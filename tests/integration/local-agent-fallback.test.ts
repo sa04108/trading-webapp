@@ -6,7 +6,7 @@ import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars } from '../helpers/seed.js';
 import * as resources from '../../src/agent/resources.js';
 import { LOCAL_AGENT_ID } from '../../src/shared/agent-protocol.js';
-import type { PreparationInput } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
+import type { PreparationInput } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import type { AgentLease, ServerAgentMessage } from '../../src/shared/agent-protocol.js';
 
@@ -53,7 +53,7 @@ async function connect(slots: number) {
   const { id } = coordinator.registry.issue('remote');
   const dataset = await coordinator.snapshots.ensureLatest();
   coordinator.connect(id, peer as unknown as WebSocket);
-  peer.submit({ type: 'HELLO', protocolVersion: 1, runnerVersion: coordinator.runnerVersion });
+  peer.submit({ type: 'HELLO', protocolVersion: 2, runnerVersion: coordinator.runnerVersion });
   await vi.waitFor(() => expect(peer.received.some((m) => m.type === 'DATASET')).toBe(true));
   peer.submit({ type: 'CAPACITY', slots, datasetVersion: dataset.version, maxBars: 8_000_000 });
   await new Promise((resolve) => setImmediate(resolve));

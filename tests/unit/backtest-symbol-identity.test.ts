@@ -4,8 +4,8 @@ import {
   assertSafePinnedScheduleIdentityJson,
   assertSafePinnedScheduleIdentities,
   UnsafeBacktestSymbolIdentityError,
-} from '../../src/server/modules/backtest/application/backtest-symbol-identity.js';
-import type { SymbolIdentitySnapshot } from '../../src/server/modules/market-data/application/symbol-master-service.js';
+} from '../../src/runtime/modules/backtest/application/backtest-symbol-identity.js';
+import type { SymbolIdentitySnapshot } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 
 const MODERN_SCHEDULE = [{
   rebalanceDate: '2025-01-02',

@@ -5,7 +5,7 @@ import {
   getSlippageProfile,
   sellTaxAmount,
   tickSizeAt,
-} from '../../src/server/modules/backtest/domain/cost-profiles.js';
+} from '../../src/runtime/modules/backtest/domain/cost-profiles.js';
 
 describe('kr-equity-default', () => {
   it.each([

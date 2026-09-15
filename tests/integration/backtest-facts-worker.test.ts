@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq, gt, inArray } from 'drizzle-orm';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
+import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
 import {
   facts as factRows,
   krxDailyBars,
@@ -25,7 +25,7 @@ const START = Date.UTC(2025, 0, 2);
 /**
  * Task 11 인접 위험 점검: `tests/integration/backtest-facts.test.ts` 의
  * '저장소 → 엔진 왕복' 은 `runBacktest` 를 직접 호출하며 facts 도 테스트가 직접
- * 조회해 넘긴다 — `src/workers/backtest-child.ts` 의 `factRepository.getFacts(...)`
+ * 조회해 넘긴다 — `src/runtime/workers/backtest-child.ts` 의 `factRepository.getFacts(...)`
  * 호출도, 그 결과를 `runBacktest` 에 넘기는 배선도 실행되지 않는다. 이 파일은 실제
  * HTTP 제출 → 큐 → 자식 프로세스 경로로 같은 시나리오를 검증해 그 배선 자체를 덮는다.
  * `facts,` 인자를 실수로 지우면 이 테스트가 실패해야 한다 (수동으로 지우고 실패 확인함,

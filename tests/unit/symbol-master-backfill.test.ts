@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Clock } from '../../src/server/shared/clock.js';
+import type { Clock } from '../../src/runtime/shared/clock.js';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
-import type { KrxHistoricalUniverseSource } from '../../src/server/modules/market-data/application/ports.js';
+import type { KrxHistoricalUniverseSource } from '../../src/runtime/modules/market-data/application/ports.js';
 import { SymbolMasterBackfill } from '../../src/server/modules/market-data/application/symbol-master-backfill.js';
 import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
-} from '../../src/server/modules/market-data/application/symbol-master-service.js';
+} from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   baseInfoFixture,

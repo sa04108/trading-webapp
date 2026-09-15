@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   findRelevantCorporateActionGaps,
-} from '../../src/server/modules/backtest/application/backtest-corporate-action-gaps.js';
+} from '../../src/runtime/modules/backtest/application/backtest-corporate-action-gaps.js';
 
 const DETAILS = new Map([['005930', [{
   year: 2025,

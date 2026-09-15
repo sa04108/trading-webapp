@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
-import { dataDatabasePath, tableExists } from './database-layout.js';
+import { dataDatabasePath, tableExists } from '../../../runtime/shared/db/database-layout.js';
 
 interface BackupManifest { version: 1; operationsSha256: string; dataSha256: string }
 interface RestoreJournal { version: 1; databasePath: string; snapshotPath: string; staged: string; manifest: BackupManifest }

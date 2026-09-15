@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
-import { PreparationPreviewCache } from '../../src/server/modules/backtest/application/preparation-preview-cache.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
+import * as runtimeVersions from '../../src/runtime/shared/runtime-versions.js';
+import * as buildInfo from '../../src/runtime/shared/build-info.js';
+import { PreparationPreviewCache } from '../../src/runtime/modules/backtest/application/preparation-preview-cache.js';
 
 describe('PreparationPreviewCache source invalidation', () => {
   let directory: string;
@@ -28,6 +30,7 @@ describe('PreparationPreviewCache source invalidation', () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     writer.close();
     database.close();
     fs.rmSync(directory, { recursive: true, force: true });
@@ -124,6 +127,29 @@ describe('PreparationPreviewCache source invalidation', () => {
   ])('changed result, request, or validation receipt is not reusable: %s', (statement) => {
     writer.sqlite.exec(statement);
     expect(cache.get('request')).toBeNull();
+  });
+
+  it('미리보기 버전이 같으면 배포 SHA와 다른 도메인 버전이 바뀌어도 재사용한다', () => {
+    const versions = runtimeVersions.readRuntimeVersions();
+    const receipt = database.sqlite.prepare('SELECT validation_version AS version FROM preparation_preview_cache').get();
+    expect(receipt).toEqual({ version: versions.previewVersion });
+    vi.spyOn(buildInfo, 'readGitCommitSha').mockReturnValue('another-deployment');
+    vi.spyOn(runtimeVersions, 'readRuntimeVersions').mockReturnValue({
+      ...versions, agentVersion: 'new-agent', collectionVersion: 'new-collection',
+      executionVersion: 'new-execution', validationVersion: 'new-validation',
+    });
+    const restarted = new PreparationPreviewCache(database);
+    expect(restarted.isFresh('prep_test')).toBe(true);
+    expect(restarted.get('request')?.preview).toEqual(expectedPreview);
+  });
+
+  it('미리보기 버전이 바뀌면 데이터 revision이 같아도 이전 결과를 거절한다', () => {
+    vi.spyOn(runtimeVersions, 'readRuntimeVersions').mockReturnValue({
+      ...runtimeVersions.readRuntimeVersions(), previewVersion: 'changed-preview',
+    });
+    const changed = new PreparationPreviewCache(database);
+    expect(changed.isFresh('prep_test')).toBe(false);
+    expect(changed.get('request')).toBeNull();
   });
 
   it('validation survives reopening the database and still detects later changes', () => {

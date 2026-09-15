@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as OTPAuth from 'otpauth';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
-import { newId } from '../../src/server/shared/ids.js';
+import { newId } from '../../src/runtime/shared/ids.js';
 
 function sessionCookie(response: { cookies: Array<{ name: string; value: string }> }): string {
   const cookie = response.cookies.find((c) => c.name === 'qp_session');

@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
-import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
-import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
+import { runBacktest } from '../../src/runtime/modules/backtest/domain/engine.js';
+import type { ExecutionProfile } from '../../src/runtime/modules/backtest/domain/types.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/runtime/modules/facts/domain/fact.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
 import {
   rangeBreakoutParameters,
   rangeBreakoutStrategy,
   type RangeBreakoutParameters,
-} from '../../src/server/modules/strategy/strategies/range-breakout.js';
-import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
+} from '../../src/runtime/modules/strategy/strategies/range-breakout.js';
+import { StrategyRegistry } from '../../src/runtime/modules/strategy/application/strategy-registry.js';
 
 describe('range-breakout parameters (스펙 §32)', () => {
   it('생략된 파라미터는 기본값으로 채운다 — 추적 손절과 비중 상한이 기본 동작이다', () => {

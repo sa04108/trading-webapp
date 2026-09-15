@@ -5,7 +5,7 @@ import {
   estimateCorporateActionSyncCost,
   filableReportCount,
   planFactSync,
-} from '../../src/server/modules/facts/domain/sync-plan.js';
+} from '../../src/runtime/modules/facts/domain/sync-plan.js';
 
 // 모든 대상 연도(~2022)가 끝난 뒤다 — 보고서 4종이 전부 존재할 수 있어
 // 최대 호출 수 공식(연도당 12회)이 그대로 성립하는 대조군 날짜.

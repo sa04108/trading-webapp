@@ -4,9 +4,9 @@ import {
   KrxContractError,
   KrxNotConfiguredError,
   KrxQuotaError,
-} from '../../src/server/modules/market-data/application/ports.js';
+} from '../../src/runtime/modules/market-data/application/ports.js';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
-import type { Clock } from '../../src/server/shared/clock.js';
+import type { Clock } from '../../src/runtime/shared/clock.js';
 import type { Logger } from '../../src/server/shared/logger.js';
 import type { ExternalApiUsage } from '../../src/server/shared/db/external-api-usage.js';
 import {

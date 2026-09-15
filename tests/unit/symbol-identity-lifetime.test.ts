@@ -5,7 +5,7 @@ import {
   symbolMasterVersions,
   symbols,
 } from '../../src/server/shared/db/schema.js';
-import { inferUniqueSymbolIdentities, validateSymbolIdentityLifetime, type SymbolIdentitySelection } from '../../src/server/modules/market-data/domain/symbol-identity-lifetime.js';
+import { inferUniqueSymbolIdentities, validateSymbolIdentityLifetime, type SymbolIdentitySelection } from '../../src/runtime/modules/market-data/domain/symbol-identity-lifetime.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 
 interface VersionInput {

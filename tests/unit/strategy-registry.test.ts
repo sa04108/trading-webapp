@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
-import type { AnyTradingStrategy } from '../../src/server/modules/strategy/domain/strategy.js';
+import { StrategyRegistry } from '../../src/runtime/modules/strategy/application/strategy-registry.js';
+import type { AnyTradingStrategy } from '../../src/runtime/modules/strategy/domain/strategy.js';
 
 const registry = new StrategyRegistry();
 

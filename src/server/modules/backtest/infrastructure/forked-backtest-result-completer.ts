@@ -3,13 +3,13 @@ import { fileURLToPath } from 'node:url';
 import type {
   BacktestResultCompletionInput,
   BacktestResultCompletionOutput,
-} from '../application/backtest-result-artifact.js';
+} from '../../../../runtime/modules/backtest/application/backtest-result-artifact.js';
 import {
   BacktestResultArtifactRejectedError,
   BacktestResultImportInternalError,
   BacktestResultPersistenceUnavailableError,
   type BacktestResultCompleter,
-} from '../application/backtest-result-artifact.js';
+} from '../../../../runtime/modules/backtest/application/backtest-result-artifact.js';
 
 type ChildMessage =
   | { readonly type: 'completed'; readonly output: BacktestResultCompletionOutput }

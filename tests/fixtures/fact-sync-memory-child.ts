@@ -1,7 +1,7 @@
 import { FactSyncService } from '../../src/server/modules/facts/application/fact-sync-service.js';
-import type { FactCoverageStore } from '../../src/server/modules/facts/application/fact-coverage-store.js';
-import type { CorporateActionCoverageStore } from '../../src/server/modules/facts/application/corporate-action-coverage.js';
-import type { FactIngestionGap, FactRepository, FactSource, FetchFinancialsRequest } from '../../src/server/modules/facts/application/ports.js';
+import type { FactCoverageStore } from '../../src/runtime/modules/facts/application/fact-coverage-store.js';
+import type { CorporateActionCoverageStore } from '../../src/runtime/modules/facts/application/corporate-action-coverage.js';
+import type { FactIngestionGap, FactRepository, FactSource, FetchFinancialsRequest } from '../../src/runtime/modules/facts/application/ports.js';
 
 const financial = process.argv[2] === 'financial';
 let persistedGaps = 0;

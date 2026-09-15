@@ -6,7 +6,7 @@ import {
   scaleHoldingPrices,
   updateTrail,
   type HoldingState,
-} from '../../src/server/modules/strategy/strategies/shared/trailing-stop.js';
+} from '../../src/runtime/modules/strategy/strategies/shared/trailing-stop.js';
 
 describe('newHolding', () => {
   it('가격 필드는 null, 나머지는 초기값으로 시작한다', () => {

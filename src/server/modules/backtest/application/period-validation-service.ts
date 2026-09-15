@@ -5,25 +5,27 @@ import {
   type ValidationMetrics, type ValidationRole, type ValidationStatus,
 } from '../../../../shared/schemas/period-validation.js';
 import { backtestRequestSchema, type BacktestRequest } from '../../../../shared/schemas/backtest-request.js';
-import type { DatabaseHandle } from '../../../shared/db/database.js';
-import { backtestPreparationJobs, backtestValidations, backtestValidationTrials } from '../../../shared/db/schema.js';
-import type { Clock } from '../../../shared/clock.js';
-import { newId } from '../../../shared/ids.js';
-import { readGitCommitSha } from '../../../shared/build-info.js';
-import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
-import { strategySourceHash } from '../../strategy/application/strategy-source-hash.js';
-import { ENGINE_VERSION } from '../domain/engine.js';
+import type { DatabaseHandle } from '../../../../runtime/shared/db/database.js';
+import { backtestPreparationJobs } from '../../../../runtime/shared/db/operations-schema.js';
+import { backtestValidations, backtestValidationTrials } from '../../../shared/db/backtest-validation-schema.js';
+import type { Clock } from '../../../../runtime/shared/clock.js';
+import { newId } from '../../../../runtime/shared/ids.js';
+import { readGitCommitSha } from '../../../../runtime/shared/build-info.js';
+import { readRuntimeVersions } from '../../../../runtime/shared/runtime-versions.js';
+import type { StrategyRegistry } from '../../../../runtime/modules/strategy/application/strategy-registry.js';
+import { strategySourceHash } from '../../../../runtime/modules/strategy/application/strategy-source-hash.js';
+import { ENGINE_VERSION } from '../../../../runtime/modules/backtest/domain/engine.js';
 import type { BacktestJobRow, JobQueue } from './job-queue.js';
-import type { BacktestPreparationOrchestrator, BacktestUniversePreview } from './backtest-preparation-orchestrator.js';
+import type { BacktestPreparationOrchestrator, BacktestUniversePreview } from '../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import type { ResultsService } from './results-service.js';
-import { PreparationPreviewCache } from './preparation-preview-cache.js';
-import { PreparationReferenceService } from './preparation-reference-service.js';
+import { PreparationPreviewCache } from '../../../../runtime/modules/backtest/application/preparation-preview-cache.js';
 
 type Experiment = typeof backtestValidations.$inferSelect;
 type Trial = typeof backtestValidationTrials.$inferSelect;
 
 export interface PeriodValidationDeps {
   database: DatabaseHandle;
+  collectPreparations(): number;
   clock: Clock;
   queue: JobQueue;
   results: ResultsService;
@@ -56,6 +58,9 @@ export class PeriodValidationService {
     if (!run || run.strategyVersion !== strategy.version || run.strategySourceHash !== strategySourceHash(strategy)) {
       throw new Error('원본과 현재 전략 버전이 다릅니다. 현재 전략으로 백테스트를 다시 실행하세요.');
     }
+    if (run.executionVersion !== readRuntimeVersions().executionVersion || run.engineVersion !== ENGINE_VERSION) {
+      throw new Error('원본과 현재 실행 버전이 다릅니다. 현재 실행 버전으로 백테스트를 다시 실행하세요.');
+    }
     if (config.mode !== 'HOLDOUT') {
       const schema = this.deps.strategies.getParameterJsonSchema(source.strategyId);
       const properties = schema?.properties as Record<string, { type?: string }> | undefined;
@@ -81,6 +86,7 @@ export class PeriodValidationService {
 
   create(sourceJobId: string, rawConfig: unknown): PeriodValidationDto {
     const { source, config, plan, strategy } = this.plan(sourceJobId, rawConfig);
+    const { executionVersion, validationVersion } = readRuntimeVersions();
     const id = newId('val');
     this.deps.database.sqlite.transaction(() => {
       if (this.deps.queue.getJob(sourceJobId)?.status !== 'COMPLETED') throw new Error('원본 백테스트 상태가 변경됐습니다.');
@@ -91,6 +97,7 @@ export class PeriodValidationService {
         id, sourceJobId, requestJson: JSON.stringify(source), configJson: JSON.stringify(config),
         planJson: JSON.stringify(plan), strategyVersion: strategy.version,
         strategySourceHash: strategySourceHash(strategy), engineVersion: ENGINE_VERSION,
+        executionVersion, validationVersion,
         gitCommitSha: readGitCommitSha(), status: 'ACTIVE', createdAtMs: this.deps.clock.now(),
       }).run();
       for (const fold of plan.folds) {
@@ -177,7 +184,7 @@ export class PeriodValidationService {
       }
       this.deps.database.db.delete(backtestValidations).where(eq(backtestValidations.id, id)).run();
       for (const trial of trials) if (trial.jobId) this.deps.queue.deleteJob(trial.jobId);
-      new PreparationReferenceService(this.deps.database).collect();
+      this.deps.collectPreparations();
       return true;
     }).immediate();
   }
@@ -227,9 +234,11 @@ export class PeriodValidationService {
   private assertVersion(experiment: Experiment): void {
     const request = JSON.parse(experiment.requestJson) as BacktestRequest;
     const strategy = this.deps.strategies.get(request.strategyId);
+    const { executionVersion, validationVersion } = readRuntimeVersions();
     if (!strategy || strategy.version !== experiment.strategyVersion
       || strategySourceHash(strategy) !== experiment.strategySourceHash
-      || ENGINE_VERSION !== experiment.engineVersion || readGitCommitSha() !== experiment.gitCommitSha) {
+      || ENGINE_VERSION !== experiment.engineVersion
+      || executionVersion !== experiment.executionVersion || validationVersion !== experiment.validationVersion) {
       throw new Error('실험 도중 전략 또는 실행 버전이 변경됐습니다. 새 실험을 생성하세요.');
     }
   }
@@ -300,7 +309,7 @@ export class PeriodValidationService {
       .where(eq(backtestValidationTrials.id, trial.id)).run();
     this.deps.database.db.update(backtestPreparationJobs).set({ lifecycleManaged: true })
       .where(eq(backtestPreparationJobs.id, preparationJobId)).run();
-    new PreparationReferenceService(this.deps.database).collect();
+    this.deps.collectPreparations();
   }
 
   private async prepareGroup(experiment: Experiment, group: Trial[], training: boolean): Promise<void> {
@@ -353,7 +362,7 @@ export class PeriodValidationService {
         const run = this.deps.results.getRun(job.id);
         const metrics = this.metrics(job.id);
         if (!run || run.strategySourceHash !== experiment.strategySourceHash || run.engineVersion !== experiment.engineVersion
-          || run.gitCommitSha !== experiment.gitCommitSha) throw new Error('하위 백테스트의 실행 버전이 실험과 다릅니다.');
+          || run.executionVersion !== experiment.executionVersion) throw new Error('하위 백테스트의 실행 버전이 실험과 다릅니다.');
         if (!metrics || !Number.isFinite(metrics.totalReturnPct)) throw new Error('하위 백테스트의 성과 지표가 없습니다.');
       }
     }

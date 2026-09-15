@@ -3,12 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FactSyncService } from '../../src/server/modules/facts/application/fact-sync-service.js';
-import { SqliteFactCoverageStore } from '../../src/server/modules/facts/application/fact-coverage-store.js';
-import { SqliteCorporateActionCoverageStore } from '../../src/server/modules/facts/application/corporate-action-coverage.js';
+import { SqliteFactCoverageStore } from '../../src/runtime/modules/facts/application/fact-coverage-store.js';
+import { SqliteCorporateActionCoverageStore } from '../../src/runtime/modules/facts/application/corporate-action-coverage.js';
 import { createDartFactSource } from '../../src/server/modules/facts/infrastructure/dart/dart-fact-source.js';
 import { SqliteDartRawSnapshotStore } from '../../src/server/modules/facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
-import { SqliteFactRepository } from '../../src/server/modules/facts/infrastructure/sqlite-fact-repository.js';
-import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
+import { SqliteFactRepository } from '../../src/runtime/modules/facts/infrastructure/sqlite-fact-repository.js';
+import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
 import { symbols } from '../../src/server/shared/db/schema.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;

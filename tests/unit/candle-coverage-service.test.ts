@@ -1,7 +1,7 @@
 import { describe, expect, it, afterEach, beforeEach } from 'vitest';
 import { createTestApp } from '../helpers/test-app.js';
 import { krxDailyBars } from '../../src/server/shared/db/schema.js';
-import { CandleCoverageService } from '../../src/server/modules/market-data/application/candle-coverage-service.js';
+import { CandleCoverageService } from '../../src/runtime/modules/market-data/application/candle-coverage-service.js';
 
 const midnight = (date: string): number => Date.parse(`${date}T00:00:00Z`);
 

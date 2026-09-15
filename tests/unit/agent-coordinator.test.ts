@@ -1,5 +1,9 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
+import * as buildInfo from '../../src/runtime/shared/build-info.js';
 import { EventEmitter } from 'node:events';
-import { BacktestResultArtifactRejectedError } from '../../src/server/modules/backtest/application/backtest-result-artifact.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { BacktestResultArtifactRejectedError } from '../../src/runtime/modules/backtest/application/backtest-result-artifact.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,7 +23,7 @@ class Peer extends EventEmitter {
 let ctx: TestApp;
 let id: string;
 let token: string;
-const dataset = { version: 1, datasetId: randomUUID(), sourceRevision: 0, schemaVersion: 1, sha256: 'a'.repeat(64), bytes: 1 };
+const dataset = { version: 1, datasetId: randomUUID(), sourceRevision: 0, collectionVersion: readRuntimeVersions().collectionVersion, schemaVersion: 1, sha256: 'a'.repeat(64), bytes: 1 };
 beforeEach(async () => {
   ctx = await createTestApp({}, undefined, true);
   const credential = ctx.container.agentCoordinator.registry.issue('device');
@@ -33,7 +37,7 @@ function enqueue() {
 async function connect(runnerVersion = ctx.container.agentCoordinator.runnerVersion): Promise<Peer> {
   const peer = new Peer();
   ctx.container.agentCoordinator.connect(id, peer as unknown as WebSocket);
-  peer.submit({ type: 'HELLO', protocolVersion: 1, runnerVersion });
+  peer.submit({ type: 'HELLO', protocolVersion: 2, runnerVersion });
   await vi.waitFor(() => expect(peer.received.length).toBeGreaterThan(0));
   return peer;
 }
@@ -60,7 +64,7 @@ describe('연결과 리스 수명 분리', () => {
     await vi.waitFor(() => expect(first.job()).toBeDefined());
     const lease = first.job()!;
     first.close();
-    const old = await connect('previous-release');
+    const old = await connect('b'.repeat(64));
     expect(old.received[0]).toMatchObject({ type: 'UPDATE_REQUIRED' });
     expect(ctx.container.jobQueue.getJob('job-one')).toMatchObject({ status: 'QUEUED', leaseTokenHash: null, leaseFailures: 0, attempt: 1 });
     old.close();
@@ -74,7 +78,7 @@ describe('연결과 리스 수명 분리', () => {
   it('미인증 데이터 요청과 과대 결과 업로드를 파일 처리 전에 거부한다', async () => {
     expect((await ctx.app.inject({ method: 'GET', url: '/api/agents/datasets/1' })).statusCode).toBe(401);
     enqueue();
-    ctx.container.agentCoordinator.backtests.claim(id, ctx.container.agentCoordinator.runnerVersion);
+    ctx.container.agentCoordinator.backtests.claim(id, readRuntimeVersions().executionVersion);
     const lease = ctx.container.jobQueue.getJob('job-one')!;
     const receive = vi.spyOn(ctx.container.remoteResultUploadManager, 'receive');
     const response = await ctx.app.inject({ method: 'POST', url: '/api/agents/jobs/job-one/result',
@@ -86,7 +90,7 @@ describe('연결과 리스 수명 분리', () => {
 
   it('결과 검증 자식이 거부한 파일은 일시 장애 대신 422로 응답한다', async () => {
     enqueue();
-    const claim = ctx.container.agentCoordinator.backtests.claim(id, ctx.container.agentCoordinator.runnerVersion);
+    const claim = ctx.container.agentCoordinator.backtests.claim(id, readRuntimeVersions().executionVersion);
     if (claim.status !== 'CLAIMED') throw new Error('리스 배정 실패');
     vi.spyOn(ctx.container.agentCoordinator.backtests, 'complete').mockRejectedValue(new BacktestResultArtifactRejectedError('invalid sqlite'));
     const payload = Buffer.from('invalid');
@@ -99,13 +103,59 @@ describe('연결과 리스 수명 분리', () => {
   it('준비된 연결도 실행 버전이 달라지면 유휴 실행기에서 즉시 제외한다', async () => {
     const peer = await connect(); capacity(peer);
     await vi.waitFor(() => expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(8_000_000));
-    peer.submit({ type: 'HELLO', protocolVersion: 1, runnerVersion: 'previous-release' });
+    peer.submit({ type: 'HELLO', protocolVersion: 2, runnerVersion: 'b'.repeat(64) });
     await vi.waitFor(() => expect(peer.received.some((message) => message.type === 'UPDATE_REQUIRED')).toBe(true));
     const job = ctx.container.jobQueue.enqueue(request);
     await new Promise((resolve) => setImmediate(resolve));
     expect(peer.job()).toBeUndefined();
     expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('QUEUED');
     expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(2_000_000);
+  });
+
+  it('클라이언트 다운로드는 연결 이력 없이 유효한 토큰으로 허용하고 해제 후에는 거부한다', async () => {
+    const exists = fs.existsSync;
+    const files = new Set([
+      path.resolve('dist/clients/manifest.json'),
+      path.resolve('dist/clients/quant-agent-linux-x64.tar.gz'),
+    ]);
+    vi.spyOn(fs, 'existsSync').mockImplementation((file) => files.has(String(file)) ? false : exists(file));
+    const endpoints = ['/api/agents/client/latest', '/api/agents/client/quant-agent-linux-x64.tar.gz'];
+    for (const url of endpoints) {
+      expect((await ctx.app.inject({ method: 'GET', url })).statusCode).toBe(401);
+      expect((await ctx.app.inject({ method: 'GET', url, headers: { authorization: `Bearer ${'x'.repeat(48)}` } })).statusCode).toBe(401);
+    }
+    const headers = { authorization: `Bearer ${token}` };
+    // 게시 파일이 없어도 인증을 통과해 명세는 503, 패키지는 404까지 도달한다.
+    expect((await ctx.app.inject({ method: 'GET', url: endpoints[0]!, headers })).statusCode).toBe(503);
+    expect((await ctx.app.inject({ method: 'GET', url: endpoints[1]!, headers })).statusCode).toBe(404);
+    ctx.container.agentCoordinator.registry.revoke(id);
+    for (const url of endpoints) {
+      expect((await ctx.app.inject({ method: 'GET', url, headers })).statusCode).toBe(401);
+    }
+  });
+
+  it('배포 SHA가 바뀌어도 동일 내용 버전 클라이언트는 환영하고 실행 버전으로 배정한다', async () => {
+    vi.spyOn(buildInfo, 'readGitCommitSha').mockReturnValue('e'.repeat(40));
+    const peer = await connect();
+    expect(peer.received[0]).toMatchObject({ type: 'WELCOME' });
+    enqueue(); capacity(peer);
+    await vi.waitFor(() => expect(peer.job()).toBeDefined());
+    expect(ctx.container.jobQueue.getJob('job-one')?.runnerVersion).toBe(readRuntimeVersions().executionVersion);
+  });
+
+  it('최신 클라이언트 명세는 내용 버전과 게시된 아키텍처를 그대로 반환한다', async () => {
+    const manifestPath = path.resolve('dist/clients/manifest.json');
+    const manifest = { runnerVersion: ctx.container.agentCoordinator.runnerVersion, clients: [
+      { arch: 'x64', file: 'quant-agent-linux-x64.tar.gz', sha256: 'a'.repeat(64), bytes: 1 },
+      { arch: 'arm64', file: 'quant-agent-linux-arm64.tar.gz', sha256: 'b'.repeat(64), bytes: 2 },
+    ] };
+    const exists = fs.existsSync;
+    const read = fs.readFileSync;
+    vi.spyOn(fs, 'existsSync').mockImplementation((file) => String(file) === manifestPath || exists(file));
+    vi.spyOn(fs, 'readFileSync').mockImplementation((...args: Parameters<typeof fs.readFileSync>) => String(args[0]) === manifestPath ? JSON.stringify(manifest) : read(...args));
+    const response = await ctx.app.inject({ method: 'GET', url: '/api/agents/client/latest', headers: { authorization: `Bearer ${token}` } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(manifest);
   });
 
   it('장치 토큰은 해시만 저장하고 해제한 장치는 다시 인증할 수 없다', () => {

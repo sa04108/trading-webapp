@@ -1,6 +1,6 @@
 import { asc, eq } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SymbolMasterService, type SymbolMasterServiceDeps } from '../../src/server/modules/market-data/application/symbol-master-service.js';
+import { SymbolMasterService, type SymbolMasterServiceDeps } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import { symbolMasterVersions } from '../../src/server/shared/db/schema.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';

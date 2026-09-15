@@ -1,6 +1,8 @@
 import { lt, or } from 'drizzle-orm';
-import type { AppDatabase } from './database.js';
-import { auditLogs, loginAttempts, notifications, sessions } from './schema.js';
+import type { AppDatabase } from '../../../runtime/shared/db/database.js';
+import { auditLogs } from '../../../runtime/shared/db/operations-schema.js';
+import { loginAttempts, sessions } from './auth-schema.js';
+import { notifications } from './notification-schema.js';
 
 /** 로그인 시도는 잠금 판정 창(15분)에만 쓰인다 — 하루면 충분하고 감사 기록은 audit_logs 가 담당 */
 const LOGIN_ATTEMPT_RETENTION_MS = 24 * 3_600_000;

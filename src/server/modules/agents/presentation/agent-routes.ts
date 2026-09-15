@@ -3,9 +3,9 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { BacktestResultArtifactRejectedError } from '../../backtest/application/backtest-result-artifact.js';
+import { BacktestResultArtifactRejectedError } from '../../../../runtime/modules/backtest/application/backtest-result-artifact.js';
 import { MAX_BACKTEST_RESULT_ARTIFACT_BYTES, InvalidBacktestResultArtifactError } from '../../backtest/infrastructure/sqlite-backtest-result-artifact-importer.js';
-import { backtestExecutionTelemetrySchema } from '../../backtest/application/backtest-execution-telemetry.js';
+import { backtestExecutionTelemetrySchema } from '../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js';
 import type { AgentCoordinator } from '../application/agent-coordinator.js';
 import type { RemoteResultUploadManager } from '../../backtest/infrastructure/remote-result-upload-manager.js';
 
@@ -48,7 +48,9 @@ export function registerAgentControlRoutes(app: FastifyInstance, coordinator: Ag
   app.get('/client/latest', { preHandler: authenticate }, async (_request, reply) => {
     const file = path.resolve('dist/clients/manifest.json');
     if (!fs.existsSync(file)) return reply.code(503).send({ error: 'Linux 클라이언트 파일이 아직 게시되지 않았습니다' });
-    return JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
+    const manifest = JSON.parse(fs.readFileSync(file, 'utf8')) as { runnerVersion: string };
+    if (manifest.runnerVersion !== coordinator.runnerVersion) return reply.code(503).send({ error: '서버가 요구하는 클라이언트가 아직 게시되지 않았습니다' });
+    return manifest;
   });
   app.get('/client/:file', { preHandler: authenticate }, async (request, reply) => sendClient(request, reply));
   app.addContentTypeParser(ARTIFACT_TYPE, (_request, stream, done) => done(null, stream));

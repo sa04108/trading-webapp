@@ -1,9 +1,10 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { readBacktestJobs } from '../helpers/backtest-jobs.js';
 import { createHash } from 'node:crypto';
 import { and, eq, gte, isNull, lte } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
+import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
 import type { FactSyncReport, FactSyncRequest } from '../../src/server/modules/facts/application/fact-sync-service.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import {
@@ -18,8 +19,8 @@ import {
   getCostProfile,
   getKrxExecutionRules,
   getSlippageProfile,
-} from '../../src/server/modules/backtest/domain/cost-profiles.js';
-import { simulateFill } from '../../src/server/modules/backtest/domain/execution.js';
+} from '../../src/runtime/modules/backtest/domain/cost-profiles.js';
+import { simulateFill } from '../../src/runtime/modules/backtest/domain/execution.js';
 import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   registerSymbols,
@@ -1156,7 +1157,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
         .run();
       ctx.container.database.db
         .insert(krxNonTradingCoverage)
-        .values({ startDate: '2025-07-27', endDate: '2026-07-24', syncedAtMs: 0 })
+        .values({ startDate: '2025-07-27', endDate: '2026-07-24', collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: 0 })
         .run();
 
       const created = await ctx.app.inject({

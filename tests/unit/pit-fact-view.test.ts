@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
-import { PitFactView, quarterOrdinal } from '../../src/server/modules/facts/domain/pit-fact-view.js';
+import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
+import { PitFactView, quarterOrdinal } from '../../src/runtime/modules/facts/domain/pit-fact-view.js';
 
 const DAY = 86_400_000;
 

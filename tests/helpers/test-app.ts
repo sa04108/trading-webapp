@@ -1,15 +1,16 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { AgentClient } from '../../src/agent/client.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { FastifyInstance } from 'fastify';
-import type { BacktestPreparationJobDto } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
+import type { BacktestPreparationJobDto } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 import { createContainer, type Container } from '../../src/server/bootstrap/container.js';
 import { buildServer } from '../../src/server/bootstrap/server.js';
-import { newId } from '../../src/server/shared/ids.js';
+import { newId } from '../../src/runtime/shared/ids.js';
 import { symbolMasterCoverage } from '../../src/server/shared/db/schema.js';
 
 export interface TestApp {
@@ -244,7 +245,7 @@ export function installPreparedSubmissionFixture(
     ctx.container.database.db.insert(symbolMasterCoverage).values({
       startDate: body.period.from,
       endDate: body.period.to,
-      syncedAtMs: ctx.container.clock.now(),
+      collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.container.clock.now(),
     }).run();
 
     const preparationJob = preparation.start({

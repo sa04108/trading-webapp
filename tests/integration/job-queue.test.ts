@@ -1,10 +1,11 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { readBacktestJobs } from '../helpers/backtest-jobs.js';
 import { and, desc, eq, gte, lte } from 'drizzle-orm';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
-import { UnsafeBacktestSymbolIdentityError } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
-import { FACTS_SLICE } from '../../src/server/modules/market-data/application/symbol-service.js';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
+import { ENGINE_VERSION } from '../../src/runtime/modules/backtest/domain/engine.js';
+import { UnsafeBacktestSymbolIdentityError } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
+import { FACTS_SLICE } from '../../src/runtime/modules/market-data/application/symbol-service.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
 import {
   backtestJobs,
   facts,
@@ -1005,6 +1006,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       '2026-06-05',
     ];
     const isolatedCoverage = rebalanceDates.map((date) => ({
+      collectionVersion: readRuntimeVersions().collectionVersion,
       startDate: ctx.container.symbolMasterService.effectiveTradingDateWithinCoverage(date)!,
       endDate: date,
       syncedAtMs: ctx.container.clock.now(),
@@ -1039,7 +1041,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         .map((date) => ({
           startDate: date,
           endDate: date,
-          syncedAtMs: ctx.container.clock.now(),
+          collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.container.clock.now(),
         })),
     ).run();
 
@@ -1379,7 +1381,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         .map((date) => ({
           startDate: date,
           endDate: date,
-          syncedAtMs: ctx.container.clock.now(),
+          collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.container.clock.now(),
         })),
     ).run();
 
@@ -1702,7 +1704,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         .map((date) => ({
           startDate: date,
           endDate: date,
-          syncedAtMs: ctx.container.clock.now(),
+          collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.container.clock.now(),
         })),
     ).run();
     expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);

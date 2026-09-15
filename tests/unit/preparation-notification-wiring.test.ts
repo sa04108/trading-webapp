@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createPreparationNotificationListener } from '../../src/server/bootstrap/preparation-notification-wiring.js';
-import type { BacktestPreparationJobDto } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
+import type { BacktestPreparationJobDto } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import type { NotificationInput } from '../../src/server/modules/notification/application/notification-service.js';
-import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
+import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
 import { backtestPreparationJobs } from '../../src/server/shared/db/schema.js';
 import type { Logger } from '../../src/server/shared/logger.js';
 

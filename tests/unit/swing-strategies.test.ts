@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
-import type { ExecutionProfile, Fill } from '../../src/server/modules/backtest/domain/types.js';
-import type { Candle, Timeframe } from '../../src/server/modules/market-data/domain/candle.js';
+import { runBacktest } from '../../src/runtime/modules/backtest/domain/engine.js';
+import type { ExecutionProfile, Fill } from '../../src/runtime/modules/backtest/domain/types.js';
+import type { Candle, Timeframe } from '../../src/runtime/modules/market-data/domain/candle.js';
 import {
   emaTrendSwitchStrategy,
   type EmaTrendSwitchState,
-} from '../../src/server/modules/strategy/strategies/ema-trend-switch.js';
+} from '../../src/runtime/modules/strategy/strategies/ema-trend-switch.js';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2025, 0, 2);

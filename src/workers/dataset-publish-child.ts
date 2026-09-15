@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
-import { DATABASE_SCHEMA_VERSION, datasetIdentity } from '../server/shared/db/database-layout.js';
+import { DATABASE_SCHEMA_VERSION, datasetIdentity } from '../runtime/shared/db/database-layout.js';
 import { DATA_TABLE_NAMES } from '../server/shared/db/database-tables.js';
 import type { DatasetManifest } from '../shared/agent-protocol.js';
 
@@ -17,7 +17,7 @@ function writeJson(file: string, value: unknown): void {
   fs.renameSync(temporary, file);
 }
 
-process.once('message', (input: { sourcePath: string; directory: string; version: number }) => {
+process.once('message', (input: { sourcePath: string; directory: string; version: number; collectionVersion: string }) => {
   void publish(input).then((manifest) => {
     process.send?.(manifest, () => process.disconnect());
   }).catch((error: unknown) => {
@@ -28,7 +28,7 @@ process.once('message', (input: { sourcePath: string; directory: string; version
 });
 process.once('disconnect', () => { if (process.exitCode === undefined) process.exitCode = 0; });
 
-async function publish(input: { sourcePath: string; directory: string; version: number }): Promise<DatasetManifest> {
+async function publish(input: { sourcePath: string; directory: string; version: number; collectionVersion: string }): Promise<DatasetManifest> {
   const temporary = path.join(input.directory, `.${input.version}-${randomUUID()}.sqlite`);
   const source = new Database(input.sourcePath, { readonly: true, fileMustExist: true });
   try { await source.backup(temporary); } finally { source.close(); }
@@ -47,6 +47,7 @@ async function publish(input: { sourcePath: string; directory: string; version: 
     for await (const chunk of fs.createReadStream(temporary)) hash.update(chunk);
     const manifest: DatasetManifest = {
       version: input.version, datasetId: identity.datasetId, sourceRevision: identity.revision,
+      collectionVersion: input.collectionVersion,
       schemaVersion: DATABASE_SCHEMA_VERSION, sha256: hash.digest('hex'), bytes: fs.statSync(temporary).size,
     };
     fs.chmodSync(temporary, 0o444);

@@ -6,9 +6,10 @@ import {
   type BacktestWizardDraftWritePayloadMap,
   type BacktestWizardDraftStep,
 } from '../../../../shared/schemas/backtest-wizard-draft.js';
-import type { DatabaseHandle } from '../../../shared/db/database.js';
-import { backtestJobs, backtestWizardDrafts } from '../../../shared/db/schema.js';
-import type { Clock } from '../../../shared/clock.js';
+import type { DatabaseHandle } from '../../../../runtime/shared/db/database.js';
+import { backtestJobs } from '../../../../runtime/shared/db/operations-schema.js';
+import { backtestWizardDrafts } from '../../../shared/db/preparation-owner-schema.js';
+import type { Clock } from '../../../../runtime/shared/clock.js';
 import { PreparationReferenceService } from './preparation-reference-service.js';
 
 export interface BacktestWizardDraft<S extends BacktestWizardDraftStep = BacktestWizardDraftStep> {

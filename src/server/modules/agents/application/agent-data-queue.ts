@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
-import type { DatabaseHandle } from '../../../shared/db/database.js';
+import { readRuntimeVersions } from '../../../../runtime/shared/runtime-versions.js';
+import type { DatabaseHandle } from '../../../../runtime/shared/db/database.js';
 import type { Logger } from '../../../shared/logger.js';
-import { KrxQuotaError } from '../../market-data/application/ports.js';
+import { KrxQuotaError } from '../../../../runtime/modules/market-data/application/ports.js';
 import { agentDataRequestSchema, type AgentDataRequest, type AgentLease } from '../../../../shared/agent-protocol.js';
 import type { DatasetSnapshots } from './dataset-snapshots.js';
 
@@ -13,6 +14,7 @@ interface DataRequestRow { id: string; request_json: string; status: string; ava
 export class AgentDataQueue {
   private running: Promise<void> | null = null;
   private stopped = false;
+  private readonly collectionVersion: string;
 
   constructor(
     private readonly database: DatabaseHandle,
@@ -20,7 +22,10 @@ export class AgentDataQueue {
     private readonly collect: (request: AgentDataRequest, shouldStop: () => boolean) => Promise<void>,
     private readonly onReady: (kind: AgentLease['kind'], jobId: string, error?: string) => void,
     private readonly logger: Logger,
-  ) {}
+    options?: { readonly collectionVersion: string },
+  ) {
+    this.collectionVersion = options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
+  }
 
   recover(): void {
     this.database.sqlite.prepare("UPDATE agent_data_requests SET status = 'QUEUED' WHERE status = 'RUNNING'").run();
@@ -36,7 +41,8 @@ export class AgentDataQueue {
       request.symbols = [...new Set(request.symbols)].sort();
     }
     const json = JSON.stringify(request);
-    const id = createHash('sha256').update(json).digest('hex');
+    // 이전 수집기의 완료 요청이 새 수집기의 재검증 요구를 가로막지 않게 한다.
+    const id = createHash('sha256').update(this.collectionVersion).update('\0').update(json).digest('hex');
     const now = Date.now();
     const previous = this.database.sqlite.prepare('SELECT * FROM agent_data_requests WHERE id = ?').get(id) as DataRequestRow | undefined;
     if (previous?.status === 'COMPLETED' && previous.available_version === requestedVersion) {

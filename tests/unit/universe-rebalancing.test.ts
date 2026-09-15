@@ -4,7 +4,7 @@ import {
 } from '../../src/server/modules/backtest/application/universe-rebalancing.js';
 import type {
   LegacyUniverseScheduleEntry,
-} from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
+} from '../../src/runtime/modules/backtest/application/universe-rule-resolver.js';
 
 function scheduleEntry(
   rebalanceDate: string,

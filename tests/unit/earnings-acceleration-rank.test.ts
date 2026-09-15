@@ -1,24 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
-import { createRng } from '../../src/server/modules/backtest/domain/seeded-rng.js';
-import type { ExecutionProfile, Position } from '../../src/server/modules/backtest/domain/types.js';
+import { runBacktest } from '../../src/runtime/modules/backtest/domain/engine.js';
+import { createRng } from '../../src/runtime/modules/backtest/domain/seeded-rng.js';
+import type { ExecutionProfile, Position } from '../../src/runtime/modules/backtest/domain/types.js';
 import type {
   Fact,
   FundamentalSnapshot,
-} from '../../src/server/modules/facts/domain/fact.js';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import type { StrategyBarContext } from '../../src/server/modules/strategy/domain/strategy.js';
+} from '../../src/runtime/modules/facts/domain/fact.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
+import type { StrategyBarContext } from '../../src/runtime/modules/strategy/domain/strategy.js';
 import {
   earningsAccelerationRankParameters,
   earningsAccelerationRankStrategy,
-} from '../../src/server/modules/strategy/strategies/earnings-acceleration-rank.js';
+} from '../../src/runtime/modules/strategy/strategies/earnings-acceleration-rank.js';
 import {
   combineRanks,
   isFreshQuarter,
   ordinalRank,
   scoreEarningsAcceleration,
   type EarningsAccelerationInput,
-} from '../../src/server/modules/strategy/strategies/shared/fundamental-rank.js';
+} from '../../src/runtime/modules/strategy/strategies/shared/fundamental-rank.js';
 
 const DAY = 86_400_000;
 const AT = Date.UTC(2025, 0, 2);

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Clock } from '../../src/server/shared/clock.js';
+import type { Clock } from '../../src/runtime/shared/clock.js';
 import type { Logger } from '../../src/server/shared/logger.js';
 import { SymbolMasterScheduler } from '../../src/server/modules/market-data/application/symbol-master-scheduler.js';
 import type { SymbolMasterBackfill } from '../../src/server/modules/market-data/application/symbol-master-backfill.js';
-import type { SymbolMasterService } from '../../src/server/modules/market-data/application/symbol-master-service.js';
+import type { SymbolMasterService } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 
 class MutableClock implements Clock {
   constructor(private value: number) {}

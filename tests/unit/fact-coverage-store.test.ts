@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { SqliteFactCoverageStore } from '../../src/server/modules/facts/application/fact-coverage-store.js';
-import { openDatabase } from '../../src/server/shared/db/database.js';
+import { SqliteFactCoverageStore } from '../../src/runtime/modules/facts/application/fact-coverage-store.js';
+import { openDatabase } from '../../src/runtime/shared/db/database.js';
 import {
   dartFinancialFilingReceipts,
   facts,

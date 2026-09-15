@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { FinancialFactAvailabilityService } from '../../src/server/modules/facts/application/financial-fact-availability.js';
-import { openDatabase } from '../../src/server/shared/db/database.js';
+import { FinancialFactAvailabilityService } from '../../src/runtime/modules/facts/application/financial-fact-availability.js';
+import { openDatabase } from '../../src/runtime/shared/db/database.js';
 import { facts } from '../../src/server/shared/db/schema.js';
 
 describe('FinancialFactAvailabilityService', () => {

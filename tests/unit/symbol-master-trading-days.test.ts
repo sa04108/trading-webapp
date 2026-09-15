@@ -1,9 +1,10 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { describe, expect, it } from 'vitest';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
-} from '../../src/server/modules/market-data/application/symbol-master-service.js';
+} from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   symbolMasterCoverage,
@@ -106,7 +107,7 @@ describe('SymbolMasterService.effectiveTradingDate', () => {
     ctx.t.container.database.db.insert(symbolMasterCoverage).values({
       startDate: '2016-03-18',
       endDate: '2016-03-20',
-      syncedAtMs: ctx.t.container.clock.now(),
+      collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.t.container.clock.now(),
     }).run();
 
     expect(ctx.svc.effectiveTradingDate('2016-03-20')).toBe('2016-03-18');

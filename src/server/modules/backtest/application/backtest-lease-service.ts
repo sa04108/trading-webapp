@@ -1,18 +1,18 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { AGENT_LEASE_MS, AGENT_MAX_ATTEMPTS, LOCAL_AGENT_ID } from '../../../../shared/agent-protocol.js';
-import type { Clock } from '../../../shared/clock.js';
+import type { Clock } from '../../../../runtime/shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
 import { isPersistenceUnavailableError } from '../../../shared/db/sqlite-errors.js';
-import type { AuditLogService } from '../../audit/audit-service.js';
-import type { BacktestExecutionTelemetry } from './backtest-execution-telemetry.js';
+import type { AuditLogService } from '../../../../runtime/modules/audit/audit-service.js';
+import type { BacktestExecutionTelemetry } from '../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js';
 import type { BacktestJobRow, JobQueue } from './job-queue.js';
 import type { JobEvent } from './job-orchestrator.js';
 import {
   BacktestResultImportInternalError,
   BacktestResultPersistenceUnavailableError,
   type BacktestResultCompleter,
-} from './backtest-result-artifact.js';
+} from '../../../../runtime/modules/backtest/application/backtest-result-artifact.js';
 
 export interface BacktestJobLease {
   readonly job: BacktestJobRow;

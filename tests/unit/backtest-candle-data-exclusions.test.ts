@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   findCandleDataExclusions,
   type CandleDataExclusionInput,
-} from '../../src/server/modules/backtest/application/backtest-candle-data-exclusions.js';
-import type { BacktestDataExclusion } from '../../src/server/modules/backtest/application/backtest-data-exclusion.js';
-import { UniverseResolutionCancelledError } from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
-import { CandleCoverageService } from '../../src/server/modules/market-data/application/candle-coverage-service.js';
-import { openDatabase } from '../../src/server/shared/db/database.js';
+} from '../../src/runtime/modules/backtest/application/backtest-candle-data-exclusions.js';
+import type { BacktestDataExclusion } from '../../src/runtime/modules/backtest/application/backtest-data-exclusion.js';
+import { UniverseResolutionCancelledError } from '../../src/runtime/modules/backtest/application/universe-rule-resolver.js';
+import { CandleCoverageService } from '../../src/runtime/modules/market-data/application/candle-coverage-service.js';
+import { openDatabase } from '../../src/runtime/shared/db/database.js';
 import { krxDailyBars } from '../../src/server/shared/db/schema.js';
 
 const ts = (date: string): number => Date.parse(`${date}T00:00:00Z`);

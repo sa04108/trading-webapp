@@ -1,23 +1,25 @@
 import { AgentRegistry } from '../modules/agents/application/agent-registry.js';
 import { DatasetSnapshots } from '../modules/agents/application/dataset-snapshots.js';
 import { AgentPreparationQueue } from '../modules/agents/application/agent-preparation-queue.js';
-import { AgentDataQueue, AgentCollectionPaused } from '../modules/agents/application/agent-data-queue.js';
+import { createAgentCollectionRuntime } from '../modules/agents/application/agent-collection-runtime.js';
+import { AgentDataQueue } from '../modules/agents/application/agent-data-queue.js';
 import { AgentCoordinator } from '../modules/agents/application/agent-coordinator.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { and, eq, inArray, lte } from 'drizzle-orm';
-import { facts as factsTable } from '../shared/db/schema.js';
-import type { Fact } from '../modules/facts/domain/fact.js';
+import { facts as factsTable } from '../../runtime/shared/db/data-schema.js';
+import type { Fact } from '../../runtime/modules/facts/domain/fact.js';
 import { periodToTsRange } from '../../shared/schemas/backtest-request.js';
 import type { AppConfig } from './config.js';
-import { readGitCommitSha } from '../shared/build-info.js';
+import { readRuntimeVersions } from '../../runtime/shared/runtime-versions.js';
+import { readGitCommitSha } from '../../runtime/shared/build-info.js';
 import { createLogger, type Logger } from '../shared/logger.js';
-import { openDatabase, type DatabaseHandle } from '../shared/db/database.js';
+import { openDatabase, type DatabaseHandle } from '../../runtime/shared/db/database.js';
 import { SqliteExternalApiUsage, type ExternalApiUsage } from '../shared/db/external-api-usage.js';
 import { pruneExpiredRows } from '../shared/db/maintenance.js';
-import { systemClock, type Clock } from '../shared/clock.js';
+import { systemClock, type Clock } from '../../runtime/shared/clock.js';
 import { configureZodLocale } from '../shared/zod-locale.js';
-import { createAuditLogService, type AuditLogService } from '../modules/audit/audit-service.js';
+import { createAuditLogService, type AuditLogService } from '../../runtime/modules/audit/audit-service.js';
 import { NotificationService } from '../modules/notification/application/notification-service.js';
 import type { NotificationInput } from '../modules/notification/application/notification-service.js';
 import {
@@ -41,13 +43,13 @@ import {
   createSqliteUserRepository,
 } from '../modules/auth/infrastructure/sqlite-repositories.js';
 import { SymbolInfoService } from '../modules/market-data/application/symbol-info-service.js';
-import { SymbolService } from '../modules/market-data/application/symbol-service.js';
-import { CandleCoverageService } from '../modules/market-data/application/candle-coverage-service.js';
-import type { CandleRepository } from '../modules/market-data/application/ports.js';
+import type { SymbolService } from '../../runtime/modules/market-data/application/symbol-service.js';
+import { CandleCoverageService } from '../../runtime/modules/market-data/application/candle-coverage-service.js';
+import type { CandleRepository } from '../../runtime/modules/market-data/application/ports.js';
 import { createTossStockInfoSource } from '../modules/broker/infrastructure/toss/toss-stock-info-source.js';
-import { KrxDailyCandleRepository } from '../modules/market-data/infrastructure/krx-daily-candle-repository.js';
-import { StrategyRegistry } from '../modules/strategy/application/strategy-registry.js';
-import { strategyRequiresFinancialData } from '../modules/strategy/domain/strategy.js';
+import { KrxDailyCandleRepository } from '../../runtime/modules/market-data/infrastructure/krx-daily-candle-repository.js';
+import { StrategyRegistry } from '../../runtime/modules/strategy/application/strategy-registry.js';
+import { strategyRequiresFinancialData } from '../../runtime/modules/strategy/domain/strategy.js';
 import { JobOrchestrator, type JobEvent } from '../modules/backtest/application/job-orchestrator.js';
 import { JobQueue } from '../modules/backtest/application/job-queue.js';
 import { PreparationReferenceService } from '../modules/backtest/application/preparation-reference-service.js';
@@ -57,45 +59,35 @@ import {
   createSeedCloneBatchJobListener,
   SeedCloneBatchService,
 } from '../modules/backtest/application/seed-clone-batch-service.js';
-import type { FactRepository } from '../modules/facts/application/ports.js';
-import {
-  SqliteCorporateActionCoverageStore,
-  type CorporateActionCoverageStore,
-} from '../modules/facts/application/corporate-action-coverage.js';
-import {
-  SqliteFactCoverageStore,
-  type FactCoverageStore,
-} from '../modules/facts/application/fact-coverage-store.js';
-import { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
-import { FinancialFactAvailabilityService } from '../modules/facts/application/financial-fact-availability.js';
-import { createDartFactSource } from '../modules/facts/infrastructure/dart/dart-fact-source.js';
-import { SqliteDartRawSnapshotStore } from '../modules/facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
-import { SqliteFactRepository } from '../modules/facts/infrastructure/sqlite-fact-repository.js';
-import { createKrxHistoricalUniverseSource } from '../modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
+import type { FactRepository } from '../../runtime/modules/facts/application/ports.js';
+import type { CorporateActionCoverageStore } from '../../runtime/modules/facts/application/corporate-action-coverage.js';
+import type { FactCoverageStore } from '../../runtime/modules/facts/application/fact-coverage-store.js';
+import type { FactSyncService } from '../modules/facts/application/fact-sync-service.js';
+import { FinancialFactAvailabilityService } from '../../runtime/modules/facts/application/financial-fact-availability.js';
 import { createFredBenchmarkSource } from '../modules/market-data/infrastructure/fred/fred-benchmark-source.js';
-import { SymbolMasterService } from '../modules/market-data/application/symbol-master-service.js';
-import { SymbolMasterBackfill } from '../modules/market-data/application/symbol-master-backfill.js';
-import { SymbolMasterScheduler } from '../modules/market-data/application/symbol-master-scheduler.js';
-import { SelectionMetricRepository } from '../modules/market-data/application/selection-metric-repository.js';
-import { UniverseRuleResolver } from '../modules/backtest/application/universe-rule-resolver.js';
-import { BacktestPreparationOrchestrator } from '../modules/backtest/application/backtest-preparation-orchestrator.js';
+import type { SymbolMasterService } from '../../runtime/modules/market-data/application/symbol-master-service.js';
+import type { SymbolMasterBackfill } from '../modules/market-data/application/symbol-master-backfill.js';
+import type { SymbolMasterScheduler } from '../modules/market-data/application/symbol-master-scheduler.js';
+import { SelectionMetricRepository } from '../../runtime/modules/market-data/application/selection-metric-repository.js';
+import { UniverseRuleResolver } from '../../runtime/modules/backtest/application/universe-rule-resolver.js';
+import { BacktestPreparationOrchestrator } from '../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import {
   assertSafePinnedScheduleIdentities,
-} from '../modules/backtest/application/backtest-symbol-identity.js';
+} from '../../runtime/modules/backtest/application/backtest-symbol-identity.js';
 import {
   financialCoverageGapMessage,
   findFinancialCoverageGap,
-} from '../modules/backtest/application/backtest-financial-coverage.js';
+} from '../../runtime/modules/backtest/application/backtest-financial-coverage.js';
 import {
   delistedEventsToTsMsBySymbol,
   financialFactCutoffsFromCoverage,
-} from '../modules/backtest/application/backtest-financial-execution-window.js';
-import { findIncompleteFundamentalCheckpointsFromCoverageSync } from '../modules/backtest/application/backtest-financial-data-readiness.js';
+} from '../../runtime/modules/backtest/application/backtest-financial-execution-window.js';
+import { findIncompleteFundamentalCheckpointsFromCoverageSync } from '../../runtime/modules/backtest/application/backtest-financial-data-readiness.js';
 import { BenchmarkService } from '../modules/market-data/application/benchmark-service.js';
 import { BacktestLeaseService } from '../modules/backtest/application/backtest-lease-service.js';
 import { RemoteResultUploadManager } from '../modules/backtest/infrastructure/remote-result-upload-manager.js';
 import { ForkedBacktestResultCompleter } from '../modules/backtest/infrastructure/forked-backtest-result-completer.js';
-import { kstDateOf } from '../modules/market-data/domain/kst-date.js';
+import { kstDateOf } from '../../runtime/modules/market-data/domain/kst-date.js';
 
 export interface SystemStatusProviders {
   queueLength: () => number;
@@ -267,33 +259,12 @@ export function createContainer(
   // 종목 등록·이름·재무 버전 체인만 SymbolService 가 맡는다.
   // 봉 수집·CSV 가져오기·슬라이스 커버리지는 이 커밋(Task 5,
   // 2026-08-07-price-data-removal)이 걷어냈다. 그래서 이제 봉 저장소를 주입받지 않는다.
-  const symbolService = new SymbolService(database.db, clock, auditLog);
-
-  const factRepository = new SqliteFactRepository(database.db);
+  const collection = createAgentCollectionRuntime({ database, config, clock, logger, auditLog, externalApiUsage });
+  const {
+    symbolService, factRepository, factCoverageStore, actionCoverageStore, factSyncService,
+    krxSource, symbolMasterService, symbolMasterBackfill, symbolMasterScheduler,
+  } = collection;
   const financialFactAvailabilityService = new FinancialFactAvailabilityService(database.db);
-  const dartRawSnapshots = new SqliteDartRawSnapshotStore(database.db);
-  const factSource = createDartFactSource(
-    config.dartApiKey ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey } : null,
-    logger,
-    // 미래 보고서 생략(filableReportCount)이 sync 계획과 같은 시각을 봐야 한다
-    { clock, usage: externalApiUsage, rawSnapshots: dartRawSnapshots },
-  );
-  // 팩트도 백테스트 입력이다 — 캔들과 같은 버전 체인에 올린다 (§9.5).
-  // SymbolService 를 통째로 넘기지 않고 좁은 포트(SymbolVersionBumper)로 받는다.
-  // 팩트와 coverage가 같은 SQLite 백업·트랜잭션 경계에 있으므로 파일 교차 검사는 없다.
-  const factCoverageStore = new SqliteFactCoverageStore(database.db);
-  // 자본변동 전용 수집(Task 5)이 갱신하는 별도 커버리지 — 재무 커버리지와 컬럼이
-  // 다르다 (corporate-action-coverage.ts 헤더 참고).
-  const actionCoverageStore = new SqliteCorporateActionCoverageStore(database.db);
-  const factSyncService = new FactSyncService(
-    factSource,
-    factRepository,
-    logger,
-    symbolService,
-    clock,
-    factCoverageStore,
-    actionCoverageStore,
-  );
   // 증권사 선택은 조립부 전용 지식 (§2.4) — 애플리케이션은 StockInfoSource 만 안다.
   // 자격 증명 미설정이면 어댑터가 포트 에러를 던지는 비활성 소스가 된다.
   const stockInfoSource = createTossStockInfoSource(
@@ -310,19 +281,6 @@ export function createContainer(
   // 종목 마스터가 채워 둔 이름이 있으면 그걸로 보여준다 (자격 증명 미설정 환경도 포함).
   const symbolInfoService = new SymbolInfoService(stockInfoSource, clock, logger, symbolService);
 
-  // KRX 과거 시점 조회 (설계 2026-08-03-krx-historical-universe). API 키 미설정이면
-  // 어댑터가 포트 에러를 던지는 비활성 소스가 된다 — 다른 데이터 경로와 같은 패턴
-  // (§2.4 조립부 전용 지식). 과거 손으로 스냅샷을 확정하던 화면(데이터셋·유니버스
-  // 스냅샷, 스펙 2026-08-05 Task 6 가 제거)은 사라졌고, 지금은 종목 마스터가 이
-  // 소스를 직접 쓴다.
-  const krxSource = createKrxHistoricalUniverseSource(
-    config.krxApiKey
-      ? { baseUrl: config.krxBaseUrl, apiKey: config.krxApiKey, approvalExpiry: config.krxApprovalExpiry }
-      : null,
-    clock,
-    logger,
-    { usage: externalApiUsage },
-  );
   const fredSource = createFredBenchmarkSource(
     config.fredApiKey ? { baseUrl: config.fredBaseUrl, apiKey: config.fredApiKey } : null,
     logger,
@@ -336,26 +294,6 @@ export function createContainer(
     logger,
   });
 
-  // 종목 마스터 (설계 2026-08-05-symbol-master-core).
-  const symbolMasterService = new SymbolMasterService({
-    db: database.db,
-    source: krxSource,
-    clock,
-    logger,
-  });
-  const symbolMasterBackfill = new SymbolMasterBackfill({
-    service: symbolMasterService,
-    source: krxSource,
-    clock,
-    logger,
-    dailyCallBudget: config.krxDailyCallBudget,
-  });
-  const symbolMasterScheduler = new SymbolMasterScheduler({
-    service: symbolMasterService,
-    backfill: symbolMasterBackfill,
-    clock,
-    logger,
-  });
   // 유니버스 규칙(시총 상위 N) → 리밸런스 날짜별 멤버십 일정 (스펙 2026-08-05) —
   // 백테스트 제출·미리보기가 공유한다.
   const selectionMetricRepository = new SelectionMetricRepository(database.db);
@@ -378,6 +316,7 @@ export function createContainer(
     logger,
   });
   const backtestPreparationOrchestrator = new BacktestPreparationOrchestrator({
+    references: new PreparationReferenceService(database),
     database,
     agentManaged: !(options.inlinePreparation ?? config.nodeEnv === 'test'),
     resolver: universeRuleResolver,
@@ -403,7 +342,7 @@ export function createContainer(
   const backtestResultCompleter = new ForkedBacktestResultCompleter(config.databasePath);
   const backtestLeaseService = new BacktestLeaseService(
     jobQueue,
-    readGitCommitSha(config.nodeEnv),
+    readRuntimeVersions().executionVersion,
     clock,
     auditLog,
     logger,
@@ -416,42 +355,11 @@ export function createContainer(
     backtestPreparationOrchestrator.agentJobUpdated(jobId);
     agentCoordinator.wake();
   });
-  const dataQueue = new AgentDataQueue(database, snapshots, async (request, shouldStop) => {
-    if (request.kind === 'MARKET') {
-      for (const date of request.dates) {
-        if (shouldStop()) return;
-        await symbolMasterService.ensureTradingDay(date);
-      }
-    } else if (request.kind === 'SELECTION') {
-      await symbolMasterService.ensureSelectionMetrics(request.dates);
-    } else if (request.kind === 'REGISTER') {
-      for (const entry of request.symbols) {
-        const registered = symbolService.getRegisteredIdentity(entry.symbol);
-        if (registered) {
-          if (registered.standardCode !== entry.standardCode) throw new Error('종목 표준코드가 기존 등록과 다릅니다');
-          continue;
-        }
-        const row = database.sqlite.prepare('SELECT name FROM symbol_master_versions WHERE short_code = ? AND standard_code = ? LIMIT 1')
-          .get(entry.symbol, entry.standardCode) as { name: string } | undefined;
-        if (!row) throw new Error('수집된 종목 마스터에 없는 표준코드입니다');
-        symbolService.addSymbol(entry.symbol, 'KR', row.name, entry.standardCode);
-      }
-    } else {
-      const input = { ...request, mode: 'INCREMENTAL' as const, consolidated: true };
-      const report = request.kind === 'FINANCIAL'
-        ? await factSyncService.sync(input, { shouldStop })
-        : await factSyncService.syncCorporateActions(input, { shouldStop });
-      if (report.stopReason === 'DAILY_QUOTA') {
-        const next = Math.floor((clock.now() + 9 * 3600_000) / 86400_000 + 1) * 86400_000 - 9 * 3600_000;
-        throw new AgentCollectionPaused(report.failureMessage ?? 'DART 일일 호출 한도 대기', next);
-      }
-      if (report.stopReason === 'ERROR') throw new Error(report.failureMessage ?? 'DART 수집 실패');
-    }
-  }, (kind, jobId, error) => {
+  const dataQueue = new AgentDataQueue(database, snapshots, collection.collect, (kind, jobId, error) => {
     if (kind === 'PREPARATION') preparations.resume(jobId, error);
   }, logger);
   const agentCoordinator = new AgentCoordinator(database, registry, snapshots, preparations, dataQueue,
-    backtestLeaseService, jobQueue, readGitCommitSha(config.nodeEnv), logger);
+    backtestLeaseService, jobQueue, readRuntimeVersions().agentVersion, logger, readRuntimeVersions().executionVersion);
   const remoteResultUploadManager = new RemoteResultUploadManager(config.tempRoot);
   const seedCloneBatchService = new SeedCloneBatchService(
     database,

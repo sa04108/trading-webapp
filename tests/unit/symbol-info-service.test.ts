@@ -8,7 +8,7 @@ import {
   type StockInfo,
   type StockInfoBatchResult,
   type StockInfoSource,
-} from '../../src/server/modules/market-data/application/ports.js';
+} from '../../src/runtime/modules/market-data/application/ports.js';
 import { createLogger } from '../../src/server/shared/logger.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 

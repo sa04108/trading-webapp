@@ -1,6 +1,7 @@
 import type { PeriodValidationDto } from '../../../../shared/schemas/period-validation.js';
-import type { DatabaseHandle } from '../../../shared/db/database.js';
+import type { DatabaseHandle } from '../../../../runtime/shared/db/database.js';
 import { registerPeriodValidationRoutes } from './period-validation-routes.js';
+import { PreparationReferenceService } from '../application/preparation-reference-service.js';
 import { createHash } from 'node:crypto';
 import type { EventEmitter } from 'node:events';
 import os from 'node:os';
@@ -26,21 +27,21 @@ import {
   TRADE_SORT_KEYS,
 } from '../../../../shared/schemas/trade-sort.js';
 import { SECURITY_HEADERS } from '../../../shared/security.js';
-import type { Clock } from '../../../shared/clock.js';
-import type { AuditLogService } from '../../audit/audit-service.js';
-import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
-import type { FinancialFactAvailabilityService } from '../../facts/application/financial-fact-availability.js';
-import type { FactRepository } from '../../facts/application/ports.js';
-import type { ConsumedVersionSnapshot, SymbolService } from '../../market-data/application/symbol-service.js';
-import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
+import type { Clock } from '../../../../runtime/shared/clock.js';
+import type { AuditLogService } from '../../../../runtime/modules/audit/audit-service.js';
+import type { FactCoverageStore } from '../../../../runtime/modules/facts/application/fact-coverage-store.js';
+import type { FinancialFactAvailabilityService } from '../../../../runtime/modules/facts/application/financial-fact-availability.js';
+import type { FactRepository } from '../../../../runtime/modules/facts/application/ports.js';
+import type { ConsumedVersionSnapshot, SymbolService } from '../../../../runtime/modules/market-data/application/symbol-service.js';
+import type { SymbolMasterService } from '../../../../runtime/modules/market-data/application/symbol-master-service.js';
 import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
-import { KRX_FILTER_POLICY_VERSION } from '../../market-data/domain/krx-filter-policy.js';
+import { KRX_FILTER_POLICY_VERSION } from '../../../../runtime/modules/market-data/domain/krx-filter-policy.js';
 import type {
   CandleCoverageRow,
   CandleCoverageService,
-} from '../../market-data/application/candle-coverage-service.js';
-import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
-import { strategyRequiresFinancialData } from '../../strategy/domain/strategy.js';
+} from '../../../../runtime/modules/market-data/application/candle-coverage-service.js';
+import type { StrategyRegistry } from '../../../../runtime/modules/strategy/application/strategy-registry.js';
+import { strategyRequiresFinancialData } from '../../../../runtime/modules/strategy/domain/strategy.js';
 import type { BenchmarkService } from '../../market-data/application/benchmark-service.js';
 import { benchmarkPinSchema } from '../../../../shared/schemas/benchmark.js';
 import { estimateBars, MAX_BACKTEST_BARS } from '../domain/bar-estimate.js';
@@ -49,35 +50,35 @@ import {
   getSlippageProfile,
   listCostProfiles,
   listSlippageProfiles,
-} from '../domain/cost-profiles.js';
+} from '../../../../runtime/modules/backtest/domain/cost-profiles.js';
 import {
   findRebalanceSpacingViolation,
   rebalanceSpacingViolationMessage,
-} from '../domain/rebalance-spacing.js';
+} from '../../../../runtime/modules/backtest/domain/rebalance-spacing.js';
 import type { JobOrchestrator, JobEvent } from '../application/job-orchestrator.js';
 import type { BacktestJobRow, JobQueue } from '../application/job-queue.js';
 import type { ResultsService } from '../application/results-service.js';
 import { rebaseStoredRequest } from '../application/stored-request.js';
 import { summarizeUniverseRebalancing } from '../application/universe-rebalancing.js';
-import type { LegacyUniverseScheduleEntry, ResolvedUniverse } from '../application/universe-rule-resolver.js';
+import type { LegacyUniverseScheduleEntry, ResolvedUniverse } from '../../../../runtime/modules/backtest/application/universe-rule-resolver.js';
 import {
   PreparationInputError,
   UnsafeBacktestSymbolIdentityError,
   type BacktestPreparationOrchestrator,
   type BacktestUniversePreview,
   type PreparationInput,
-} from '../application/backtest-preparation-orchestrator.js';
-import { backtestPreparationRequestHash } from '../application/backtest-preparation-plan.js';
-import { assertSafePinnedScheduleIdentities } from '../application/backtest-symbol-identity.js';
+} from '../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
+import { backtestPreparationRequestHash } from '../../../../runtime/modules/backtest/application/backtest-preparation-plan.js';
+import { assertSafePinnedScheduleIdentities } from '../../../../runtime/modules/backtest/application/backtest-symbol-identity.js';
 import {
   financialCoverageGapMessage,
   findFinancialCoverageGap,
-} from '../application/backtest-financial-coverage.js';
+} from '../../../../runtime/modules/backtest/application/backtest-financial-coverage.js';
 import {
   delistedEventsToTsMsBySymbol,
   financialFactCutoffsFromCoverage,
-} from '../application/backtest-financial-execution-window.js';
-import { findIncompleteFundamentalCheckpointsFromCoverage } from '../application/backtest-financial-data-readiness.js';
+} from '../../../../runtime/modules/backtest/application/backtest-financial-execution-window.js';
+import { findIncompleteFundamentalCheckpointsFromCoverage } from '../../../../runtime/modules/backtest/application/backtest-financial-data-readiness.js';
 import type {
   SeedCloneBatchDetail,
   SeedCloneBatchService,
@@ -946,6 +947,7 @@ export function registerBacktestRoutes(app: FastifyInstance, deps: BacktestRoute
 
   const validations = registerPeriodValidationRoutes(app, {
     database: deps.database, clock, queue, results, strategies, preparation,
+    collectPreparations: () => new PreparationReferenceService(deps.database).collect(),
     onFinished: deps.onValidationFinished,
     validateRequest: (body) => {
       const errors = validateStaticSubmission(body);

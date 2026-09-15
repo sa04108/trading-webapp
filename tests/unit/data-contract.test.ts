@@ -4,7 +4,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { afterEach, describe, expect, it } from 'vitest';
-import { datasetIdentity, migrateDatabaseRole } from '../../src/server/shared/db/database-layout.js';
+import { datasetIdentity, migrateDatabaseRole } from '../../src/runtime/shared/db/database-layout.js';
 
 const directories: string[] = [];
 const legacyTables = ['symbol_master_checkpoints', 'symbol_master_checkpoint_symbols', 'symbol_master_events', 'symbol_master_storage_state'];

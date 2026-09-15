@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
-import type { AuditLogService } from '../../audit/audit-service.js';
+import type { AuditLogService } from '../../../../runtime/modules/audit/audit-service.js';
 import type { JobQueue, BacktestJobStatus } from './job-queue.js';
-import type { BacktestExecutionTelemetry } from './backtest-execution-telemetry.js';
+import type { BacktestExecutionTelemetry } from '../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js';
 
 export type ChildMessage =
   | { type: 'progress'; processedBars: number; totalBars: number; progressLabel: string | null }

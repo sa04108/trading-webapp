@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createTossStockInfoSource } from '../../src/server/modules/broker/infrastructure/toss/toss-stock-info-source.js';
-import { StockInfoSourceNotConfiguredError } from '../../src/server/modules/market-data/application/ports.js';
+import { StockInfoSourceNotConfiguredError } from '../../src/runtime/modules/market-data/application/ports.js';
 import { createLogger } from '../../src/server/shared/logger.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 

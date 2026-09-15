@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { riskQuantity } from '../../src/server/modules/strategy/strategies/shared/position-sizing.js';
+import { riskQuantity } from '../../src/runtime/modules/strategy/strategies/shared/position-sizing.js';
 
 describe('riskQuantity', () => {
   it('equity × 리스크% ÷ 손절 폭을 내림한다', () => {

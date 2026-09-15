@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { CorporateActionCoverageStore } from '../../src/server/modules/facts/application/corporate-action-coverage.js';
-import type { FactCoverageStore } from '../../src/server/modules/facts/application/fact-coverage-store.js';
+import type { CorporateActionCoverageStore } from '../../src/runtime/modules/facts/application/corporate-action-coverage.js';
+import type { FactCoverageStore } from '../../src/runtime/modules/facts/application/fact-coverage-store.js';
 import {
   FactSyncService,
   factsFingerprint,
@@ -15,8 +15,8 @@ import {
   type FactSource,
   type FetchFinancialsRequest,
   type PeriodicFiling,
-} from '../../src/server/modules/facts/application/ports.js';
-import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
+} from '../../src/runtime/modules/facts/application/ports.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/runtime/modules/facts/domain/fact.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
 const CLOCK = { now: () => 1_700_000_000_000 };
@@ -30,7 +30,7 @@ function fakeCoverage(
   results: Array<{
     symbol: string;
     years: readonly number[];
-    gaps: readonly import('../../src/server/modules/facts/application/ports.js').FactIngestionGap[];
+    gaps: readonly import('../../src/runtime/modules/facts/application/ports.js').FactIngestionGap[];
   }>;
   processedReceiptNos: Set<string>;
 } {
@@ -46,7 +46,7 @@ function fakeCoverage(
   const results: Array<{
     symbol: string;
     years: readonly number[];
-    gaps: readonly import('../../src/server/modules/facts/application/ports.js').FactIngestionGap[];
+    gaps: readonly import('../../src/runtime/modules/facts/application/ports.js').FactIngestionGap[];
   }> = [];
   const processedReceiptNos = new Set<string>();
   const add = (symbol: string, years: readonly number[], nowMs: number): void => {

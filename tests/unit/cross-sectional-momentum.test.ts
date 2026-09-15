@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
-import { createRng } from '../../src/server/modules/backtest/domain/seeded-rng.js';
-import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
-import type { CorporateAction } from '../../src/server/modules/facts/domain/fact.js';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
-import type { StrategyBarContext } from '../../src/server/modules/strategy/domain/strategy.js';
+import { runBacktest } from '../../src/runtime/modules/backtest/domain/engine.js';
+import { createRng } from '../../src/runtime/modules/backtest/domain/seeded-rng.js';
+import type { ExecutionProfile } from '../../src/runtime/modules/backtest/domain/types.js';
+import type { CorporateAction } from '../../src/runtime/modules/facts/domain/fact.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
+import { StrategyRegistry } from '../../src/runtime/modules/strategy/application/strategy-registry.js';
+import type { StrategyBarContext } from '../../src/runtime/modules/strategy/domain/strategy.js';
 import {
   crossSectionalMomentumParameters,
   crossSectionalMomentumStrategy,
   momentumScore,
-} from '../../src/server/modules/strategy/strategies/cross-sectional-momentum.js';
+} from '../../src/runtime/modules/strategy/strategies/cross-sectional-momentum.js';
 
 const DAY = 86_400_000;
 /** 2025-01-02 09:00 KST = 2025-01-02 00:00 UTC */

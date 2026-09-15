@@ -5,8 +5,8 @@ import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import Database from 'better-sqlite3';
 import type { AgentSettings } from './config.js';
-import { DATABASE_SCHEMA_VERSION, datasetIdentity } from '../server/shared/db/database-layout.js';
-import { type DatasetManifest } from '../shared/agent-protocol.js';
+import { DATABASE_SCHEMA_VERSION, datasetIdentity } from '../runtime/shared/db/database-layout.js';
+import { datasetManifestSchema, type DatasetManifest } from '../shared/agent-protocol.js';
 
 export function durableJson(file: string, value: unknown): void {
   const temporary = `${file}.tmp`;
@@ -30,9 +30,11 @@ export class AgentDatasetCache {
   file(dataset: DatasetManifest): string { return path.join(this.directory, `${dataset.version}-${dataset.sha256}.sqlite`); }
   get syncing(): boolean { return this.pending !== null; }
 
-  async synchronize(manifest: DatasetManifest): Promise<void> {
+  async synchronize(input: DatasetManifest): Promise<void> {
+    if (input.schemaVersion !== DATABASE_SCHEMA_VERSION) throw new Error('계산 DB 스키마가 달라 클라이언트를 업데이트해야 합니다');
+    const manifest = datasetManifestSchema.parse(input);
     if (this.current && manifest.version < this.current.version) return;
-    if (this.current?.version === manifest.version && this.current.sha256 === manifest.sha256) return;
+    if (this.current?.version === manifest.version && this.current.sha256 === manifest.sha256 && this.current.collectionVersion === manifest.collectionVersion) return;
     if (this.pending) { await this.pending; return this.synchronize(manifest); }
     this.pending = this.download(manifest).finally(() => { this.pending = null; this.abort = null; });
     return this.pending;

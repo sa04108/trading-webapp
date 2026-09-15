@@ -3,7 +3,7 @@ import { createKrxHistoricalUniverseSource } from '../../src/server/modules/mark
 import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
-} from '../../src/server/modules/market-data/application/symbol-master-service.js';
+} from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 import { krxDailyBars } from '../../src/server/shared/db/schema.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
@@ -142,15 +142,14 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     await teardown(ctx);
   });
 
-  it('이미 있는 날짜의 봉을 덮어쓰지 않는다', async () => {
+  it('미검증 일봉은 재조회한 응답으로 갱신한다', async () => {
     const ctx = await setup();
     const date = '2023-01-02';
 
-    // 커버리지를 기록하기 전에 죽어 일봉만 남은 상태를 흉내낸다. 재수집은 정상적으로
-    // 종목 버전과 coverage 를 만들되, 이미 저장된 일봉 값은 덮어쓰지 않아야 한다.
+    // 현재 수집 버전으로 검증하지 않은 일봉이 남은 상태를 흉내낸다.
+    // 재조회한 응답과 함께 종목 버전·coverage·일봉을 같은 트랜잭션에서 갱신한다.
     expect(ctx.svc.isCovered(date)).toBe(false);
-    // 그 죽은 시도가 남겨 둔 낡은 일봉 행 두 개다(서로 다른 종목·값).
-    // 자본변동은 계산 시점에 반영하므로 재수집이 들어와도 이 값은 그대로 남아야 한다.
+    // 이전 수집기가 남긴 서로 다른 종목의 낡은 일봉을 갱신 대상으로 심는다.
     ctx.t.container.database.db
       .insert(krxDailyBars)
       .values([
@@ -187,8 +186,8 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
 
     const rows = allBars(ctx);
     expect(rows).toEqual([
-      { shortCode: '000660', date, market: 'KOSDAQ', open: 2, high: 2, low: 2, close: 2, volume: 2 },
-      { shortCode: '005930', date, market: 'KOSPI', open: 1, high: 1, low: 1, close: 1, volume: 1 },
+      { shortCode: '000660', date, market: 'KOSDAQ', open: 100_000, high: 101_000, low: 99_000, close: 100_500, volume: 500_000 },
+      { shortCode: '005930', date, market: 'KOSPI', open: 71_500, high: 72_000, low: 71_000, close: 71_800, volume: 12_345_678 },
     ]);
     await teardown(ctx);
   });

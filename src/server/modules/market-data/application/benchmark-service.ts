@@ -8,21 +8,16 @@ import {
   type BenchmarkPin,
   type FredBenchmarkId,
 } from '../../../../shared/schemas/benchmark.js';
-import type { AppDatabase } from '../../../shared/db/database.js';
-import {
-  benchmarkDailyValues,
-  fredBenchmarkCoverage,
-  symbolMasterCoverage,
-  symbolMasterTradingDays,
-} from '../../../shared/db/schema.js';
-import type { Clock } from '../../../shared/clock.js';
+import type { AppDatabase } from '../../../../runtime/shared/db/database.js';
+import { benchmarkDailyValues, fredBenchmarkCoverage, symbolMasterCoverage, symbolMasterTradingDays } from '../../../../runtime/shared/db/data-schema.js';
+import type { Clock } from '../../../../runtime/shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
-import { addCalendarDays, isWeekendDate } from '../domain/kst-date.js';
+import { addCalendarDays, isWeekendDate } from '../../../../runtime/modules/market-data/domain/kst-date.js';
 import {
   KrxNotConfiguredError,
   type FredBenchmarkSource,
   type KrxHistoricalUniverseSource,
-} from './ports.js';
+} from '../../../../runtime/modules/market-data/application/ports.js';
 
 export type BenchmarkBackfillState = 'IDLE' | 'RUNNING' | 'FAILED';
 

@@ -1,19 +1,19 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { runBacktest, runBacktestCancellable } from '../../src/server/modules/backtest/domain/engine.js';
-import type { ExecutionProfile, OrderIntent } from '../../src/server/modules/backtest/domain/types.js';
-import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
-import { PitFactView } from '../../src/server/modules/facts/domain/pit-fact-view.js';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
+import { runBacktest, runBacktestCancellable } from '../../src/runtime/modules/backtest/domain/engine.js';
+import type { ExecutionProfile, OrderIntent } from '../../src/runtime/modules/backtest/domain/types.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/runtime/modules/facts/domain/fact.js';
+import { PitFactView } from '../../src/runtime/modules/facts/domain/pit-fact-view.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
 import type {
   StrategyBarContext,
   TradingStrategy,
-} from '../../src/server/modules/strategy/domain/strategy.js';
+} from '../../src/runtime/modules/strategy/domain/strategy.js';
 import {
   rangeBreakoutStrategy,
   type RangeBreakoutParameters,
-} from '../../src/server/modules/strategy/strategies/range-breakout.js';
+} from '../../src/runtime/modules/strategy/strategies/range-breakout.js';
 
 const HOUR = 3_600_000;
 const START = Date.UTC(2026, 6, 6, 0, 0);

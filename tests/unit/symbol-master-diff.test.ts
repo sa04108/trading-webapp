@@ -3,7 +3,7 @@ import {
   diffUniverse,
   type SymbolMasterEntry,
   type UniverseState,
-} from '../../src/server/modules/market-data/domain/symbol-master.js';
+} from '../../src/runtime/modules/market-data/domain/symbol-master.js';
 
 function entry(overrides: Partial<SymbolMasterEntry> = {}): SymbolMasterEntry {
   return {

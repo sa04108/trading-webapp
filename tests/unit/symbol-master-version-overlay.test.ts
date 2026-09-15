@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { SymbolMasterEntry } from '../../src/server/modules/market-data/domain/symbol-master.js';
+import type { SymbolMasterEntry } from '../../src/runtime/modules/market-data/domain/symbol-master.js';
 import {
   overlayVersionTimeline,
   type SymbolMasterVersionSegment,
-} from '../../src/server/modules/market-data/domain/symbol-master-version.js';
+} from '../../src/runtime/modules/market-data/domain/symbol-master-version.js';
 
 function entry(overrides: Partial<SymbolMasterEntry> = {}): SymbolMasterEntry {
   return {

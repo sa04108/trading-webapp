@@ -3,7 +3,7 @@ import { createKrxHistoricalUniverseSource } from '../../src/server/modules/mark
 import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
-} from '../../src/server/modules/market-data/application/symbol-master-service.js';
+} from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   baseInfoFixture,

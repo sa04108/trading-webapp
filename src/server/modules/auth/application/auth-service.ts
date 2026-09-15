@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { Clock } from '../../../shared/clock.js';
+import type { Clock } from '../../../../runtime/shared/clock.js';
 import { isLoginLocked, isSessionExpired } from '../domain/session-policy.js';
 import type {
   LoginAttemptRepository,

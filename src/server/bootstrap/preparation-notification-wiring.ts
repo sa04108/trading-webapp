@@ -1,8 +1,8 @@
 import { eq } from 'drizzle-orm';
-import type { BacktestPreparationJobDto } from '../modules/backtest/application/backtest-preparation-orchestrator.js';
+import type { BacktestPreparationJobDto } from '../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import type { NotificationInput } from '../modules/notification/application/notification-service.js';
-import type { DatabaseHandle } from '../shared/db/database.js';
-import { backtestPreparationJobs } from '../shared/db/schema.js';
+import type { DatabaseHandle } from '../../runtime/shared/db/database.js';
+import { backtestPreparationJobs } from '../../runtime/shared/db/operations-schema.js';
 import type { Logger } from '../shared/logger.js';
 
 const TERMINAL_NOTIFICATIONS = {

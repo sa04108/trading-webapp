@@ -7,18 +7,19 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
-import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
+import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
 import { backtestMetrics, backtestPreparationJobs, backtestRuns, backtestValidations } from '../../src/server/shared/db/schema.js';
-import { readGitCommitSha } from '../../src/server/shared/build-info.js';
+import { readGitCommitSha } from '../../src/runtime/shared/build-info.js';
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { JobQueue } from '../../src/server/modules/backtest/application/job-queue.js';
 import { ResultsService } from '../../src/server/modules/backtest/application/results-service.js';
 import { PeriodValidationService, type PeriodValidationDeps } from '../../src/server/modules/backtest/application/period-validation-service.js';
-import { PreparationPreviewCache } from '../../src/server/modules/backtest/application/preparation-preview-cache.js';
+import { PreparationPreviewCache } from '../../src/runtime/modules/backtest/application/preparation-preview-cache.js';
 import { PreparationReferenceService } from '../../src/server/modules/backtest/application/preparation-reference-service.js';
-import type { BacktestPreparationOrchestrator, BacktestUniversePreview } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
-import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
-import { strategySourceHash } from '../../src/server/modules/strategy/application/strategy-source-hash.js';
-import { ENGINE_VERSION } from '../../src/server/modules/backtest/domain/engine.js';
+import type { BacktestPreparationOrchestrator, BacktestUniversePreview } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
+import { StrategyRegistry } from '../../src/runtime/modules/strategy/application/strategy-registry.js';
+import { strategySourceHash } from '../../src/runtime/modules/strategy/application/strategy-source-hash.js';
+import { ENGINE_VERSION } from '../../src/runtime/modules/backtest/domain/engine.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import type { PeriodValidationConfig, ValidationMetrics } from '../../src/shared/schemas/period-validation.js';
 
@@ -69,6 +70,7 @@ describe('독립 구간 검증 실행', () => {
       },
     } as unknown as BacktestPreparationOrchestrator;
     deps = {
+      collectPreparations: () => new PreparationReferenceService(database).collect(),
       database, clock, queue, results, preparation, strategies: new StrategyRegistry([strategy]),
       validateRequest: () => [],
       buildEnqueue: vi.fn(async (request, preview) => () => queue.enqueue(request, [], undefined, null, [], undefined, { preparationJobId: preview.preparationJobId })),
@@ -89,6 +91,7 @@ describe('독립 구간 검증 실행', () => {
       strategySourceHash: strategySourceHash(strategy), parameterJson: JSON.stringify(request.parameters),
       universeRuleJson: JSON.stringify(request.universeRule), scheduleHash: 'test', universeHash: 'test', universeJson: '[]',
       engineVersion: ENGINE_VERSION, feeModelVersion: 'test', slippageModelVersion: 'test', randomSeed: request.randomSeed,
+      executionVersion: readRuntimeVersions().executionVersion,
       gitCommitSha: readGitCommitSha(), startedAtMs: 1, completedAtMs: 2,
     }).run();
     database.db.insert(backtestMetrics).values({ jobId, metricsJson: JSON.stringify(values), totalReturnPct: values.totalReturnPct, cagrPct: values.cagrPct, maxDrawdownPct: values.maxDrawdownPct, sharpe: values.sharpe, tradeCount: values.tradeCount }).run();
@@ -220,6 +223,51 @@ describe('독립 구간 검증 실행', () => {
     database.db.update(backtestValidations).set({ engineVersion: 'old' }).where(eq(backtestValidations.id, another.id)).run();
     await service.pump();
     expect(service.get(another.id)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('버전') });
+  });
+
+  it('배포 SHA가 다른 원본·실험·하위 결과도 실행 버전이 같으면 끝까지 비교한다', async () => {
+    database.db.update(backtestRuns).set({ gitCommitSha: 'source-deployment' }).where(eq(backtestRuns.jobId, sourceId)).run();
+    const experiment = service.create(sourceId, { mode: 'HOLDOUT', splitDate: '2023-01-01' });
+    const versions = readRuntimeVersions();
+    expect(database.db.select().from(backtestValidations).where(eq(backtestValidations.id, experiment.id)).get())
+      .toMatchObject({ executionVersion: versions.executionVersion, validationVersion: versions.validationVersion });
+    database.db.update(backtestValidations).set({ gitCommitSha: 'experiment-deployment' }).where(eq(backtestValidations.id, experiment.id)).run();
+    for (let i = 0; i < 40 && service.get(experiment.id)!.status === 'ACTIVE'; i += 1) {
+      await service.pump();
+      for (const trial of service.get(experiment.id)!.trials.filter((trial) => trial.status === 'QUEUED')) {
+        complete(trial.jobId!);
+        database.db.update(backtestRuns).set({ gitCommitSha: 'child-deployment' }).where(eq(backtestRuns.jobId, trial.jobId!)).run();
+      }
+    }
+    expect(service.get(experiment.id)!.status).toBe('COMPLETED');
+  });
+
+  it.each([null, 'old-execution'])('원본 실행 버전 %s는 조회를 유지하고 새 검증 실험에서 거절한다', (executionVersion) => {
+    database.db.update(backtestRuns).set({ executionVersion }).where(eq(backtestRuns.jobId, sourceId)).run();
+    expect(results.getRun(sourceId)?.executionVersion).toBe(executionVersion);
+    expect(() => service.plan(sourceId, optimized)).toThrow('원본과 현재 실행 버전');
+    expect(() => service.create(sourceId, optimized)).toThrow('원본과 현재 실행 버전');
+  });
+
+  it.each([
+    { executionVersion: null }, { executionVersion: 'old-execution' },
+    { validationVersion: null }, { validationVersion: 'old-validation' },
+  ])('과거·불일치 버전 실험은 진행하지 않는다: %j', async (versions) => {
+    const experiment = service.create(sourceId, optimized);
+    database.db.update(backtestValidations).set(versions).where(eq(backtestValidations.id, experiment.id)).run();
+    await service.pump();
+    expect(service.get(experiment.id)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('버전') });
+    expect(service.get(experiment.id)!.trials.every((trial) => trial.jobId === null)).toBe(true);
+  });
+
+  it.each([null, 'old-execution'])('하위 결과 실행 버전 %s는 같은 실험에 합치지 않는다', async (executionVersion) => {
+    const experiment = service.create(sourceId, { mode: 'HOLDOUT', splitDate: '2023-01-01' });
+    await until(() => service.get(experiment.id)!.trials.some((trial) => trial.jobId));
+    const jobId = service.get(experiment.id)!.trials.find((trial) => trial.jobId)!.jobId!;
+    complete(jobId);
+    database.db.update(backtestRuns).set({ executionVersion }).where(eq(backtestRuns.jobId, jobId)).run();
+    await service.pump();
+    expect(service.get(experiment.id)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('하위 백테스트의 실행 버전') });
   });
 
   it('제출 검증을 기다리는 동안 취소하면 새 작업을 생성하지 않는다', async () => {

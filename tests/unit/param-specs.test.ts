@@ -5,7 +5,7 @@ import {
   paramLabel,
   paramMetaLine,
 } from '../../src/web/features/backtests/param-specs.js';
-import { rangeBreakoutParameters } from '../../src/server/modules/strategy/strategies/range-breakout.js';
+import { rangeBreakoutParameters } from '../../src/runtime/modules/strategy/strategies/range-breakout.js';
 
 const jsonSchema = z.toJSONSchema(rangeBreakoutParameters) as Record<string, unknown>;
 

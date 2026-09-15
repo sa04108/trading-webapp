@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   rankUniverseStage,
   type UniverseStageValue,
-} from '../../src/server/modules/backtest/application/universe-stage-ranking.js';
+} from '../../src/runtime/modules/backtest/application/universe-stage-ranking.js';
 import type { UniverseCriterion, UniverseStage } from '../../src/shared/schemas/universe-rule.js';
 
 const rows = (...values: Array<[string, number | bigint | null]>): UniverseStageValue[] =>

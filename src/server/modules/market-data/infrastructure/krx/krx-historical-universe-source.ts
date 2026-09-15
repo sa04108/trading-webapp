@@ -1,4 +1,4 @@
-import type { Clock } from '../../../../shared/clock.js';
+import type { Clock } from '../../../../../runtime/shared/clock.js';
 import type { Logger } from '../../../../shared/logger.js';
 import type { ExternalApiUsage } from '../../../../shared/db/external-api-usage.js';
 import { BENCHMARK_NAMES, type KrxBenchmarkId } from '../../../../../shared/schemas/benchmark.js';
@@ -9,13 +9,13 @@ import {
   KrxNotConfiguredError,
   KrxQuotaError,
   type KrxHistoricalUniverseSource,
-} from '../../application/ports.js';
-import { isoToBasDd, kstDateOf } from '../../domain/kst-date.js';
+} from '../../../../../runtime/modules/market-data/application/ports.js';
+import { isoToBasDd, kstDateOf } from '../../../../../runtime/modules/market-data/domain/kst-date.js';
 import type {
   KrxDailyTradeRow,
   KrxIssueBaseInfoRow,
   KrxMarket,
-} from '../../domain/krx-universe-types.js';
+} from '../../../../../runtime/modules/market-data/domain/krx-universe-types.js';
 import { parseBaseInfoRows, parseDailyRows, parseIndexClose, parseKrxEnvelope } from './krx-contract.js';
 
 export interface KrxConfig {

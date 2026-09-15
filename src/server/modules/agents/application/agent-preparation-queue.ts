@@ -1,8 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto';
+import { readRuntimeVersions } from '../../../../runtime/shared/runtime-versions.js';
 import { z } from 'zod';
-import type { DatabaseHandle } from '../../../shared/db/database.js';
+import type { DatabaseHandle } from '../../../../runtime/shared/db/database.js';
 import { AGENT_LEASE_MS, AGENT_MAX_ATTEMPTS, type AgentLease, type AgentMessage, type DatasetManifest } from '../../../../shared/agent-protocol.js';
-import { PreparationPreviewCache } from '../../backtest/application/preparation-preview-cache.js';
+import { PreparationPreviewCache } from '../../../../runtime/modules/backtest/application/preparation-preview-cache.js';
 import { agentTokenHash } from './agent-registry.js';
 
 interface LeaseRow { job_id: string; client_id: string; attempt: number; lease_token_hash: string | null; lease_expires_at_ms: number | null; dataset_version: number; failures: number; result_hash: string | null; status: string; cancel_requested: number }
@@ -71,22 +72,31 @@ export class AgentPreparationQueue {
     return true;
   }
 
-  finish(clientId: string, identity: Identity, outcome: 'COMPLETED' | 'FAILED' | 'CANCELLED', input: unknown, sourceRevision: number, error?: string): boolean {
+  finish(clientId: string, identity: Identity, outcome: 'COMPLETED' | 'FAILED' | 'CANCELLED', input: unknown, dataset: DatasetManifest | null, error?: string): boolean {
     const row = this.row(identity.jobId);
     if (!this.owns(clientId, identity, true) || !row) return false;
     const hash = createHash('sha256').update(JSON.stringify(input ?? null)).digest('hex');
     if (row.status === 'COMPLETED') return row.result_hash === hash && outcome === 'COMPLETED';
     if (row.cancel_requested) outcome = 'CANCELLED';
+    if (outcome === 'COMPLETED' && dataset?.collectionVersion !== readRuntimeVersions().collectionVersion) {
+      // 수집 코드가 바뀐 뒤 도착한 옛 결과를 현재 미리보기 검증으로 승격하지 않는다.
+      this.database.sqlite.transaction(() => {
+        this.database.sqlite.prepare("UPDATE backtest_preparation_jobs SET status = 'QUEUED', error = NULL, updated_at_ms = ?, completed_at_ms = NULL WHERE id = ?").run(Date.now(), identity.jobId);
+        this.database.sqlite.prepare('UPDATE agent_preparation_leases SET lease_token_hash = NULL, lease_expires_at_ms = NULL WHERE job_id = ?').run(identity.jobId);
+      })();
+      this.changed(identity.jobId);
+      return true;
+    }
     const result = outcome === 'COMPLETED' ? resultSchema.parse(input) : null;
     if (result) result.preview = (input as typeof result).preview;
-    if (result && (result.dataRevision !== sourceRevision || createHash('sha256').update(JSON.stringify(result.preview.schedule)).digest('hex') !== result.preview.scheduleHash)) {
+    if (result && (result.dataRevision !== dataset?.sourceRevision || createHash('sha256').update(JSON.stringify(result.preview.schedule)).digest('hex') !== result.preview.scheduleHash)) {
       throw new Error('유니버스 결과의 데이터 버전 또는 일정 해시가 다릅니다');
     }
     this.database.sqlite.transaction(() => {
       this.database.sqlite.prepare(`UPDATE backtest_preparation_jobs SET status = ?, overall_progress = ?, preview_json = ?, error = ?, completed_at_ms = ?, updated_at_ms = ? WHERE id = ?`)
         .run(outcome, outcome === 'COMPLETED' ? 100 : 0, result ? JSON.stringify(result.preview) : null, outcome === 'FAILED' ? error ?? '계산 실패' : null, Date.now(), Date.now(), identity.jobId);
       this.database.sqlite.prepare('UPDATE agent_preparation_leases SET result_hash = ? WHERE job_id = ?').run(hash, identity.jobId);
-      if (result) new PreparationPreviewCache(this.database).store(identity.jobId, sourceRevision, result.fundamentalSymbols);
+      if (result) new PreparationPreviewCache(this.database).store(identity.jobId, dataset!.sourceRevision, result.fundamentalSymbols);
     })();
     this.changed(identity.jobId);
     return true;

@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
-import { SqliteFactRepository } from '../../src/server/modules/facts/infrastructure/sqlite-fact-repository.js';
-import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
+import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
+import { SqliteFactRepository } from '../../src/runtime/modules/facts/infrastructure/sqlite-fact-repository.js';
+import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
 
 let root: string;
 let database: DatabaseHandle;

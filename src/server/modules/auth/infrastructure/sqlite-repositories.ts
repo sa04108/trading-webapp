@@ -1,7 +1,7 @@
 import { and, count, eq, gt, isNull, lt, or } from 'drizzle-orm';
-import type { AppDatabase } from '../../../shared/db/database.js';
+import type { AppDatabase } from '../../../../runtime/shared/db/database.js';
 import type { Logger } from '../../../shared/logger.js';
-import { loginAttempts, sessions, users } from '../../../shared/db/schema.js';
+import { loginAttempts, sessions, users } from '../../../shared/db/auth-schema.js';
 import type {
   LoginAttemptRepository,
   SessionRecord,

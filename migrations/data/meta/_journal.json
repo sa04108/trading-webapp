@@ -15,6 +15,13 @@
       "when": 1789432955440,
       "tag": "0001_retire_completed_conversions",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1789461592013,
+      "tag": "0002_collection_coverage_version",
+      "breakpoints": true
     }
   ]
 }

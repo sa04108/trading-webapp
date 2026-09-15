@@ -8,11 +8,11 @@ import {
   PreparationInputError,
   UnsafeBacktestSymbolIdentityError,
   type BacktestPreparationOrchestrator,
-} from '../application/backtest-preparation-orchestrator.js';
+} from '../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import { PreparationReferenceError } from '../application/preparation-reference-service.js';
-import type { FinancialFactAvailabilityService } from '../../facts/application/financial-fact-availability.js';
-import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
-import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
+import type { FinancialFactAvailabilityService } from '../../../../runtime/modules/facts/application/financial-fact-availability.js';
+import type { CandleCoverageService } from '../../../../runtime/modules/market-data/application/candle-coverage-service.js';
+import type { SymbolMasterService } from '../../../../runtime/modules/market-data/application/symbol-master-service.js';
 import { sendIfKrxError, sendIfNotCovered } from './krx-error-mapping.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;

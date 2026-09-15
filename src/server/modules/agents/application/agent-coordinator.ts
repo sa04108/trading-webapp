@@ -1,12 +1,12 @@
 import path from 'node:path';
 import { AgentClient } from '../../../../agent/client.js';
 import { availableServerResources } from '../../../../agent/resources.js';
-import { BacktestResultArtifactRejectedError } from '../../backtest/application/backtest-result-artifact.js';
+import { BacktestResultArtifactRejectedError } from '../../../../runtime/modules/backtest/application/backtest-result-artifact.js';
 import { InvalidBacktestResultArtifactError } from '../../backtest/infrastructure/sqlite-backtest-result-artifact-importer.js';
-import { backtestExecutionTelemetrySchema } from '../../backtest/application/backtest-execution-telemetry.js';
+import { backtestExecutionTelemetrySchema } from '../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js';
 import type { WebSocket } from 'ws';
 import { MAX_BACKTEST_BARS } from '../../../shared/backtest-limits.js';
-import type { DatabaseHandle } from '../../../shared/db/database.js';
+import type { DatabaseHandle } from '../../../../runtime/shared/db/database.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { BacktestLeaseService } from '../../backtest/application/backtest-lease-service.js';
 import type { JobQueue } from '../../backtest/application/job-queue.js';
@@ -41,6 +41,7 @@ export class AgentCoordinator {
     private readonly queue: JobQueue,
     readonly runnerVersion: string,
     private readonly logger: Logger,
+    private readonly executionVersion: string,
   ) {
     this.queue.events.on('queued', this.wake);
     this.backtests.events.on('job', this.wake);
@@ -134,13 +135,13 @@ export class AgentCoordinator {
             this.dataQueue.request(message.kind, message.jobId, this.preparations.datasetVersion(message.jobId)!, message.request);
           });
         } catch (error) {
-          accepted = this.preparations.finish(clientId, identity, 'FAILED', null, 0, error instanceof Error ? error.message : String(error));
+          accepted = this.preparations.finish(clientId, identity, 'FAILED', null, null, error instanceof Error ? error.message : String(error));
         }
       }
     } else if (message.kind === 'PREPARATION') {
       const version = this.preparations.datasetVersion(message.jobId);
       const dataset = version === null ? null : this.snapshots.get(version);
-      if (dataset) accepted = this.preparations.finish(clientId, identity, message.outcome, message.result, dataset.sourceRevision, message.error);
+      accepted = this.preparations.finish(clientId, identity, message.outcome, message.result, dataset, message.error);
     } else if (this.ownsBacktest(clientId, message.jobId) && message.outcome !== 'COMPLETED') {
       const telemetry = backtestExecutionTelemetrySchema.safeParse(message.result?.telemetry);
       const cancelPath = message.result?.cancelPath;
@@ -222,7 +223,7 @@ export class AgentCoordinator {
     let active = this.activeLeaseCount(clientId);
     while (connection.slots > active) {
       let lease: AgentLease | null;
-      const claim = this.backtests.claim(clientId, this.runnerVersion, connection.maxBars);
+      const claim = this.backtests.claim(clientId, this.executionVersion, connection.maxBars);
       if (claim.status === 'CLAIMED') {
         const job = claim.lease.job;
         this.database.sqlite.prepare('INSERT INTO agent_backtest_datasets (job_id, dataset_version) VALUES (?, ?) ON CONFLICT(job_id) DO UPDATE SET dataset_version = excluded.dataset_version').run(job.id, dataset.version);

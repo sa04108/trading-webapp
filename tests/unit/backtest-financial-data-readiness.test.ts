@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { findIncompleteFundamentalCheckpoints, findIncompleteFundamentalCheckpointsFromCoverage } from '../../src/server/modules/backtest/application/backtest-financial-data-readiness.js';
-import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
-import { valueQualityRankStrategy } from '../../src/server/modules/strategy/strategies/value-quality-rank.js';
+import { findIncompleteFundamentalCheckpoints, findIncompleteFundamentalCheckpointsFromCoverage } from '../../src/runtime/modules/backtest/application/backtest-financial-data-readiness.js';
+import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
+import { valueQualityRankStrategy } from '../../src/runtime/modules/strategy/strategies/value-quality-rank.js';
 
 const schedule = [
   { rebalanceDate: '2025-01-02', symbols: ['LATER', 'NEVER'] },

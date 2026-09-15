@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { groupPreparationIssues, splitPreparationWarnings } from '../../src/web/features/backtests/preparation-issues.js';
-import { backtestDataExclusionWarnings, type BacktestDataExclusion } from '../../src/server/modules/backtest/application/backtest-data-exclusion.js';
+import { backtestDataExclusionWarnings, type BacktestDataExclusion } from '../../src/runtime/modules/backtest/application/backtest-data-exclusion.js';
 
 const price = (symbol: string, periodKey = '2026-01-05', days = 20): BacktestDataExclusion => ({
   symbol, category: 'KRX_PRICE', periodKey,

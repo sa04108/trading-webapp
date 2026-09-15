@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { JobOrchestrator } from '../../src/server/modules/backtest/application/job-orchestrator.js';
 import type { JobQueue } from '../../src/server/modules/backtest/application/job-queue.js';
-import type { AuditLogService } from '../../src/server/modules/audit/audit-service.js';
+import type { AuditLogService } from '../../src/runtime/modules/audit/audit-service.js';
 
 describe('에이전트 작업 취소', () => {
   it('결과 완료와 경합해 상태 변경이 거절되면 취소 알림을 보내지 않는다', () => {

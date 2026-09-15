@@ -2,17 +2,12 @@ import { configureZodLocale } from '../shared/zod-locale.js';
 import { loadConfig } from './config.js';
 import { createContainer } from './container.js';
 import { buildServer } from './server.js';
-import { readGitCommitSha } from '../shared/build-info.js';
+import { readRuntimeVersions } from '../../runtime/shared/runtime-versions.js';
 
 async function main(): Promise<void> {
   configureZodLocale();
   const config = loadConfig();
-  if (
-    config.nodeEnv === 'production'
-    && readGitCommitSha(config.nodeEnv) === 'unknown'
-  ) {
-    throw new Error('에이전트 실행에는 dist/build-info.json의 Git SHA가 필요합니다');
-  }
+  readRuntimeVersions();
   const container = createContainer(config);
   await container.remoteResultUploadManager.cleanupOrphanedUploads();
   const app = await buildServer(container);

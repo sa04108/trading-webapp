@@ -1,28 +1,29 @@
+import type { FactSyncRequest, FactSyncHooks, FactSyncReport } from '../../../../runtime/modules/facts/application/fact-sync-port.js';
+export type { FactSyncRequest, FactSyncProgress, FactSyncHooks, FactSyncReport } from '../../../../runtime/modules/facts/application/fact-sync-port.js';
 import { createHash } from 'node:crypto';
-import type { Clock } from '../../../shared/clock.js';
+import type { Clock } from '../../../../runtime/shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
-import { addCalendarDays, kstDateOf } from '../../market-data/domain/kst-date.js';
-import { CORPORATE_ACTION_FIELD, type Fact } from '../domain/fact.js';
+import { addCalendarDays, kstDateOf } from '../../../../runtime/modules/market-data/domain/kst-date.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../../../runtime/modules/facts/domain/fact.js';
 import {
   DART_DAILY_CALL_LIMIT,
   DART_MIN_INTERVAL_MS,
   planFactSync,
-  type FactSyncMode,
   type FactSyncPlan,
-} from '../domain/sync-plan.js';
+} from '../../../../runtime/modules/facts/domain/sync-plan.js';
 // 원천은 market-data(symbol-service.ts) 쪽이다 — market-data 는 facts 를 몰라도
 // 되지만(§7) facts 는 이미 market-data 를 안다(예: exchange-session.js 사용).
 // 손으로 맞추던 중복 상수를 없앴다(리뷰 finding, 2026-08-08).
-import { FACTS_SLICE } from '../../market-data/application/symbol-service.js';
+import { FACTS_SLICE } from '../../../../runtime/modules/market-data/application/symbol-service.js';
 import type {
   CorporateActionCoverageStore,
   CorporateActionGapDetail,
-} from './corporate-action-coverage.js';
+} from '../../../../runtime/modules/facts/application/corporate-action-coverage.js';
 import type {
   FactCoverageStore,
   FinancialFilingCheckpoint,
-} from './fact-coverage-store.js';
-import { DartQuotaError, FactSourceNotConfiguredError } from './ports.js';
+} from '../../../../runtime/modules/facts/application/fact-coverage-store.js';
+import { DartQuotaError, FactSourceNotConfiguredError } from '../../../../runtime/modules/facts/application/ports.js';
 import type {
   FactIngestionGap,
   FactRepository,
@@ -31,20 +32,7 @@ import type {
   FetchFinancialsRequest,
   PeriodicFiling,
   SymbolVersionBumper,
-} from './ports.js';
-
-export interface FactSyncRequest {
-  readonly symbols: readonly string[];
-  readonly fromYear: number;
-  readonly toYear: number;
-  readonly consolidated: boolean;
-  /**
-   * FULL = 이력을 무시하고 지정 구간 전체 (CLI). INCREMENTAL = 미수집 연도 +
-   * watermark 이후 새 정기공시가 접수된 연도 (웹·준비 잡, detectRedisclosedYears
-   * 참고). 웹이 매번 전 구간을 다시 받으면 45분짜리 버튼이 된다.
-   */
-  readonly mode: FactSyncMode;
-}
+} from '../../../../runtime/modules/facts/application/ports.js';
 
 /**
  * 공시검색(watermark 기반 재수집 판정)의 최대 되짚기 일수. 이보다 오래된 watermark 는
@@ -65,48 +53,6 @@ class DartDailyQuotaReachedError extends Error {
 
 function isDartDailyQuotaError(error: unknown): boolean {
   return error instanceof DartDailyQuotaReachedError || error instanceof DartQuotaError;
-}
-
-/** 종목 하나가 끝날 때마다 호출된다 — 45분짜리 실행이 조용하지 않게 한다 */
-export interface FactSyncProgress {
-  readonly symbol: string;
-  /** 1부터 시작하는 진행 번호 */
-  readonly index: number;
-  readonly total: number;
-  /** 이 종목에서 저장된 팩트 수 */
-  readonly savedFacts: number;
-  /** 이 종목에서 남은 누락 수 */
-  readonly gapCount: number;
-}
-
-export interface FactSyncHooks {
-  onSymbolDone?(progress: FactSyncProgress): void;
-  /**
-   * 종목 경계에서 확인하는 취소 신호. 봉 수집이 페이지 경계에서 확인하는 것과 같은
-   * 입자다 — 저장이 종목 단위이므로 여기서 멈추면 저장분과 이력이 정합하게 남는다.
-   */
-  shouldStop?(): boolean;
-  /**
-   * 실제 DART HTTP attempt 직전에 1건을 예약한다. 목록 페이지와 재시도도 각각 호출된다.
-   */
-  beforeDartRequest?(): 'CONTINUE' | 'PAUSE_DAILY_QUOTA';
-}
-
-export interface FactSyncReport {
-  readonly savedFacts: number;
-  /** 예시 보관 상한과 무관한 전체 결손 건수. */
-  readonly gapCount: number;
-  /** 최대 100건의 진단 예시. 실행 차단 판정에는 저장된 연도별 coverage를 사용한다. */
-  readonly gaps: readonly FactIngestionGap[];
-  /** 중단된 종목코드. 완주하면 null */
-  readonly stoppedAtSymbol: string | null;
-  /**
-   * 중단 원인. 호출부가 잡 상태를 FAILED/CANCELLED 로 갈라야 하므로
-   * stoppedAtSymbol 만으로는 부족하다.
-   */
-  readonly stopReason: 'ERROR' | 'CANCELLED' | 'DAILY_QUOTA' | null;
-  /** 중단 사유 + 이어받는 방법을 담은 한국어 안내. 완주하면 null */
-  readonly failureMessage: string | null;
 }
 
 /**

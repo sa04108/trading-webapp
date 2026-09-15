@@ -3,7 +3,7 @@ import {
   sumExcludedNonTrading,
   UniverseRuleResolver,
   type LegacyUniverseScheduleEntry,
-} from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
+} from '../../src/runtime/modules/backtest/application/universe-rule-resolver.js';
 
 describe('UniverseRuleResolver 거래불가 제외', () => {
   it('기준일에 거래불가인 종목은 시총이 커도 후보에서 빠진다', async () => {

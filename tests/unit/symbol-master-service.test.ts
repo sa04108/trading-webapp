@@ -1,3 +1,4 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
@@ -6,12 +7,12 @@ import {
   symbolMasterTradingDays,
   symbolMasterVersions,
 } from '../../src/server/shared/db/schema.js';
-import type { KrxHistoricalUniverseSource } from '../../src/server/modules/market-data/application/ports.js';
+import type { KrxHistoricalUniverseSource } from '../../src/runtime/modules/market-data/application/ports.js';
 import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
-} from '../../src/server/modules/market-data/application/symbol-master-service.js';
-import type { SymbolMasterEntry } from '../../src/server/modules/market-data/domain/symbol-master.js';
+} from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
+import type { SymbolMasterEntry } from '../../src/runtime/modules/market-data/domain/symbol-master.js';
 
 function entry(overrides: Partial<SymbolMasterEntry> = {}): SymbolMasterEntry {
   return {
@@ -144,7 +145,7 @@ describe('SymbolMasterService.ingestDate selection metrics', () => {
 function insertCoverage(t: TestApp, startDate: string, endDate: string): void {
   t.container.database.db
     .insert(symbolMasterCoverage)
-    .values({ startDate, endDate, syncedAtMs: t.container.clock.now() })
+    .values({ startDate, endDate, collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: t.container.clock.now() })
     .run();
   let firstWeekdayTsMs = Date.parse(`${startDate}T00:00:00Z`);
   while ([0, 6].includes(new Date(firstWeekdayTsMs).getUTCDay())) {

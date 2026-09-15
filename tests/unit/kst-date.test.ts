@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addCalendarDays, basDdToIso, isoToBasDd, kstDateOf, kstEndOfDayMs, kstHourOf,
-} from '../../src/server/modules/market-data/domain/kst-date.js';
+} from '../../src/runtime/modules/market-data/domain/kst-date.js';
 
 describe('kst-date', () => {
   it('UTC 자정 직전은 KST 다음 날이다', () => {

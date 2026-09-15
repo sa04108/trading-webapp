@@ -7,10 +7,10 @@ import { createHash } from 'node:crypto';
 import WebSocket from 'ws';
 import Database from 'better-sqlite3';
 import { AGENT_HEARTBEAT_MS, AGENT_PROTOCOL_VERSION, AGENT_MAX_MESSAGE_BYTES, agentLeaseSchema, type AgentLease, type AgentMessage, type ServerAgentMessage } from '../shared/agent-protocol.js';
-import { backtestExecutionTelemetrySchema, type BacktestExecutionTelemetry } from '../server/modules/backtest/application/backtest-execution-telemetry.js';
-import { readGitCommitSha } from '../server/shared/build-info.js';
-import { openDatabase } from '../server/shared/db/database.js';
-import { backtestJobs } from '../server/shared/db/schema.js';
+import { backtestExecutionTelemetrySchema, type BacktestExecutionTelemetry } from '../runtime/modules/backtest/application/backtest-execution-telemetry.js';
+import { readRuntimeVersions } from '../runtime/shared/runtime-versions.js';
+import { openDatabase } from '../runtime/shared/db/database.js';
+import { backtestJobs } from '../runtime/shared/db/schema.js';
 import { availableResources, processRss, type AgentResources } from './resources.js';
 import { AgentDatasetCache, durableJson } from './dataset-cache.js';
 import type { AgentSettings } from './config.js';
@@ -128,7 +128,7 @@ export class AgentClient {
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(url, { headers: { authorization: `Bearer ${this.settings.token}` }, handshakeTimeout: 15_000, maxPayload: AGENT_MAX_MESSAGE_BYTES });
     this.socket = socket;
-    socket.once('open', () => { this.lastServerContact = Date.now(); this.send({ type: 'HELLO', protocolVersion: AGENT_PROTOCOL_VERSION, runnerVersion: readGitCommitSha() }); });
+    socket.once('open', () => { this.lastServerContact = Date.now(); this.send({ type: 'HELLO', protocolVersion: AGENT_PROTOCOL_VERSION, runnerVersion: readRuntimeVersions().agentVersion }); });
     socket.on('pong', () => { this.lastServerContact = Date.now(); });
     socket.on('message', (raw) => {
       this.lastServerContact = Date.now();
@@ -174,7 +174,8 @@ export class AgentClient {
     } else if (message.type === 'JOB') {
       const lease = agentLeaseSchema.parse(message.lease);
       if (this.running.has(this.key(lease)) || this.outbox.has(this.key(lease))) return;
-      if (this.cache.current?.version !== lease.dataset.version || this.cache.current.sha256 !== lease.dataset.sha256) throw new Error('준비하지 않은 데이터 버전의 작업입니다');
+      if (this.cache.current?.version !== lease.dataset.version || this.cache.current.sha256 !== lease.dataset.sha256
+        || this.cache.current.collectionVersion !== lease.dataset.collectionVersion) throw new Error('준비하지 않은 데이터 버전의 작업입니다');
       this.spawn(lease);
     } else if (message.type === 'LEASE') {
       const key = `${message.jobId}-${message.attempt}`;
@@ -243,7 +244,7 @@ export class AgentClient {
       finally { database.close(); }
     }
     const ts = import.meta.url.endsWith('.ts');
-    const target = lease.kind === 'PREPARATION' ? `../workers/preparation-child.${ts ? 'ts' : 'js'}` : `../workers/backtest-child.${ts ? 'ts' : 'js'}`;
+    const target = lease.kind === 'PREPARATION' ? `../runtime/workers/preparation-child.${ts ? 'ts' : 'js'}` : `../runtime/workers/backtest-child.${ts ? 'ts' : 'js'}`;
     const child = fork(fileURLToPath(new URL(target, import.meta.url)), [], {
       execArgv: [`--max-old-space-size=${this.admission.heapMb}`, ...(ts ? ['--import', 'tsx'] : [])],
       env: { NODE_ENV: 'production', DATABASE_PATH: jobPath, BACKTEST_JOB_ID: lease.jobId,
@@ -270,7 +271,7 @@ export class AgentClient {
       this.finishing.add(completion);
       void completion.finally(() => this.finishing.delete(completion));
     });
-    if (lease.kind === 'PREPARATION') child.send({ lease, jobPath, dataPath });
+    child.send({ lease, jobPath, dataPath });
     this.log(`${lease.kind} 작업 시작: ${lease.jobId}`);
   }
 

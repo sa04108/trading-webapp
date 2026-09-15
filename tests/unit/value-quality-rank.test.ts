@@ -1,21 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
-import { createRng } from '../../src/server/modules/backtest/domain/seeded-rng.js';
-import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
+import { runBacktest } from '../../src/runtime/modules/backtest/domain/engine.js';
+import { createRng } from '../../src/runtime/modules/backtest/domain/seeded-rng.js';
+import type { ExecutionProfile } from '../../src/runtime/modules/backtest/domain/types.js';
 import type {
   Fact,
   FundamentalField,
   FundamentalSnapshot,
-} from '../../src/server/modules/facts/domain/fact.js';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
-import type { StrategyBarContext } from '../../src/server/modules/strategy/domain/strategy.js';
+} from '../../src/runtime/modules/facts/domain/fact.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
+import { StrategyRegistry } from '../../src/runtime/modules/strategy/application/strategy-registry.js';
+import type { StrategyBarContext } from '../../src/runtime/modules/strategy/domain/strategy.js';
 import {
   computeValueQualityMetrics,
   currentQuarterOrdinal,
   valueQualityRankParameters,
   valueQualityRankStrategy,
-} from '../../src/server/modules/strategy/strategies/value-quality-rank.js';
+} from '../../src/runtime/modules/strategy/strategies/value-quality-rank.js';
 
 /**
  * 계정 → 값 맵으로 스냅샷을 흉내낸다. ttm 은 손익 계정만 응답한다.

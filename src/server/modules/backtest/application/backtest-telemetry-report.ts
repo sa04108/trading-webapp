@@ -2,7 +2,7 @@ import {
   backtestExecutionTelemetrySchema,
   type BacktestExecutionStage,
   type BacktestExecutionTelemetry,
-} from './backtest-execution-telemetry.js';
+} from '../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js';
 
 const MIN_COMPLETED_SAMPLES = 10;
 const MIN_DISTINCT_INPUT_SHAPES = 3;

@@ -9,16 +9,13 @@ import {
   type BacktestRequest,
 } from '../../../../shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../../../../shared/schemas/provenance-pin.js';
-import type { Clock } from '../../../shared/clock.js';
-import type { DatabaseHandle } from '../../../shared/db/database.js';
-import {
-  backtestJobs,
-  backtestCloneBatchItems,
-  backtestCloneBatches,
-} from '../../../shared/db/schema.js';
-import { newId } from '../../../shared/ids.js';
-import type { ConsumedVersionSnapshot } from '../../market-data/application/symbol-service.js';
-import type { LegacyUniverseScheduleEntry } from './universe-rule-resolver.js';
+import type { Clock } from '../../../../runtime/shared/clock.js';
+import type { DatabaseHandle } from '../../../../runtime/shared/db/database.js';
+import { backtestJobs } from '../../../../runtime/shared/db/operations-schema.js';
+import { backtestCloneBatchItems, backtestCloneBatches } from '../../../shared/db/backtest-batch-schema.js';
+import { newId } from '../../../../runtime/shared/ids.js';
+import type { ConsumedVersionSnapshot } from '../../../../runtime/modules/market-data/application/symbol-service.js';
+import type { LegacyUniverseScheduleEntry } from '../../../../runtime/modules/backtest/application/universe-rule-resolver.js';
 import type { JobEvent } from './job-orchestrator.js';
 import type { BacktestJobRow, JobQueue } from './job-queue.js';
 

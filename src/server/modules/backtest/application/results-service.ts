@@ -5,22 +5,15 @@ import {
   type SortDirection,
   type TradeSortKey,
 } from '../../../../shared/schemas/trade-sort.js';
-import type { AppDatabase } from '../../../shared/db/database.js';
+import type { AppDatabase } from '../../../../runtime/shared/db/database.js';
 import {
   BENCHMARK_NAMES,
   benchmarkIdSchema,
   benchmarkPinSchema,
   type BenchmarkId,
 } from '../../../../shared/schemas/benchmark.js';
-import {
-  backtestJobs,
-  backtestDrawdownPoints,
-  backtestEquityPoints,
-  backtestMetrics,
-  backtestMonthlyReturns,
-  backtestRuns,
-  backtestTrades,
-} from '../../../shared/db/schema.js';
+import { backtestJobs } from '../../../../runtime/shared/db/operations-schema.js';
+import { backtestDrawdownPoints, backtestEquityPoints, backtestMetrics, backtestMonthlyReturns, backtestRuns, backtestTrades } from '../../../shared/db/backtest-result-schema.js';
 import { downsampleLttb } from './downsample.js';
 
 const CHART_MAX_POINTS = 1_000;
