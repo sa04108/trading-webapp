@@ -143,6 +143,8 @@ WSS는 TLS 위의 WebSocket 연결이다. PC에서 운영 서버의 HTTPS 포트
 
 기존 단일 DB에서의 분리는 앱 쓰기를 멈춘 유지보수 구간에서 실행한다. 배포 스크립트는
 서비스를 먼저 중지하고 새 릴리스 CLI로 백업한 뒤 `db:prepare`를 실행한다.
+`db:prepare`는 systemd oneshot 작업으로 실행해 중단 신호를 배포 실패로 처리한다.
+SSH 연결 유지 패킷과 응답 제한으로 긴 검증 중 연결 단절도 감지한다.
 
 ```bash
 # 운영 서버에서는 서비스 중지 및 app.env를 읽는 기존 systemd-run 절차를 먼저 적용한다.
@@ -157,6 +159,10 @@ pnpm cli db:restore /안전한경로/before.sqlite
 원래 단일 DB migration 파일은 이전 DB 검증용으로 보존한다.
 
 분리 시 기존 데이터를 새 두 파일로 복사하고 행·참조·무결성·autoincrement를 검증한다.
+복사와 대조는 테이블별로 진행 상황을 출력한다. 행 순서를 고정한 순차 비교로
+큰 정렬 없이 정수·문자열·바이너리와 행 개수를 확인한다. 내용 무결성은 활성화 전에
+검증하며, 파일 이름 교체 뒤에는 식별자를 확인한다. 중단된 전환을 재개할 때는
+남아 있는 파일의 내용 무결성을 다시 검증한다.
 기존 파일은 `app.sqlite.split-<UUID>.backup.sqlite`로 남긴다. 도중 중단되면
 `app.sqlite.split-migration.json`을 기준으로 같은 `db:prepare` 명령이 복구를 이어간다.
 앱은 분리·복원 journal이 남아 있거나 서로 다른 데이터셋의 파일이면 부팅하지 않는다.

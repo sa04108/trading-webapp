@@ -177,6 +177,7 @@ function readConnection(component, settings) {
     throw new DeployError(`${prefix}_SSH_HOST_KEY는 accept-new | yes | no 중 하나여야 합니다`);
   }
   sshOptions.push('-o', `StrictHostKeyChecking=${hostKey}`);
+  sshOptions.push('-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=3');
 
   return { component, remoteTarget, sshOptions };
 }

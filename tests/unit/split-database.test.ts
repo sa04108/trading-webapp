@@ -112,6 +112,23 @@ describe('기존 단일 DB 이전', () => {
     expect(migrateSplitDatabase(file)).toEqual({ status: 'ALREADY_SPLIT' });
   });
 
+  it('행 번호의 공백과 정렬이 다른 키, 큰 정수와 바이너리를 보존한다', () => {
+    legacyDatabase();
+    const source = new Database(file);
+    source.exec("INSERT INTO symbols (rowid, code, market, created_at_ms) VALUES (9, '000660', 'KR', 1), (3, '035420', 'KR', 1)");
+    source.prepare('INSERT INTO audit_logs (id, actor, event, detail_json, created_at_ms) VALUES (?, ?, ?, ?, ?)')
+      .run(9007199254740993n, 'user', 'binary', Buffer.from([0, 255, 128, 65]), 9007199254740995n);
+    source.close();
+    migrateSplitDatabase(file);
+    const result = openDatabase(file);
+    try {
+      expect(result.sqlite.prepare('SELECT code FROM data.symbols ORDER BY rowid').pluck().all())
+        .toEqual(['005930', '035420', '000660']);
+      expect(result.sqlite.prepare('SELECT id, detail_json, created_at_ms FROM audit_logs').safeIntegers().get())
+        .toEqual({ id: 9007199254740993n, detail_json: Buffer.from([0, 255, 128, 65]), created_at_ms: 9007199254740995n });
+    } finally { result.close(); }
+  });
+
   it.each([1, 2, 3])('파일 활성화 %i 단계에서 중단돼도 기록으로 복구한다', (failAt) => {
     legacyDatabase();
     const rename = fs.renameSync;

@@ -631,6 +631,7 @@ case "${PHASE}" in
     if [ "${DEPLOY_FAILED}" -eq 0 ]; then
       sudo systemd-run --quiet --pipe --wait --collect \
         --unit=quant-platform-db-prepare \
+        --property=Type=oneshot \
         --property=User=quant \
         --property=Group=quant \
         --property=EnvironmentFile=/etc/quant-platform/app.env \

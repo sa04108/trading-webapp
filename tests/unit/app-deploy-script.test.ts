@@ -357,10 +357,13 @@ describe('deploy script failure workflow', () => {
     expect(orchestrator).toContain("path.join(SCRIPT_DIR, 'deploy-app.sh')");
     expect(deploy).toContain('write_transaction_state');
     expect(deploy).toContain('verify_prepared_app');
+    expect(deploy).toContain('--property=Type=oneshot');
     expect(deploy).toContain('rollback_app_transaction');
     expect(deploy).toMatch(/finalize\)\s+read_transaction_state[\s\S]*verify_current_app_release/);
     expect(orchestrator).toContain('stageAppDeployment(');
     expect(orchestrator).toContain("runAppPhase(deployment, 'prepare')");
+    expect(orchestrator).toContain('ServerAliveInterval=15');
+    expect(orchestrator).toContain('ServerAliveCountMax=3');
     expect(orchestrator).toContain("runAppPhase(deployment, 'verify')");
     expect(orchestrator).toContain("runAppPhase(deployment, 'commit')");
     expect(orchestrator).toContain("runAppPhase(deployment, 'finalize')");

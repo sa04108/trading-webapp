@@ -58,7 +58,7 @@ function ask(question: string, hidden = false): Promise<string> {
 async function dbPrepare(): Promise<void> {
   const config = loadConfig();
   const startedAtMs = Date.now();
-  const migration = migrateSplitDatabase(config.databasePath);
+  const migration = migrateSplitDatabase(config.databasePath, (message) => console.log(message));
   if (migration.backupPath) console.log(`분리 전 원본 DB 보존: ${migration.backupPath}`);
   const container = createContainer(config);
   try {

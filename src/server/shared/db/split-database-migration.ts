@@ -35,16 +35,18 @@ function writeJournal(file: string, journal: SplitJournal): void {
   syncDirectory(path.dirname(file));
 }
 
-function verifyIdentity(file: string, role: 'operations' | 'data', expected: string): void {
+function verifyIdentity(file: string, role: 'operations' | 'data', expected: string, verifyContent = true): void {
   if (fs.lstatSync(file).isSymbolicLink()) throw new Error('DB 분리 대상은 심볼릭 링크일 수 없습니다');
   const sqlite = new Database(file, { readonly: true, fileMustExist: true });
   try {
     const table = role === 'data' ? 'dataset_state' : 'operational_database_state';
     const row = sqlite.prepare(`SELECT dataset_id AS id FROM ${table} WHERE singleton = 1`).get() as { id: string } | undefined;
     if (row?.id !== expected) throw new Error(`DB 분리 대상의 식별자가 다릅니다: ${file}`);
-    const integrity = sqlite.pragma('integrity_check', { simple: true });
-    if (integrity !== 'ok') throw new Error(`DB 무결성 검사 실패: ${file}`);
-    if ((sqlite.pragma('foreign_key_check') as unknown[]).length > 0) throw new Error(`DB 참조 무결성 검사 실패: ${file}`);
+    if (verifyContent) {
+      const integrity = sqlite.pragma('integrity_check', { simple: true });
+      if (integrity !== 'ok') throw new Error(`DB 무결성 검사 실패: ${file}`);
+      if ((sqlite.pragma('foreign_key_check') as unknown[]).length > 0) throw new Error(`DB 참조 무결성 검사 실패: ${file}`);
+    }
   } finally { sqlite.close(); }
 }
 
@@ -68,13 +70,13 @@ function validateJournal(journal: SplitJournal, sourcePath: string): void {
 }
 
 /** 검증된 두 파일을 차례로 활성화한다. 중단된 구간은 기록과 파일 식별자로 복구한다. */
-function publishSplit(journal: SplitJournal): void {
+function publishSplit(journal: SplitJournal, alreadyVerified = false): void {
   const { sourcePath, dataPath, backupPath, stagedOperationsPath, stagedDataPath, datasetId } = journal;
   validateJournal(journal, sourcePath);
   const operationsCandidate = fs.existsSync(stagedOperationsPath) ? stagedOperationsPath : sourcePath;
   const dataCandidate = fs.existsSync(stagedDataPath) ? stagedDataPath : dataPath;
-  verifyIdentity(operationsCandidate, 'operations', datasetId);
-  verifyIdentity(dataCandidate, 'data', datasetId);
+  verifyIdentity(operationsCandidate, 'operations', datasetId, !alreadyVerified);
+  verifyIdentity(dataCandidate, 'data', datasetId, !alreadyVerified);
   if (!fs.existsSync(backupPath)) {
     if (!fs.existsSync(stagedOperationsPath)) throw new Error('DB 분리 원본 백업이 없습니다');
     fs.renameSync(sourcePath, backupPath);
@@ -90,13 +92,14 @@ function publishSplit(journal: SplitJournal): void {
     fs.renameSync(stagedOperationsPath, sourcePath);
     syncDirectory(path.dirname(sourcePath));
   }
-  verifyIdentity(sourcePath, 'operations', datasetId);
-  verifyIdentity(dataPath, 'data', datasetId);
+  // 이름 교체는 검증된 파일 내용을 바꾸지 않는다. 최종 위치와 식별자만 다시 확인한다.
+  verifyIdentity(sourcePath, 'operations', datasetId, false);
+  verifyIdentity(dataPath, 'data', datasetId, false);
   fs.unlinkSync(`${sourcePath}.split-migration.json`);
   syncDirectory(path.dirname(sourcePath));
 }
 
-function copyTables(sqlite: Database.Database, tables: readonly string[], destination: string): void {
+function copyTables(sqlite: Database.Database, tables: readonly string[], destination: string, report: (message: string) => void): void {
   for (const table of tables) {
     const name = sqlIdentifier(table);
     const sourceColumns = (sqlite.pragma(`main.table_info(${name})`) as Array<{ name: string }>);
@@ -110,11 +113,31 @@ function copyTables(sqlite: Database.Database, tables: readonly string[], destin
         ? `CASE WHEN ${identifier} GLOB 'remote:*' THEN substr(${identifier}, 8) ELSE ${identifier} END`
         : identifier;
     }).join(', ');
-    sqlite.exec(`DELETE FROM ${destination}.${name}; INSERT INTO ${destination}.${name} (${columns}) SELECT ${sourceValues} FROM main.${name};`);
-    const originalCount = sqlite.prepare(`SELECT COUNT(*) AS n FROM main.${name}`).get() as { n: number };
-    const copiedCount = sqlite.prepare(`SELECT COUNT(*) AS n FROM ${destination}.${name}`).get() as { n: number };
-    const difference = sqlite.prepare(`SELECT 1 FROM (SELECT ${sourceValues} FROM main.${name} EXCEPT SELECT ${columns} FROM ${destination}.${name}) LIMIT 1`).get();
-    if (originalCount.n !== copiedCount.n || difference !== undefined) throw new Error(`이전한 데이터가 원본과 다릅니다: ${table}`);
+    report(`DB 분리 복사: ${table}`);
+    // 기존 스키마의 테이블은 모두 rowid를 가진다. 삽입 순서를 고정해 큰 정렬 없이
+    // 두 테이블을 같은 순서로 읽고, 정수·문자열·BLOB을 손실 없이 한 행씩 대조한다.
+    sqlite.exec(`DELETE FROM ${destination}.${name}; INSERT INTO ${destination}.${name} (${columns}) SELECT ${sourceValues} FROM main.${name} ORDER BY _rowid_;`);
+    report(`DB 분리 대조: ${table}`);
+    const original = sqlite.prepare(`SELECT ${sourceValues} FROM main.${name} ORDER BY _rowid_`).raw().safeIntegers().iterate();
+    const copied = sqlite.prepare(`SELECT ${columns} FROM ${destination}.${name} ORDER BY _rowid_`).raw().safeIntegers().iterate();
+    let count = 0;
+    try {
+      for (const row of original) {
+        const next = copied.next();
+        const values = row as unknown[];
+        const actual = next.value as unknown[] | undefined;
+        if (next.done || !actual || values.length !== actual.length || values.some((value, index) =>
+          Buffer.isBuffer(value) ? !Buffer.isBuffer(actual[index]) || !value.equals(actual[index]) : value !== actual[index])) {
+          throw new Error(`이전한 데이터가 원본과 다릅니다: ${table}`);
+        }
+        count++;
+      }
+      if (!copied.next().done) throw new Error(`이전한 데이터가 원본과 다릅니다: ${table}`);
+    } finally {
+      original.return?.();
+      copied.return?.();
+    }
+    report(`DB 분리 대조 완료: ${table} (${count}행)`);
   }
   if (tableExists(sqlite, 'sqlite_sequence', destination)) {
     const placeholders = tables.map(() => '?').join(',');
@@ -124,7 +147,7 @@ function copyTables(sqlite: Database.Database, tables: readonly string[], destin
 }
 
 /** 서비스의 모든 쓰기를 중지한 배포 준비 단계에서만 단일 DB를 두 파일로 이전한다. */
-export function migrateSplitDatabase(databasePath: string): SplitMigrationResult {
+export function migrateSplitDatabase(databasePath: string, report: (message: string) => void = () => undefined): SplitMigrationResult {
   if (databasePath === ':memory:') throw new Error('메모리 DB는 파일 분리 마이그레이션 대상이 아닙니다');
   const sourcePath = path.resolve(databasePath);
   const journalPath = `${sourcePath}.split-migration.json`;
@@ -174,10 +197,11 @@ export function migrateSplitDatabase(databasePath: string): SplitMigrationResult
     source.transaction(() => {
       const triggers = source.prepare("SELECT name, sql FROM target_data.sqlite_master WHERE type='trigger'").all() as Array<{ name: string; sql: string }>;
       for (const trigger of triggers) source.exec(`DROP TRIGGER target_data.${sqlIdentifier(trigger.name)}`);
-      copyTables(source, OPERATIONAL_TABLE_NAMES, 'target_ops');
-      copyTables(source, DATA_TABLE_NAMES, 'target_data');
+      copyTables(source, OPERATIONAL_TABLE_NAMES, 'target_ops', report);
+      copyTables(source, DATA_TABLE_NAMES, 'target_data', report);
       for (const trigger of triggers) source.exec(trigger.sql.replace(/^CREATE TRIGGER\s+/i, 'CREATE TRIGGER target_data.'));
       source.exec('UPDATE target_data.dataset_state SET revision = 1 WHERE singleton = 1');
+      report('DB 분리 외래 키 검증');
       if ((source.pragma('target_ops.foreign_key_check') as unknown[]).length || (source.pragma('target_data.foreign_key_check') as unknown[]).length) {
         throw new Error('분리된 DB의 외래 키 검증에 실패했습니다');
       }
@@ -185,7 +209,9 @@ export function migrateSplitDatabase(databasePath: string): SplitMigrationResult
     source.close();
     fs.chmodSync(stagedOperationsPath, 0o600);
     fs.chmodSync(stagedDataPath, 0o600);
+    report('운영 DB 파일 무결성 검증');
     verifyIdentity(stagedOperationsPath, 'operations', identity.id);
+    report('계산 DB 파일 무결성 검증');
     verifyIdentity(stagedDataPath, 'data', identity.id);
     journal = {
       schemaVersion: 1, sourcePath, dataPath: dataDatabasePath(sourcePath),
@@ -202,6 +228,7 @@ export function migrateSplitDatabase(databasePath: string): SplitMigrationResult
     }
     throw error;
   }
-  publishSplit(journal);
+  report('검증된 두 DB 활성화');
+  publishSplit(journal, true);
   return { status: 'MIGRATED', backupPath: journal.backupPath };
 }
