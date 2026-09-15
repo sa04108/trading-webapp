@@ -66,7 +66,7 @@ function publishedPackage(options: { version?: string; packageVersion?: string; 
   const source = packageDirectory(options.packageVersion ?? version, options.checkExit);
   const archive = spawnSync('tar', ['-czf', '-', '-C', source, '.']);
   expect(archive.status).toBe(0);
-  const manifest: ClientManifest = { versionScheme: 'content-v1', runnerVersion: version, clients: [{
+  const manifest: ClientManifest = { runnerVersion: version, clients: [{
     arch: process.arch as 'x64' | 'arm64', file: `quant-agent-linux-${process.arch}.tar.gz`,
     sha256: options.hash ?? createHash('sha256').update(archive.stdout).digest('hex'),
     bytes: archive.stdout.length + (options.bytesDelta ?? 0),
@@ -101,7 +101,7 @@ describe('agent 수동 업데이트', () => {
     expect(current()).toBe(path.join(installRoot(), 'releases', newVersion));
     expect(fs.existsSync(previous)).toBe(true);
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
-      `${settings.serverUrl}/api/agents/client/latest?versionScheme=content-v1`,
+      `${settings.serverUrl}/api/agents/client/latest`,
       `${settings.serverUrl}/api/agents/client/quant-agent-linux-${process.arch}.tar.gz`,
     ]);
     for (const [, options] of fetchMock.mock.calls) {
@@ -116,7 +116,7 @@ describe('agent 수동 업데이트', () => {
   it('예전 실행 파일에서 호출해도 설치된 버전이 최신이면 다운로드와 재시작을 생략한다', async () => {
     activate(packageDirectory(newVersion), newVersion);
     fakeService('active');
-    fetchMock.mockResolvedValueOnce(Response.json({ versionScheme: 'content-v1', runnerVersion: newVersion, clients: [] }));
+    fetchMock.mockResolvedValueOnce(Response.json({ runnerVersion: newVersion, clients: [] }));
     await runAgentCli(['update', '--state', state]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(console.log).toHaveBeenCalledWith(`이미 게시된 최신 클라이언트입니다: ${newVersion}`);
@@ -135,31 +135,17 @@ describe('agent 수동 업데이트', () => {
     fs.rmSync(path.join(source, 'dist/build-info.json'));
     activate(source, newVersion);
     const previous = current();
-    fetchMock.mockResolvedValueOnce(Response.json({ versionScheme: 'content-v1', runnerVersion: newVersion, buildGitSha: 'e'.repeat(40), clients: [] }));
+    fetchMock.mockResolvedValueOnce(Response.json({ runnerVersion: newVersion, buildGitSha: 'e'.repeat(40), clients: [] }));
     await expect(updateAgent(settings, state)).resolves.toMatchObject({ updated: false });
     expectUntouched(previous);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('내용 버전 메타데이터가 없으면 SHA가 같아도 새 설치로 인정하지 않는다', () => {
+  it('필수 내용 버전 메타데이터가 없으면 설치를 거부한다', () => {
     const source = packageDirectory(newVersion);
     fs.rmSync(path.join(source, 'dist/runtime-versions.json'));
-    fs.writeFileSync(path.join(source, 'dist/build-info.json'), JSON.stringify({ gitSha: newVersion }));
     expect(() => activate(source, newVersion)).toThrow();
     expect(fs.existsSync(path.join(installRoot(), 'current'))).toBe(false);
-  });
-
-  it('구형 서버로 돌아갈 때 명시한 구형 계약으로 설치할 수 있다', async () => {
-    const sha = 'f'.repeat(40);
-    const source = packageDirectory(newVersion);
-    fs.rmSync(path.join(source, 'dist/runtime-versions.json'));
-    fs.writeFileSync(path.join(source, 'dist/build-info.json'), JSON.stringify({ gitSha: sha }));
-    const archive = spawnSync('tar', ['-czf', '-', '-C', source, '.']);
-    expect(archive.status).toBe(0);
-    fetchMock.mockResolvedValueOnce(Response.json({ runnerVersion: sha, clients: [{ arch: process.arch, file: `quant-agent-linux-${process.arch}.tar.gz`, sha256: createHash('sha256').update(archive.stdout).digest('hex'), bytes: archive.stdout.length }] }));
-    fetchMock.mockResolvedValueOnce(new Response(new Uint8Array(archive.stdout)));
-    await expect(updateAgent(settings, state, { versionScheme: 'legacy-git-v1', expectedVersion: sha })).resolves.toMatchObject({ updated: true, version: sha });
-    expect(current()).toBe(path.join(installRoot(), 'releases', sha));
   });
 
   it('설정이 없으면 토큰 입력 안내를 내고 서버에 요청하지 않는다', async () => {
@@ -211,14 +197,14 @@ describe('agent 수동 업데이트', () => {
   it('현재 아키텍처의 패키지가 없으면 기존 설치를 보존한다', async () => {
     activate(packageDirectory(oldVersion), oldVersion);
     const previous = current();
-    fetchMock.mockResolvedValueOnce(Response.json({ versionScheme: 'content-v1', runnerVersion: newVersion, clients: [] }));
+    fetchMock.mockResolvedValueOnce(Response.json({ runnerVersion: newVersion, clients: [] }));
     await expect(updateAgent(settings, state)).rejects.toThrow('CPU 아키텍처');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expectUntouched(previous);
   });
 
   it('자동 업데이트는 서버가 요구한 버전과 게시 버전이 같아야 한다', async () => {
-    fetchMock.mockResolvedValueOnce(Response.json({ versionScheme: 'content-v1', runnerVersion: newVersion, clients: [] }));
+    fetchMock.mockResolvedValueOnce(Response.json({ runnerVersion: newVersion, clients: [] }));
     await expect(updateAgent(settings, state, { expectedVersion: oldVersion })).rejects.toThrow('운영 서버와 게시된 클라이언트 버전이 다릅니다');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

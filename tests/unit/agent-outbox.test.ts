@@ -33,12 +33,6 @@ function lease(jobId = 'restored-job'): AgentLease {
   };
 }
 
-function legacyLease(jobId = 'legacy-job') {
-  const current = lease(jobId);
-  const { collectionVersion: _collectionVersion, ...dataset } = current.dataset;
-  return { ...current, dataset };
-}
-
 function writeOutbox<T extends Pick<AgentLease, 'jobId' | 'attempt' | 'leaseToken'>>(value: T): string {
   const jobDirectory = path.join(directory, 'jobs', `${value.jobId}-${value.attempt}`);
   fs.mkdirSync(jobDirectory, { recursive: true });
@@ -72,15 +66,15 @@ function harness() {
   return { client, sent, upload, receive: (message: ServerAgentMessage) => receive(message) };
 }
 
-describe('에이전트 미전송 결과 버전 전환', () => {
+describe('에이전트 미전송 결과 복구', () => {
   it('현재 형식은 HELLO 후 결과를 재전송하고 ACK를 받아야 정리한다', () => {
     const restored = lease();
     const jobDirectory = writeOutbox(restored);
     const agent = harness();
 
     agent.client.start();
-    expect(agent.sent).toEqual([{ type: 'HELLO', protocolVersion: 1, versionScheme: 'content-v1', runnerVersion: 'a'.repeat(64) }]);
-    agent.receive({ type: 'WELCOME', versionScheme: 'content-v1', runnerVersion: 'a'.repeat(64) });
+    expect(agent.sent).toEqual([{ type: 'HELLO', protocolVersion: 2, runnerVersion: 'a'.repeat(64) }]);
+    agent.receive({ type: 'WELCOME', runnerVersion: 'a'.repeat(64) });
     expect(agent.sent.filter((message) => message.type === 'FINISH')).toHaveLength(1);
     expect(fs.existsSync(jobDirectory)).toBe(true);
     vi.advanceTimersByTime(AGENT_HEARTBEAT_MS);
@@ -88,56 +82,15 @@ describe('에이전트 미전송 결과 버전 전환', () => {
 
     agent.receive({ type: 'ACK', kind: restored.kind, jobId: restored.jobId, attempt: restored.attempt, accepted: true });
     expect(fs.existsSync(jobDirectory)).toBe(false);
-    expect(fs.existsSync(path.join(directory, 'legacy-jobs'))).toBe(false);
     expect(agent.upload).not.toHaveBeenCalled();
   });
 
-  it('구형 결과와 파일을 보관하고 현재 결과만 복구해 정상 기동한다', () => {
-    const previous = legacyLease();
-    const jobDirectory = writeOutbox(previous);
-    fs.writeFileSync(path.join(jobDirectory, 'lease.json'), JSON.stringify(previous));
-    fs.writeFileSync(path.join(jobDirectory, 'job.sqlite'), '이전 작업 DB');
-    fs.writeFileSync(path.join(jobDirectory, 'result.sqlite'), '이전 결과 DB');
-    const saved = Object.fromEntries(fs.readdirSync(jobDirectory).map((file) => [file, fs.readFileSync(path.join(jobDirectory, file))]));
-    const current = lease('current-job');
-    const currentDirectory = writeOutbox(current);
-    const agent = harness();
-
-    expect(() => agent.client.start()).not.toThrow();
-    expect(agent.sent[0]).toMatchObject({ type: 'HELLO', versionScheme: 'content-v1' });
-    agent.receive({ type: 'WELCOME', versionScheme: 'content-v1', runnerVersion: 'a'.repeat(64) });
-    vi.advanceTimersByTime(AGENT_HEARTBEAT_MS);
-    const completions = agent.sent.filter((message) => message.type === 'FINISH');
-    expect(completions).toHaveLength(2);
-    expect(completions.every((message) => message.jobId === current.jobId)).toBe(true);
-    expect(agent.upload).not.toHaveBeenCalled();
-    expect(fs.existsSync(currentDirectory)).toBe(true);
-    expect(fs.existsSync(jobDirectory)).toBe(false);
-
-    const archive = path.join(directory, 'legacy-jobs');
-    const outboxes = fs.readdirSync(archive, { recursive: true }).filter((file) => path.basename(String(file)) === 'outbox.json');
-    expect(outboxes).toHaveLength(1);
-    const archivedJob = path.dirname(path.join(archive, String(outboxes[0])));
-    for (const [file, contents] of Object.entries(saved)) expect(fs.readFileSync(path.join(archivedJob, file))).toEqual(contents);
-  });
-
-  it.each(['invalid', null, 'a'.repeat(63)])('현재 형식의 잘못된 collectionVersion %j를 구형으로 취급하지 않는다', (collectionVersion) => {
+  it.each(['invalid', null, undefined, 'a'.repeat(63)])('잘못된 수집 버전 %j가 기록된 결과는 복구하지 않는다', (collectionVersion) => {
     const current = lease();
     const jobDirectory = writeOutbox({ ...current, dataset: { ...current.dataset, collectionVersion } });
     const agent = harness();
     expect(() => agent.client.start()).toThrow();
     expect(agent.sent).toEqual([]);
     expect(fs.existsSync(path.join(jobDirectory, 'outbox.json'))).toBe(true);
-    expect(fs.existsSync(path.join(directory, 'legacy-jobs'))).toBe(false);
-  });
-
-  it('collectionVersion만 없는 형식이어도 기존 필수 필드가 잘못되면 거부한다', () => {
-    const previous = legacyLease();
-    const jobDirectory = writeOutbox({ ...previous, leaseToken: 'invalid' });
-    const agent = harness();
-    expect(() => agent.client.start()).toThrow();
-    expect(agent.sent).toEqual([]);
-    expect(fs.existsSync(path.join(jobDirectory, 'outbox.json'))).toBe(true);
-    expect(fs.existsSync(path.join(directory, 'legacy-jobs'))).toBe(false);
   });
 });

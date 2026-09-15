@@ -51,8 +51,8 @@ export async function runAgentCli(args: string[] = process.argv.slice(2)): Promi
   }
   // 설치·설정·업데이트 명령은 계산 런타임과 네이티브 DB 모듈을 로드하지 않는다.
   const { AgentClient } = await import('./client.js');
-  const client = new AgentClient(settings, state, async (version, versionScheme) => {
-    await updateAgent(settings, state, { expectedVersion: version, versionScheme });
+  const client = new AgentClient(settings, state, async (version) => {
+    await updateAgent(settings, state, { expectedVersion: version });
     await client.stop();
     console.log('클라이언트 업데이트 완료 — 백그라운드 서비스가 새 버전으로 재시작합니다');
     process.exit(75);

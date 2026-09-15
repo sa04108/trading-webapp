@@ -40,7 +40,6 @@ const request: BacktestRequest = {
 
 interface PublishedClients {
   runnerVersion: string;
-  versionScheme: string;
   clients: Array<{ arch: string; file: string; sha256: string; bytes: number }>;
 }
 
@@ -113,7 +112,7 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
     const hash = createHash('sha256');
     for await (const chunk of fs.createReadStream(archive)) hash.update(chunk);
     expect(published).toMatchObject({ file: path.basename(archive), bytes: fs.statSync(archive).size, sha256: hash.digest('hex') });
-    expect(manifest).toMatchObject({ versionScheme: 'content-v1', runnerVersion: versions.agentVersion });
+    expect(manifest).toMatchObject({ runnerVersion: versions.agentVersion });
     expect(versions, '현재 소스를 빌드한 패키지로 검증해야 합니다').toEqual(readRuntimeVersions());
 
     expect(fs.readdirSync(path.join(packageRoot, 'dist')).sort()).toEqual([

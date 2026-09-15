@@ -1,4 +1,3 @@
-import { readGitCommitSha } from '../../../../runtime/shared/build-info.js';
 import path from 'node:path';
 import { AgentClient } from '../../../../agent/client.js';
 import { availableServerResources } from '../../../../agent/resources.js';
@@ -42,7 +41,7 @@ export class AgentCoordinator {
     private readonly queue: JobQueue,
     readonly runnerVersion: string,
     private readonly logger: Logger,
-    private readonly executionVersion: string = runnerVersion,
+    private readonly executionVersion: string,
   ) {
     this.queue.events.on('queued', this.wake);
     this.backtests.events.on('job', this.wake);
@@ -91,17 +90,15 @@ export class AgentCoordinator {
 
   private async message(clientId: string, connection: Connection, message: AgentMessage): Promise<void> {
     if (message.type === 'HELLO') {
-      if (message.versionScheme !== 'content-v1' || message.runnerVersion !== this.runnerVersion) {
+      if (message.runnerVersion !== this.runnerVersion) {
         connection.ready = false;
         connection.slots = 0;
         this.invalidateClientLeases(clientId);
-        // SHA 계약의 구형 설치기를 새 패키지로 한 번 이동시키는 전환 경로다.
-        const legacy = message.versionScheme !== 'content-v1';
-        this.send(connection, { type: 'UPDATE_REQUIRED', runnerVersion: legacy ? readGitCommitSha() : this.runnerVersion, versionScheme: legacy ? 'legacy-git-v1' : 'content-v1' });
+        this.send(connection, { type: 'UPDATE_REQUIRED', runnerVersion: this.runnerVersion });
         return;
       }
       connection.ready = true;
-      this.send(connection, { type: 'WELCOME', runnerVersion: this.runnerVersion, versionScheme: 'content-v1' });
+      this.send(connection, { type: 'WELCOME', runnerVersion: this.runnerVersion });
       if (clientId === LOCAL_AGENT_ID) { this.wake(); return; }
       const dataset = await this.snapshots.ensureLatest();
       this.send(connection, { type: 'DATASET', dataset });

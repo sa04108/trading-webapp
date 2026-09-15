@@ -70,6 +70,8 @@ WSL2는 Linux의 systemd를 활성화해야 한다. Windows 절전·종료나 WS
 작업할 수 없다. systemd 없이 직접 실행할 때는 `./quant-agent setup` 후
 `./quant-agent run`을 사용하며 자동 업데이트 후 종료 코드 75가 나면 실행 관리자가 재시작해야 한다.
 
+기존 SHA 기반 agent는 제거한 뒤 새 패키지로 다시 설치한다. 구형 작업 상태와 데이터 캐시는 재사용하지 않는다.
+
 ## 클라이언트 명령어
 
 아래 명령은 패키지 압축을 푼 디렉터리에서 일반 사용자로 실행한다.
@@ -109,7 +111,6 @@ systemctl --user restart quant-agent
 | 서버 주소·장치 토큰 | `~/.local/state/quant-agent/settings.json` (600) |
 | 로컬 입력 스냅샷 | `~/.local/state/quant-agent/datasets/` |
 | 작업과 전송 대기 결과 | `~/.local/state/quant-agent/jobs/` |
-| 버전 전환 시 보관한 구형 미전송 결과 | `~/.local/state/quant-agent/legacy-jobs/` |
 | 설치 버전 | `~/.local/share/quant-agent/releases/` |
 | 현재 실행 버전 | `~/.local/share/quant-agent/current` |
 | 서비스 | `~/.config/systemd/user/quant-agent.service` |
@@ -136,9 +137,8 @@ WSS 연결 이력이 없어도 발급된 토큰이 유효하면 다운로드할 
 ```
 
 `XDG_DATA_HOME`을 사용했다면 해당 설치 경로의 `current/quant-agent`를 실행한다.
-예전 압축 해제 폴더의 `./quant-agent update`를 실행해도 현재 설치된 버전을 기준으로
-확인한다. `update`가 없는 구버전은 기존 자동 업데이트로 새 패키지를 적용하거나,
-새 패키지를 내려받아 설치한 뒤 이 명령을 사용할 수 있다.
+압축 해제 폴더의 `./quant-agent update`를 실행해도 현재 설치된 내용 버전을 기준으로
+최신 여부를 확인한다.
 
 - 패키지 크기·SHA-256·내부 버전·실행 검사를 통과한 뒤 `current` 링크를 교체한다.
 - 다운로드나 검증이 실패하면 현재 설치와 서비스는 유지한다. 직전 릴리스도 보관한다.
@@ -150,8 +150,7 @@ WSS 연결 이력이 없어도 발급된 토큰이 유효하면 다운로드할 
 
 최신 여부는 게시 명세와 설치 패키지의 `agentVersion`을 비교한다. 운영 배포의 Git SHA와
 게시 시각은 출처 정보이며, 웹·인증 코드만 바뀌어 재게시된 패키지는 다시 설치하지 않는다.
-기존 SHA 방식 설치기는 한 번 새 설치기로 전환한 뒤 `content-v1`을 사용한다.
-미리보기·수집·백테스트·기간 검증도 별도 내용 버전을 갖는다. 자세한 입력 범위와 전환
+미리보기·수집·백테스트·기간 검증도 별도 내용 버전을 갖는다. 자세한 입력 범위와 설치
 계약은 [Agent 실행 경계와 도메인 버전](AGENT_RUNTIME_BOUNDARY.md)에 정리한다.
 
 ## 작업 배정과 로컬 실행

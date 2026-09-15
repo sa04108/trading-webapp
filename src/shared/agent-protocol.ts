@@ -4,9 +4,7 @@ export const LOCAL_AGENT_ID = 'server-local';
 import { z } from 'zod';
 import { isoDateSchema } from './schemas/backtest-request.js';
 
-export const AGENT_PROTOCOL_VERSION = 1;
-export const AGENT_VERSION_SCHEME = 'content-v1';
-export type AgentVersionScheme = 'content-v1' | 'legacy-git-v1';
+export const AGENT_PROTOCOL_VERSION = 2;
 export const AGENT_LEASE_MS = 90_000;
 export const AGENT_HEARTBEAT_MS = 15_000;
 export const AGENT_MAX_ATTEMPTS = 3;
@@ -60,7 +58,7 @@ const identity = {
   leaseToken: z.string().min(32).max(256),
 };
 export const agentMessageSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('HELLO'), protocolVersion: z.literal(AGENT_PROTOCOL_VERSION), versionScheme: z.enum(['content-v1', 'legacy-git-v1']).optional(), runnerVersion: z.string().min(1).max(128) }),
+  z.object({ type: z.literal('HELLO'), protocolVersion: z.literal(AGENT_PROTOCOL_VERSION), runnerVersion: z.string().regex(/^[a-f0-9]{64}$/) }),
   z.object({ type: z.literal('CAPACITY'), slots: z.number().int().min(0).max(4096), datasetVersion: z.number().int().nonnegative(), maxBars: z.number().int().positive().max(Number.MAX_SAFE_INTEGER) }),
   z.object({ type: z.literal('HEARTBEAT'), ...identity, progress: z.object({ processedBars: z.number().int().nonnegative(), totalBars: z.number().int().nonnegative(), progressLabel: z.string().max(200).nullable() }).optional(), preparationProgress: z.object({ phase: z.enum(['MARKET_DATA', 'RESOLVING_STAGES', 'VALIDATING_RESULT', 'SYNCING_FACTS', 'FINALIZING']), overallProgress: z.number().min(0).max(100), doneSymbols: z.number().int().nonnegative(), totalSymbols: z.number().int().nonnegative(), savedFacts: z.number().int().nonnegative(), gapCount: z.number().int().nonnegative() }).optional() }),
   z.object({ type: z.literal('NEEDS_DATA'), ...identity, request: agentDataRequestSchema }),
@@ -68,8 +66,8 @@ export const agentMessageSchema = z.discriminatedUnion('type', [
 ]);
 export type AgentMessage = z.infer<typeof agentMessageSchema>;
 export type ServerAgentMessage =
-  | { type: 'WELCOME'; runnerVersion: string; versionScheme?: AgentVersionScheme }
-  | { type: 'UPDATE_REQUIRED'; runnerVersion: string; versionScheme?: AgentVersionScheme }
+  | { type: 'WELCOME'; runnerVersion: string }
+  | { type: 'UPDATE_REQUIRED'; runnerVersion: string }
   | { type: 'DEMAND'; estimatedBars: number }
   | { type: 'DATASET'; dataset: DatasetManifest }
   | { type: 'JOB'; lease: AgentLease }

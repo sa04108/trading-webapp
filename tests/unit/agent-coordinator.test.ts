@@ -37,7 +37,7 @@ function enqueue() {
 async function connect(runnerVersion = ctx.container.agentCoordinator.runnerVersion): Promise<Peer> {
   const peer = new Peer();
   ctx.container.agentCoordinator.connect(id, peer as unknown as WebSocket);
-  peer.submit({ type: 'HELLO', versionScheme: 'content-v1', protocolVersion: 1, runnerVersion });
+  peer.submit({ type: 'HELLO', protocolVersion: 2, runnerVersion });
   await vi.waitFor(() => expect(peer.received.length).toBeGreaterThan(0));
   return peer;
 }
@@ -64,7 +64,7 @@ describe('연결과 리스 수명 분리', () => {
     await vi.waitFor(() => expect(first.job()).toBeDefined());
     const lease = first.job()!;
     first.close();
-    const old = await connect('previous-release');
+    const old = await connect('b'.repeat(64));
     expect(old.received[0]).toMatchObject({ type: 'UPDATE_REQUIRED' });
     expect(ctx.container.jobQueue.getJob('job-one')).toMatchObject({ status: 'QUEUED', leaseTokenHash: null, leaseFailures: 0, attempt: 1 });
     old.close();
@@ -103,7 +103,7 @@ describe('연결과 리스 수명 분리', () => {
   it('준비된 연결도 실행 버전이 달라지면 유휴 실행기에서 즉시 제외한다', async () => {
     const peer = await connect(); capacity(peer);
     await vi.waitFor(() => expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(8_000_000));
-    peer.submit({ type: 'HELLO', versionScheme: 'content-v1', protocolVersion: 1, runnerVersion: 'previous-release' });
+    peer.submit({ type: 'HELLO', protocolVersion: 2, runnerVersion: 'b'.repeat(64) });
     await vi.waitFor(() => expect(peer.received.some((message) => message.type === 'UPDATE_REQUIRED')).toBe(true));
     const job = ctx.container.jobQueue.enqueue(request);
     await new Promise((resolve) => setImmediate(resolve));
@@ -137,34 +137,25 @@ describe('연결과 리스 수명 분리', () => {
   it('배포 SHA가 바뀌어도 동일 내용 버전 클라이언트는 환영하고 실행 버전으로 배정한다', async () => {
     vi.spyOn(buildInfo, 'readGitCommitSha').mockReturnValue('e'.repeat(40));
     const peer = await connect();
-    expect(peer.received[0]).toMatchObject({ type: 'WELCOME', versionScheme: 'content-v1' });
+    expect(peer.received[0]).toMatchObject({ type: 'WELCOME' });
     enqueue(); capacity(peer);
     await vi.waitFor(() => expect(peer.job()).toBeDefined());
     expect(ctx.container.jobQueue.getJob('job-one')?.runnerVersion).toBe(readRuntimeVersions().executionVersion);
   });
 
-  it('구형 SHA 설치 계약은 새 패키지로 한 번 전환하고 재연결부터 내용 버전으로 판정한다', async () => {
-    const sha = 'f'.repeat(40);
-    vi.spyOn(buildInfo, 'readGitCommitSha').mockReturnValue(sha);
-    const peer = new Peer();
-    ctx.container.agentCoordinator.connect(id, peer as unknown as WebSocket);
-    peer.submit({ type: 'HELLO', protocolVersion: 1, runnerVersion: sha });
-    await vi.waitFor(() => expect(peer.received[0]).toEqual({ type: 'UPDATE_REQUIRED', runnerVersion: sha, versionScheme: 'legacy-git-v1' }));
+  it('최신 클라이언트 명세는 내용 버전과 게시된 아키텍처를 그대로 반환한다', async () => {
     const manifestPath = path.resolve('dist/clients/manifest.json');
-    const manifest = { versionScheme: 'content-v1', runnerVersion: ctx.container.agentCoordinator.runnerVersion, buildGitSha: sha, clients: [{ arch: 'x64', buildGitSha: sha }, { arch: 'arm64', buildGitSha: 'a'.repeat(40) }] };
+    const manifest = { runnerVersion: ctx.container.agentCoordinator.runnerVersion, clients: [
+      { arch: 'x64', file: 'quant-agent-linux-x64.tar.gz', sha256: 'a'.repeat(64), bytes: 1 },
+      { arch: 'arm64', file: 'quant-agent-linux-arm64.tar.gz', sha256: 'b'.repeat(64), bytes: 2 },
+    ] };
     const exists = fs.existsSync;
     const read = fs.readFileSync;
     vi.spyOn(fs, 'existsSync').mockImplementation((file) => String(file) === manifestPath || exists(file));
     vi.spyOn(fs, 'readFileSync').mockImplementation((...args: Parameters<typeof fs.readFileSync>) => String(args[0]) === manifestPath ? JSON.stringify(manifest) : read(...args));
-    const headers = { authorization: `Bearer ${token}` };
-    const legacy = await ctx.app.inject({ method: 'GET', url: '/api/agents/client/latest', headers });
-    expect(legacy.json()).toMatchObject({ runnerVersion: sha, versionScheme: 'legacy-git-v1', clients: [{ arch: 'x64' }] });
-    expect(legacy.json().clients).toHaveLength(1);
-    const content = await ctx.app.inject({ method: 'GET', url: '/api/agents/client/latest?versionScheme=content-v1', headers });
-    expect(content.json()).toEqual(manifest);
-    peer.close();
-    const upgraded = await connect();
-    expect(upgraded.received[0]).toMatchObject({ type: 'WELCOME', versionScheme: 'content-v1' });
+    const response = await ctx.app.inject({ method: 'GET', url: '/api/agents/client/latest', headers: { authorization: `Bearer ${token}` } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(manifest);
   });
 
   it('장치 토큰은 해시만 저장하고 해제한 장치는 다시 인증할 수 없다', () => {

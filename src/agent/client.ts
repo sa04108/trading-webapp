@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import WebSocket from 'ws';
 import Database from 'better-sqlite3';
-import { AGENT_VERSION_SCHEME, type AgentVersionScheme, AGENT_HEARTBEAT_MS, AGENT_PROTOCOL_VERSION, AGENT_MAX_MESSAGE_BYTES, agentLeaseSchema, type AgentLease, type AgentMessage, type ServerAgentMessage } from '../shared/agent-protocol.js';
+import { AGENT_HEARTBEAT_MS, AGENT_PROTOCOL_VERSION, AGENT_MAX_MESSAGE_BYTES, agentLeaseSchema, type AgentLease, type AgentMessage, type ServerAgentMessage } from '../shared/agent-protocol.js';
 import { backtestExecutionTelemetrySchema, type BacktestExecutionTelemetry } from '../runtime/modules/backtest/application/backtest-execution-telemetry.js';
 import { readRuntimeVersions } from '../runtime/shared/runtime-versions.js';
 import { openDatabase } from '../runtime/shared/db/database.js';
@@ -30,7 +30,6 @@ export interface AgentRuntimeAdapter {
 }
 
 interface Outbox { lease: AgentLease; message?: FinishMessage; artifactPath?: string; sha256?: string; telemetry?: BacktestExecutionTelemetry }
-const legacyLeaseSchema = agentLeaseSchema.extend({ dataset: agentLeaseSchema.shape.dataset.omit({ collectionVersion: true }) });
 interface Running { lease: AgentLease; child: ChildProcess; directory: string; jobPath: string; progress?: Extract<AgentMessage, { type: 'HEARTBEAT' }>['progress']; preparationProgress?: Extract<AgentMessage, { type: 'HEARTBEAT' }>['preparationProgress']; peakRss: number; budgetBytes: number; resourceError?: string; cancellation: boolean; cancelPath?: 'IPC' | 'SIGTERM' | 'SIGKILL'; telemetry?: BacktestExecutionTelemetry; timers: NodeJS.Timeout[] }
 
 /** 연결 유지와 작업 수명은 부모가 맡고 계산은 격리된 자식 프로세스에서 수행한다. */
@@ -57,7 +56,7 @@ export class AgentClient {
   private updating = false;
 
   constructor(readonly settings: AgentSettings, readonly directory: string,
-    private readonly onUpdateRequired?: (runnerVersion: string, versionScheme: AgentVersionScheme) => Promise<void>,
+    private readonly onUpdateRequired?: (runnerVersion: string) => Promise<void>,
     private readonly log: (message: string) => void = console.log,
     private readonly runtime?: AgentRuntimeAdapter) {
     fs.mkdirSync(path.join(directory, 'jobs'), { recursive: true, mode: 0o700 });
@@ -94,15 +93,6 @@ export class AgentClient {
       const file = path.join(directory, 'outbox.json');
       if (fs.existsSync(file)) {
         const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Outbox;
-        // 구형 결과에는 수집 버전과 새 결과 ABI를 소급 지정할 수 없으므로 원본을 보관한다.
-        if (value.lease?.dataset?.collectionVersion === undefined && legacyLeaseSchema.safeParse(value.lease).success) {
-          const archive = path.join(this.directory, 'legacy-jobs');
-          fs.mkdirSync(archive, { recursive: true, mode: 0o700 });
-          const destination = fs.mkdtempSync(path.join(archive, `${name}-`));
-          fs.renameSync(directory, path.join(destination, 'job'));
-          this.log(`이전 버전의 미전송 작업 보관: ${destination}`);
-          continue;
-        }
         value.lease = agentLeaseSchema.parse(value.lease);
         // 결과 경로는 기록의 외부 경로를 신뢰하지 않고 소유 작업 폴더에서 재구성한다.
         if (value.artifactPath) value.artifactPath = path.join(directory, 'result.sqlite');
@@ -131,14 +121,14 @@ export class AgentClient {
           this.send(finish);
         }
       });
-      this.send({ type: 'HELLO', versionScheme: AGENT_VERSION_SCHEME, protocolVersion: AGENT_PROTOCOL_VERSION, runnerVersion: this.runtime.runnerVersion });
+      this.send({ type: 'HELLO', protocolVersion: AGENT_PROTOCOL_VERSION, runnerVersion: this.runtime.runnerVersion });
       return;
     }
     const url = new URL('/api/agents/connect', this.settings.serverUrl);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     const socket = new WebSocket(url, { headers: { authorization: `Bearer ${this.settings.token}` }, handshakeTimeout: 15_000, maxPayload: AGENT_MAX_MESSAGE_BYTES });
     this.socket = socket;
-    socket.once('open', () => { this.lastServerContact = Date.now(); this.send({ type: 'HELLO', versionScheme: AGENT_VERSION_SCHEME, protocolVersion: AGENT_PROTOCOL_VERSION, runnerVersion: readRuntimeVersions().agentVersion }); });
+    socket.once('open', () => { this.lastServerContact = Date.now(); this.send({ type: 'HELLO', protocolVersion: AGENT_PROTOCOL_VERSION, runnerVersion: readRuntimeVersions().agentVersion }); });
     socket.on('pong', () => { this.lastServerContact = Date.now(); });
     socket.on('message', (raw) => {
       this.lastServerContact = Date.now();
@@ -169,7 +159,7 @@ export class AgentClient {
       this.ready = false;
       if (!this.updating && this.onUpdateRequired) {
         this.updating = true;
-        void this.update(message.runnerVersion, message.versionScheme ?? 'legacy-git-v1').catch((error: unknown) => {
+        void this.update(message.runnerVersion).catch((error: unknown) => {
           this.updating = false; this.log(`클라이언트 업데이트 실패: ${this.error(error)}`); this.socket?.close();
         });
       } else this.log('운영 서버에 맞는 클라이언트 업데이트를 기다립니다');
@@ -370,13 +360,13 @@ export class AgentClient {
     await Promise.all([...this.finishing]);
   }
 
-  private async update(version: string, scheme: AgentVersionScheme): Promise<void> {
+  private async update(version: string): Promise<void> {
     // UPDATE_REQUIRED는 서버가 이전 리스를 폐기한 뒤 보내는 응답이다.
     for (const abort of this.uploadAborts.values()) abort.abort();
     await this.cancelChildren();
     await Promise.all([...this.uploads.values()]);
     for (const key of [...this.outbox.keys()]) this.acknowledge(key);
-    await this.onUpdateRequired!(version, scheme);
+    await this.onUpdateRequired!(version);
   }
 
   async stop(): Promise<void> {

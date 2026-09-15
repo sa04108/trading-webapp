@@ -36,11 +36,7 @@ export class DatasetSnapshots {
 
   private readManifest(file: string): DatasetManifest | null {
     if (!fs.existsSync(file)) return null;
-    try {
-      const parsed = datasetManifestSchema.safeParse(JSON.parse(fs.readFileSync(file, 'utf8')));
-      // 수집 버전을 모르는 과거 명세는 새 임대에 쓰지 않고 원본 DB에서 다시 게시한다.
-      return parsed.success ? parsed.data : null;
-    } catch { return null; }
+    return datasetManifestSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
   }
 
   ensureLatest(): Promise<DatasetManifest> {
@@ -94,13 +90,6 @@ export class DatasetSnapshots {
       if (version >= this.current.version - 1 || pinned.has(version)) continue;
       const manifest = this.get(version);
       if (manifest) fs.rmSync(this.file(manifest), { force: true });
-      else {
-        // 구형 명세를 읽지 못해도 보존 대상이 아닌 해당 게시 파일은 함께 정리한다.
-        const archive = new RegExp(`^${version}-[a-f0-9]{64}\\.sqlite$`);
-        for (const file of fs.readdirSync(this.directory)) {
-          if (archive.test(file)) fs.rmSync(path.join(this.directory, file), { force: true });
-        }
-      }
       fs.rmSync(path.join(this.directory, name), { force: true });
     }
   }

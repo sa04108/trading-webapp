@@ -69,7 +69,7 @@ try {
   const clients = previous.runnerVersion === versions.agentVersion ? previous.clients.filter((client) => client.arch !== process.arch) : [];
   clients.push({ buildGitSha: metadata.gitSha, arch: process.arch, file, sha256, bytes: fs.statSync(destination).size,
     minimumGlibc: process.report.getReport().header.glibcVersionRuntime });
-  fs.writeFileSync(`${manifestPath}.tmp`, JSON.stringify({ versionScheme: 'content-v1', runnerVersion: versions.agentVersion, buildGitSha: metadata.gitSha, clients }, null, 2));
+  fs.writeFileSync(`${manifestPath}.tmp`, JSON.stringify({ runnerVersion: versions.agentVersion, buildGitSha: metadata.gitSha, clients }, null, 2));
   fs.renameSync(`${manifestPath}.tmp`, manifestPath);
   process.stdout.write(`Linux 클라이언트 생성: ${destination}\n`);
 } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
