@@ -22,7 +22,7 @@ export function AgentSettings() {
   } });
   const revoke = useMutation({ mutationFn: (id: string) => api(`/agents/${id}`, { method: 'DELETE' }), onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['agents'] }); } });
   return <Card>
-    <CardHeader><CardTitle className="text-base">계산 장치</CardTitle></CardHeader>
+    <CardHeader><CardTitle className="text-base">Agent</CardTitle></CardHeader>
     <CardContent className="space-y-4 text-sm">
       <p className="text-muted-foreground">Linux 또는 WSL2 장치에서 클라이언트를 실행하면 유니버스 준비와 백테스트를 맡길 수 있습니다. CPU와 메모리 사용량은 자동으로 조절됩니다.</p>
       <div className="flex flex-wrap gap-3">
@@ -30,7 +30,7 @@ export function AgentSettings() {
         {data?.downloads.length === 0 && <span className="text-muted-foreground">클라이언트 파일 게시를 기다리고 있습니다.</span>}
       </div>
       <form onSubmit={(event) => { event.preventDefault(); issue.mutate(); }} className="flex items-end gap-2">
-        <div className="flex-1 space-y-2"><Label htmlFor="agent-name">장치 이름</Label><Input id="agent-name" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} placeholder="작업용 PC" /></div>
+        <div className="flex-1 space-y-2"><Label htmlFor="agent-name">Agent 이름</Label><Input id="agent-name" value={name} onChange={(event) => setName(event.target.value)} maxLength={80} placeholder="작업용 PC" /></div>
         <Button type="submit" disabled={!name.trim() || issue.isPending}>연결 토큰 발급</Button>
       </form>
       {token && <div className="space-y-2 rounded-md border p-3">

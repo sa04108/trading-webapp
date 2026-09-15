@@ -31,11 +31,20 @@ flowchart LR
 
 ## 설치와 실행
 
-1. 운영 웹의 **설정 → 계산 장치**에서 장치 이름을 입력하고 전용 토큰을 발급한다.
-   토큰은 발급 직후 한 번만 표시한다. 장치마다 별도로 발급한다.
-2. 같은 화면에서 해당 Linux 아키텍처의 압축 파일을 다운로드하고 푼다.
-3. 일반 사용자로 압축을 푼 디렉터리에서 `./quant-agent install`을 실행한다.
-   서버 HTTPS 주소와 장치 토큰을 입력하면 사용자 systemd 서비스가 시작된다.
+1. 운영 웹의 **설정 → Agent**에서 Agent 이름을 입력하고 전용 토큰을 발급한다.
+   토큰은 발급 직후 한 번만 표시한다. Agent마다 별도로 발급한다.
+2. 같은 화면에서 해당 Linux 아키텍처의 압축 파일을 다운로드한다.
+3. 다운로드한 파일이 있는 디렉터리에서 일반 사용자로 다음 명령을 실행한다. 아래는 x64 기준이다.
+
+   ```bash
+   mkdir -p quant-agent
+   tar -xzf quant-agent-linux-x64.tar.gz -C quant-agent
+   cd quant-agent
+   ./quant-agent install
+   ```
+
+   arm64 패키지는 압축 파일명을 `quant-agent-linux-arm64.tar.gz`로 바꾼다.
+   서버 HTTPS 주소와 Agent 토큰을 입력하면 사용자 systemd 서비스가 시작된다.
 
 Node 런타임과 필요한 패키지를 클라이언트에 포함하므로 장치에 Node·pnpm을 설치하지 않는다.
 Linux glibc 환경과 tar, 사용자 systemd가 필요하다. `dist/clients/manifest.json`에 빌드 환경의
