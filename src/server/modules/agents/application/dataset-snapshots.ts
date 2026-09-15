@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { DatabaseHandle } from '../../../shared/db/database.js';
-import { datasetIdentity } from '../../../shared/db/database-layout.js';
+import { DATABASE_SCHEMA_VERSION, datasetIdentity } from '../../../shared/db/database-layout.js';
 import { datasetManifestSchema, type DatasetManifest } from '../../../../shared/agent-protocol.js';
 
 /** 준비가 끝난 파일만 latest에 게시한다. 작업별 입력 DB를 다시 구성하지 않는다. */
@@ -35,7 +35,8 @@ export class DatasetSnapshots {
     if (this.stopped) return Promise.reject(new Error('데이터 게시 서비스가 종료되었습니다'));
     if (this.publishing) return this.publishing;
     const source = datasetIdentity(this.database.sqlite);
-    if (this.current?.datasetId === source.datasetId && this.current.sourceRevision === source.revision) {
+    if (this.current?.datasetId === source.datasetId && this.current.sourceRevision === source.revision
+      && this.current.schemaVersion === DATABASE_SCHEMA_VERSION) {
       return Promise.resolve(this.current);
     }
     // DB 복원으로 원본 revision이 낮아져도 배포 파일의 버전은 증가한다.

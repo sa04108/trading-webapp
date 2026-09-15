@@ -16,6 +16,9 @@ import { StrategyRegistry } from '../../src/server/modules/strategy/application/
 import { KrxQuotaError } from '../../src/server/modules/market-data/application/ports.js';
 import type { SymbolMasterEntry } from '../../src/server/modules/market-data/domain/symbol-master.js';
 
+import { SqliteExternalApiUsage } from '../../src/server/shared/db/external-api-usage.js';
+import { kstDateOf } from '../../src/server/modules/market-data/domain/kst-date.js';
+
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
 
 const INPUT: PreparationInput = {
@@ -86,6 +89,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     database: handle,
     clock: { now: () => nowMs },
     logger: LOGGER,
+    externalApiUsage: new SqliteExternalApiUsage({ database: handle, clock: { now: () => nowMs }, currentDateKst: kstDateOf }),
     resolver: {
       resolveOrDescribeNeeds: async () => ready(),
       isPeriodCovered: () => true,
@@ -1754,6 +1758,7 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
             if (decision === 'PAUSE_DAILY_QUOTA') {
               return { savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: symbol, stopReason: 'DAILY_QUOTA', failureMessage: 'quota' };
             }
+            ctx.deps.externalApiUsage.recordCall('DART', 'daily');
             requestedSymbols.push(symbol);
             completedSymbols.add(symbol);
             hooks.onSymbolDone?.({ index: index + 1, total: request.symbols.length });

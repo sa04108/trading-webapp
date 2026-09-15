@@ -141,37 +141,35 @@ WSS는 TLS 위의 WebSocket 연결이다. PC에서 운영 서버의 HTTPS 포트
 
 ## DB 마이그레이션과 복원
 
-기존 단일 DB에서의 분리는 앱 쓰기를 멈춘 유지보수 구간에서 실행한다. 배포 스크립트는
-서비스를 먼저 중지하고 새 릴리스 CLI로 백업한 뒤 `db:prepare`를 실행한다.
-`db:prepare`는 systemd oneshot 작업으로 실행해 중단 신호를 배포 실패로 처리한다.
+`DATABASE_PATH`는 운영 파일이며 계산 파일 경로는 자동으로 `*.data.sqlite`로 결정한다.
+각 파일은 `migrations/operations`, `migrations/data`의 독립 마이그레이션 이력을 가진다.
+배포는 서비스를 중지하고 두 DB를 백업한 뒤 새 릴리스의 `db:prepare`를 실행한다.
+`db:prepare`는 systemd oneshot 작업으로 실행하여 중단 신호를 배포 실패로 처리한다.
 SSH 연결 유지 패킷과 응답 제한으로 긴 검증 중 연결 단절도 감지한다.
 
 ```bash
-# 운영 서버에서는 서비스 중지 및 app.env를 읽는 기존 systemd-run 절차를 먼저 적용한다.
+# 운영 서버에서는 서비스 중지 및 app.env를 읽는 systemd-run 절차를 먼저 적용한다.
 pnpm cli db:backup /안전한경로/before.sqlite
 pnpm cli db:prepare
-# 복원이 필요하면 서비스를 멈춘 상태에서:
+# 복원이 필요하면 서비스를 멈춘 상태에서 실행한다.
 pnpm cli db:restore /안전한경로/before.sqlite
 ```
 
-`DATABASE_PATH`가 운영 파일이며 계산 파일 경로는 자동으로 `*.data.sqlite`로 결정한다.
-각 파일은 `migrations/operations`, `migrations/data`의 독립 마이그레이션 이력을 가진다.
-원래 단일 DB migration 파일은 이전 DB 검증용으로 보존한다.
+백업 세트는 `before.sqlite`, `before.sqlite.data`, `before.sqlite.json` 세 파일이다.
+복원은 모든 해시를 먼저 확인하고 임시 파일과 복원 기록으로 진행한다. 중단되면 같은
+`db:restore`를 다시 실행한다. 복원 기록이 남았거나 연결된 파일이 없거나 데이터셋 식별자가
+다르면 앱은 부팅하지 않는다. SQLite WAL의 여러 파일 쓰기를 하나의 원자적 트랜잭션으로
+간주하지 않으며, 유지보수 중 모든 쓰기를 중지한다.
 
-분리 시 기존 데이터를 새 두 파일로 복사하고 행·참조·무결성·autoincrement를 검증한다.
-복사와 대조는 테이블별로 진행 상황을 출력한다. 행 순서를 고정한 순차 비교로
-큰 정렬 없이 정수·문자열·바이너리와 행 개수를 확인한다. 내용 무결성은 활성화 전에
-검증하며, 파일 이름 교체 뒤에는 식별자를 확인한다. 중단된 전환을 재개할 때는
-남아 있는 파일의 내용 무결성을 다시 검증한다.
-기존 파일은 `app.sqlite.split-<UUID>.backup.sqlite`로 남긴다. 도중 중단되면
-`app.sqlite.split-migration.json`을 기준으로 같은 `db:prepare` 명령이 복구를 이어간다.
-앱은 분리·복원 journal이 남아 있거나 서로 다른 데이터셋의 파일이면 부팅하지 않는다.
+일회성 단일 DB 분리 코드는 전환 릴리스 `040ef56`에 남아 있다. 현재 릴리스는 이미 분리된
+DB 또는 새 DB만 지원한다. 분리 전 백업을 복원해야 한다면 해당 전환 릴리스의 CLI로
+복원·분리를 먼저 완료한다. 분리 당시 보존한 원본 백업과 해당 릴리스를 함께 보관한다.
 
-백업 세트는 `before.sqlite`, `before.sqlite.data`(분리 DB일 때), `before.sqlite.json`이다.
-세 파일을 함께 보존한다. 복원은 모든 해시를 먼저 확인하고 staged 파일과 복원 journal로
-진행한다. 중단되면 같은 `db:restore`를 다시 실행한다. 기존 단일 DB 백업을 복원하면
-분리 전 형식으로 돌아간다. SQLite WAL의 여러 파일 쓰기를 하나의 crash-atomic 트랜잭션으로
-간주하지 않는다. 유지보수 중 모든 쓰기 중지와 게시·복원 journal이 복구 경계다.
+데이터 마이그레이션 `0001_retire_completed_conversions`는 완료된 SCD 변환의 임시 테이블과
+사용하지 않는 `symbol_facts_state.updated_at_ms`를 삭제한다. 미변환 체크포인트·이벤트나
+PENDING 상태의 종목 이력이 있으면 삭제하지 않고 중단한다. 현재 종목 버전, 재무·자본변동의
+독립 watermark는 보존한다. 데이터 스키마 버전은 2이며 revision을 올려 스냅샷을 다시 게시한다.
+에이전트는 같은 릴리스의 클라이언트로 업데이트해야 한다.
 
 ## 빌드와 배포
 
@@ -190,6 +188,6 @@ pnpm run deploy        # 앱 SSH 배포 + 같은 Git 버전 클라이언트 파�
 
 운영 마이그레이션 `0004_agent_ownership`은 `backtest_jobs.worker_id`를 `agent_id`로
 이름 변경하고 값의 `remote:` 접두사를 한 번 제거한다. 상태·attempt·임대 token hash·만료
-시각·완료 결과는 보존한다. 기존 단일 DB를 처음 분리할 때도 같은 변환을 적용하며,
-백업 원본에는 기존 이름과 값이 그대로 남는다. 과거 마이그레이션과 결정 이력의 이름은
+시각·완료 결과는 보존한다. 새 DB 생성에도 필요한 운영 스키마 이행 순서를 유지한다.
+과거 마이그레이션과 결정 이력의 이름은
 당시 스키마를 설명하므로 유지한다. 과거 비밀 키 이름의 로그 마스킹도 유지한다.

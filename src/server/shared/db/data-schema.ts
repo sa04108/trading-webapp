@@ -62,8 +62,6 @@ export const symbolFactsState = sqliteTable('symbol_facts_state', {
   actionGapDetailsJson: text('action_gap_details_json'),
   /** 현재 gap/정렬 해석 프로토콜로 다시 검증한 연도와 버전 JSON */
   actionCoverageProtocolJson: text('action_coverage_protocol_json'),
-  /** 과거 마이그레이션 호환용 최종 갱신 시각. 새 watermark 판정에는 쓰지 않는다 */
-  updatedAtMs: integer('updated_at_ms').notNull(),
   /** 재무 수집만 전진시키는 공시검색 watermark */
   financialUpdatedAtMs: integer('financial_updated_at_ms'),
   /** 자본변동 수집만 전진시키는 공시검색 watermark */
@@ -74,7 +72,7 @@ export const symbolFactsState = sqliteTable('symbol_facts_state', {
 /**
  * 재무 증분 수집까지 반영한 DART 정기공시 접수번호.
  *
- * `symbol_facts_state.updated_at_ms` 는 날짜보다 정밀하지만 공시검색 API는 접수일만
+ * `symbol_facts_state.financial_updated_at_ms` 는 날짜보다 정밀하지만 공시검색 API는 접수일만
  * 돌려준다. watermark 당일을 다시 조회하면서도 같은 공시를 매 실행마다 재수집하지
  * 않으려면 접수번호를 별도로 기억해야 한다. 행은 팩트 저장과 버전 반영이 성공한 뒤에만
  * 추가한다 — 실패한 공시는 다음 실행에서 다시 시도한다.
@@ -199,82 +197,6 @@ export const symbolMasterVersions = sqliteTable(
       'chk_smv_valid_range',
       sql`${table.validToDate} IS NULL OR ${table.validToDate} > ${table.validFromDate}`,
     ),
-  ],
-);
-
-
-/** legacy 체크포인트+이벤트 이력을 SCD 버전으로 원자적 변환했는지 표시한다. */
-export const symbolMasterStorageState = sqliteTable(
-  'symbol_master_storage_state',
-  {
-    singleton: integer('singleton').primaryKey(),
-    phase: text('phase').notNull(), // PENDING | ACTIVE
-    migratedAtMs: integer('migrated_at_ms'),
-  },
-  (table) => [
-    check('chk_sms_singleton', sql`${table.singleton} = 1`),
-    check('chk_sms_phase', sql`${table.phase} IN ('PENDING', 'ACTIVE')`),
-  ],
-);
-
-
-// 아래 세 테이블은 SCD 이행 전 데이터 보존용 legacy 구조다.
-// 신규 수집과 조회에서는 사용하지 않고, 후속 contract 마이그레이션 전까지만 남겨 둔다.
-/** 분기 체크포인트 메타데이터 — legacy 이행 전용. */
-export const symbolMasterCheckpoints = sqliteTable('symbol_master_checkpoints', {
-  id: text('id').primaryKey(),
-  checkpointDate: text('checkpoint_date').notNull().unique(),
-  source: text('source').notNull(), // KRX
-  verifiedAtMs: integer('verified_at_ms'),
-  mismatchJson: text('mismatch_json'),
-  createdAtMs: integer('created_at_ms').notNull(),
-});
-
-
-/** symbols 에 FK 를 걸지 않는다 — 마스터는 미등록·폐지 종목도 담는다 */
-export const symbolMasterCheckpointSymbols = sqliteTable(
-  'symbol_master_checkpoint_symbols',
-  {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    checkpointId: text('checkpoint_id')
-      .notNull()
-      .references(() => symbolMasterCheckpoints.id, { onDelete: 'cascade' }),
-    standardCode: text('standard_code').notNull(),
-    shortCode: text('short_code').notNull(),
-    name: text('name').notNull(),
-    market: text('market').notNull(), // KOSPI | KOSDAQ
-    /** 10진 정수 문자열 — bigint 를 그대로 보존한다 */
-    sharesOutstanding: text('shares_outstanding').notNull(),
-    /** COMMON_STOCK 또는 KrxExclusionReason — 필터 정책은 읽기 시점에 적용한다 */
-    instrumentType: text('instrument_type').notNull(),
-    listedDate: text('listed_date'),
-  },
-  (table) => [
-    uniqueIndex('idx_smcs_checkpoint_code').on(table.checkpointId, table.standardCode),
-  ],
-);
-
-
-/**
- * 변경 이벤트(delta). old/newValue 는 절대값 JSON 이라 중복 적용해도 결과가 같다.
- * observedSpanStart: diff 기준일 — 갭을 건너뛴 수집이면 이벤트 날짜가 근사값이다.
- */
-export const symbolMasterEvents = sqliteTable(
-  'symbol_master_events',
-  {
-    id: integer('id').primaryKey({ autoIncrement: true }),
-    effectiveDate: text('effective_date').notNull(),
-    standardCode: text('standard_code').notNull(),
-    // LISTED | DELISTED | MARKET_MOVED | SHARES_CHANGED | NAME_CHANGED | TYPE_CHANGED
-    eventType: text('event_type').notNull(),
-    oldValue: text('old_value'),
-    newValue: text('new_value'),
-    observedSpanStart: text('observed_span_start').notNull(),
-    createdAtMs: integer('created_at_ms').notNull(),
-  },
-  (table) => [
-    index('idx_sme_effective').on(table.effectiveDate),
-    index('idx_sme_code_effective').on(table.standardCode, table.effectiveDate),
   ],
 );
 

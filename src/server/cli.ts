@@ -17,7 +17,6 @@ import {
   type NumericDistribution,
 } from './modules/backtest/application/backtest-telemetry-report.js';
 import { newId } from './shared/ids.js';
-import { migrateSplitDatabase } from './shared/db/split-database-migration.js';
 
 function ask(question: string, hidden = false): Promise<string> {
   const muted = new Writable({
@@ -40,26 +39,10 @@ function ask(question: string, hidden = false): Promise<string> {
   });
 }
 
-/**
- * DB 를 새 릴리스가 기대하는 상태로 올려 둔다 — 스키마 마이그레이션과 데이터
- * 마이그레이션을 전부 포함한다.
- *
- * 하는 일이 "컨테이너를 한 번 만들고 닫는다" 인 이유: 스키마 마이그레이션은
- * `openDatabase` 가, 데이터 마이그레이션은 각 서비스 생성자가 이미 돌린다
- * (`SymbolMasterService` 의 SCD 이행 등). 컨테이너 조립이 그 둘을 모두 태우므로
- * 마이그레이션 목록을 여기에 따로 두지 않는다. 앞으로 같은 패턴의 데이터
- * 마이그레이션이 늘어도 이 명령은 손대지 않아도 된다.
- *
- * 배포가 서비스를 멈춘 창에서 이걸 먼저 부른다. 그러지 않으면 부팅 안에서
- * 마이그레이션이 돌아 포트가 늦게 열리고, 무거운 데이터 마이그레이션 한 번에
- * readiness 확인이 타임아웃한다 — 2026-08-09 배포 장애가 그 경로였다
- * (SCD 이행 16초, readiness 창 18초).
- */
+/** 서비스 시작 전에 각 DB의 스키마를 갱신하고 컨테이너 조립을 검증한다. */
 async function dbPrepare(): Promise<void> {
   const config = loadConfig();
   const startedAtMs = Date.now();
-  const migration = migrateSplitDatabase(config.databasePath, (message) => console.log(message));
-  if (migration.backupPath) console.log(`분리 전 원본 DB 보존: ${migration.backupPath}`);
   const container = createContainer(config);
   try {
     console.log(`DB 준비 완료 (${Date.now() - startedAtMs}ms): ${config.databasePath}`);

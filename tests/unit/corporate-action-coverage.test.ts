@@ -78,7 +78,6 @@ describe('SqliteCorporateActionCoverageStore', () => {
       actionCoveredYearsJson: '[2025]',
       actionGapYearsJson: null,
       actionCoverageProtocolJson: '{"version":8,"years":[2025]}',
-      updatedAtMs: 100,
       actionUpdatedAtMs: 100,
     }).run();
 
@@ -92,7 +91,7 @@ describe('SqliteCorporateActionCoverageStore', () => {
   it('재무 커버리지를 건드리지 않는다', async () => {
     const { db, store } = await setup();
     db.insert(symbolFactsState)
-      .values({ code: '005930', coveredYearsJson: JSON.stringify([2019]), updatedAtMs: 1 })
+      .values({ code: '005930', coveredYearsJson: JSON.stringify([2019]) })
       .run();
 
     store.addCoveredYears('005930', [2025], 100);

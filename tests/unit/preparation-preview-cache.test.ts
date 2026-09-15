@@ -44,7 +44,7 @@ describe('PreparationPreviewCache source invalidation', () => {
       "INSERT INTO facts (scope, key, field, period_key, as_of_ts_ms, value, unit) VALUES ('SYMBOL', '005930', 'NET_INCOME', '2025Q4', 1, 10, 'KRW')",
       'UPDATE facts SET value = 20', 'DELETE FROM facts'],
     ['financial/action coverage',
-      "INSERT INTO symbol_facts_state (code, covered_years_json, updated_at_ms) VALUES ('005930', '[2025]', 1)",
+      "INSERT INTO symbol_facts_state (code, covered_years_json, financial_updated_at_ms) VALUES ('005930', '[2025]', 1)",
       "UPDATE symbol_facts_state SET action_covered_years_json = '[2025]'", 'DELETE FROM symbol_facts_state'],
     ['symbol identity and shares',
       `INSERT INTO symbol_master_versions (standard_code, valid_from_date, short_code, name,

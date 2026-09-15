@@ -111,7 +111,7 @@ describe('SqliteFactCoverageStore', () => {
       .run();
     database.db
       .insert(symbolFactsState)
-      .values({ code: '999999', coveredYearsJson: '[]', updatedAtMs: 1 })
+      .values({ code: '999999', coveredYearsJson: '[]' })
       .run();
 
     const covered = store.getCoveredYears();
@@ -124,7 +124,7 @@ describe('SqliteFactCoverageStore', () => {
     const { store, database } = setup();
     database.sqlite
       .prepare(
-        'INSERT INTO symbol_facts_state (code, covered_years_json, updated_at_ms) VALUES (?, ?, ?)',
+        'INSERT INTO symbol_facts_state (code, covered_years_json, financial_updated_at_ms) VALUES (?, ?, ?)',
       )
       .run('005930', '{not json', 1);
     expect(store.getCoveredYears().get('005930')).toEqual([]);
@@ -136,7 +136,6 @@ describe('SqliteFactCoverageStore', () => {
     database.db.insert(symbolFactsState).values({
       code: '005930',
       coveredYearsJson: '[2024,2025]',
-      updatedAtMs: 1,
       financialUpdatedAtMs: 1,
     }).run();
 

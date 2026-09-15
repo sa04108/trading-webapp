@@ -6,8 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { openDatabase } from '../../src/server/shared/db/database.js';
 import { dataDatabasePath, datasetIdentity, initializeDatabaseIdentity, migrateDatabaseRole } from '../../src/server/shared/db/database-layout.js';
-import { DATA_TABLE_NAMES, OPERATIONAL_TABLE_NAMES } from '../../src/server/shared/db/database-tables.js';
-import { migrateSplitDatabase } from '../../src/server/shared/db/split-database-migration.js';
+import { DATA_TABLE_NAMES } from '../../src/server/shared/db/database-tables.js';
 
 let directory: string;
 let file: string;
@@ -16,26 +15,6 @@ beforeEach(() => {
   file = path.join(directory, 'app.sqlite');
 });
 afterEach(() => { vi.restoreAllMocks(); fs.rmSync(directory, { recursive: true, force: true }); });
-
-function legacyDatabase(): void {
-  const sqlite = new Database(file);
-  try {
-    sqlite.exec(fs.readFileSync('migrations/0000_baseline.sql', 'utf8'));
-    sqlite.exec(`
-      INSERT INTO users (id, username, password_hash, created_at_ms, updated_at_ms)
-        VALUES ('user', 'alice', 'private-hash', 1, 1);
-      INSERT INTO symbols (code, market, created_at_ms) VALUES ('005930', 'KR', 1);
-      INSERT INTO facts (scope, key, field, period_key, as_of_ts_ms, value, unit)
-        VALUES ('SYMBOL', '005930', 'NET_INCOME', '2025Q4', 1, 42, 'KRW');
-      INSERT INTO backtest_jobs (id, status, request_json, strategy_id, universe_rule_json, universe_schedule_json, created_at_ms, worker_id)
-        VALUES ('job', 'COMPLETED', '{}', 'range-breakout', '{}', '[]', 1, 'remote:legacy-agent');
-      INSERT INTO external_api_daily_usage (api, quota_scope, usage_date_kst, calls_used, updated_at_ms)
-        VALUES ('DART', 'daily', '2026-09-14', 127, 1);
-      INSERT INTO audit_logs (id, actor, event, created_at_ms) VALUES (99, 'user', 'retained', 1);
-      DELETE FROM audit_logs;
-    `);
-  } finally { sqlite.close(); }
-}
 
 function tables(sqlite: Database.Database): string[] {
   return (sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(({ name }) => name);
@@ -48,8 +27,7 @@ describe('물리 DB 분리', () => {
       handle.sqlite.exec("INSERT INTO symbols (code, market, created_at_ms) VALUES ('005930', 'KR', 1)");
       const data = new Database(handle.dataPath, { readonly: true });
       try {
-        expect(tables(data)).toEqual(expect.arrayContaining([...DATA_TABLE_NAMES, 'dataset_state']));
-        expect(tables(data).filter((name) => OPERATIONAL_TABLE_NAMES.includes(name as never))).toEqual([]);
+        expect(tables(data).sort()).toEqual([...DATA_TABLE_NAMES, 'dataset_state', '__drizzle_migrations', 'sqlite_sequence'].sort());
         expect(tables(handle.sqlite).filter((name) => DATA_TABLE_NAMES.includes(name as never))).toEqual([]);
         expect(data.prepare('SELECT code FROM symbols').all()).toEqual([{ code: '005930' }]);
       } finally { data.close(); }
@@ -76,6 +54,23 @@ describe('물리 DB 분리', () => {
     } finally { job.close(); }
   });
 
+  it('운영 파일만 유실됐으면 빈 DB를 만들지 않는다', () => {
+    openDatabase(file).close();
+    fs.rmSync(file);
+    expect(() => openDatabase(file)).toThrow('계산 DB만 존재');
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('단일 DB는 변환 지원 릴리스로 안내하고 원본을 수정하지 않는다', () => {
+    const legacy = new Database(file);
+    legacy.exec("CREATE TABLE symbols (code TEXT); INSERT INTO symbols VALUES ('005930')");
+    legacy.close();
+    expect(() => openDatabase(file)).toThrow('040ef56');
+    const retained = new Database(file, { readonly: true });
+    try { expect(tables(retained)).toEqual(['symbols']); } finally { retained.close(); }
+    expect(fs.existsSync(dataDatabasePath(file))).toBe(false);
+  });
+
   it('계산 DB가 사라지거나 다른 데이터셋 파일로 바뀌면 부팅을 거부한다', () => {
     openDatabase(file).close();
     const dataPath = dataDatabasePath(file);
@@ -88,88 +83,20 @@ describe('물리 DB 분리', () => {
   });
 });
 
-describe('기존 단일 DB 이전', () => {
-  it('계정·입력·작업·API 원장과 자동 증가 값을 보존하고 반복 실행해도 유지한다', () => {
-    legacyDatabase();
-    expect(() => openDatabase(file)).toThrow('기존 단일 DB를 분리');
-    const result = migrateSplitDatabase(file);
-    expect(result.status).toBe('MIGRATED');
-    expect(result.backupPath).toBeDefined();
-    const backup = new Database(result.backupPath!, { readonly: true });
-    try {
-      expect(tables(backup)).toEqual(expect.arrayContaining(['users', 'symbols']));
-      expect(backup.prepare('SELECT worker_id FROM backtest_jobs').get()).toEqual({ worker_id: 'remote:legacy-agent' });
-    } finally { backup.close(); }
-    const handle = openDatabase(file);
-    try {
-      expect(handle.sqlite.prepare('SELECT password_hash FROM users').get()).toEqual({ password_hash: 'private-hash' });
-      expect(handle.sqlite.prepare('SELECT value FROM facts').get()).toEqual({ value: 42 });
-      expect(handle.sqlite.prepare('SELECT id, status, agent_id FROM backtest_jobs').get()).toEqual({ id: 'job', status: 'COMPLETED', agent_id: 'legacy-agent' });
-      expect(handle.sqlite.prepare('SELECT calls_used FROM external_api_daily_usage').get()).toEqual({ calls_used: 127 });
-      handle.sqlite.exec("INSERT INTO audit_logs (actor, event, created_at_ms) VALUES ('user', 'next', 1)");
-      expect(handle.sqlite.prepare('SELECT id FROM audit_logs').get()).toEqual({ id: 100 });
-    } finally { handle.close(); }
-    expect(migrateSplitDatabase(file)).toEqual({ status: 'ALREADY_SPLIT' });
-  });
-
-  it('행 번호의 공백과 정렬이 다른 키, 큰 정수와 바이너리를 보존한다', () => {
-    legacyDatabase();
-    const source = new Database(file);
-    source.exec("INSERT INTO symbols (rowid, code, market, created_at_ms) VALUES (9, '000660', 'KR', 1), (3, '035420', 'KR', 1)");
-    source.prepare('INSERT INTO audit_logs (id, actor, event, detail_json, created_at_ms) VALUES (?, ?, ?, ?, ?)')
-      .run(9007199254740993n, 'user', 'binary', Buffer.from([0, 255, 128, 65]), 9007199254740995n);
-    source.close();
-    migrateSplitDatabase(file);
-    const result = openDatabase(file);
-    try {
-      expect(result.sqlite.prepare('SELECT code FROM data.symbols ORDER BY rowid').pluck().all())
-        .toEqual(['005930', '035420', '000660']);
-      expect(result.sqlite.prepare('SELECT id, detail_json, created_at_ms FROM audit_logs').safeIntegers().get())
-        .toEqual({ id: 9007199254740993n, detail_json: Buffer.from([0, 255, 128, 65]), created_at_ms: 9007199254740995n });
-    } finally { result.close(); }
-  });
-
-  it.each([1, 2, 3])('파일 활성화 %i 단계에서 중단돼도 기록으로 복구한다', (failAt) => {
-    legacyDatabase();
-    const rename = fs.renameSync;
-    let activated = 0;
-    vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
-      if (!String(to).endsWith('.json') && ++activated === failAt) throw new Error('simulated interruption');
-      rename(from, to);
-    });
-    expect(() => migrateSplitDatabase(file)).toThrow('simulated interruption');
-    expect(() => openDatabase(file)).toThrow('DB 분리 작업이 완료되지');
-    vi.restoreAllMocks();
-    const recovered = migrateSplitDatabase(file);
-    expect(recovered.status).toBe('RECOVERED');
-    expect(fs.existsSync(recovered.backupPath!)).toBe(true);
-    const handle = openDatabase(file);
-    try { expect(handle.sqlite.prepare('SELECT value FROM facts').get()).toEqual({ value: 42 }); }
-    finally { handle.close(); }
-    expect(fs.existsSync(`${file}.split-migration.json`)).toBe(false);
-  });
-
-  it('소유 DB가 정의되지 않은 테이블이 있으면 원본을 보존하며 중단한다', () => {
-    legacyDatabase();
-    const original = new Database(file);
-    original.exec('CREATE TABLE unclassified (secret TEXT)');
-    original.close();
-    expect(() => migrateSplitDatabase(file)).toThrow('소유 DB가 정의되지');
-    expect(fs.existsSync(dataDatabasePath(file))).toBe(false);
-    const retained = new Database(file, { readonly: true });
-    try { expect(retained.prepare('SELECT value FROM facts').get()).toEqual({ value: 42 }); } finally { retained.close(); }
-  });
-
-  it('새 DB 준비는 두 파일을 만들고 운영 파일이 유실된 경우 빈 DB를 만들지 않는다', () => {
-    expect(migrateSplitDatabase(file)).toEqual({ status: 'NEW' });
-    fs.rmSync(file);
-    expect(() => openDatabase(file)).toThrow('계산 DB만 존재');
-    expect(() => migrateSplitDatabase(file)).toThrow('계산 DB만 존재');
-    expect(fs.existsSync(file)).toBe(false);
-  });
-});
-
 describe('두 DB의 배포 백업과 복원', () => {
+  it('계산 파일 없는 백업 명세는 운영 파일을 교체하기 전에 거부한다', async () => {
+    const { backupDatabase, restoreDatabase } = await import('../../src/server/shared/db/database-backup.js');
+    const backup = path.join(directory, 'before.sqlite');
+    openDatabase(file).close();
+    await backupDatabase(file, backup);
+    const before = fs.readFileSync(file);
+    const manifest = JSON.parse(fs.readFileSync(`${backup}.json`, 'utf8'));
+    fs.writeFileSync(`${backup}.json`, JSON.stringify({ ...manifest, dataSha256: null }));
+    await expect(restoreDatabase(file, backup)).rejects.toThrow('백업 명세');
+    expect(fs.readFileSync(file)).toEqual(before);
+    expect(fs.existsSync(`${file}.restore.json`)).toBe(false);
+  });
+
   it.each(['data', 'operations'])('%s 파일 교체 중 복원이 중단되면 앱 부팅을 막고 같은 명령으로 복구한다', async (phase) => {
     const { backupDatabase, restoreDatabase } = await import('../../src/server/shared/db/database-backup.js');
     const backup = path.join(directory, 'before.sqlite');
@@ -206,14 +133,7 @@ describe('두 DB의 배포 백업과 복원', () => {
     handle = openDatabase(file);
     expect(handle.sqlite.prepare('SELECT code FROM symbols').all()).toEqual([{ code: '005930' }]); handle.close();
   });
-  it('분리 배포 실패 후 단일 DB 백업으로 복원하고 분리를 다시 진행할 수 있다', async () => {
-    const { backupDatabase, restoreDatabase } = await import('../../src/server/shared/db/database-backup.js');
-    legacyDatabase(); const backup = path.join(directory, 'before.sqlite');
-    await backupDatabase(file, backup); migrateSplitDatabase(file);
-    await restoreDatabase(file, backup);
-    expect(fs.existsSync(dataDatabasePath(file))).toBe(false);
-    expect(migrateSplitDatabase(file).status).toBe('MIGRATED');
-  });
+
 });
 
 describe('기존 분리 DB의 에이전트 소유권 이행', () => {
@@ -239,7 +159,6 @@ describe('기존 분리 DB의 에이전트 소유권 이행', () => {
     insert.run('queued', 'QUEUED', null);
     previous.close();
     for (let attempt = 0; attempt < 2; attempt++) {
-      expect(migrateSplitDatabase(file).status).toBe('ALREADY_SPLIT');
       const handle = openDatabase(file);
       try {
         expect(handle.sqlite.prepare('SELECT id, agent_id FROM backtest_jobs ORDER BY id').all()).toEqual([

@@ -245,7 +245,6 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     const values = {
       actionGapYearsJson: JSON.stringify(mergedYears),
       actionGapDetailsJson: JSON.stringify(details),
-      updatedAtMs: nowMs,
       actionUpdatedAtMs: nowMs,
     };
     if (existing) {
@@ -316,7 +315,6 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
         version: CORPORATE_ACTION_COVERAGE_PROTOCOL_VERSION,
         years: verifiedYears,
       }),
-      updatedAtMs: nowMs,
       actionUpdatedAtMs: nowMs,
     };
 

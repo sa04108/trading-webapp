@@ -28,9 +28,6 @@ export function openDatabase(databasePath: string, options: DatabaseOpenOptions 
   if (databasePath !== ':memory:') {
     fs.mkdirSync(path.dirname(path.resolve(databasePath)), { recursive: true });
     if (fs.existsSync(`${databasePath}.restore.json`)) throw new Error('DB 복원이 완료되지 않았습니다. db:restore를 다시 실행하세요.');
-    if (fs.existsSync(`${databasePath}.split-migration.json`)) {
-      throw new Error('DB 분리 작업이 완료되지 않았습니다. db:prepare를 다시 실행하세요.');
-    }
   }
   if (databasePath !== ':memory:' && !options.dataReadonly && !fs.existsSync(databasePath) && fs.existsSync(dataPath)) {
     throw new Error('계산 DB만 존재합니다. 운영 DB를 백업에서 복원하세요.');
@@ -39,7 +36,7 @@ export function openDatabase(databasePath: string, options: DatabaseOpenOptions 
   try {
     sqlite.pragma('busy_timeout = 5000');
     if (tableExists(sqlite, 'symbols')) {
-      throw new Error('기존 단일 DB를 분리해야 합니다. 서비스 쓰기를 중지한 뒤 db:prepare를 실행하세요.');
+      throw new Error('지원하지 않는 단일 DB입니다. 분리 전환 릴리스 040ef56의 db:prepare로 이전을 완료하세요.');
     }
     const existing = tableExists(sqlite, 'operational_database_state');
     if (!existing && !options.dataReadonly && dataPath !== ':memory:' && fs.existsSync(dataPath)) throw new Error('운영 DB 식별자가 없습니다. 두 DB를 백업에서 함께 복원하세요.');

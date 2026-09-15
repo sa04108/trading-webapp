@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   and,
   asc,
@@ -24,12 +23,8 @@ import {
   krxDailyBars,
   krxNonTradingDays,
   krxNonTradingCoverage,
-  symbolMasterCheckpointSymbols,
-  symbolMasterCheckpoints,
   symbolMasterCoverage,
-  symbolMasterEvents,
   symbolMasterMarketCaps,
-  symbolMasterStorageState,
   symbolMasterTradingDays,
   symbolMasterVersions,
   symbols as registeredSymbols,
@@ -52,8 +47,6 @@ import type {
   KrxMarket,
 } from '../domain/krx-universe-types.js';
 import {
-  applyEventsBackward,
-  applyEventsForward,
   diffUniverse,
   type SymbolMasterEntry,
   type SymbolMasterEventDraft,
@@ -76,8 +69,6 @@ function storedTradingDateIsWeekday() {
 export interface SymbolMasterEventRow extends SymbolMasterEventDraft {
   readonly id: string;
 }
-type LegacySymbolMasterEventRow = typeof symbolMasterEvents.$inferSelect;
-type LegacySymbolMasterCheckpointRow = typeof symbolMasterCheckpoints.$inferSelect;
 type SymbolMasterCoverageRow = typeof symbolMasterCoverage.$inferSelect;
 type SymbolMasterVersionRow = typeof symbolMasterVersions.$inferSelect;
 type IdentityVersionWithId = KnownSymbolIdentityVersion & { readonly id: number };
@@ -190,55 +181,9 @@ export interface EnsureTradingDayResult {
  */
 const DEFAULT_MAX_LOOKBACK_DAYS = 10;
 
-/** DB row 를 도메인 이벤트 draft 로 좁힌다 — drizzle 은 text 컬럼을 string 으로만 추론한다 */
-function toEventDraft(row: LegacySymbolMasterEventRow): SymbolMasterEventDraft {
-  return {
-    effectiveDate: row.effectiveDate,
-    standardCode: row.standardCode,
-    eventType: row.eventType as SymbolMasterEventDraft['eventType'],
-    oldValue: row.oldValue,
-    newValue: row.newValue,
-    observedSpanStart: row.observedSpanStart,
-  };
-}
-
-function universeFingerprint(state: UniverseState): string {
-  const canonical = [...state.values()]
-    .sort((a, b) => a.standardCode.localeCompare(b.standardCode))
-    .map((entry) => [
-      entry.standardCode,
-      entry.shortCode,
-      entry.name,
-      entry.market,
-      entry.sharesOutstanding,
-      entry.instrumentType,
-      entry.listedDate,
-    ]);
-  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
-}
-
 /** KRX 계약 파서가 검증한 원문을 bigint 정밀도 손실 없이 DB text 로 정규화한다. */
 function metricDecimalText(raw: string | null): string | null {
   return raw === null ? null : BigInt(raw.replaceAll(',', '').trim()).toString();
-}
-
-/** effectiveDate·id 정렬된 legacy 행에서 (from, to]만 이진 탐색으로 자른다. */
-function legacyEventsBetween(
-  rows: readonly LegacySymbolMasterEventRow[],
-  from: string,
-  to: string,
-): SymbolMasterEventDraft[] {
-  const firstAfter = (date: string): number => {
-    let low = 0;
-    let high = rows.length;
-    while (low < high) {
-      const mid = Math.floor((low + high) / 2);
-      if (rows[mid]!.effectiveDate <= date) low = mid + 1;
-      else high = mid;
-    }
-    return low;
-  };
-  return rows.slice(firstAfter(from), firstAfter(to)).map(toEventDraft);
 }
 
 export class SymbolMasterService {
@@ -258,207 +203,7 @@ export class SymbolMasterService {
    */
   private readonly inflightMarketCaps = new Map<string, Promise<ReadonlyMap<string, string>>>();
 
-  constructor(private readonly deps: SymbolMasterServiceDeps) {
-    this.ensureScdStorageReady();
-  }
-
-  /**
-   * 0012 이전 DB 의 체크포인트+이벤트 조회 결과를 종목별 SCD 버전으로 한 번만
-   * 변환한다. 전체가 한 SQLite 트랜잭션이므로 중간 실패 시 legacy 이력과
-   * PENDING 상태가 그대로 남아 다음 부팅에서 안전하게 재시도한다.
-   */
-  private ensureScdStorageReady(): void {
-    const current = this.deps.db
-      .select()
-      .from(symbolMasterStorageState)
-      .where(eq(symbolMasterStorageState.singleton, 1))
-      .get();
-    if (current?.phase === 'ACTIVE') return;
-
-    this.deps.db.transaction((tx) => {
-      const state = tx
-        .select()
-        .from(symbolMasterStorageState)
-        .where(eq(symbolMasterStorageState.singleton, 1))
-        .get();
-      if (state === undefined) {
-        tx.insert(symbolMasterStorageState)
-          .values({ singleton: 1, phase: 'PENDING', migratedAtMs: null })
-          .run();
-      } else if (state.phase === 'ACTIVE') {
-        return;
-      }
-
-      const checkpoints = tx
-        .select()
-        .from(symbolMasterCheckpoints)
-        .orderBy(asc(symbolMasterCheckpoints.checkpointDate))
-        .all();
-      const legacyEvents = tx
-        .select()
-        .from(symbolMasterEvents)
-        .orderBy(asc(symbolMasterEvents.effectiveDate), asc(symbolMasterEvents.id))
-        .all();
-      const tradingDates = tx
-        .select({ date: symbolMasterTradingDays.date })
-        .from(symbolMasterTradingDays)
-        .orderBy(asc(symbolMasterTradingDays.date))
-        .all()
-        .map((row) => row.date);
-      const hasCheckpointSymbols = tx
-        .select({ id: symbolMasterCheckpointSymbols.id })
-        .from(symbolMasterCheckpointSymbols)
-        .limit(1)
-        .get() !== undefined;
-      if (
-        checkpoints.length === 0
-        && (legacyEvents.length > 0 || tradingDates.length > 0 || hasCheckpointSymbols)
-      ) {
-        throw new Error('종목 마스터 SCD 이행 실패: 거래 이력은 있지만 legacy 체크포인트가 없다');
-      }
-      tx.delete(symbolMasterVersions).run();
-
-      if (checkpoints.length > 0) {
-        const checkpointSymbols = tx.select().from(symbolMasterCheckpointSymbols).all();
-        const symbolsByCheckpoint = new Map<string, Map<string, SymbolMasterEntry>>();
-        for (const row of checkpointSymbols) {
-          let universe = symbolsByCheckpoint.get(row.checkpointId);
-          if (universe === undefined) {
-            universe = new Map();
-            symbolsByCheckpoint.set(row.checkpointId, universe);
-          }
-          universe.set(row.standardCode, {
-            standardCode: row.standardCode,
-            shortCode: row.shortCode,
-            name: row.name,
-            market: row.market as KrxMarket,
-            sharesOutstanding: row.sharesOutstanding,
-            instrumentType: row.instrumentType as SymbolMasterInstrumentType,
-            listedDate: row.listedDate,
-          });
-        }
-        for (const checkpoint of checkpoints) {
-          if ((symbolsByCheckpoint.get(checkpoint.id)?.size ?? 0) === 0) {
-            throw new Error(
-              `종목 마스터 SCD 이행 실패: ${checkpoint.checkpointDate} 체크포인트가 비어 있다`,
-            );
-          }
-        }
-        // 거래일 테이블이 도입되기 전 데이터나 부분 기록도 잃지 않도록 legacy 경계일을
-        // 항상 합친다. 체크포인트에만 있던 shortCode/listedDate 교정도 이 날짜에서 버전이 된다.
-        const dates = [...new Set([
-          ...tradingDates,
-          ...checkpoints.map((checkpoint) => checkpoint.checkpointDate),
-          ...legacyEvents.map((event) => event.effectiveDate),
-        ])].sort();
-
-        const recordedAtMs = this.deps.clock.now();
-        const versions: (typeof symbolMasterVersions.$inferInsert)[] = [];
-        const expectedFingerprints: Array<{ date: string; fingerprint: string }> = [];
-        const openIndex = new Map<string, number>();
-        let previous: UniverseState = new Map();
-
-        for (const date of dates) {
-          const next = this.legacyUniverseAsOf(
-            date,
-            checkpoints,
-            symbolsByCheckpoint,
-            legacyEvents,
-          );
-          for (const code of new Set([...previous.keys(), ...next.keys()])) {
-            const before = previous.get(code);
-            const after = next.get(code);
-            if (sameSymbolMasterEntry(before, after)) continue;
-
-            const existingIndex = openIndex.get(code);
-            if (existingIndex !== undefined) {
-              versions[existingIndex] = { ...versions[existingIndex]!, validToDate: date };
-              openIndex.delete(code);
-            }
-            if (after !== undefined) {
-              const index = versions.length;
-              versions.push({
-                standardCode: after.standardCode,
-                validFromDate: date,
-                validToDate: null,
-                shortCode: after.shortCode,
-                name: after.name,
-                market: after.market,
-                sharesOutstanding: after.sharesOutstanding,
-                instrumentType: after.instrumentType,
-                listedDate: after.listedDate,
-                recordedAtMs,
-              });
-              openIndex.set(code, index);
-            }
-          }
-          expectedFingerprints.push({ date, fingerprint: universeFingerprint(next) });
-          previous = next;
-        }
-
-        for (let i = 0; i < versions.length; i += 200) {
-          tx.insert(symbolMasterVersions).values(versions.slice(i, i + 200)).run();
-        }
-        for (const expected of expectedFingerprints) {
-          const actual = universeFingerprint(this.readUniverseAsOfInternal(expected.date, tx));
-          if (actual !== expected.fingerprint) {
-            throw new Error(`종목 마스터 SCD 이행 검증 실패: ${expected.date}`);
-          }
-        }
-        this.deps.logger.info(
-          {
-            module: 'market-data',
-            event: 'symbol-master.scd-migrated',
-            tradingDates: dates.length,
-            versions: versions.length,
-          },
-          '종목 마스터 legacy 이력을 SCD 버전으로 변환했다',
-        );
-
-        // 검증을 통과한 뒤에만 중복 저장을 비운다. 테이블 자체는 구버전 DB를 읽는
-        // expand-contract 코드가 제거되는 다음 contract migration까지 남겨 둔다.
-        tx.delete(symbolMasterCheckpointSymbols).run();
-        tx.delete(symbolMasterEvents).run();
-        tx.delete(symbolMasterCheckpoints).run();
-      }
-
-      tx.update(symbolMasterStorageState)
-        .set({ phase: 'ACTIVE', migratedAtMs: this.deps.clock.now() })
-        .where(eq(symbolMasterStorageState.singleton, 1))
-        .run();
-    });
-  }
-
-  private legacyUniverseAsOf(
-    date: string,
-    checkpoints: readonly LegacySymbolMasterCheckpointRow[],
-    symbolsByCheckpoint: ReadonlyMap<string, UniverseState>,
-    rows: readonly LegacySymbolMasterEventRow[],
-  ): UniverseState {
-    const target = Date.parse(date);
-    let checkpoint: LegacySymbolMasterCheckpointRow | undefined;
-    let bestDiff = Infinity;
-    for (const candidate of checkpoints) {
-      const diff = Math.abs(Date.parse(candidate.checkpointDate) - target);
-      if (
-        diff < bestDiff
-        || (diff === bestDiff && checkpoint !== undefined
-          && candidate.checkpointDate < checkpoint.checkpointDate)
-      ) {
-        checkpoint = candidate;
-        bestDiff = diff;
-      }
-    }
-    if (checkpoint === undefined) return new Map();
-
-    const base = new Map(symbolsByCheckpoint.get(checkpoint.id) ?? []);
-    if (date >= checkpoint.checkpointDate) {
-      const events = legacyEventsBetween(rows, checkpoint.checkpointDate, date);
-      return applyEventsForward(base, events);
-    }
-    const events = legacyEventsBetween(rows, date, checkpoint.checkpointDate);
-    return applyEventsBackward(base, events);
-  }
+  constructor(private readonly deps: SymbolMasterServiceDeps) {}
 
   /**
    * 하루치 KRX 유니버스를 수집해 SCD 버전·coverage 를 갱신한다. 이미 커버된 날짜는
@@ -1733,8 +1478,7 @@ export class SymbolMasterService {
    * [from, to] 구간에 효력이 발생한 상장폐지 이벤트. 백테스트 워커가 폐지 종목을
    * 청산하는 데 쓴다.
    *
-   * `symbol_master_events` 는 SCD 이행(D-045) 전 legacy 이력이라 읽지 않는다. 닫힌
-   * version의 validTo에 같은 표준코드 successor가 없으면 listEvents의 DELISTED와
+   * 닫힌 version의 validTo에 같은 표준코드 successor가 없으면 listEvents의 DELISTED와
    * 같은 경계다. shortCode도 closing row에 있으므로 전체 이벤트 JSON을 만들 필요가 없다.
    */
   delistedEventsBetween(
@@ -1853,8 +1597,7 @@ export class SymbolMasterService {
    * 액면분할에서 이 날이 곧 변경상장일이다. DART 가 주는 날짜는 분할 기준일이라
    * 그 사이 주권교체 정지 구간만큼 어긋난다.
    *
-   * `symbol_master_events` 는 SCD 이행(D-045) 전 legacy 이력이므로 읽지 않는다.
-   * 대신 맞닿은 SCD predecessor/after 행에서 주식수 경계만 직접 projection한다.
+   * 맞닿은 SCD 이전·다음 버전에서 주식수 변경 경계를 직접 조회한다.
    * 저장소가 처음 관측한 날은 listEvents와 같은 baseline guard로 제외한다.
    */
   sharesChangesBetween(

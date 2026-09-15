@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import type Database from 'better-sqlite3';
 
-export const DATABASE_SCHEMA_VERSION = 1;
+export const DATABASE_SCHEMA_VERSION = 2;
 export type DatabaseRole = 'operations' | 'data';
 export const MIGRATIONS_DIRECTORY = fileURLToPath(new URL('../../../../migrations/', import.meta.url));
 

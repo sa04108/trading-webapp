@@ -283,7 +283,6 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
           version: FINANCIAL_COVERAGE_PROTOCOL_VERSION,
           manifests: [...byYear.values()].sort((left, right) => left.year - right.year),
         } satisfies FinancialCoverageProtocol),
-        updatedAtMs: nowMs,
         financialUpdatedAtMs: nowMs,
       };
 

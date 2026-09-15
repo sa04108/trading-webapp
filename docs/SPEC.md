@@ -776,10 +776,6 @@ symbol_versions
 krx_daily_bars
 
 symbol_master_versions
-symbol_master_storage_state
-symbol_master_checkpoints             # legacy 이행용, ACTIVE 전환 후 비어 있음
-symbol_master_checkpoint_symbols      # legacy 이행용, ACTIVE 전환 후 비어 있음
-symbol_master_events                  # legacy 이행용, ACTIVE 전환 후 비어 있음
 symbol_master_coverage
 symbol_master_market_caps
 symbol_master_trading_days

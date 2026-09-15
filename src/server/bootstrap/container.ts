@@ -182,7 +182,7 @@ export function createContainer(
   }
 
   const database = openDatabase(config.databasePath);
-  new PreparationReferenceService(database).initializeLegacyReferences();
+  new PreparationReferenceService(database).collect();
   const clock = systemClock;
 
   // 무한 증가 방지: 만료 세션·오래된 로그인 시도·보존 기간 지난 감사 로그 정리.

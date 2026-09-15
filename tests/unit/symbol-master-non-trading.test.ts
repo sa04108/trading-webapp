@@ -9,7 +9,7 @@ import {
   krxNonTradingDays,
   krxNonTradingCoverage,
   symbolMasterCoverage,
-  symbolMasterEvents,
+  symbolMasterVersions,
 } from '../../src/server/shared/db/schema.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
@@ -248,7 +248,7 @@ describe('거래불가일 조회', () => {
 });
 
 describe('거래불가일 백필', () => {
-  it('봉·이벤트·coverage 를 건드리지 않고 거래불가일만 채운다', async () => {
+  it('봉·종목 버전·coverage 를 건드리지 않고 거래불가일만 채운다', async () => {
     const ctx = await setup();
     for (const basDd of ['20210615', '20210616']) {
       ctx.fake.setResponse('stk_bydd_trd', basDd, { body: krxEnvelope([]) });
@@ -262,9 +262,9 @@ describe('거래불가일 백필', () => {
     expect(rows).toHaveLength(2);
     expect(rows.every((row) => row.shortCode === '215600')).toBe(true);
 
-    // 백필은 봉·이벤트·마스터 coverage 를 쓰지 않는다 — 이벤트 재생성 위험이 없어야 한다
+    // 거래불가일 백필은 봉·종목 버전·마스터 coverage를 변경하지 않는다.
     expect(ctx.t.container.database.db.select().from(krxDailyBars).all()).toHaveLength(0);
-    expect(ctx.t.container.database.db.select().from(symbolMasterEvents).all()).toHaveLength(0);
+    expect(ctx.t.container.database.db.select().from(symbolMasterVersions).all()).toHaveLength(0);
     expect(ctx.t.container.database.db.select().from(symbolMasterCoverage).all()).toHaveLength(0);
 
     expect(ctx.svc.isNonTradingRangeCovered('2021-06-15', '2021-06-16')).toBe(true);

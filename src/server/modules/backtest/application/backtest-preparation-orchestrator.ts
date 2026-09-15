@@ -1,6 +1,6 @@
 import { AgentDataRequired } from '../../../../shared/agent-protocol.js';
 import { createHash } from 'node:crypto';
-import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import {
   periodToTsRange,
   type BacktestRequest,
@@ -12,7 +12,7 @@ import {
 } from '../../../../shared/schemas/backtest-preparation.js';
 import type { Clock } from '../../../shared/clock.js';
 import type { DatabaseHandle } from '../../../shared/db/database.js';
-import { backtestPreparationJobs, externalApiDailyUsage } from '../../../shared/db/schema.js';
+import { backtestPreparationJobs } from '../../../shared/db/schema.js';
 import { PreparationReferenceService } from './preparation-reference-service.js';
 import { newId } from '../../../shared/ids.js';
 import type { Logger } from '../../../shared/logger.js';
@@ -221,10 +221,8 @@ export { UnsafeBacktestSymbolIdentityError } from './backtest-symbol-identity.js
 /** needsDart 계획에만 쓰고 저장·sync하지 않는 미상 future candidate probe. */
 const UNKNOWN_CANDIDATE_PROBE = '__UNKNOWN_FUTURE_UNIVERSE_CANDIDATE__';
 
-export interface BacktestPreparationOrchestratorDeps {
+interface PreparationDependencies {
   readonly database: DatabaseHandle;
-  /** 에이전트는 원본 스냅샷에 쓰지 않고 부족한 범위를 서버에 반환한다. */
-  readonly snapshotMode?: boolean;
   /** 중앙 서버에서는 영속 상태만 관리하고 계산 큐는 에이전트에 맡긴다. */
   readonly agentManaged?: boolean;
   readonly resolver: Pick<UniverseRuleResolver, 'resolveOrDescribeNeeds' | 'isPeriodCovered'>;
@@ -261,14 +259,18 @@ export interface BacktestPreparationOrchestratorDeps {
   readonly clock: Clock;
   readonly logger: Logger;
   readonly dartDailyCallLimit?: number;
-  /** 모든 DART 경로가 공유하는 영속 일일 호출 원장. */
-  readonly externalApiUsage?: ExternalApiUsage;
   readonly financialFacts: Pick<FinancialFactAvailabilityService, 'symbolsWithFinancialFacts'>;
   /** Child runtime uses this to tell the parent to re-read the durable DTO for SSE. */
   readonly onJobUpdated?: (jobId: string) => void;
   /** 종료 상태를 저장한 실행 주체만 알림을 만든다. 부모의 SSE 재전송은 제외한다. */
   readonly onJobFinished?: (job: BacktestPreparationJobDto) => void;
 }
+
+/** 서버는 공유 API 원장을 필수로 사용하고, 스냅샷 워커는 원장을 가지지 않는다. */
+export type BacktestPreparationOrchestratorDeps = PreparationDependencies & (
+  | { readonly snapshotMode: true; readonly externalApiUsage?: never }
+  | { readonly snapshotMode?: false; readonly externalApiUsage: ExternalApiUsage }
+);
 
 /**
  * 준비 작업은 SQLite 행을 큐이자 복구 지점으로 사용하고, 한 번에 하나만 실행한다.
@@ -1479,7 +1481,7 @@ export class BacktestPreparationOrchestrator {
             gapCount: row.gapCount + report.gapCount,
             ...(report.failureMessage ? { error: report.failureMessage } : {}),
           }), ['RUNNING']);
-      this.deps.externalApiUsage?.reportQuotaExceeded(
+      this.serverApiUsage.reportQuotaExceeded(
         'DART',
         'daily',
         report.failureMessage ?? 'DART 일일 호출 한도에 도달했습니다.',
@@ -1541,31 +1543,19 @@ export class BacktestPreparationOrchestrator {
     }
   }
 
+  private get serverApiUsage(): ExternalApiUsage {
+    if (this.deps.snapshotMode) throw new Error('스냅샷 워커는 서버 API 호출 원장을 사용할 수 없습니다');
+    return this.deps.externalApiUsage;
+  }
+
   private reserveDartCall(jobId: string): 'CONTINUE' | 'PAUSE_DAILY_QUOTA' {
     const now = this.deps.clock.now();
     const quotaDate = kstDateOf(now);
     const snapshot = this.persistAndEmit(
       jobId,
       (row) => {
-        // 운영에서는 모든 실제 DART attempt가 공유하는 원장을 본다. 원장을 주입하지
-        // 않는 단위 테스트·옛 조립부만 준비 job 합계를 fallback으로 사용한다.
-        let total = this.deps.externalApiUsage?.callsUsed('DART', 'daily');
-        if (total === undefined) {
-          const legacyTotal = this.deps.database.db
-            .select({ value: sql<number>`coalesce(sum(${backtestPreparationJobs.dartCallsUsed}), 0)` })
-            .from(backtestPreparationJobs)
-            .where(eq(backtestPreparationJobs.dartQuotaDateKst, quotaDate))
-            .get()?.value ?? 0;
-          const ledgerTotal = this.deps.database.db.select({ value: externalApiDailyUsage.callsUsed })
-            .from(externalApiDailyUsage).where(and(
-              eq(externalApiDailyUsage.api, 'DART'),
-              eq(externalApiDailyUsage.quotaScope, 'daily'),
-              eq(externalApiDailyUsage.usageDateKst, quotaDate),
-            )).get()?.value ?? 0;
-          total = Math.max(legacyTotal, ledgerTotal);
-        }
-        const providerAlreadyExhausted =
-          this.deps.externalApiUsage?.quotaExceeded('DART', 'daily') ?? false;
+        const total = this.serverApiUsage.callsUsed('DART', 'daily');
+        const providerAlreadyExhausted = this.serverApiUsage.quotaExceeded('DART', 'daily');
         if (providerAlreadyExhausted || total + 1 > this.dailyLimit) {
           return {
             status: 'WAITING_DAILY_QUOTA',
@@ -1573,16 +1563,6 @@ export class BacktestPreparationOrchestrator {
             dartQuotaDateKst: quotaDate,
             ...(row.dartQuotaDateKst === quotaDate ? {} : { dartCallsUsed: 0 }),
           };
-        }
-        if (!this.deps.externalApiUsage) {
-          // 구형 조립부에서도 작업 삭제가 일일 호출 예산을 되돌리지 않도록 원장에 남긴다.
-          this.deps.database.db.insert(externalApiDailyUsage).values({
-            api: 'DART', quotaScope: 'daily', usageDateKst: quotaDate,
-            callsUsed: total + 1, updatedAtMs: now,
-          }).onConflictDoUpdate({
-            target: [externalApiDailyUsage.api, externalApiDailyUsage.quotaScope, externalApiDailyUsage.usageDateKst],
-            set: { callsUsed: total + 1, updatedAtMs: now },
-          }).run();
         }
         return {
           dartQuotaDateKst: quotaDate,
@@ -1592,7 +1572,7 @@ export class BacktestPreparationOrchestrator {
       ['RUNNING'],
     );
     if (snapshot?.status === 'WAITING_DAILY_QUOTA') {
-      this.deps.externalApiUsage?.reportQuotaExceeded(
+      this.serverApiUsage.reportQuotaExceeded(
         'DART',
         'daily',
         'DART 일일 호출 한도에 도달해 다음 KST 날짜까지 준비 작업을 멈췄습니다.',
