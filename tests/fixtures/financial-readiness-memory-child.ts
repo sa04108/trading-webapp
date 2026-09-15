@@ -1,15 +1,15 @@
 import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
-import * as schema from '../../src/server/shared/db/schema.js';
-import { CandleCoverageService } from '../../src/server/modules/market-data/application/candle-coverage-service.js';
-import { SqliteFactRepository } from '../../src/server/modules/facts/infrastructure/sqlite-fact-repository.js';
+import * as schema from '../../src/runtime/shared/db/schema.js';
+import { CandleCoverageService } from '../../src/runtime/modules/market-data/application/candle-coverage-service.js';
+import { SqliteFactRepository } from '../../src/runtime/modules/facts/infrastructure/sqlite-fact-repository.js';
 import {
   findIncompleteFundamentalCheckpoints,
   findIncompleteFundamentalCheckpointsFromCoverage,
   findIncompleteFundamentalCheckpointsFromCoverageSync,
-} from '../../src/server/modules/backtest/application/backtest-financial-data-readiness.js';
-import { lowPerHighRoeRankStrategy } from '../../src/server/modules/strategy/strategies/low-per-high-roe-rank.js';
+} from '../../src/runtime/modules/backtest/application/backtest-financial-data-readiness.js';
+import { lowPerHighRoeRankStrategy } from '../../src/runtime/modules/strategy/strategies/low-per-high-roe-rank.js';
 
 const sqlite = new Database(process.argv[2]!, { readonly: true });
 const db = drizzle(sqlite, { schema });

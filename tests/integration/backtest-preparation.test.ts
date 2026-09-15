@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { get as httpGet, type IncomingMessage } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
-import type { PreparationInput } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
+import type { PreparationInput } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import {
   dailySelectionMetricCoverage,
   dailySelectionMetrics,

@@ -1,11 +1,11 @@
-import type { Clock } from '../../../shared/clock.js';
+import type { Clock } from '../../../../runtime/shared/clock.js';
 import type { Logger } from '../../../shared/logger.js';
-import { SYMBOL_PATTERN } from '../domain/candle.js';
+import { SYMBOL_PATTERN } from '../../../../runtime/modules/market-data/domain/candle.js';
 import {
   StockInfoSourceNotConfiguredError,
   type StockInfo,
   type StockInfoSource,
-} from './ports.js';
+} from '../../../../runtime/modules/market-data/application/ports.js';
 
 const DEFAULT_TTL_MS = 24 * 3600 * 1000; // 종목명은 사실상 불변 — 상장폐지 반영 정도면 충분
 

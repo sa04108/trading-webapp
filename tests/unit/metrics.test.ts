@@ -3,8 +3,8 @@ import {
   computeDrawdownStats,
   computeMetrics,
   computeMonthlyReturns,
-} from '../../src/server/modules/backtest/domain/metrics.js';
-import type { EquityPoint, Trade } from '../../src/server/modules/backtest/domain/types.js';
+} from '../../src/runtime/modules/backtest/domain/metrics.js';
+import type { EquityPoint, Trade } from '../../src/runtime/modules/backtest/domain/types.js';
 
 const DAY = 86_400_000;
 

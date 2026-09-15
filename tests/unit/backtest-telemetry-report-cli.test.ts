@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { BacktestExecutionTelemetry } from '../../src/server/modules/backtest/application/backtest-execution-telemetry.js';
+import type { BacktestExecutionTelemetry } from '../../src/runtime/modules/backtest/application/backtest-execution-telemetry.js';
 
 const tempDirectories: string[] = [];
 

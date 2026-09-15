@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyKrxIssue,
   UnknownKrxClassificationError,
-} from '../../src/server/modules/market-data/domain/krx-filter-policy.js';
+} from '../../src/runtime/modules/market-data/domain/krx-filter-policy.js';
 
 const base = {
   securityGroupRaw: '주권',

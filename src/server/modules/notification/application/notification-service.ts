@@ -1,9 +1,9 @@
 import { EventEmitter } from 'node:events';
 import { count, desc, eq, inArray } from 'drizzle-orm';
-import type { AppDatabase } from '../../../shared/db/database.js';
-import { notifications } from '../../../shared/db/schema.js';
-import type { Clock } from '../../../shared/clock.js';
-import { newId } from '../../../shared/ids.js';
+import type { AppDatabase } from '../../../../runtime/shared/db/database.js';
+import { notifications } from '../../../shared/db/notification-schema.js';
+import type { Clock } from '../../../../runtime/shared/clock.js';
+import { newId } from '../../../../runtime/shared/ids.js';
 
 export type NotificationType = 'backtest' | 'data-sync';
 export type NotificationSeverity = 'info' | 'error';

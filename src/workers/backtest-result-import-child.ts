@@ -1,5 +1,5 @@
-import { openDatabase } from '../server/shared/db/database.js';
-import { systemClock } from '../server/shared/clock.js';
+import { openDatabase } from '../runtime/shared/db/database.js';
+import { systemClock } from '../runtime/shared/clock.js';
 import { JobQueue } from '../server/modules/backtest/application/job-queue.js';
 import {
   BacktestResultPersistenceError,
@@ -9,23 +9,23 @@ import {
 import {
   BacktestResultPersistenceUnavailableError,
   type BacktestResultCompletionOutput,
-} from '../server/modules/backtest/application/backtest-result-artifact.js';
+} from '../runtime/modules/backtest/application/backtest-result-artifact.js';
 import { backtestRequestSchema } from '../shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../shared/schemas/provenance-pin.js';
-import { ENGINE_VERSION } from '../server/modules/backtest/domain/engine.js';
+import { ENGINE_VERSION } from '../runtime/modules/backtest/domain/engine.js';
 import {
   getCostProfile,
   getSlippageProfile,
-} from '../server/modules/backtest/domain/cost-profiles.js';
-import { StrategyRegistry } from '../server/modules/strategy/application/strategy-registry.js';
-import { strategySourceHash } from '../server/modules/strategy/application/strategy-source-hash.js';
+} from '../runtime/modules/backtest/domain/cost-profiles.js';
+import { StrategyRegistry } from '../runtime/modules/strategy/application/strategy-registry.js';
+import { strategySourceHash } from '../runtime/modules/strategy/application/strategy-source-hash.js';
 import { isPersistenceUnavailableError } from '../server/shared/db/sqlite-errors.js';
-import { SymbolMasterService } from '../server/modules/market-data/application/symbol-master-service.js';
+import { SymbolMasterService } from '../runtime/modules/market-data/application/symbol-master-service.js';
 import {
   assertSafePinnedScheduleIdentityJson,
   calculatePinnedScheduleHash,
   UnsafeBacktestSymbolIdentityError,
-} from '../server/modules/backtest/application/backtest-symbol-identity.js';
+} from '../runtime/modules/backtest/application/backtest-symbol-identity.js';
 
 function required(name: string): string {
   const value = process.env[name];
@@ -93,9 +93,9 @@ function main(): void {
       // valid lease의 authoritative IMMEDIATE validator가 같은 행을 읽고 FAILED로 확정한다.
     }
     const compareArtifactProvenancePin = hasUsableProvenanceScheduleHash(job.provenancePinJson);
-    if (artifact.context.gitCommitSha !== expectedRunnerVersion) {
+    if (artifact.context.executionVersion !== expectedRunnerVersion) {
       throw new InvalidBacktestResultArtifactError(
-        `artifact runner version 불일치: ${artifact.context.gitCommitSha} != ${expectedRunnerVersion}`,
+        `artifact 실행 버전 불일치: ${artifact.context.executionVersion} != ${expectedRunnerVersion}`,
       );
     }
     const contextMatchesJob = artifact.context.strategyId === strategy.id

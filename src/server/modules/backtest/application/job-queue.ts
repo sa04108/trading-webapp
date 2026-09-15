@@ -1,14 +1,14 @@
 import { EventEmitter } from 'node:events';
 import { and, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
-import type { AppDatabase, DatabaseHandle } from '../../../shared/db/database.js';
-import { PreparationPreviewCache } from './preparation-preview-cache.js';
+import type { AppDatabase, DatabaseHandle } from '../../../../runtime/shared/db/database.js';
+import { PreparationPreviewCache } from '../../../../runtime/modules/backtest/application/preparation-preview-cache.js';
 import { PreparationReferenceError, PreparationReferenceService } from './preparation-reference-service.js';
-import { backtestJobs } from '../../../shared/db/schema.js';
-import type { Clock } from '../../../shared/clock.js';
-import { newId } from '../../../shared/ids.js';
+import { backtestJobs } from '../../../../runtime/shared/db/operations-schema.js';
+import type { Clock } from '../../../../runtime/shared/clock.js';
+import { newId } from '../../../../runtime/shared/ids.js';
 import type { BacktestRequest } from '../../../../shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../../../../shared/schemas/provenance-pin.js';
-import type { LegacyUniverseScheduleEntry } from './universe-rule-resolver.js';
+import type { LegacyUniverseScheduleEntry } from '../../../../runtime/modules/backtest/application/universe-rule-resolver.js';
 import type { BenchmarkPin } from '../../../../shared/schemas/benchmark.js';
 
 export type BacktestJobStatus =

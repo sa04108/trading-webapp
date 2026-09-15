@@ -1,4 +1,4 @@
-import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
+import { StrategyRegistry } from '../../src/runtime/modules/strategy/application/strategy-registry.js';
 
 /**
  * 등록된 전략의 현재 버전.

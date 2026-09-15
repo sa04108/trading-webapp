@@ -6,6 +6,8 @@ import { createHash } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { z } from 'zod';
+import { parseRuntimeVersions } from '../runtime/shared/runtime-versions.js';
+import type { AgentVersionScheme } from '../shared/agent-protocol.js';
 import type { AgentSettings } from './config.js';
 
 export function installRoot(): string { return path.join(process.env.XDG_DATA_HOME ?? path.join(os.homedir(), '.local/share'), 'quant-agent'); }
@@ -15,8 +17,8 @@ function command(program: string, args: string[]): void {
 }
 function systemdQuote(value: string): string { return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%')}"`; }
 
-export function activate(source: string, version: string, destination = installRoot()): void {
-  verifyPackage(source, version);
+export function activate(source: string, version: string, destination = installRoot(), scheme: AgentVersionScheme = 'content-v1'): void {
+  verifyPackage(source, version, scheme);
   fs.mkdirSync(path.join(destination, 'releases'), { recursive: true, mode: 0o700 });
   const release = path.join(destination, 'releases', version);
   if (path.resolve(source) !== release && !fs.existsSync(release)) {
@@ -26,7 +28,7 @@ export function activate(source: string, version: string, destination = installR
     command(path.join(staging, 'bin/node'), [path.join(staging, 'dist/agent/main.js'), '--check']);
     fs.renameSync(staging, release);
   }
-  verifyPackage(release, version);
+  verifyPackage(release, version, scheme);
   command(path.join(release, 'bin/node'), [path.join(release, 'dist/agent/main.js'), '--check']);
   const current = path.join(destination, 'current');
   const previous = fs.existsSync(current) ? fs.realpathSync(current) : null;
@@ -39,11 +41,17 @@ export function activate(source: string, version: string, destination = installR
   }
 }
 
-function verifyPackage(source: string, version: string): void {
+function verifyPackage(source: string, version: string, scheme: AgentVersionScheme): void {
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(version)) throw new Error('클라이언트 버전 형식이 올바르지 않습니다');
   if (!fs.existsSync(path.join(source, 'bin/node')) || !fs.existsSync(path.join(source, 'quant-agent'))) throw new Error('빌드된 Linux 클라이언트 패키지에서 설치하세요');
-  const metadata = JSON.parse(fs.readFileSync(path.join(source, 'dist/build-info.json'), 'utf8')) as { gitSha: string };
-  if (metadata.gitSha !== version) throw new Error('클라이언트 패키지의 버전이 다릅니다');
+  if (scheme === 'content-v1') {
+    const metadata = parseRuntimeVersions(JSON.parse(fs.readFileSync(path.join(source, 'dist/runtime-versions.json'), 'utf8')));
+    if (metadata.agentVersion !== version) throw new Error('클라이언트 패키지의 버전이 다릅니다');
+  } else {
+    // 구형 서버로 되돌릴 때만 구형 설치 계약을 사용한다. 새 클라이언트의 호환 버전은 아니다.
+    const metadata = JSON.parse(fs.readFileSync(path.join(source, 'dist/build-info.json'), 'utf8')) as { gitSha: string };
+    if (metadata.gitSha !== version) throw new Error('클라이언트 패키지의 버전이 다릅니다');
+  }
 }
 
 export function installService(source: string, version: string, state: string): void {
@@ -60,13 +68,13 @@ export function installService(source: string, version: string, state: string): 
   if (linger.status !== 0) console.log('로그아웃 후 상시 실행 설정을 완료하지 못했습니다. 관리자가 loginctl enable-linger 사용자명으로 활성화하세요.');
 }
 
-const packageManifestSchema = z.object({ runnerVersion: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), clients: z.array(z.object({ arch: z.enum(['x64', 'arm64']), file: z.string().regex(/^quant-agent-linux-(x64|arm64)\.tar\.gz$/), sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: z.number().int().positive() })) });
+const packageManifestSchema = z.object({ versionScheme: z.enum(['content-v1', 'legacy-git-v1']).default('legacy-git-v1'), runnerVersion: z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/), clients: z.array(z.object({ arch: z.enum(['x64', 'arm64']), file: z.string().regex(/^quant-agent-linux-(x64|arm64)\.tar\.gz$/), sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: z.number().int().positive() })) });
 
 export type ClientManifest = z.infer<typeof packageManifestSchema>;
 
-export async function fetchClientManifest(settings: AgentSettings): Promise<ClientManifest> {
+export async function fetchClientManifest(settings: AgentSettings, scheme: AgentVersionScheme = 'content-v1'): Promise<ClientManifest> {
   const headers = { authorization: `Bearer ${settings.token}` };
-  const response = await fetch(`${settings.serverUrl}/api/agents/client/latest`, { headers, redirect: 'error', signal: AbortSignal.timeout(30_000) });
+  const response = await fetch(`${settings.serverUrl}/api/agents/client/latest?versionScheme=${scheme}`, { headers, redirect: 'error', signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`클라이언트 명세 조회 실패: HTTP ${response.status}`);
   return packageManifestSchema.parse(await response.json());
 }
@@ -94,7 +102,7 @@ export async function downloadUpdate(settings: AgentSettings, version: string, d
   const unpacked = path.join(directory, 'unpacked');
   fs.rmSync(unpacked, { recursive: true, force: true }); fs.mkdirSync(unpacked);
   command('tar', ['--no-same-owner', '-xzf', archive, '-C', unpacked]);
-  verifyPackage(unpacked, version);
+  verifyPackage(unpacked, version, manifest.versionScheme);
   command(path.join(unpacked, 'bin/node'), [path.join(unpacked, 'dist/agent/main.js'), '--check']);
   return unpacked;
 }

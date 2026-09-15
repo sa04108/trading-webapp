@@ -4,7 +4,7 @@ import {
   type DartRawSnapshotKey,
 } from '../../src/server/modules/facts/infrastructure/dart/dart-raw-snapshot-store.js';
 import { SqliteDartRawSnapshotStore } from '../../src/server/modules/facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
-import { openDatabase } from '../../src/server/shared/db/database.js';
+import { openDatabase } from '../../src/runtime/shared/db/database.js';
 import { dartRawApiSnapshots, symbols } from '../../src/server/shared/db/schema.js';
 
 const KEY: DartRawSnapshotKey = {

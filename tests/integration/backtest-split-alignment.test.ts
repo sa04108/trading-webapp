@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/runtime/modules/facts/domain/fact.js';
 import { backtestJobs, symbolMasterVersions } from '../../src/server/shared/db/schema.js';
 import { eq } from 'drizzle-orm';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';

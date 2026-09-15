@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { parseRuntimeVersions } from '../runtime/shared/runtime-versions.js';
+import type { AgentVersionScheme } from '../shared/agent-protocol.js';
 import type { AgentSettings } from './config.js';
 import { activate, downloadUpdate, fetchClientManifest, installRoot } from './install.js';
 
@@ -33,11 +35,13 @@ export async function withInstallLock<T>(action: () => Promise<T> | T): Promise<
   }
 }
 
-function installedVersion(): string | null {
-  const metadata = path.join(installRoot(), 'current/dist/build-info.json');
-  // 예전 압축 해제 폴더에서 명령을 실행해도 실제 설치된 버전을 우선한다.
-  if (fs.existsSync(path.join(installRoot(), 'current/quant-agent')) && fs.existsSync(metadata)) return (JSON.parse(fs.readFileSync(metadata, 'utf8')) as { gitSha: string }).gitSha;
-  return null;
+function installedVersion(scheme: AgentVersionScheme): string | null {
+  const root = path.join(installRoot(), 'current');
+  const metadata = path.join(root, scheme === 'content-v1' ? 'dist/runtime-versions.json' : 'dist/build-info.json');
+  // 예전 압축 해제 폴더에서 실행해도 실제 설치된 버전으로 비교한다.
+  if (!fs.existsSync(path.join(root, 'quant-agent')) || !fs.existsSync(metadata)) return null;
+  const value: unknown = JSON.parse(fs.readFileSync(metadata, 'utf8'));
+  return scheme === 'content-v1' ? parseRuntimeVersions(value).agentVersion : (value as { gitSha: string }).gitSha;
 }
 
 function restartRunningService(): boolean {
@@ -56,21 +60,22 @@ export interface AgentUpdateResult { version: string; updated: boolean; restarte
 /** 저장된 토큰으로 게시 버전을 조회하고 검증된 패키지만 현재 설치로 전환한다. */
 export async function updateAgent(settings: AgentSettings, state: string, options: {
   expectedVersion?: string;
+  versionScheme?: AgentVersionScheme;
   restartService?: boolean;
 } = {}): Promise<AgentUpdateResult> {
   return withInstallLock(async () => {
-    const manifest = await fetchClientManifest(settings);
+    const manifest = await fetchClientManifest(settings, options.versionScheme);
     const version = manifest.runnerVersion;
     if (options.expectedVersion !== undefined && version !== options.expectedVersion) {
       throw new Error('운영 서버와 게시된 클라이언트 버전이 다릅니다');
     }
-    if (version === installedVersion()) return { version, updated: false, restarted: false };
+    if (version === installedVersion(manifest.versionScheme)) return { version, updated: false, restarted: false };
     const updates = path.join(state, 'updates');
     fs.mkdirSync(updates, { recursive: true, mode: 0o700 });
     const directory = fs.mkdtempSync(path.join(updates, 'client-'));
     try {
       const unpacked = await downloadUpdate(settings, version, directory, manifest);
-      activate(unpacked, version);
+      activate(unpacked, version, installRoot(), manifest.versionScheme);
       const restarted = options.restartService === true && restartRunningService();
       return { version, updated: true, restarted };
     } finally {

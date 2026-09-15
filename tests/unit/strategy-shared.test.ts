@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { createRng } from '../../src/server/modules/backtest/domain/seeded-rng.js';
-import type { Position } from '../../src/server/modules/backtest/domain/types.js';
-import type { CorporateAction } from '../../src/server/modules/facts/domain/fact.js';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import { splitAdjustedClose } from '../../src/server/modules/strategy/strategies/shared/adjusted-price.js';
+import { createRng } from '../../src/runtime/modules/backtest/domain/seeded-rng.js';
+import type { Position } from '../../src/runtime/modules/backtest/domain/types.js';
+import type { CorporateAction } from '../../src/runtime/modules/facts/domain/fact.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
+import { splitAdjustedClose } from '../../src/runtime/modules/strategy/strategies/shared/adjusted-price.js';
 import {
   combineRanks,
   ordinalRank,
-} from '../../src/server/modules/strategy/strategies/shared/fundamental-rank.js';
-import { rankDescending } from '../../src/server/modules/strategy/strategies/shared/rank.js';
+} from '../../src/runtime/modules/strategy/strategies/shared/fundamental-rank.js';
+import { rankDescending } from '../../src/runtime/modules/strategy/strategies/shared/rank.js';
 import {
   planBuyPhase,
   planSellPhase,
-} from '../../src/server/modules/strategy/strategies/shared/two-phase-rebalance.js';
+} from '../../src/runtime/modules/strategy/strategies/shared/two-phase-rebalance.js';
 
 const DAY = 86_400_000;
 

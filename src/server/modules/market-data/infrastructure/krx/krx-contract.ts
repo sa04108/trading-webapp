@@ -1,9 +1,9 @@
 import { z } from 'zod';
-import { KrxContractError } from '../../application/ports.js';
-import { basDdToIso } from '../../domain/kst-date.js';
-import type { KrxDailyTradeRow, KrxIssueBaseInfoRow } from '../../domain/krx-universe-types.js';
+import { KrxContractError } from '../../../../../runtime/modules/market-data/application/ports.js';
+import { basDdToIso } from '../../../../../runtime/modules/market-data/domain/kst-date.js';
+import type { KrxDailyTradeRow, KrxIssueBaseInfoRow } from '../../../../../runtime/modules/market-data/domain/krx-universe-types.js';
 
-export { KRX_CONTRACT_VERSION } from '../../domain/krx-universe-types.js';
+export { KRX_CONTRACT_VERSION } from '../../../../../runtime/modules/market-data/domain/krx-universe-types.js';
 
 const krxRecordSchema = z.object({}).loose();
 

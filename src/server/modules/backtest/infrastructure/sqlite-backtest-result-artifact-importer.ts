@@ -1,16 +1,16 @@
 import fs from 'node:fs';
 import Database from 'better-sqlite3';
 import { z } from 'zod';
-import type { DatabaseHandle } from '../../../shared/db/database.js';
+import type { DatabaseHandle } from '../../../../runtime/shared/db/database.js';
 import { isRetryableSqliteError } from '../../../shared/db/sqlite-errors.js';
-import { newId } from '../../../shared/ids.js';
+import { newId } from '../../../../runtime/shared/ids.js';
 import {
   backtestResultSummarySchema,
   backtestResultWriteContextSchema,
   type BacktestResultArtifactImporter,
   type ValidatedBacktestResultArtifact,
-} from '../application/backtest-result-artifact.js';
-import { BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION } from './sqlite-backtest-result-artifact-writer.js';
+} from '../../../../runtime/modules/backtest/application/backtest-result-artifact.js';
+import { BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION } from '../../../../runtime/modules/backtest/infrastructure/sqlite-backtest-result-artifact-writer.js';
 
 export const MAX_BACKTEST_RESULT_ARTIFACT_BYTES = 256 * 1024 * 1024;
 const MAX_BACKTEST_RESULT_ROWS = 5_000_000;
@@ -223,10 +223,10 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
       target.prepare(
         `INSERT INTO backtest_runs (
            id, job_id, strategy_id, strategy_version, strategy_source_hash, parameter_json,
-           universe_rule_json, schedule_hash, universe_json, universe_hash, engine_version,
+           universe_rule_json, schedule_hash, universe_json, universe_hash, engine_version, execution_version,
            fee_model_version, slippage_model_version, random_seed, git_commit_sha,
            provenance_pin_json, warnings_json, open_positions_json, started_at_ms, completed_at_ms
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         newId('run'),
         context.jobId,
@@ -239,6 +239,7 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
         context.universeJson,
         context.universeHash,
         context.engineVersion,
+        context.executionVersion,
         context.feeModelVersion,
         context.slippageModelVersion,
         context.randomSeed,

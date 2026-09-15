@@ -1,6 +1,7 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { describe, expect, it } from 'vitest';
-import { SelectionMetricRepository } from '../../src/server/modules/market-data/application/selection-metric-repository.js';
-import type { DailySelectionMetric } from '../../src/server/modules/market-data/application/selection-metric-repository.js';
+import { SelectionMetricRepository } from '../../src/runtime/modules/market-data/application/selection-metric-repository.js';
+import type { DailySelectionMetric } from '../../src/runtime/modules/market-data/application/selection-metric-repository.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 
 // better-sqlite3 in this project accepts 250,000 variables. This deliberately
@@ -159,5 +160,5 @@ function seedMetrics(t: TestApp, rows: readonly DailySelectionMetric[]): void {
   for (const row of rows) statement.run(row.date, row.standardCode, row.marketCapKrw?.toString() ?? null, row.volume, row.tradingValueKrw?.toString() ?? null);
 }
 function seedMetricCoverage(t: TestApp, dates: readonly string[], syncedAtMs: number): void {
-  for (const date of dates) t.container.database.sqlite.prepare('INSERT INTO daily_selection_metric_coverage (date, synced_at_ms) VALUES (?, ?)').run(date, syncedAtMs);
+  for (const date of dates) t.container.database.sqlite.prepare('INSERT INTO daily_selection_metric_coverage (date, synced_at_ms, collection_version) VALUES (?, ?, ?)').run(date, syncedAtMs, readRuntimeVersions().collectionVersion);
 }

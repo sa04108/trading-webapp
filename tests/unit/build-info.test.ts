@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { readGitCommitSha } from '../../src/server/shared/build-info.js';
+import { readGitCommitSha } from '../../src/runtime/shared/build-info.js';
 
 const originalNodeEnv = process.env.NODE_ENV;
 const originalBuildGitSha = process.env.BUILD_GIT_SHA;

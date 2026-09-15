@@ -6,7 +6,7 @@ import type {
   StockInfo,
   StockInfoBatchResult,
   StockInfoSource,
-} from '../../src/server/modules/market-data/application/ports.js';
+} from '../../src/runtime/modules/market-data/application/ports.js';
 
 /**
  * `/symbols/info` 의 로컬 폴백 (원인 1·2·3 통합 확인).

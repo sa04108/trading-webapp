@@ -1,3 +1,4 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { Container } from '../../src/server/bootstrap/container.js';
 import {
@@ -62,7 +63,7 @@ export function seedSymbolMasterUniverse(
 
   container.database.db
     .insert(symbolMasterCoverage)
-    .values({ startDate: '2000-01-01', endDate: '2099-12-31', syncedAtMs: container.clock.now() })
+    .values({ startDate: '2000-01-01', endDate: '2099-12-31', collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: container.clock.now() })
     .run();
 
   // resolver 는 이제 effectiveTradingDate(date) 도 함께 확인한다 — 각 리밸런스 날짜를
@@ -92,7 +93,7 @@ export function seedSymbolMasterUniverse(
     container.database.db.insert(dailySelectionMetricCoverage).values(
       [...new Set(rebalanceDates)].map((date) => ({
         date,
-        syncedAtMs: container.clock.now(),
+        collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: container.clock.now(),
       })),
     ).onConflictDoNothing().run();
   }

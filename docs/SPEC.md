@@ -556,6 +556,7 @@ scheduleHash
 universeHash
 universeJson
 engineVersion
+executionVersion
 feeModelVersion
 slippageModelVersion
 randomSeed
@@ -693,7 +694,10 @@ Linux/WSL2 클라이언트의 부모 프로세스가 agent이고 유니버스·�
 배정 가능한 에이전트가 없으면 즉시 서버 내부 에이전트로 실행한다. 양쪽에 여유가 없으면
 큐에 대기하며, 슬롯 확보 이벤트마다 원격 에이전트부터 배정한다. 이미 시작한 작업은
 다른 에이전트로 옮기지 않는다. CPU·메모리·worker 수는 가용 자원으로 자동 결정한다.
-클라이언트와 서버의 실행 Git SHA가 일치해야 작업을 배정한다.
+클라이언트와 서버가 요구하는 `agentVersion`이 일치해야 작업을 배정한다. 백테스트 임대와
+결과 검증에는 별도 `executionVersion`을 사용한다. 배포 Git SHA는 운영 화면과 실행 출처
+기록에만 남긴다. 미리보기·수집·기간 검증의 버전 입력과 구형 설치기 전환은
+[도메인 버전 문서](AGENT_RUNTIME_BOUNDARY.md)를 따른다.
 
 원자적 claim은 `attempt`를 증가시키고 `agent_id`, 임대 token의 SHA-256과 만료 시각을
 저장한다. `agent_id`는 여러 작업을 소유할 수 있으며 개별 worker의 PID가 아니다.

@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
+import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
 import { JobQueue } from '../../src/server/modules/backtest/application/job-queue.js';
 
 let directory: string;

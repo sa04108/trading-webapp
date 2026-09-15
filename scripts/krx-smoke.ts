@@ -26,19 +26,19 @@ import {
   KrxContractError,
   KrxNotConfiguredError,
   type KrxHistoricalUniverseSource,
-} from '../src/server/modules/market-data/application/ports.js';
+} from '../src/runtime/modules/market-data/application/ports.js';
 import {
   classifyKrxIssue,
   UnknownKrxClassificationError,
-} from '../src/server/modules/market-data/domain/krx-filter-policy.js';
+} from '../src/runtime/modules/market-data/domain/krx-filter-policy.js';
 import {
   KRX_CONTRACT_VERSION,
   type KrxDailyTradeRow,
   type KrxIssueBaseInfoRow,
   type KrxMarket,
-} from '../src/server/modules/market-data/domain/krx-universe-types.js';
-import { addCalendarDays, KRX_DATA_EPOCH, kstDateOf, kstHourOf } from '../src/server/modules/market-data/domain/kst-date.js';
-import { systemClock } from '../src/server/shared/clock.js';
+} from '../src/runtime/modules/market-data/domain/krx-universe-types.js';
+import { addCalendarDays, KRX_DATA_EPOCH, kstDateOf, kstHourOf } from '../src/runtime/modules/market-data/domain/kst-date.js';
+import { systemClock } from '../src/runtime/shared/clock.js';
 
 const MARKETS: readonly KrxMarket[] = ['KOSPI', 'KOSDAQ'];
 

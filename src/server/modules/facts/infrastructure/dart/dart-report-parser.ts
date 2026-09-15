@@ -1,6 +1,6 @@
-import { KR_SESSION } from '../../../market-data/domain/exchange-session.js';
-import type { FactIngestionGap } from '../../application/ports.js';
-import { CORPORATE_ACTION_FIELD, type Fact, type FundamentalField } from '../../domain/fact.js';
+import { KR_SESSION } from '../../../../../runtime/modules/market-data/domain/exchange-session.js';
+import type { FactIngestionGap } from '../../../../../runtime/modules/facts/application/ports.js';
+import { CORPORATE_ACTION_FIELD, type Fact, type FundamentalField } from '../../../../../runtime/modules/facts/domain/fact.js';
 import { resolveAccount } from './dart-account-map.js';
 
 /** 정기보고서 코드 (DART reprt_code) */

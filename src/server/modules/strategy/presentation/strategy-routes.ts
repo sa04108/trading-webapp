@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { StrategyRegistry } from '../application/strategy-registry.js';
+import type { StrategyRegistry } from '../../../../runtime/modules/strategy/application/strategy-registry.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 

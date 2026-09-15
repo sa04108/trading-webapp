@@ -110,6 +110,7 @@ build_release() {
   (
     cd "${REPO_ROOT}"
     pnpm build:agent --prepared
+    pnpm test:agent-package
   )
 
   echo "==> 공통 release archive 생성: ${release_archive}"

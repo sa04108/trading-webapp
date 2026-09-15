@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it } from 'vitest';
-import { installCancellationHandlers } from '../../src/workers/cancellation.js';
+import { installCancellationHandlers } from '../../src/runtime/workers/cancellation.js';
 
 describe('worker cancellation', () => {
   it('records cancel IPC and SIGTERM requests but ignores unrelated IPC', () => {

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
-import type { DatabaseHandle } from '../../../shared/db/database.js';
-import { newId } from '../../../shared/ids.js';
+import type { DatabaseHandle } from '../../../../runtime/shared/db/database.js';
+import { newId } from '../../../../runtime/shared/ids.js';
 
 export function agentTokenHash(token: string): string { return createHash('sha256').update(token).digest('hex'); }
 

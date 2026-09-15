@@ -1,11 +1,12 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { describe, expect, it, vi } from 'vitest';
 import { BenchmarkService } from '../../src/server/modules/market-data/application/benchmark-service.js';
 import type {
   FredBenchmarkSource,
   KrxHistoricalUniverseSource,
-} from '../../src/server/modules/market-data/application/ports.js';
+} from '../../src/runtime/modules/market-data/application/ports.js';
 import { ResultsService } from '../../src/server/modules/backtest/application/results-service.js';
-import { openDatabase } from '../../src/server/shared/db/database.js';
+import { openDatabase } from '../../src/runtime/shared/db/database.js';
 import {
   backtestJobs,
   backtestMetrics,
@@ -51,7 +52,7 @@ describe('벤치마크 저장과 결과 비교', () => {
       database.db.insert(symbolMasterCoverage).values({
         startDate: '2026-01-02',
         endDate: '2026-01-05',
-        syncedAtMs: 1,
+        collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: 1,
       }).run();
       await service.syncDate('KOSPI', '2026-01-02');
       await service.syncDate('KOSPI', '2026-01-05');
@@ -131,7 +132,7 @@ describe('벤치마크 저장과 결과 비교', () => {
       database.db.insert(symbolMasterCoverage).values({
         startDate: '2026-08-13',
         endDate: '2026-08-13',
-        syncedAtMs: 1,
+        collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: 1,
       }).run();
       database.db.insert(symbolMasterTradingDays).values([
         { date: '2026-08-13' },

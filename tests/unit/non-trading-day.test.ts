@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { isNonTradingRow } from '../../src/server/modules/market-data/domain/non-trading-day.js';
-import type { KrxDailyTradeRow } from '../../src/server/modules/market-data/domain/krx-universe-types.js';
+import { isNonTradingRow } from '../../src/runtime/modules/market-data/domain/non-trading-day.js';
+import type { KrxDailyTradeRow } from '../../src/runtime/modules/market-data/domain/krx-universe-types.js';
 
 function row(partial: Partial<KrxDailyTradeRow>): KrxDailyTradeRow {
   return {

@@ -1,6 +1,7 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
+import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
 import { AgentPreparationQueue } from '../../src/server/modules/agents/application/agent-preparation-queue.js';
 import { AgentDataQueue } from '../../src/server/modules/agents/application/agent-data-queue.js';
 import { AgentRegistry } from '../../src/server/modules/agents/application/agent-registry.js';
@@ -12,7 +13,7 @@ import type { DatasetManifest } from '../../src/shared/agent-protocol.js';
 let database: DatabaseHandle;
 let preparations: AgentPreparationQueue;
 let clientId: string;
-const dataset: DatasetManifest = { version: 1, datasetId: randomUUID(), sourceRevision: 0, schemaVersion: 1, sha256: 'a'.repeat(64), bytes: 1 };
+const dataset: DatasetManifest = { version: 1, datasetId: randomUUID(), sourceRevision: 0, collectionVersion: readRuntimeVersions().collectionVersion, schemaVersion: 1, sha256: 'a'.repeat(64), bytes: 1 };
 beforeEach(() => {
   database = openDatabase(':memory:');
   preparations = new AgentPreparationQueue(database, () => undefined);
@@ -34,7 +35,7 @@ describe('에이전트 리스와 데이터 대기', () => {
     const next = preparations.claim(clientId, dataset)!;
     expect(next.attempt).toBe(lease.attempt + 1);
     expect(preparations.heartbeat(clientId, lease).accepted).toBe(false);
-    expect(preparations.finish(clientId, lease, 'FAILED', null, 0)).toBe(false);
+    expect(preparations.finish(clientId, lease, 'FAILED', null, dataset)).toBe(false);
     expect(preparations.heartbeat(clientId, next).accepted).toBe(true);
   });
 
@@ -62,6 +63,38 @@ describe('에이전트 리스와 데이터 대기', () => {
     expect(collect).toHaveBeenCalledTimes(1);
     expect(database.sqlite.prepare('SELECT available_version FROM agent_data_requests').get()).toEqual({ available_version: 2 });
     expect(() => queue.request('PREPARATION', 'prep-three', 2, { kind: 'MARKET', dates: ['2026-01-05', '2026-01-06'] })).toThrow('같은 결손');
+  });
+
+  it('수집 버전이 달라지면 이전 완료 요청을 재사용하지 않고 새 수집을 실행한다', async () => {
+    const collect = vi.fn(async () => undefined);
+    const ready = vi.fn();
+    const snapshots = { ensureLatest: async () => ({ ...dataset, version: 2 }) } as DatasetSnapshots;
+    const previous = new AgentDataQueue(database, snapshots, collect, ready, pino({ enabled: false }), { collectionVersion: 'a'.repeat(64) });
+    const current = new AgentDataQueue(database, snapshots, collect, ready, pino({ enabled: false }), { collectionVersion: 'b'.repeat(64) });
+    const request = { kind: 'MARKET' as const, dates: ['2026-01-05'] };
+    try {
+      previous.request('PREPARATION', 'old-job', 1, request);
+      previous.tick();
+      await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
+      expect(() => current.request('PREPARATION', 'new-job', 2, request)).not.toThrow();
+      current.tick();
+      await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(2));
+      expect(collect).toHaveBeenCalledTimes(2);
+      expect(database.sqlite.prepare('SELECT status FROM agent_data_requests').all()).toEqual([
+        { status: 'COMPLETED' }, { status: 'COMPLETED' },
+      ]);
+    } finally { await previous.stop(); await current.stop(); }
+  });
+
+  it('옛 수집 버전의 준비 결과는 현재 미리보기로 확정하지 않고 실패 소모 없이 재배정한다', () => {
+    seedPreparation('old-collection');
+    const previous = { ...dataset, collectionVersion: 'c'.repeat(64) };
+    const lease = preparations.claim(clientId, previous)!;
+    expect(preparations.finish(clientId, lease, 'COMPLETED', null, previous)).toBe(true);
+    expect(database.sqlite.prepare('SELECT status, preview_json FROM backtest_preparation_jobs WHERE id = ?').get(lease.jobId)).toEqual({ status: 'QUEUED', preview_json: null });
+    expect(database.sqlite.prepare('SELECT failures, lease_token_hash FROM agent_preparation_leases WHERE job_id = ?').get(lease.jobId)).toEqual({ failures: 0, lease_token_hash: null });
+    expect(preparations.heartbeat(clientId, lease).accepted).toBe(false);
+    expect(preparations.claim(clientId, { ...dataset, version: 2 })).toMatchObject({ attempt: 2, dataset: { collectionVersion: dataset.collectionVersion } });
   });
 
   it('큰 백테스트를 작은 장치가 가져가지 않고 재시도 토큰으로 이전 결과를 차단한다', () => {

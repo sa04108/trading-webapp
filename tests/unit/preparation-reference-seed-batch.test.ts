@@ -5,7 +5,7 @@ import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.
 import type { ProvenancePin } from '../../src/shared/schemas/provenance-pin.js';
 import type { BenchmarkPin } from '../../src/shared/schemas/benchmark.js';
 import { SeedCloneBatchService, type SeedCloneBatchSnapshot } from '../../src/server/modules/backtest/application/seed-clone-batch-service.js';
-import type { LegacyUniverseScheduleEntry } from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
+import type { LegacyUniverseScheduleEntry } from '../../src/runtime/modules/backtest/application/universe-rule-resolver.js';
 
 const request: BacktestRequest = {
   strategyId: 'range-breakout',

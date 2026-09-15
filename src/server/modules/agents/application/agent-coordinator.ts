@@ -1,12 +1,13 @@
+import { readGitCommitSha } from '../../../../runtime/shared/build-info.js';
 import path from 'node:path';
 import { AgentClient } from '../../../../agent/client.js';
 import { availableServerResources } from '../../../../agent/resources.js';
-import { BacktestResultArtifactRejectedError } from '../../backtest/application/backtest-result-artifact.js';
+import { BacktestResultArtifactRejectedError } from '../../../../runtime/modules/backtest/application/backtest-result-artifact.js';
 import { InvalidBacktestResultArtifactError } from '../../backtest/infrastructure/sqlite-backtest-result-artifact-importer.js';
-import { backtestExecutionTelemetrySchema } from '../../backtest/application/backtest-execution-telemetry.js';
+import { backtestExecutionTelemetrySchema } from '../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js';
 import type { WebSocket } from 'ws';
 import { MAX_BACKTEST_BARS } from '../../../shared/backtest-limits.js';
-import type { DatabaseHandle } from '../../../shared/db/database.js';
+import type { DatabaseHandle } from '../../../../runtime/shared/db/database.js';
 import type { Logger } from '../../../shared/logger.js';
 import type { BacktestLeaseService } from '../../backtest/application/backtest-lease-service.js';
 import type { JobQueue } from '../../backtest/application/job-queue.js';
@@ -41,6 +42,7 @@ export class AgentCoordinator {
     private readonly queue: JobQueue,
     readonly runnerVersion: string,
     private readonly logger: Logger,
+    private readonly executionVersion: string = runnerVersion,
   ) {
     this.queue.events.on('queued', this.wake);
     this.backtests.events.on('job', this.wake);
@@ -89,15 +91,17 @@ export class AgentCoordinator {
 
   private async message(clientId: string, connection: Connection, message: AgentMessage): Promise<void> {
     if (message.type === 'HELLO') {
-      if (message.runnerVersion !== this.runnerVersion) {
+      if (message.versionScheme !== 'content-v1' || message.runnerVersion !== this.runnerVersion) {
         connection.ready = false;
         connection.slots = 0;
         this.invalidateClientLeases(clientId);
-        this.send(connection, { type: 'UPDATE_REQUIRED', runnerVersion: this.runnerVersion });
+        // SHA 계약의 구형 설치기를 새 패키지로 한 번 이동시키는 전환 경로다.
+        const legacy = message.versionScheme !== 'content-v1';
+        this.send(connection, { type: 'UPDATE_REQUIRED', runnerVersion: legacy ? readGitCommitSha() : this.runnerVersion, versionScheme: legacy ? 'legacy-git-v1' : 'content-v1' });
         return;
       }
       connection.ready = true;
-      this.send(connection, { type: 'WELCOME', runnerVersion: this.runnerVersion });
+      this.send(connection, { type: 'WELCOME', runnerVersion: this.runnerVersion, versionScheme: 'content-v1' });
       if (clientId === LOCAL_AGENT_ID) { this.wake(); return; }
       const dataset = await this.snapshots.ensureLatest();
       this.send(connection, { type: 'DATASET', dataset });
@@ -134,13 +138,13 @@ export class AgentCoordinator {
             this.dataQueue.request(message.kind, message.jobId, this.preparations.datasetVersion(message.jobId)!, message.request);
           });
         } catch (error) {
-          accepted = this.preparations.finish(clientId, identity, 'FAILED', null, 0, error instanceof Error ? error.message : String(error));
+          accepted = this.preparations.finish(clientId, identity, 'FAILED', null, null, error instanceof Error ? error.message : String(error));
         }
       }
     } else if (message.kind === 'PREPARATION') {
       const version = this.preparations.datasetVersion(message.jobId);
       const dataset = version === null ? null : this.snapshots.get(version);
-      if (dataset) accepted = this.preparations.finish(clientId, identity, message.outcome, message.result, dataset.sourceRevision, message.error);
+      accepted = this.preparations.finish(clientId, identity, message.outcome, message.result, dataset, message.error);
     } else if (this.ownsBacktest(clientId, message.jobId) && message.outcome !== 'COMPLETED') {
       const telemetry = backtestExecutionTelemetrySchema.safeParse(message.result?.telemetry);
       const cancelPath = message.result?.cancelPath;
@@ -222,7 +226,7 @@ export class AgentCoordinator {
     let active = this.activeLeaseCount(clientId);
     while (connection.slots > active) {
       let lease: AgentLease | null;
-      const claim = this.backtests.claim(clientId, this.runnerVersion, connection.maxBars);
+      const claim = this.backtests.claim(clientId, this.executionVersion, connection.maxBars);
       if (claim.status === 'CLAIMED') {
         const job = claim.lease.job;
         this.database.sqlite.prepare('INSERT INTO agent_backtest_datasets (job_id, dataset_version) VALUES (?, ?) ON CONFLICT(job_id) DO UPDATE SET dataset_version = excluded.dataset_version').run(job.id, dataset.version);

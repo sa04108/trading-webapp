@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": { "sourceMap": false },
+  "files": ["src/agent/main.ts", "src/runtime/workers/backtest-child.ts", "src/runtime/workers/preparation-child.ts"],
+  "include": []
+}

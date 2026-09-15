@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   financialCoverageGapMessage,
   findFinancialCoverageGap,
-} from '../../src/server/modules/backtest/application/backtest-financial-coverage.js';
-import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
+} from '../../src/runtime/modules/backtest/application/backtest-financial-coverage.js';
+import { StrategyRegistry } from '../../src/runtime/modules/strategy/application/strategy-registry.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 
 const period: BacktestRequest['period'] = { from: '2025-01-02', to: '2025-12-31' };

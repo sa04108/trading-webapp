@@ -1,5 +1,5 @@
-import { ALL_MARKETS, type Market } from './candle.js';
-import { hasMarketSession } from './exchange-session.js';
+import { ALL_MARKETS, type Market } from '../../../../runtime/modules/market-data/domain/candle.js';
+import { hasMarketSession } from '../../../../runtime/modules/market-data/domain/exchange-session.js';
 
 export interface MarketSupport {
   readonly market: Market;

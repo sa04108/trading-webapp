@@ -4,7 +4,7 @@ import {
   UnsupportedMarketSessionError,
   getSessionForMarket,
   hasMarketSession,
-} from '../../src/server/modules/market-data/domain/exchange-session.js';
+} from '../../src/runtime/modules/market-data/domain/exchange-session.js';
 import { listMarketSupport } from '../../src/server/modules/market-data/domain/market-support.js';
 
 describe('hasMarketSession', () => {

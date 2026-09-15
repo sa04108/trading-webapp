@@ -9,7 +9,7 @@ import Fastify from 'fastify';
 import { loadConfig } from '../src/server/bootstrap/config.js';
 import { createContainer, type Container } from '../src/server/bootstrap/container.js';
 import { buildServer } from '../src/server/bootstrap/server.js';
-import { newId } from '../src/server/shared/ids.js';
+import { newId } from '../src/runtime/shared/ids.js';
 
 export const E2E_USERNAME = 'e2e-operator';
 export const E2E_PASSWORD = 'correct-horse-battery-staple';

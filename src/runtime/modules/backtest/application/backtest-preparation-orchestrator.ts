@@ -1,0 +1,2047 @@
+import { AgentDataRequired } from '../../../../shared/agent-protocol.js';
+import { createHash } from 'node:crypto';
+import { and, asc, desc, eq, inArray, isNotNull } from 'drizzle-orm';
+import {
+  periodToTsRange,
+  type BacktestRequest,
+} from '../../../../shared/schemas/backtest-request.js';
+import type { UniverseRule } from '../../../../shared/schemas/universe-rule.js';
+import {
+  preparationInputSchema,
+  type PreparationInput as SharedPreparationInput,
+} from '../../../../shared/schemas/backtest-preparation.js';
+import type { Clock } from '../../../shared/clock.js';
+import type { DatabaseHandle } from '../../../shared/db/database.js';
+import { backtestPreparationJobs } from '../../../shared/db/schema.js';
+import { newId } from '../../../shared/ids.js';
+import type { Logger } from 'pino';
+import type { ExternalApiUsage } from '../../../shared/external-api-usage.js';
+import type { CorporateActionCoverageStore } from '../../facts/application/corporate-action-coverage.js';
+import type { FactCoverageStore } from '../../facts/application/fact-coverage-store.js';
+import type { FactRepository } from '../../facts/application/ports.js';
+import type { FinancialFactAvailabilityService } from '../../facts/application/financial-fact-availability.js';
+import type { FactSyncPort, FactSyncReport } from '../../facts/application/fact-sync-port.js';
+import { DART_DAILY_CALL_LIMIT } from '../../facts/domain/sync-plan.js';
+import { CORPORATE_ACTION_FIELD } from '../../facts/domain/fact.js';
+import {
+  alignCorporateActionEffectiveDates,
+  CORPORATE_ACTION_ALIGNMENT_WINDOW,
+  corporateActionRawDateRange,
+} from '../../facts/domain/corporate-action-effective-date.js';
+import type { CandleCoverageService } from '../../market-data/application/candle-coverage-service.js';
+import { KrxQuotaError } from '../../market-data/application/ports.js';
+import type { SymbolMasterService } from '../../market-data/application/symbol-master-service.js';
+import { addCalendarDays, kstDateOf } from '../../market-data/domain/kst-date.js';
+import type { SymbolService } from '../../market-data/application/symbol-service.js';
+import type { SymbolMasterEntry } from '../../market-data/domain/symbol-master.js';
+import type { StrategyRegistry } from '../../strategy/application/strategy-registry.js';
+import {
+  strategyRequiresFinancialData,
+  type AnyTradingStrategy,
+} from '../../strategy/domain/strategy.js';
+import { UnsafeBacktestSymbolIdentityError } from './backtest-symbol-identity.js';
+import {
+  delistedEventsToTsMsBySymbol,
+  financialFactCutoffsFromCoverage,
+} from './backtest-financial-execution-window.js';
+import {
+  findRelevantCorporateActionGaps,
+  readCorporateActionGapDetails,
+  type RelevantCorporateActionGap,
+} from './backtest-corporate-action-gaps.js';
+import { findFinancialCoverageGap } from './backtest-financial-coverage.js';
+import { findCandleDataExclusions } from './backtest-candle-data-exclusions.js';
+import {
+  backtestPreparationRequestHash,
+  buildBacktestPreparationPlan,
+  type BacktestPreparationPlan,
+} from './backtest-preparation-plan.js';
+import { PreparationPreviewCache } from './preparation-preview-cache.js';
+import { UniverseResolutionCancelledError } from './universe-rule-resolver.js';
+import {
+  backtestDataExclusionKey,
+  backtestDataExclusionWarnings,
+  type BacktestDataExclusion,
+} from './backtest-data-exclusion.js';
+import { findIncompleteFundamentalCheckpointsFromCoverage } from './backtest-financial-data-readiness.js';
+import type {
+  RebalanceDiagnostic,
+  UniverseDataNeed,
+  UniverseResolveAttempt,
+  UniverseRuleResolver,
+  UniverseScheduleEntry,
+} from './universe-rule-resolver.js';
+
+export type PreparationStatus =
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'WAITING_DAILY_QUOTA'
+  | 'WAITING_DATA'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED';
+
+export type PreparationPhase =
+  | 'MARKET_DATA'
+  | 'RESOLVING_STAGES'
+  | 'VALIDATING_RESULT'
+  | 'SYNCING_FACTS'
+  | 'FINALIZING';
+
+export type PreparationInput = SharedPreparationInput;
+
+export interface BacktestPreparationJobDto {
+  readonly id: string;
+  readonly requestHash: string;
+  readonly status: PreparationStatus;
+  readonly phase: PreparationPhase;
+  readonly overallProgress: number;
+  readonly doneSymbols: number;
+  readonly totalSymbols: number;
+  readonly savedFacts: number;
+  readonly gapCount: number;
+  readonly nextResumeAtMs: number | null;
+  readonly error: string | null;
+}
+
+export interface ReadyPreviewDetails {
+  readonly preview: BacktestUniversePreview;
+  readonly fundamentalSymbols: readonly string[];
+}
+
+export interface BacktestUniversePreview {
+  /** 저장된 결과를 소유자와 연결하는 ID. 계산 중인 결과에는 아직 없다. */
+  readonly preparationJobId?: string;
+  readonly schedule: readonly UniverseScheduleEntry[];
+  readonly diagnostics: readonly RebalanceDiagnostic[];
+  readonly stages: UniverseRule['stages'];
+  readonly unionSymbols: readonly string[];
+  readonly scheduleHash: string;
+  readonly uncoveredDates: readonly string[];
+  readonly periodCovered: boolean;
+  readonly missingCandleSymbols: readonly string[];
+  readonly warnings: readonly string[];
+}
+
+type PreparationJobRow = typeof backtestPreparationJobs.$inferSelect;
+type PreparationJobPatch = Partial<typeof backtestPreparationJobs.$inferInsert>;
+type PreparationJobDtoRow = Pick<
+  PreparationJobRow,
+  | 'id'
+  | 'requestHash'
+  | 'status'
+  | 'phase'
+  | 'overallProgress'
+  | 'doneSymbols'
+  | 'totalSymbols'
+  | 'savedFacts'
+  | 'gapCount'
+  | 'nextResumeAtMs'
+  | 'error'
+>;
+
+const ACTIVE_STATUSES: readonly PreparationStatus[] = [
+  'QUEUED', 'RUNNING', 'WAITING_DAILY_QUOTA', 'WAITING_DATA',
+];
+const TERMINAL_STATUSES: readonly PreparationStatus[] = ['COMPLETED', 'FAILED', 'CANCELLED'];
+const MAX_FINAL_STABILIZATION_PASSES = 8;
+const MAX_RESOLUTION_PROGRESS_UPDATES = 100;
+
+type ProgressRange = readonly [start: number, end: number];
+
+/**
+ * 추가 수집량은 선정 결과에 따라 달라지므로 전체 진행률은 작업 비중으로 추정한다.
+ * 선정·필요 데이터 수집 0~60, 최종 종목 데이터 준비 60~85, 검증 85~99를 배정하고,
+ * 반복 계산과 quota 재개로 같은 구간을 다시 거쳐도 저장 경계에서 기존 최댓값을 유지한다.
+ * 실제 결과 저장이 완료된 작업만 100에 도달한다.
+ */
+function progressWithin([start, end]: ProgressRange, done: number, total: number): number {
+  const fraction = total > 0 ? Math.min(1, Math.max(0, done / total)) : 0;
+  return Math.floor(start + (end - start) * fraction);
+}
+const PREPARATION_DTO_SELECTION = {
+  id: backtestPreparationJobs.id,
+  requestHash: backtestPreparationJobs.requestHash,
+  status: backtestPreparationJobs.status,
+  phase: backtestPreparationJobs.phase,
+  overallProgress: backtestPreparationJobs.overallProgress,
+  doneSymbols: backtestPreparationJobs.doneSymbols,
+  totalSymbols: backtestPreparationJobs.totalSymbols,
+  savedFacts: backtestPreparationJobs.savedFacts,
+  gapCount: backtestPreparationJobs.gapCount,
+  nextResumeAtMs: backtestPreparationJobs.nextResumeAtMs,
+  error: backtestPreparationJobs.error,
+} as const;
+const PREPARATION_RECOVERY_SELECTION = {
+  ...PREPARATION_DTO_SELECTION,
+  requestJson: backtestPreparationJobs.requestJson,
+} as const;
+
+function corporateActionDataExclusions(
+  gaps: readonly RelevantCorporateActionGap[],
+): BacktestDataExclusion[] {
+  return gaps.map((gap) => ({
+    symbol: gap.symbol,
+    category: 'DART_CORPORATE_ACTION',
+    periodKey: `${gap.year}년/${gap.periodKey}`,
+    reason: gap.reason,
+  }));
+}
+
+const ALLOWED_TRANSITIONS: Readonly<Record<PreparationStatus, readonly PreparationStatus[]>> = {
+  QUEUED: ['RUNNING'],
+  RUNNING: ['WAITING_DATA', 'WAITING_DAILY_QUOTA', 'COMPLETED', 'FAILED', 'CANCELLED'],
+  WAITING_DAILY_QUOTA: ['QUEUED', 'CANCELLED'],
+  WAITING_DATA: ['QUEUED', 'CANCELLED', 'FAILED'],
+  COMPLETED: [],
+  FAILED: [],
+  CANCELLED: [],
+};
+
+const EMPTY_NEEDS: UniverseDataNeed = {
+  factSymbols: [],
+  actionSymbols: [],
+  priceSymbols: [],
+  selectionMetricDates: [],
+  priceRange: null,
+};
+
+/** 요청 입력 자체의 문제(미지 전략, 파라미터 형식) — 라우트가 400 으로 매핑한다. */
+export class PreparationInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PreparationInputError';
+  }
+}
+
+/** 현재 shortCode 기반 저장 구조로 안전하게 분리할 수 없는 종목 identity 조합. */
+export { UnsafeBacktestSymbolIdentityError } from './backtest-symbol-identity.js';
+
+/** needsDart 계획에만 쓰고 저장·sync하지 않는 미상 future candidate probe. */
+const UNKNOWN_CANDIDATE_PROBE = '__UNKNOWN_FUTURE_UNIVERSE_CANDIDATE__';
+
+/** 사용자 소유권과 서버 결과 수명은 계산 worker 밖에서 관리한다. */
+export interface PreparationReferences {
+  bindWizard(userId: string, context: string, preparationJobId: string): void;
+  getWizard(userId: string): { preparationJobId: string } | null;
+  collect(): number;
+}
+
+interface PreparationDependencies {
+  readonly references?: PreparationReferences;
+  readonly database: DatabaseHandle;
+  /** 중앙 서버에서는 영속 상태만 관리하고 계산 큐는 에이전트에 맡긴다. */
+  readonly agentManaged?: boolean;
+  readonly resolver: Pick<UniverseRuleResolver, 'resolveOrDescribeNeeds' | 'isPeriodCovered'>;
+  readonly factSync: FactSyncPort;
+  readonly actionCoverage: Pick<
+    CorporateActionCoverageStore,
+    'getCoveredYears' | 'getGapYears' | 'getGapDetails'
+  >;
+  readonly factCoverage: Pick<FactCoverageStore, 'getCoverageState'>;
+  readonly facts: Pick<FactRepository, 'getFacts'>;
+  readonly symbolMaster: Pick<
+    SymbolMasterService,
+    | 'ensureTradingDay'
+    | 'ensureSelectionMetrics'
+    | 'ingestDate'
+    | 'isRangeCovered'
+    | 'nonTradingDaysBetween'
+    | 'delistedEventsBetween'
+    | 'sharesChangesBetween'
+  > & Partial<Pick<SymbolMasterService, 'tradingDaysBetween'>>;
+  readonly strategies: Pick<StrategyRegistry, 'get'>;
+  readonly symbolService: Pick<
+    SymbolService,
+    'exists' | 'addSymbol' | 'getRegisteredIdentity' | 'getRegisteredIdentityByStandardCode'
+  >;
+  readonly candleCoverage?: Pick<CandleCoverageService, 'getCoverageBetween'>
+    & Partial<Pick<
+      CandleCoverageService,
+      'getValidDatesByCodeBetween' | 'getLastTsInWindows'
+    >>;
+  readonly clock: Clock;
+  readonly logger: Logger;
+  readonly dartDailyCallLimit?: number;
+  readonly financialFacts: Pick<FinancialFactAvailabilityService, 'symbolsWithFinancialFacts'>;
+  /** Child runtime uses this to tell the parent to re-read the durable DTO for SSE. */
+  readonly onJobUpdated?: (jobId: string) => void;
+  /** 종료 상태를 저장한 실행 주체만 알림을 만든다. 부모의 SSE 재전송은 제외한다. */
+  readonly onJobFinished?: (job: BacktestPreparationJobDto) => void;
+}
+
+/** 서버는 공유 API 원장을 필수로 사용하고, 스냅샷 워커는 원장을 가지지 않는다. */
+export type BacktestPreparationOrchestratorDeps = PreparationDependencies & (
+  | { readonly snapshotMode: true; readonly externalApiUsage?: never }
+  | { readonly snapshotMode?: false; readonly externalApiUsage: ExternalApiUsage }
+);
+
+/**
+ * 준비 작업은 SQLite 행을 큐이자 복구 지점으로 사용하고, 한 번에 하나만 실행한다.
+ * FactSyncService가 symbol-year 저장 경계를 닫으므로 quota 재개는 항상 INCREMENTAL이다.
+ */
+export class BacktestPreparationOrchestrator {
+  private readonly listeners = new Map<string, Set<(job: BacktestPreparationJobDto) => void>>();
+  private readonly resumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private runnerActive = false;
+  private runnerPromise: Promise<void> | null = null;
+  private stopping = false;
+  private readonly dailyLimit: number;
+  private readonly previewCache: PreparationPreviewCache;
+
+  constructor(
+    private readonly deps: BacktestPreparationOrchestratorDeps,
+  ) {
+    this.previewCache = new PreparationPreviewCache(deps.database);
+    this.dailyLimit = deps.dartDailyCallLimit ?? DART_DAILY_CALL_LIMIT;
+
+  }
+
+  start(input: PreparationInput, owner?: { userId: string; context: string }): BacktestPreparationJobDto {
+    const strategy = this.requireStrategy(input);
+    const requestHash = backtestPreparationRequestHash(input, strategy);
+    // 읽기와 insert 사이에 다른 프로세스가 같은 hash를 넣을 수 있으므로 write lock을
+    // 먼저 잡는다. WAL의 일반 SELECT는 다른 writer와 겹칠 수 있어 transaction 없이
+    // 두 문장을 잇는 것만으로는 single-flight가 아니다.
+    const selected = this.deps.database.sqlite.transaction(() => {
+      const existing = this.deps.database.db
+        .select(PREPARATION_DTO_SELECTION)
+        .from(backtestPreparationJobs)
+        .where(and(
+          eq(backtestPreparationJobs.requestHash, requestHash),
+          inArray(backtestPreparationJobs.status, [...ACTIVE_STATUSES]),
+        ))
+        .orderBy(desc(backtestPreparationJobs.createdAtMs))
+        .limit(1)
+        .get();
+      if (existing) {
+        if (owner) this.bindWizard(owner.userId, owner.context, existing.id);
+        return { row: existing, inserted: false } as const;
+      }
+
+      const now = this.deps.clock.now();
+      const id = newId('prep');
+      this.deps.database.db.insert(backtestPreparationJobs).values({
+        id,
+        requestHash,
+        requestJson: JSON.stringify(input),
+        lifecycleManaged: owner !== undefined,
+        status: 'QUEUED',
+        phase: 'MARKET_DATA',
+        doneSymbols: 0,
+        totalSymbols: 0,
+        savedFacts: 0,
+        gapCount: 0,
+        dartCallsUsed: 0,
+        cancelRequested: false,
+        createdAtMs: now,
+        updatedAtMs: now,
+      }).run();
+      const row = this.getRow(id);
+      if (!row) throw new Error('준비 작업을 저장하지 못했습니다.');
+      if (owner) this.bindWizard(owner.userId, owner.context, id);
+      return { row, inserted: true } as const;
+    }).immediate();
+    if (!selected.inserted) return toDto(selected.row);
+
+    const created = this.persistAndEmit(selected.row.id, {});
+    if (!created) throw new Error('준비 작업을 저장하지 못했습니다.');
+    this.queuePump();
+    return created;
+  }
+
+  bindWizard(userId: string, context: string, preparationJobId: string): void {
+    if (!this.deps.references) throw new Error('사용자 미리보기 소유권은 서버에서만 변경할 수 있습니다.');
+    this.deps.references.bindWizard(userId, context, preparationJobId);
+  }
+
+  get(jobId: string): BacktestPreparationJobDto | null {
+    const row = this.getDtoRow(jobId);
+    return row ? toDto(row) : null;
+  }
+
+  /** Cheap same-input fast path used before scheduling any child-process revalidation. */
+  getActive(input: PreparationInput): BacktestPreparationJobDto | null {
+    const strategy = this.requireStrategy(input);
+    const requestHash = backtestPreparationRequestHash(input, strategy);
+    const row = this.deps.database.db
+      .select(PREPARATION_DTO_SELECTION)
+      .from(backtestPreparationJobs)
+      .where(and(
+        eq(backtestPreparationJobs.requestHash, requestHash),
+        inArray(backtestPreparationJobs.status, [...ACTIVE_STATUSES]),
+      ))
+      .orderBy(desc(backtestPreparationJobs.createdAtMs))
+      .limit(1)
+      .get();
+    return row ? toDto(row) : null;
+  }
+
+  getPreview(jobId: string): BacktestUniversePreview | null {
+    const row = this.getRow(jobId);
+    if (!row?.previewJson) return null;
+    try {
+      return { ...JSON.parse(row.previewJson) as BacktestUniversePreview, preparationJobId: jobId };
+    } catch (error) {
+      this.deps.logger.warn(
+        { module: 'backtest', event: 'preparation.preview.parse-failed', jobId, err: error },
+        '저장된 준비 미리보기가 올바르지 않습니다',
+      );
+      return null;
+    }
+  }
+
+  /**
+   * 지정한 preparation job ID의 완료 미리보기를 DB에서만 읽는다.
+   *
+   * 현재 종목 마스터를 다시 해소하지 않으므로, 원본 job에 고정된 일정과 저장된
+   * 미리보기의 schedule hash가 일치하는지 확인한 복제 경로에서만 사용한다. 신규 제출은
+   * 현재 사용자의 참조 행이 가리키는 검증 결과를 쓰는 `getReadyPreviewForWizard`를 사용한다.
+   */
+  getCachedPreview(input: PreparationInput, preparationJobId?: string): BacktestUniversePreview | null {
+    if (this.deps.agentManaged) return this.getFreshPreviewDetails(input, preparationJobId)?.preview ?? null;
+    const strategy = this.requireStrategy(input);
+    const hash = backtestPreparationRequestHash(input, strategy);
+    const completedId = preparationJobId ?? this.latestCompletedPreviewId(hash);
+    if (completedId === null) return null;
+    const row = this.getDtoRow(completedId);
+    if (row?.status !== 'COMPLETED' || row.requestHash !== hash) return null;
+    const preview = this.getPreview(completedId);
+    if (
+      !preview
+      || this.financialCoverageGap(input, strategy, preview.unionSymbols) !== null
+      || this.corporateActionCoverageFailure(input, strategy, preview.unionSymbols) !== null
+    ) {
+      return null;
+    }
+    return preview;
+  }
+
+  /** 복제는 게시된 검증 결과와 현재 데이터 revision을 확인한다. */
+  async getCachedPreviewIsolated(input: PreparationInput, preparationJobId?: string): Promise<BacktestUniversePreview | null> {
+    return this.getCachedPreview(input, preparationJobId);
+  }
+
+  /** HTTP 미리보기 조회는 resolver를 예약하거나 child 작업을 기다리지 않는다. */
+  getFreshPreviewDetails(input: PreparationInput, preparationJobId?: string): ReadyPreviewDetails | null {
+    const strategy = this.requireStrategy(input);
+    return this.previewCache.get(backtestPreparationRequestHash(input, strategy), preparationJobId);
+  }
+
+  /** 신규 제출은 해당 사용자가 현재 참조하는 검증된 결과만 사용한다. */
+  getReadyPreviewForWizard(input: PreparationInput, userId: string): BacktestUniversePreview | null {
+    const owner = this.deps.references?.getWizard(userId);
+    if (!owner) return null;
+    return this.getFreshPreviewDetails(input, owner.preparationJobId)?.preview ?? null;
+  }
+
+  /** 기존 호환 경로에서 같은 요청의 완료 결과를 다시 확인해 오래된 미리보기를 거른다. */
+  async getReadyPreview(
+    input: PreparationInput,
+    progressJobId?: string,
+  ): Promise<BacktestUniversePreview | null> {
+    if (this.deps.agentManaged) {
+      // 제출은 같은 검증 snapshot을 사용할 수 있다. 데이터가 바뀌면 기존
+      // PREPARATION_REQUIRED 응답으로 위저드를 영속 준비 단계로 돌려보낸다.
+      return this.getFreshPreviewDetails(input)?.preview ?? null;
+    }
+    const strategy = this.requireStrategy(input);
+    const hash = backtestPreparationRequestHash(input, strategy);
+    const completedId = this.latestCompletedPreviewId(hash);
+    if (completedId === null) return null;
+
+    // 프로토콜 변경이나 사후 손상으로 이미 재사용할 수 없는 미리보기라면, 모든
+    // 리밸런싱 날짜의 현재 유니버스를 다시 계산할 이유가 없다. 저장된 union만으로
+    // coverage를 먼저 탈락시키고, 통과한 preview에만 비싼 schedule stale 검증을 한다.
+    // 자본변동을 먼저 보는 것은 parser protocol 변경처럼 값싼 버전 판정만으로
+    // 즉시 탈락할 수 있는 경로에서 재무 fact manifest 재해시까지 하지 않기 위해서다.
+    const storedPreview = this.getPreview(completedId);
+    if (
+      !storedPreview
+      || this.corporateActionCoverageFailure(input, strategy, storedPreview.unionSymbols) !== null
+      || this.financialCoverageGap(input, strategy, storedPreview.unionSymbols) !== null
+    ) {
+      return null;
+    }
+
+    const current = await this.resolveReadyPreviewWithKnownDataExclusions(input, strategy, progressJobId);
+    if (current === null || isEmptySchedule(current.attempt.schedule)) return null;
+    const currentPreview = this.buildPreview(input, current.attempt, current.exclusions);
+    // request hash가 같아도 종목 마스터·선정 지표가 갱신되면 최종 멤버십은 달라질
+    // 수 있다. 이전 union에만 full facts/actions를 준비했으므로 다른 schedule을 완료
+    // 결과처럼 돌려주지 않고 새 durable job을 시작하게 한다.
+    if (storedPreview.scheduleHash !== currentPreview.scheduleHash) return null;
+    // 완료 뒤 coverage가 삭제·손상됐으면 캐시된 200을 계속 돌려 재준비 진입을 막지
+    // 않는다. null을 돌려 라우트가 새 durable preparation을 시작하게 한다.
+    if (this.financialCoverageGap(input, strategy, currentPreview.unionSymbols) !== null) return null;
+    if (this.corporateActionCoverageFailure(input, strategy, currentPreview.unionSymbols) !== null) {
+      return null;
+    }
+    this.registerUniverse(current.attempt);
+    return { ...currentPreview, preparationJobId: completedId };
+  }
+
+  /** 운영 서버는 에이전트가 저장한 검증 결과를 읽는다. */
+  async getReadyPreviewDetails(input: PreparationInput): Promise<ReadyPreviewDetails | null> {
+    if (this.deps.agentManaged) return this.getFreshPreviewDetails(input);
+    const preview = await this.getReadyPreview(input);
+    if (preview === null) return null;
+    return { preview, fundamentalSymbols: this.fundamentalSymbols(input, preview) };
+  }
+
+  /** 외부 호출 없이 현재 저장소에 확인되는 종목별 결손을 적용해 cached schedule을 재검증한다. */
+  private async resolveReadyPreviewWithKnownDataExclusions(
+    input: PreparationInput,
+    strategy: AnyTradingStrategy,
+    progressJobId?: string,
+    attemptedActionSymbols: ReadonlySet<string> = new Set(),
+  ): Promise<{
+    attempt: Extract<UniverseResolveAttempt, { kind: 'READY' }>;
+    exclusions: readonly BacktestDataExclusion[];
+  } | null> {
+    const excludedSymbols = new Set<string>();
+    const exclusions = new Map<string, BacktestDataExclusion>();
+    for (;;) {
+      if (this.stopping || (progressJobId !== undefined && this.finishCancelledIfRequested(progressJobId))) {
+        return null;
+      }
+      const attempt = progressJobId === undefined
+        ? await this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period, { excludedSymbols })
+        : await this.resolve(progressJobId, input, excludedSymbols, 'VALIDATING_RESULT');
+      if (attempt.kind !== 'READY') return null;
+      if (this.recordDataExclusions(
+        attempt.dataExclusions
+          ?? corporateActionDataExclusions(attempt.corporateActionExclusions ?? []),
+        excludedSymbols,
+        exclusions,
+      )) continue;
+
+      const plan = buildBacktestPreparationPlan({
+        request: preparationRequest(input),
+        resolutionNeeds: EMPTY_NEEDS,
+        finalUniverseSymbols: unionSymbols(attempt.schedule),
+        strategy,
+      });
+      const missingCoverage = this.missingCorporateActionCoverageSymbols(plan.actions);
+      // Only the current durable run can prove that these candidates were actually
+      // collected and found unavailable. A newly selected, unprepared candidate must
+      // return to data preparation instead of silently disappearing from the ranking.
+      if (missingCoverage.some((symbol) => !attemptedActionSymbols.has(symbol))) return null;
+      if (this.recordDataExclusions(
+        this.corporateActionCoverageExclusions(plan.actions), excludedSymbols, exclusions,
+      )) continue;
+      if (this.recordDataExclusions(
+        [
+          ...corporateActionDataExclusions(this.corporateActionGapsForPlan(plan.actions)),
+          ...corporateActionDataExclusions(
+            await this.corporateActionAlignmentExclusionsForPlan(plan.actions),
+          ),
+          ...await this.financialDataExclusions(
+            input,
+            strategy,
+            attempt.schedule,
+            () => this.stopping || (progressJobId !== undefined && this.cancelOrStopRequested(progressJobId)),
+          ),
+          ...await this.candleDataExclusions(
+            input,
+            attempt.schedule,
+            () => this.stopping || (progressJobId !== undefined && this.cancelOrStopRequested(progressJobId)),
+          ),
+        ],
+        excludedSymbols,
+        exclusions,
+      )) continue;
+      return { attempt, exclusions: [...exclusions.values()] };
+    }
+  }
+
+  /** 라우트가 DART 미설정 503을 실제 sync 필요 요청에만 적용할 때 쓴다. */
+  async needsDart(input: PreparationInput): Promise<boolean> {
+    if (this.deps.agentManaged) return false;
+    const strategy = this.requireStrategy(input);
+    const attempt = await this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period);
+    if (attempt.kind === 'NEEDS_DATA') {
+      const candidateSymbols = [...attempt.unionEntries.keys()];
+      // master 날짜 자체가 미수집이면 빈 Map은 빈 유니버스라는 뜻이 아니다.
+      // 하나의 가상 후보를 planner에 넣어 rule/strategy metadata가 future fact/action을
+      // 요구하는지만 본다. price-only면 plan에 DART symbol이 생기지 않는다.
+      let resolutionNeeds = attempt.needs;
+      if (!attempt.candidateScopeKnown) {
+        candidateSymbols.push(UNKNOWN_CANDIDATE_PROBE);
+        // 후보 scope 미상이면 resolver 는 PER·ROE 재무·DECLINE 자본변동 후보를 아직
+        // 못 채웠다. plan 은 stage 요구를 resolutionNeeds 로만 받으므로, probe 를
+        // 여기에도 넣어야 price-only 전략 + PER/ROE/DECLINE stage 요청이 DART-key
+        // 게이트를 그냥 통과해 뒤늦게 raw 설정 오류로 죽지 않는다.
+        const stages = input.universeRule.stages;
+        resolutionNeeds = {
+          ...resolutionNeeds,
+          factSymbols: stages.some((stage) => stage.criterion === 'PER' || stage.criterion === 'ROE')
+            ? [...resolutionNeeds.factSymbols, UNKNOWN_CANDIDATE_PROBE]
+            : resolutionNeeds.factSymbols,
+          actionSymbols: stages.some((stage) => stage.criterion === 'DECLINE')
+            ? [...resolutionNeeds.actionSymbols, UNKNOWN_CANDIDATE_PROBE]
+            : resolutionNeeds.actionSymbols,
+        };
+      }
+      return this.planNeedsDart(buildBacktestPreparationPlan({
+        request: preparationRequest(input),
+        resolutionNeeds,
+        // 시장 데이터가 빈 stage는 아직 최종 멤버를 정할 수 없다.
+        // resolver가 알려준 현재 후보 scope를 final-union의 상한으로 계획해야
+        // 뒤에 전략 fact/action이 필요해지는 요청을 DART 없이 받지 않는다.
+        finalUniverseSymbols: candidateSymbols,
+        strategy,
+      }));
+    }
+    const finalSymbols = unionSymbols(attempt.schedule);
+    const plan = buildBacktestPreparationPlan({
+      request: preparationRequest(input),
+      resolutionNeeds: EMPTY_NEEDS,
+      finalUniverseSymbols: finalSymbols,
+      strategy,
+    });
+    return this.planNeedsDart(plan);
+  }
+
+  cancel(jobId: string): boolean {
+    const current = this.getDtoRow(jobId);
+    if (!current) return false;
+    const status = current.status as PreparationStatus;
+    if (TERMINAL_STATUSES.includes(status)) return true;
+    if (status === 'WAITING_DATA') {
+      this.persistAndEmit(jobId, { status: 'CANCELLED', cancelRequested: true }, ['WAITING_DATA']);
+      return true;
+    }
+    if (status === 'WAITING_DAILY_QUOTA') {
+      this.clearResumeTimer(jobId);
+      this.persistAndEmit(
+        jobId,
+        { status: 'CANCELLED', cancelRequested: true },
+        ['WAITING_DAILY_QUOTA'],
+      );
+      return true;
+    }
+    // QUEUED는 허용 전이표를 지키기 위해 cancelRequested만 남긴다. runner가
+    // QUEUED→RUNNING을 확보한 직후 RUNNING→CANCELLED로 닫는다.
+    this.persistAndEmit(jobId, { cancelRequested: true }, ['QUEUED', 'RUNNING']);
+    this.queuePump();
+    return true;
+  }
+
+  /** 외부 계산 상태를 UI 구독과 종료 알림에 반영한다. */
+  agentJobUpdated(jobId: string): void {
+    this.emitCurrent(jobId);
+    const job = this.get(jobId);
+    if (job && this.isTerminal(job.status)) this.notifyFinished(jobId);
+  }
+
+  recoverOrphaned(): void {
+    if (this.deps.agentManaged) {
+      this.deps.database.sqlite.prepare("UPDATE backtest_preparation_jobs SET status = 'QUEUED', next_resume_at_ms = NULL WHERE status = 'WAITING_DAILY_QUOTA'").run();
+      return;
+    }
+    const rows = this.deps.database.db
+      .select(PREPARATION_RECOVERY_SELECTION)
+      .from(backtestPreparationJobs)
+      .where(inArray(backtestPreparationJobs.status, [...ACTIVE_STATUSES]))
+      .all();
+    for (const row of rows) {
+      const status = row.status as PreparationStatus;
+      if (!ACTIVE_STATUSES.includes(status)) continue;
+      this.normalizeRecoveredRequest(row);
+      if (status === 'RUNNING') {
+        // 복구 전이는 정상 실행 전이표의 유일한 예외다. 죽은 runner를 다시 큐에
+        // 올려야 이미 저장된 symbol-year를 INCREMENTAL로 이어받을 수 있다.
+        this.persistAndEmit(row.id, { status: 'QUEUED' }, ['RUNNING'], true);
+      } else if (status === 'WAITING_DAILY_QUOTA') {
+        if (row.nextResumeAtMs !== null && row.nextResumeAtMs <= this.deps.clock.now()) {
+          this.persistAndEmit(
+            row.id,
+            { status: 'QUEUED', nextResumeAtMs: null },
+            ['WAITING_DAILY_QUOTA'],
+          );
+        } else if (row.nextResumeAtMs !== null) {
+          this.scheduleResume(row.id, row.nextResumeAtMs);
+        }
+      }
+    }
+    this.queuePump();
+  }
+
+  subscribe(jobId: string, listener: (job: BacktestPreparationJobDto) => void): () => void {
+    const listeners = this.listeners.get(jobId) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(jobId, listeners);
+    const current = this.get(jobId);
+    if (current) listener(current);
+    return () => {
+      const currentListeners = this.listeners.get(jobId);
+      currentListeners?.delete(listener);
+      if (currentListeners?.size === 0) this.listeners.delete(jobId);
+    };
+  }
+
+  isTerminal(status: string): boolean {
+    return TERMINAL_STATUSES.includes(status as PreparationStatus);
+  }
+
+  async stop(): Promise<void> {
+    this.stopping = true;
+    for (const timer of this.resumeTimers.values()) clearTimeout(timer);
+    this.resumeTimers.clear();
+    this.listeners.clear();
+    await this.runnerPromise;
+  }
+
+  private queuePump(): void {
+    queueMicrotask(() => this.pump());
+  }
+
+  private pump(): void {
+    if (this.deps.agentManaged || this.stopping || this.runnerActive) return;
+    const next = this.deps.database.db
+      .select({ id: backtestPreparationJobs.id })
+      .from(backtestPreparationJobs)
+      .where(eq(backtestPreparationJobs.status, 'QUEUED'))
+      .orderBy(asc(backtestPreparationJobs.createdAtMs))
+      .get();
+    if (!next) return;
+
+    const claimed = this.persistAndEmit(
+      next.id,
+      () => {
+        const running = this.deps.database.db
+          .select({ id: backtestPreparationJobs.id })
+          .from(backtestPreparationJobs)
+          .where(eq(backtestPreparationJobs.status, 'RUNNING'))
+          .get();
+        return running ? null : { status: 'RUNNING', error: null };
+      },
+      ['QUEUED'],
+    );
+    if (!claimed || claimed.status !== 'RUNNING') return;
+
+    this.runnerActive = true;
+    const runner = this.runClaimedJob(claimed.id)
+      .catch((error: unknown) => {
+        const current = this.getRow(claimed.id);
+        if (!this.stopping && current?.status === 'RUNNING') {
+          if (current.cancelRequested) this.finishCancelledIfRequested(claimed.id);
+          else this.fail(
+            claimed.id,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        this.deps.logger.error(
+          { module: 'backtest', event: 'preparation.unhandled', jobId: claimed.id, err: error },
+          'backtest preparation rejected outside run handler',
+        );
+      })
+      .finally(() => {
+        this.afterClaimedJobSettled(claimed.id);
+        this.runnerActive = false;
+        if (this.runnerPromise === runner) this.runnerPromise = null;
+        if (!this.stopping) this.queuePump();
+      });
+    this.runnerPromise = runner;
+  }
+
+  /** Used by the isolated child after the parent has durably claimed QUEUED -> RUNNING. */
+  async runClaimedJob(jobId: string): Promise<void> {
+    try {
+      const row = this.getRow(jobId);
+      if (!row) return;
+      const input = parseStoredPreparationInput(row.requestJson);
+      const strategy = this.requireStrategy(input);
+      if (this.finishCancelledIfRequested(jobId)) return;
+
+      // Legacy/stale completed previews are revalidated as durable work. The HTTP caller
+      // already has a 202 and can observe progress, disconnect, or cancel this job.
+      const previousRevision = this.previewCache.beginValidation();
+      const previous = await this.getReadyPreview(input, jobId);
+      if (this.finishCancelledIfRequested(jobId) || this.stopping) return;
+      if (previous !== null && this.completePreview(jobId, input, previous, previousRevision)) return;
+
+      for (let validationPass = 0; validationPass < MAX_FINAL_STABILIZATION_PASSES; validationPass += 1) {
+        const excludedSymbols = new Set<string>();
+        const dataExclusions = new Map<string, BacktestDataExclusion>();
+        const attemptedActionSymbols = new Set<string>();
+
+        let finalAttempt = await this.resolveUntilReady(
+          jobId,
+          input,
+          strategy,
+          await this.resolve(jobId, input, excludedSymbols),
+          excludedSymbols,
+          dataExclusions,
+        );
+        if (finalAttempt === null) return;
+        this.persistAndEmit(jobId, { overallProgress: 60 }, ['RUNNING']);
+
+        // 최종 전략 데이터 sync 자체가 팩트/봉을 추가해 순위와 멤버십을 바꿀 수 있다.
+        // A만 준비한 뒤 B로 바뀐 결과를 바로 완료하면 B의 자본변동·warm-up이 비어도
+        // 실행된다. 같은 schedule이 연속으로 확인될 때까지 새 멤버의 plan을 반복하고,
+        // 데이터 이상으로 계속 진동하면 무한 외부 호출 대신 상한에서 명시적으로 실패한다.
+        let stabilized = false;
+        for (let pass = 0; pass < MAX_FINAL_STABILIZATION_PASSES; pass += 1) {
+          if (isEmptySchedule(finalAttempt.schedule)) {
+            this.fail(jobId, '모든 리밸런싱 날짜에서 선정된 종목이 없어 유니버스를 만들 수 없습니다. 조건이나 데이터 이력을 확인하세요.');
+            return;
+          }
+          const beforeSignature = JSON.stringify(finalAttempt.schedule);
+          this.registerUniverse(finalAttempt);
+          const finalPlan = buildBacktestPreparationPlan({
+            request: preparationRequest(input),
+            resolutionNeeds: EMPTY_NEEDS,
+            finalUniverseSymbols: unionSymbols(finalAttempt.schedule),
+            strategy,
+          });
+          if (finalPlan.price.symbols.length > 0) {
+            await this.syncMarketData(jobId, [], finalPlan.price, [60, 70]);
+            if (this.shouldReturnFromRun(jobId)) return;
+          }
+          if (finalPlan.financial.symbols.length > 0 || finalPlan.actions.symbols.length > 0) {
+            const continued = await this.syncFacts(jobId, finalPlan, [70, 85]);
+            if (!continued) return;
+            for (const symbol of finalPlan.actions.symbols) attemptedActionSymbols.add(symbol);
+          }
+
+          const resolved = await this.resolveUntilReady(
+            jobId,
+            input,
+            strategy,
+            await this.resolve(jobId, input, excludedSymbols),
+            excludedSymbols,
+            dataExclusions,
+          );
+          if (resolved === null) return;
+          finalAttempt = resolved;
+          if (JSON.stringify(finalAttempt.schedule) !== beforeSignature) continue;
+
+          const finalDataExclusions = [
+            ...this.corporateActionCoverageExclusions(finalPlan.actions),
+            ...corporateActionDataExclusions(this.corporateActionGapsForPlan(finalPlan.actions)),
+            ...corporateActionDataExclusions(
+              await this.corporateActionAlignmentExclusionsForPlan(finalPlan.actions),
+            ),
+            ...await this.financialDataExclusions(
+              input,
+              strategy,
+              finalAttempt.schedule,
+              () => this.cancelOrStopRequested(jobId),
+            ),
+            ...await this.candleDataExclusions(
+              input,
+              finalAttempt.schedule,
+              () => this.cancelOrStopRequested(jobId),
+            ),
+          ];
+          if (finalDataExclusions.length > 0) {
+            const addedSymbol = this.recordDataExclusions(
+              finalDataExclusions,
+              excludedSymbols,
+              dataExclusions,
+            );
+            if (!addedSymbol) {
+              throw new Error(
+                '불완전한 외부 데이터로 제외한 종목이 최종 유니버스에 다시 포함됐습니다. '
+                  + '유니버스 제외 조건 적용을 확인하세요.',
+              );
+            }
+            const retried = await this.resolveUntilReady(
+              jobId,
+              input,
+              strategy,
+              await this.resolve(jobId, input, excludedSymbols),
+              excludedSymbols,
+              dataExclusions,
+            );
+            if (retried === null) return;
+            finalAttempt = retried;
+            // 결손 종목 제외는 단조롭게 후보를 줄이는 정책 적용이지 schedule 진동이 아니다.
+            // 차순위에도 결손이 이어질 수 있으므로 기존 안정화 8회 예산을 소비하지 않는다.
+            pass -= 1;
+            continue;
+          }
+          stabilized = true;
+          break;
+        }
+        if (!stabilized) {
+          this.fail(
+            jobId,
+            `최종 데이터 준비 후 유니버스가 ${MAX_FINAL_STABILIZATION_PASSES}회 안에 안정되지 않았습니다. `
+              + '순위 입력의 반복 변경이나 데이터 충돌을 확인하세요.',
+          );
+          return;
+        }
+        if (this.finishCancelledIfRequested(jobId)) return;
+
+        // The same fresh validation previously ran inside the follow-up HTTP request.
+        // Keep it inside the durable job, restarting exclusions against a single unchanged
+        // source revision so repaired data cannot inherit an earlier exclusion decision.
+        this.persistAndEmit(jobId, { overallProgress: 85 }, ['RUNNING']);
+        const revision = this.previewCache.beginValidation();
+        const current = await this.resolveReadyPreviewWithKnownDataExclusions(
+          input, strategy, jobId, attemptedActionSymbols,
+        );
+        if (this.finishCancelledIfRequested(jobId) || this.stopping) return;
+        if (current !== null && !isEmptySchedule(current.attempt.schedule)) {
+          const preview = this.buildPreview(input, current.attempt, current.exclusions);
+          this.registerUniverse(current.attempt);
+          if (
+            this.financialCoverageGap(input, strategy, preview.unionSymbols) === null
+            && this.corporateActionCoverageFailure(input, strategy, preview.unionSymbols) === null
+            && this.completePreview(jobId, input, preview, revision)
+          ) return;
+        }
+        // A concurrent write or an unprepared new member needs a full pass with fresh
+        // exclusions. Keep the same durable job, and bound repeated source changes.
+      }
+      this.fail(jobId, '검증 중 데이터가 반복해서 변경되어 미리보기를 확정하지 못했습니다. 데이터 수집이 끝난 뒤 다시 준비하세요.');
+    } catch (error) {
+      if (error instanceof AgentDataRequired) throw error;
+      if (this.stopping) return;
+      if (error instanceof UniverseResolutionCancelledError) {
+        if (this.finishCancelledIfRequested(jobId)) return;
+      }
+      const current = this.getRow(jobId);
+      if (!current || current.status !== 'RUNNING') return;
+      if (error instanceof KrxQuotaError) {
+        this.waitForKrxDailyQuota(jobId, error.message);
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.deps.logger.error(
+        { module: 'backtest', event: 'preparation.failed', jobId, err: error },
+        'backtest preparation failed',
+      );
+      this.fail(jobId, message);
+    }
+  }
+
+  /** Publish the preview and its validation receipt atomically, before notifying SSE. */
+  private completePreview(
+    jobId: string,
+    input: PreparationInput,
+    preview: BacktestUniversePreview,
+    revision: number,
+  ): boolean {
+    this.persistAndEmit(jobId, { phase: 'FINALIZING', overallProgress: 99 }, ['RUNNING']);
+    const fundamentalSymbols = this.fundamentalSymbols(input, preview);
+    const completed = this.deps.database.sqlite.transaction(() => {
+      const row = this.getRow(jobId);
+      if (row?.status !== 'RUNNING' || row.cancelRequested || this.previewCache.revision() !== revision) {
+        return false;
+      }
+      const now = this.deps.clock.now();
+      this.deps.database.db.update(backtestPreparationJobs).set({
+        status: 'COMPLETED',
+        phase: 'FINALIZING',
+        overallProgress: 100,
+        previewJson: JSON.stringify({ ...preview, preparationJobId: undefined }),
+        updatedAtMs: now,
+        completedAtMs: now,
+        nextResumeAtMs: null,
+      }).where(eq(backtestPreparationJobs.id, jobId)).run();
+      this.previewCache.store(jobId, revision, fundamentalSymbols);
+      return true;
+    }).immediate();
+    if (completed) {
+      this.notifyFinished(jobId);
+      this.emitCurrent(jobId);
+      this.deps.onJobUpdated?.(jobId);
+    }
+    return completed;
+  }
+
+  private async resolve(
+    jobId: string,
+    input: PreparationInput,
+    excludedSymbols: ReadonlySet<string> = new Set(),
+    phase: 'RESOLVING_STAGES' | 'VALIDATING_RESULT' = 'RESOLVING_STAGES',
+  ): Promise<UniverseResolveAttempt> {
+    // 기존 결과의 사전 재검증이 실패해도 본 작업을 시작하기 전에 높은 비율로 뛰지 않는다.
+    const validatingFinalResult = phase === 'VALIDATING_RESULT'
+      && (this.getDtoRow(jobId)?.overallProgress ?? 0) >= 85;
+    const progressRange: ProgressRange = validatingFinalResult ? [85, 99] : [0, 10];
+    this.persistAndEmit(jobId, {
+      phase,
+      overallProgress: progressRange[0],
+      doneSymbols: 0,
+      totalSymbols: 0,
+    }, ['RUNNING']);
+    let lastPersistedCompleted = -1;
+    return this.deps.resolver.resolveOrDescribeNeeds(input.universeRule, input.period, {
+      onProgress: ({ completedRebalanceDates, totalRebalanceDates }) => {
+        // DAY 10년이면 수천 날짜다. 계산보다 진행률 BEGIN IMMEDIATE/UPDATE/SSE가
+        // 더 비싸지지 않도록 시작·완료는 항상 남기고 중간 durable write만 샘플링한다.
+        const persistEvery = Math.max(
+          1,
+          Math.ceil(totalRebalanceDates / MAX_RESOLUTION_PROGRESS_UPDATES),
+        );
+        if (
+          completedRebalanceDates !== totalRebalanceDates
+          && lastPersistedCompleted >= 0
+          && completedRebalanceDates - lastPersistedCompleted < persistEvery
+        ) return;
+        lastPersistedCompleted = completedRebalanceDates;
+        this.persistAndEmit(jobId, {
+          doneSymbols: completedRebalanceDates,
+          totalSymbols: totalRebalanceDates,
+          overallProgress: progressWithin(progressRange, completedRebalanceDates, totalRebalanceDates),
+        }, ['RUNNING']);
+      },
+      shouldStop: () => this.cancelOrStopRequested(jobId),
+      excludedSymbols,
+    });
+  }
+
+  private async resolveUntilReady(
+    jobId: string,
+    input: PreparationInput,
+    strategy: AnyTradingStrategy,
+    initialAttempt: UniverseResolveAttempt,
+    excludedSymbols: Set<string>,
+    dataExclusions: Map<string, BacktestDataExclusion>,
+  ): Promise<Extract<UniverseResolveAttempt, { kind: 'READY' }> | null> {
+    let attempt = initialAttempt;
+    const seenNeeds = new Set<string>();
+    for (;;) {
+      if (this.finishCancelledIfRequested(jobId)) return null;
+      if (attempt.kind === 'READY') {
+        const addedSymbol = this.recordDataExclusions(
+          attempt.dataExclusions
+            ?? corporateActionDataExclusions(attempt.corporateActionExclusions ?? []),
+          excludedSymbols,
+          dataExclusions,
+        );
+        if (!addedSymbol) return attempt;
+        attempt = await this.resolve(jobId, input, excludedSymbols);
+        continue;
+      }
+      const signature = JSON.stringify(attempt.needs);
+      if (seenNeeds.has(signature)) {
+        this.fail(
+          jobId,
+          '필요 데이터를 모두 조회했지만 유니버스 선정 조건을 해소하지 못했습니다. 데이터 공백과 DART 응답 누락을 확인하세요.',
+        );
+        return null;
+      }
+      seenNeeds.add(signature);
+
+      const plan = buildBacktestPreparationPlan({
+        request: preparationRequest(input),
+        resolutionNeeds: attempt.needs,
+        strategy,
+      });
+      const hasMarketWork = attempt.needs.selectionMetricDates.length > 0
+        || (plan.price.symbols.length > 0 && attempt.needs.priceRange !== null);
+      const hasDartWork = plan.financial.symbols.length > 0 || plan.actions.symbols.length > 0;
+      if (!hasMarketWork && !hasDartWork) {
+        this.fail(jobId, '준비할 수 있는 데이터 작업이 없어 유니버스 조건을 해소하지 못했습니다.');
+        return null;
+      }
+      if (hasMarketWork) {
+        await this.syncMarketData(jobId, attempt.needs.selectionMetricDates, plan.price);
+        if (this.shouldReturnFromRun(jobId)) return null;
+        // 시장 데이터가 아직 없는 iteration 의 DART 요구는 좁혀지지 않은 상한이다.
+        // 시장 데이터를 먼저 채우고 재해소한 뒤 실제 후보에만 DART quota를 쓴다.
+        attempt = await this.resolve(jobId, input, excludedSymbols);
+        continue;
+      }
+      if (hasDartWork) {
+        this.registerNeededSymbols(attempt, [
+          ...plan.financial.symbols,
+          ...plan.actions.symbols,
+        ]);
+        const continued = await this.syncFacts(jobId, plan);
+        if (!continued) return null;
+      }
+      attempt = await this.resolve(jobId, input, excludedSymbols);
+    }
+  }
+
+  private async syncMarketData(
+    jobId: string,
+    selectionMetricDates: readonly string[],
+    price: BacktestPreparationPlan['price'],
+    progressRange: ProgressRange = [10, 35],
+  ): Promise<void> {
+    // 이 phase 의 작업 단위는 심볼이 아니라 날짜다 — 심볼 수를 분모로 두면 warm-up
+    // 몇 달치를 받는 동안 진행이 끝까지 0 에 머문다 (운영 리포트, 2026-08-10).
+    // 가격 구간은 아래 ingest 루프가 실제로 돌 때만 분모에 넣는다.
+    const metricDates = [...new Set(selectionMetricDates)];
+    const priceIngestNeeded = price.symbols.length > 0
+      && this.deps.symbolMaster.isRangeCovered?.(price.from, price.to) !== true;
+    if (this.deps.snapshotMode) {
+      const missing = new Set(metricDates.filter((date) => !this.deps.symbolMaster.isRangeCovered(date, date)));
+      if (priceIngestNeeded) {
+        for (let date = price.from; date <= price.to; date = addCalendarDays(date, 1)) {
+          if (!this.deps.symbolMaster.isRangeCovered(date, date)) missing.add(date);
+        }
+      }
+      if (missing.size > 0) throw new AgentDataRequired({ kind: 'MARKET', dates: [...missing].sort() });
+    }
+    const priceDays = priceIngestNeeded ? calendarDaysInclusive(price.from, price.to) : 0;
+    let done = 0;
+    this.persistAndEmit(jobId, {
+      phase: 'MARKET_DATA',
+      doneSymbols: 0,
+      totalSymbols: metricDates.length + priceDays,
+      overallProgress: progressRange[0],
+    }, ['RUNNING']);
+
+    for (const date of metricDates) {
+      if (this.cancelOrStopRequested(jobId)) return;
+      await this.deps.symbolMaster.ensureTradingDay(date);
+      done += 1;
+      this.persistAndEmit(jobId, {
+        doneSymbols: done,
+        overallProgress: progressWithin(progressRange, done, metricDates.length + priceDays),
+      }, ['RUNNING']);
+    }
+    await this.deps.symbolMaster.ensureSelectionMetrics(selectionMetricDates);
+
+    if (!priceIngestNeeded) return;
+    let cursor = price.from;
+    while (cursor <= price.to) {
+      if (this.cancelOrStopRequested(jobId)) return;
+      await this.deps.symbolMaster.ingestDate(cursor);
+      done += 1;
+      this.persistAndEmit(jobId, {
+        doneSymbols: done,
+        overallProgress: progressWithin(progressRange, done, metricDates.length + priceDays),
+      }, ['RUNNING']);
+      cursor = addCalendarDays(cursor, 1);
+    }
+  }
+
+  private async syncFacts(
+    jobId: string,
+    plan: BacktestPreparationPlan,
+    progressRange: ProgressRange = [35, 60],
+  ): Promise<boolean> {
+    this.persistAndEmit(jobId, {
+      phase: 'SYNCING_FACTS',
+      doneSymbols: 0,
+      totalSymbols: 0,
+      overallProgress: progressRange[0],
+    }, ['RUNNING']);
+    const total = plan.financial.symbols.length + plan.actions.symbols.length;
+    const financialEnd = progressWithin(progressRange, plan.financial.symbols.length, total);
+    if (plan.financial.symbols.length > 0) {
+      const report = await this.runFactRequest(jobId, 'FINANCIAL', {
+        symbols: plan.financial.symbols,
+        fromYear: plan.financial.fromYear,
+        toYear: plan.financial.toYear,
+      }, [progressRange[0], financialEnd]);
+      if (!this.consumeFactReport(jobId, report)) return false;
+    }
+
+    // 재무 sync가 실행한 연도의 action coverage는 즉시 닫힌다. action 경로에는 전체
+    // actionSymbols를 그대로 넘기고 그 coverage가 남은 연도만 증분 계획하게 한다.
+    // 심볼만 보고 제외하면 "재무는 이미 커버됐지만 action은 비어 있는" 경우를 놓친다.
+    if (plan.actions.symbols.length > 0) {
+      const report = await this.runFactRequest(jobId, 'ACTIONS', {
+        symbols: plan.actions.symbols,
+        fromYear: plan.actions.fromYear,
+        toYear: plan.actions.toYear,
+      }, [financialEnd, progressRange[1]]);
+      if (!this.consumeFactReport(jobId, report)) return false;
+    }
+    return !this.shouldReturnFromRun(jobId);
+  }
+
+  /** 완료 preview가 현재 action protocol coverage를 여전히 만족하는지 부작용 없이 확인한다. */
+  private corporateActionCoverageFailure(
+    input: PreparationInput,
+    strategy: AnyTradingStrategy,
+    symbols: readonly string[],
+  ): string | null {
+    const plan = buildBacktestPreparationPlan({
+      request: preparationRequest(input),
+      resolutionNeeds: EMPTY_NEEDS,
+      finalUniverseSymbols: symbols,
+      strategy,
+    });
+    return this.corporateActionCoverageFailureForPlan(plan.actions);
+  }
+
+  private missingCorporateActionCoverageSymbols(
+    actions: BacktestPreparationPlan['actions'],
+  ): string[] {
+    if (actions.symbols.length === 0) return [];
+    const requiredYears = new Set<number>();
+    for (let year = actions.fromYear; year <= actions.toYear; year += 1) requiredYears.add(year);
+    const coveredBySymbol = this.deps.actionCoverage.getCoveredYears(actions.symbols);
+    return actions.symbols.filter((symbol) => {
+      const covered = new Set(coveredBySymbol.get(symbol) ?? []);
+      return [...requiredYears].some((year) => !covered.has(year));
+    });
+  }
+
+  private corporateActionCoverageExclusions(
+    actions: BacktestPreparationPlan['actions'],
+  ): BacktestDataExclusion[] {
+    return this.missingCorporateActionCoverageSymbols(actions).map((symbol) => ({
+      symbol,
+      category: 'DART_CORPORATE_ACTION',
+      periodKey: `${actions.fromYear}~${actions.toYear}`,
+      reason: '필요 연도의 DART 자본변동 coverage를 확보하지 못함',
+    }));
+  }
+
+  private corporateActionCoverageFailureForPlan(
+    actions: BacktestPreparationPlan['actions'],
+  ): string | null {
+    const missing = this.missingCorporateActionCoverageSymbols(actions);
+    if (missing.length > 0) {
+      return '완료된 미리보기의 최종 유니버스에 자본변동 coverage가 '
+        + `사라진 종목이 있습니다: ${missing.join(', ')}. 미리보기를 다시 준비하세요.`;
+    }
+    const relevantGaps = this.corporateActionGapsForPlan(actions);
+    if (relevantGaps.length === 0) return null;
+    const affected = [...new Set(relevantGaps.map((gap) => gap.symbol))].sort();
+    const causes = relevantGaps.map((gap) => (
+      `${gap.symbol}(${gap.periodKey}: ${gap.reason})`
+    )).join('; ');
+    return `완료된 미리보기에 자본변동 보정 정보가 손상된 종목이 있습니다 — 대상: `
+      + `${affected.join(', ')}. 확인된 원인: ${causes}. `
+      + '미리보기를 다시 준비하세요.';
+  }
+
+  private corporateActionGapsForPlan(
+    actions: BacktestPreparationPlan['actions'],
+  ): RelevantCorporateActionGap[] {
+    if (actions.symbols.length === 0) return [];
+    const detailsBySymbol = readCorporateActionGapDetails(
+      this.deps.actionCoverage,
+      actions.symbols,
+    );
+    if ([...detailsBySymbol.values()].every((details) => details.length === 0)) return [];
+    const executionFrom = `${actions.fromYear}-01-01`;
+    const executionTo = `${actions.toYear}-12-31`;
+    return findRelevantCorporateActionGaps(
+      detailsBySymbol,
+      this.deps.symbolMaster.sharesChangesBetween(executionFrom, executionTo),
+      {
+        executionFrom,
+        executionTo,
+        rawFrom: executionFrom,
+        rawTo: executionTo,
+      },
+    );
+  }
+
+  private async corporateActionAlignmentExclusionsForPlan(
+    actions: BacktestPreparationPlan['actions'],
+  ): Promise<RelevantCorporateActionGap[]> {
+    if (actions.symbols.length === 0) return [];
+    const rawFacts = await this.deps.facts.getFacts({
+      scope: 'SYMBOL',
+      keys: actions.symbols,
+      fields: [CORPORATE_ACTION_FIELD],
+    });
+    const rawRange = corporateActionRawDateRange(rawFacts);
+    if (rawRange === null) return [];
+    const sharesChanges = this.deps.symbolMaster.sharesChangesBetween(
+      addCalendarDays(rawRange.from, -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays),
+      addCalendarDays(rawRange.to, CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays),
+    );
+    const rawFrom = `${actions.fromYear}-01-01`;
+    const rawTo = `${actions.toYear}-12-31`;
+    return alignCorporateActionEffectiveDates(rawFacts, sharesChanges).unaligned
+      .filter((action) => action.periodKey >= rawFrom && action.periodKey <= rawTo)
+      .map((action) => ({
+        symbol: action.symbol,
+        year: Number(action.periodKey.slice(0, 4)),
+        periodKey: action.periodKey,
+        reason: 'KRX 상장주식수 변경일과 정렬할 수 없는 자본변동',
+        severity: 'BLOCKING' as const,
+      }));
+  }
+
+  private recordDataExclusions(
+    exclusions: readonly BacktestDataExclusion[],
+    excludedSymbols: Set<string>,
+    recorded: Map<string, BacktestDataExclusion>,
+  ): boolean {
+    let addedSymbol = false;
+    for (const exclusion of exclusions) {
+      recorded.set(backtestDataExclusionKey(exclusion), exclusion);
+      if (!excludedSymbols.has(exclusion.symbol)) {
+        excludedSymbols.add(exclusion.symbol);
+        addedSymbol = true;
+      }
+    }
+    return addedSymbol;
+  }
+
+  private financialCoverageGap(
+    input: PreparationInput,
+    strategy: AnyTradingStrategy,
+    symbols: readonly string[],
+  ): ReturnType<typeof findFinancialCoverageGap> {
+    return findFinancialCoverageGap({
+      request: input,
+      strategy,
+      symbols,
+      coverage: this.deps.factCoverage,
+    });
+  }
+
+  private async financialDataExclusions(
+    input: PreparationInput,
+    strategy: AnyTradingStrategy,
+    schedule: readonly UniverseScheduleEntry[],
+    shouldStop?: () => boolean,
+  ): Promise<BacktestDataExclusion[]> {
+    const symbols = unionSymbols(schedule);
+    const gap = this.financialCoverageGap(input, strategy, symbols);
+    const exclusions: BacktestDataExclusion[] = gap?.kind === 'BLOCKING_INGESTION_GAP'
+      ? gap.affected.map(({ symbol, years, examples }) => ({
+          symbol,
+          category: 'DART_FINANCIAL',
+          periodKey: years.join(', '),
+          reason: examples.length > 0
+            ? [...new Set(examples)].slice(0, 3).join(' / ')
+            : '필요 연도의 DART 재무 원천·파서 gap',
+        }))
+      : gap?.kind === 'MISSING_OR_CORRUPT'
+        ? gap.missingSymbols.map((symbol) => ({
+            symbol,
+            category: 'DART_FINANCIAL',
+            periodKey: `${gap.fromYear}~${gap.toYear}`,
+            reason: '필요 연도의 DART 재무 coverage를 확보하지 못함',
+          }))
+        : [];
+    if (!strategyRequiresFinancialData(strategy)) return exclusions;
+    const candleCoverage = this.deps.candleCoverage;
+    if (candleCoverage?.getLastTsInWindows === undefined) return exclusions;
+    const cutoffs = financialFactCutoffsFromCoverage({
+      period: input.period,
+      schedule: schedule.map((entry) => ({
+        rebalanceDate: entry.rebalanceDate,
+        effectiveTradingDate: entry.effectiveDate,
+        symbols: entry.members.map((member) => member.symbol),
+        excludedNonTradingCount: entry.excludedNonTradingCount,
+      })),
+      delistedTsMsBySymbol: delistedEventsToTsMsBySymbol(
+        this.deps.symbolMaster.delistedEventsBetween(input.period.from, input.period.to),
+      ),
+      candles: candleCoverage as Pick<CandleCoverageService, 'getLastTsInWindows'>,
+    });
+    if (cutoffs.size === 0) return exclusions;
+    const fundamentalsReady = strategy.dataRequirements?.fundamentalsReady;
+    if (fundamentalsReady !== undefined) {
+      for (const checkpoint of await findIncompleteFundamentalCheckpointsFromCoverage({
+        strategy,
+        parameters: input.parameters,
+        facts: this.deps.facts,
+        candles: candleCoverage,
+        period: input.period,
+        throwIfStopped: () => {
+          if (shouldStop?.()) throw new UniverseResolutionCancelledError();
+        },
+        schedule: schedule.map((entry) => ({
+          rebalanceDate: entry.rebalanceDate,
+          symbols: entry.members.map((member) => member.symbol),
+        })),
+      })) {
+        if (exclusions.some((item) => item.symbol === checkpoint.symbol)) continue;
+        exclusions.push({
+          symbol: checkpoint.symbol,
+          category: 'DART_FINANCIAL',
+          periodKey: checkpoint.date,
+          reason: '리밸런스 시점에 전략이 요구하는 PIT 재무 계정·연속 분기·신선도 부족',
+        });
+      }
+      return exclusions;
+    }
+    const available = this.deps.financialFacts.symbolsWithFinancialFacts(cutoffs);
+    for (const [symbol, cutoff] of cutoffs) {
+      if (available.has(symbol) || exclusions.some((item) => item.symbol === symbol)) continue;
+      exclusions.push({
+        symbol,
+        category: 'DART_FINANCIAL',
+        periodKey: new Date(cutoff).toISOString().slice(0, 10),
+        reason: '실제 편입 기간의 마지막 봉까지 사용할 수 있는 DART 재무 fact 없음',
+      });
+    }
+    return exclusions;
+  }
+
+  private fundamentalSymbols(
+    input: PreparationInput,
+    preview: BacktestUniversePreview,
+  ): readonly string[] {
+    const candles = this.deps.candleCoverage;
+    if (candles?.getLastTsInWindows === undefined) return [];
+    const factCutoffs = financialFactCutoffsFromCoverage({
+      period: input.period,
+      schedule: preview.schedule.map((entry) => ({
+        rebalanceDate: entry.rebalanceDate,
+        symbols: entry.members.map((member) => member.symbol),
+      })),
+      delistedTsMsBySymbol: delistedEventsToTsMsBySymbol(
+        this.deps.symbolMaster.delistedEventsBetween(input.period.from, input.period.to),
+      ),
+      candles: candles as Pick<CandleCoverageService, 'getLastTsInWindows'>,
+    });
+    const available = this.deps.financialFacts.symbolsWithFinancialFacts(factCutoffs);
+    return preview.unionSymbols.filter((symbol) => available.has(symbol));
+  }
+
+  /**
+   * 기간 전체 KRX 수집이 끝난 뒤에도 활성 멤버에게 유효 봉이 없으면 그 종목만
+   * 제외한다. 거래불가일과 최초 상장폐지 이후는 worker와 동일하게 정상 공백이다.
+   */
+  private async candleDataExclusions(
+    input: PreparationInput,
+    schedule: readonly UniverseScheduleEntry[],
+    shouldStop: () => boolean = () => this.stopping,
+  ): Promise<BacktestDataExclusion[]> {
+    const readTradingDays = this.deps.symbolMaster.tradingDaysBetween;
+    const readValidDates = this.deps.candleCoverage?.getValidDatesByCodeBetween;
+    if (readTradingDays === undefined || readValidDates === undefined || schedule.length === 0) {
+      return [];
+    }
+    if (unionSymbols(schedule).length === 0) return [];
+    const tradingDays = readTradingDays.call(
+      this.deps.symbolMaster,
+      input.period.from,
+      input.period.to,
+    );
+    return findCandleDataExclusions({
+      period: input.period,
+      schedule,
+      tradingDays,
+      delistedEvents: this.deps.symbolMaster.delistedEventsBetween(
+        input.period.from,
+        input.period.to,
+      ),
+      readValidDates: (codes, from, to) => readValidDates.call(
+        this.deps.candleCoverage,
+        codes,
+        from,
+        to,
+      ),
+      readNonTradingDays: (from, to, codes) => (
+        this.deps.symbolMaster.nonTradingDaysBetween(from, to, codes)
+      ),
+      shouldStop,
+    });
+  }
+
+  private runFactRequest(
+    jobId: string,
+    kind: 'FINANCIAL' | 'ACTIONS',
+    request: { readonly symbols: readonly string[]; readonly fromYear: number; readonly toYear: number },
+    progressRange: ProgressRange,
+  ): Promise<FactSyncReport> {
+    this.persistAndEmit(jobId, {
+      doneSymbols: 0,
+      totalSymbols: new Set(request.symbols).size,
+      overallProgress: progressRange[0],
+    }, ['RUNNING']);
+    const hooks = {
+      onSymbolDone: (progress: { index: number; total: number }): void => {
+        this.persistAndEmit(jobId, {
+          doneSymbols: progress.index,
+          totalSymbols: progress.total,
+          overallProgress: progressWithin(progressRange, progress.index, progress.total),
+        }, ['RUNNING']);
+      },
+      shouldStop: (): boolean => this.cancelOrStopRequested(jobId),
+      beforeDartRequest: (): 'CONTINUE' | 'PAUSE_DAILY_QUOTA' =>
+        this.reserveDartCall(jobId),
+    };
+    // 최신화는 sync 내부의 공시검색 판정이 맡는다 — coverage watermark 이후 정기공시가
+    // 접수된 종목·연도만 다시 받으므로 quota/재시작 복구가 닫힌 symbol-year 를
+    // 반복하지 않는 성질은 그대로다 (fact-sync-service.ts detectRedisclosedYears).
+    const input = {
+      ...request,
+      consolidated: true,
+      mode: 'INCREMENTAL' as const,
+    };
+    return kind === 'FINANCIAL'
+      ? this.deps.factSync.sync(input, hooks)
+      : this.deps.factSync.syncCorporateActions(input, hooks);
+  }
+
+  private consumeFactReport(jobId: string, report: FactSyncReport): boolean {
+    if (report.stopReason === 'DAILY_QUOTA') {
+      const now = this.deps.clock.now();
+      const current = this.getRow(jobId);
+      const snapshot = current?.status === 'WAITING_DAILY_QUOTA'
+        ? this.persistAndEmit(jobId, (row) => ({
+            savedFacts: row.savedFacts + report.savedFacts,
+            gapCount: row.gapCount + report.gapCount,
+            ...(report.failureMessage ? { error: report.failureMessage } : {}),
+          }), ['WAITING_DAILY_QUOTA'])
+        : this.persistAndEmit(jobId, (row) => ({
+            status: 'WAITING_DAILY_QUOTA',
+            nextResumeAtMs: nextKstMidnightMs(now),
+            savedFacts: row.savedFacts + report.savedFacts,
+            gapCount: row.gapCount + report.gapCount,
+            ...(report.failureMessage ? { error: report.failureMessage } : {}),
+          }), ['RUNNING']);
+      this.serverApiUsage.reportQuotaExceeded(
+        'DART',
+        'daily',
+        report.failureMessage ?? 'DART 일일 호출 한도에 도달했습니다.',
+      );
+      if (snapshot?.nextResumeAtMs !== null && snapshot?.nextResumeAtMs !== undefined) {
+        this.scheduleResume(jobId, snapshot.nextResumeAtMs);
+      }
+      return false;
+    }
+
+    this.persistAndEmit(jobId, (row) => ({
+      savedFacts: row.savedFacts + report.savedFacts,
+      gapCount: row.gapCount + report.gapCount,
+      ...(report.failureMessage ? { error: report.failureMessage } : {}),
+    }));
+    if (report.stopReason === 'CANCELLED') {
+      // 프로세스 종료는 사용자 취소가 아니다. 현재 symbol 저장 결과까지만 반영하고
+      // RUNNING 복구점을 남기면 다음 부팅의 recoverOrphaned가 QUEUED로 이어받는다.
+      if (this.stopping) return false;
+      this.persistAndEmit(
+        jobId,
+        { status: 'CANCELLED', error: report.failureMessage ?? '사용자가 준비 작업을 취소했습니다.' },
+        ['RUNNING'],
+      );
+      return false;
+    }
+    if (report.stopReason === 'ERROR') {
+      this.fail(jobId, report.failureMessage ?? 'DART 데이터 동기화에 실패했습니다.');
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * KRX 일별 데이터는 수집 날짜가 지나도 바뀌지 않는다. 성공한 날짜는 symbol master
+   * coverage에 즉시 남으므로 다음 KST 날짜에 job 전체를 다시 계획해도 ingestDate가 그
+   * 날짜를 API 호출 없이 건너뛴다. DART처럼 새 공시 여부를 확인하거나 covered 날짜를
+   * 강제로 다시 여는 단계는 두지 않는다.
+   */
+  private waitForKrxDailyQuota(jobId: string, message: string): void {
+    const now = this.deps.clock.now();
+    const snapshot = this.persistAndEmit(
+      jobId,
+      (row) => row.cancelRequested
+        ? { status: 'CANCELLED', error: '사용자가 준비 작업을 취소했습니다.' }
+        : {
+            status: 'WAITING_DAILY_QUOTA',
+            phase: 'MARKET_DATA',
+            nextResumeAtMs: nextKstMidnightMs(now),
+            error: message,
+          },
+      ['RUNNING'],
+    );
+    if (
+      snapshot?.status === 'WAITING_DAILY_QUOTA'
+      && snapshot.nextResumeAtMs !== null
+    ) {
+      this.scheduleResume(jobId, snapshot.nextResumeAtMs);
+    }
+  }
+
+  private get serverApiUsage(): ExternalApiUsage {
+    if (this.deps.snapshotMode) throw new Error('스냅샷 워커는 서버 API 호출 원장을 사용할 수 없습니다');
+    return this.deps.externalApiUsage;
+  }
+
+  private reserveDartCall(jobId: string): 'CONTINUE' | 'PAUSE_DAILY_QUOTA' {
+    const now = this.deps.clock.now();
+    const quotaDate = kstDateOf(now);
+    const snapshot = this.persistAndEmit(
+      jobId,
+      (row) => {
+        const total = this.serverApiUsage.callsUsed('DART', 'daily');
+        const providerAlreadyExhausted = this.serverApiUsage.quotaExceeded('DART', 'daily');
+        if (providerAlreadyExhausted || total + 1 > this.dailyLimit) {
+          return {
+            status: 'WAITING_DAILY_QUOTA',
+            nextResumeAtMs: nextKstMidnightMs(now),
+            dartQuotaDateKst: quotaDate,
+            ...(row.dartQuotaDateKst === quotaDate ? {} : { dartCallsUsed: 0 }),
+          };
+        }
+        return {
+          dartQuotaDateKst: quotaDate,
+          dartCallsUsed: (row.dartQuotaDateKst === quotaDate ? row.dartCallsUsed : 0) + 1,
+        };
+      },
+      ['RUNNING'],
+    );
+    if (snapshot?.status === 'WAITING_DAILY_QUOTA') {
+      this.serverApiUsage.reportQuotaExceeded(
+        'DART',
+        'daily',
+        'DART 일일 호출 한도에 도달해 다음 KST 날짜까지 준비 작업을 멈췄습니다.',
+      );
+      this.scheduleResume(jobId, snapshot.nextResumeAtMs as number);
+      return 'PAUSE_DAILY_QUOTA';
+    }
+    return 'CONTINUE';
+  }
+
+  private scheduleResume(jobId: string, resumeAtMs: number): void {
+    this.clearResumeTimer(jobId);
+    const timer = setTimeout(() => {
+      this.resumeTimers.delete(jobId);
+      if (this.stopping) return;
+      const current = this.getRow(jobId);
+      if (
+        current?.status === 'WAITING_DAILY_QUOTA'
+        && current.nextResumeAtMs !== null
+        && current.nextResumeAtMs <= this.deps.clock.now()
+      ) {
+        this.persistAndEmit(
+          jobId,
+          { status: 'QUEUED', nextResumeAtMs: null },
+          ['WAITING_DAILY_QUOTA'],
+        );
+        this.queuePump();
+      }
+    }, Math.max(0, resumeAtMs - this.deps.clock.now()));
+    timer.unref();
+    this.resumeTimers.set(jobId, timer);
+  }
+
+  private clearResumeTimer(jobId: string): void {
+    const timer = this.resumeTimers.get(jobId);
+    if (timer) clearTimeout(timer);
+    this.resumeTimers.delete(jobId);
+  }
+
+  private finishCancelledIfRequested(jobId: string): boolean {
+    const row = this.getRow(jobId);
+    if (!row || row.status !== 'RUNNING' || !row.cancelRequested) return false;
+    this.persistAndEmit(
+      jobId,
+      { status: 'CANCELLED', error: '사용자가 준비 작업을 취소했습니다.' },
+      ['RUNNING'],
+    );
+    return true;
+  }
+
+  private cancelOrStopRequested(jobId: string): boolean {
+    return this.stopping || this.getRow(jobId)?.cancelRequested === true;
+  }
+
+  private shouldReturnFromRun(jobId: string): boolean {
+    if (this.stopping) return true;
+    if (this.finishCancelledIfRequested(jobId)) return true;
+    return this.getRow(jobId)?.status !== 'RUNNING';
+  }
+
+  private fail(jobId: string, error: string): void {
+    this.persistAndEmit(jobId, { status: 'FAILED', error }, ['RUNNING']);
+  }
+
+  /** preparation과 같은 증분 계획에서 실제 DART 호출만 센다 (공시 재수집 전 하한). */
+  private planNeedsDart(plan: BacktestPreparationPlan): boolean {
+    const financialPlan = this.deps.factSync.planFinancialSync(
+      plan.financial.symbols,
+      plan.financial.fromYear,
+      plan.financial.toYear,
+    );
+    if (financialPlan.calls > 0) return true;
+
+    return this.deps.factSync.planCorporateActionSync(
+      plan.actions.symbols,
+      plan.actions.fromYear,
+      plan.actions.toYear,
+    ).calls > 0;
+  }
+
+  private registerUniverse(attempt: Extract<UniverseResolveAttempt, { kind: 'READY' }>): void {
+    this.requestMissingRegistrations([...attempt.unionEntries.values()]);
+    const checked = new Set<string>();
+    for (const scheduleEntry of attempt.schedule) {
+      for (const member of scheduleEntry.members) {
+        const entry = attempt.unionEntries.get(member.symbol);
+        if (!entry) {
+          throw new UnsafeBacktestSymbolIdentityError(
+            `${member.symbol} 종목의 KRX identity 원본이 준비 결과에서 누락됐습니다. 실행을 차단했습니다.`,
+          );
+        }
+        if (entry.standardCode !== member.standardCode) {
+          throw new UnsafeBacktestSymbolIdentityError(
+            `단축코드 ${member.symbol}이 준비 일정에서 여러 표준코드(`
+            + `${entry.standardCode}, ${member.standardCode})에 연결됐습니다. `
+            + '단축코드 재사용 가능성이 있어 실행을 차단했습니다.',
+          );
+        }
+        const identityKey = `${member.symbol}\0${member.standardCode}`;
+        if (checked.has(identityKey)) continue;
+        checked.add(identityKey);
+        this.registerOrVerifySymbol(entry);
+      }
+    }
+  }
+
+  private registerNeededSymbols(
+    attempt: Extract<UniverseResolveAttempt, { kind: 'NEEDS_DATA' }>,
+    symbols: readonly string[],
+  ): void {
+    this.requestMissingRegistrations(symbols.flatMap((symbol) => {
+      const entry = attempt.unionEntries.get(symbol);
+      return entry ? [entry] : [];
+    }));
+    for (const symbol of new Set(symbols)) {
+      const entry = attempt.unionEntries.get(symbol);
+      if (!entry) {
+        throw new UnsafeBacktestSymbolIdentityError(
+          `${symbol} 종목의 KRX identity 원본이 데이터 준비 후보에서 누락됐습니다. `
+          + '대상 종목을 안전하게 식별할 수 없어 전체 응답·준비 일정의 불일치를 확인해야 합니다.',
+        );
+      }
+      this.registerOrVerifySymbol(entry);
+    }
+  }
+
+  /**
+   * 단축코드가 같다는 이유만으로 기존 종목을 과거 KRX 증권과 자동 병합하지 않는다.
+   * 봉·팩트가 아직 단축코드 키라 잘못 병합하면 다른 회사의 데이터가 한 상태로 이어진다.
+   */
+  private requestMissingRegistrations(entries: readonly SymbolMasterEntry[]): void {
+    if (!this.deps.snapshotMode) return;
+    const symbols = entries.filter((entry) => this.deps.symbolService.getRegisteredIdentity(entry.shortCode) === null)
+      .map((entry) => ({ symbol: entry.shortCode, standardCode: entry.standardCode }));
+    if (symbols.length > 0) throw new AgentDataRequired({ kind: 'REGISTER', symbols });
+  }
+
+  private registerOrVerifySymbol(entry: SymbolMasterEntry): void {
+    const registered = this.deps.symbolService.getRegisteredIdentity(entry.shortCode);
+    const standardOwner = this.deps.symbolService
+      .getRegisteredIdentityByStandardCode(entry.standardCode);
+    if (standardOwner !== null && standardOwner.code !== entry.shortCode) {
+      throw new UnsafeBacktestSymbolIdentityError(
+        `KRX 표준코드 ${entry.standardCode}가 기존 단축코드(${standardOwner.code})와 `
+        + `준비 후보 단축코드(${entry.shortCode})에 함께 연결됐습니다. `
+        + '코드 변경 전후 데이터를 현재 저장 구조로 분리할 수 없어 실행을 차단했습니다.',
+      );
+    }
+    if (registered === null) {
+      this.deps.symbolService.addSymbol(
+        entry.shortCode,
+        'KR',
+        entry.name,
+        entry.standardCode,
+      );
+      return;
+    }
+    if (registered.standardCode === null) {
+      throw new UnsafeBacktestSymbolIdentityError(
+        `${entry.shortCode} 종목은 KRX 표준코드가 없는 기존 등록이라 같은 증권인지 확인할 수 없습니다. `
+        + '기존 데이터의 종목 정체성을 검증·이관한 뒤 표준코드를 등록하세요.',
+      );
+    }
+    if (registered.standardCode !== entry.standardCode) {
+      throw new UnsafeBacktestSymbolIdentityError(
+        `${entry.shortCode} 종목의 기존 KRX 표준코드(${registered.standardCode})가 `
+        + `준비 유니버스의 표준코드(${entry.standardCode})와 다릅니다. `
+        + '단축코드가 다른 증권에 재사용됐을 수 있어 자동 병합하지 않습니다.',
+      );
+    }
+  }
+
+  private buildPreview(
+    input: PreparationInput,
+    attempt: Extract<UniverseResolveAttempt, { kind: 'READY' }>,
+    dataExclusions: readonly BacktestDataExclusion[] = [],
+  ): BacktestUniversePreview {
+    const symbols = unionSymbols(attempt.schedule);
+    const period = periodToTsRange(input.period);
+    const coverage = this.deps.candleCoverage?.getCoverageBetween(
+      symbols,
+      period.fromTsMs,
+      period.toTsMs,
+    ) ?? [];
+    const withBars = new Set(coverage.filter((row) => row.barCount > 0).map((row) => row.code));
+    const missingCandleSymbols = this.deps.candleCoverage
+      ? symbols.filter((symbol) => !this.deps.symbolService.exists(symbol) || !withBars.has(symbol))
+      : [];
+    const warnings = backtestDataExclusionWarnings(dataExclusions);
+    if (input.universeRule.rebalanceInterval.unit === 'NONE') {
+      const selected = new Set(symbols);
+      const nonTradingBySymbol = new Map<string, string[]>();
+      for (const row of this.deps.symbolMaster.nonTradingDaysBetween(input.period.from, input.period.to)) {
+        if (!selected.has(row.shortCode)) continue;
+        const dates = nonTradingBySymbol.get(row.shortCode) ?? [];
+        dates.push(row.date);
+        nonTradingBySymbol.set(row.shortCode, dates);
+      }
+      const delistedBySymbol = new Map(
+        this.deps.symbolMaster.delistedEventsBetween(input.period.from, input.period.to)
+          .filter((event) => selected.has(event.shortCode))
+          .map((event) => [event.shortCode, event.effectiveDate] as const),
+      );
+      for (const symbol of symbols) {
+        const entry = attempt.unionEntries.get(symbol);
+        const label = entry ? `${entry.name} (${symbol})` : symbol;
+        const dates = nonTradingBySymbol.get(symbol) ?? [];
+        if (dates.length === 1) {
+          warnings.push(`${label}: ${dates[0]}에 거래정지·무거래 기록이 있습니다.`);
+        } else if (dates.length > 1) {
+          warnings.push(
+            `${label}: ${dates[0]}~${dates[dates.length - 1]} 기간 중 거래정지·무거래 기록이 ${dates.length}일 있습니다.`,
+          );
+        }
+        const delistedDate = delistedBySymbol.get(symbol);
+        if (delistedDate !== undefined) {
+          warnings.push(`${label}: ${delistedDate}에 상장폐지됐습니다.`);
+        }
+      }
+    }
+    return {
+      schedule: attempt.schedule,
+      diagnostics: attempt.diagnostics,
+      stages: input.universeRule.stages,
+      unionSymbols: symbols,
+      scheduleHash: scheduleHash(attempt.schedule),
+      uncoveredDates: [],
+      periodCovered: this.deps.resolver.isPeriodCovered(input.period),
+      missingCandleSymbols,
+      warnings,
+    };
+  }
+
+  private requireStrategy(input: PreparationInput): AnyTradingStrategy {
+    const strategy = this.deps.strategies.get(input.strategyId);
+    if (!strategy) throw new PreparationInputError(`알 수 없는 전략: ${input.strategyId}`);
+    const validated = strategy.parameterSchema.safeParse(input.parameters);
+    if (!validated.success) {
+      throw new PreparationInputError(
+        validated.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '),
+      );
+    }
+    return strategy;
+  }
+
+  private normalizeRecoveredRequest(
+    row: PreparationJobDtoRow & Pick<PreparationJobRow, 'requestJson'>,
+  ): void {
+    try {
+      const input = parseStoredPreparationInput(row.requestJson);
+      const strategy = this.requireStrategy(input);
+      const requestJson = JSON.stringify(input);
+      const requestHash = backtestPreparationRequestHash(input, strategy);
+      if (row.requestJson === requestJson && row.requestHash === requestHash) return;
+      this.persistAndEmit(
+        row.id,
+        { requestJson, requestHash },
+        [row.status as PreparationStatus],
+      );
+    } catch (error) {
+      this.deps.logger.warn(
+        { module: 'backtest', event: 'preparation.recovery.request-invalid', jobId: row.id, err: error },
+        'recovered preparation request is invalid and will fail when resumed',
+      );
+    }
+  }
+
+  private getRow(jobId: string): PreparationJobRow | null {
+    return this.deps.database.db
+      .select()
+      .from(backtestPreparationJobs)
+      .where(eq(backtestPreparationJobs.id, jobId))
+      .get() ?? null;
+  }
+
+  private getDtoRow(jobId: string): PreparationJobDtoRow | null {
+    return this.deps.database.db
+      .select(PREPARATION_DTO_SELECTION)
+      .from(backtestPreparationJobs)
+      .where(eq(backtestPreparationJobs.id, jobId))
+      .get() ?? null;
+  }
+
+  private latestCompletedPreviewId(requestHash: string): string | null {
+    return this.deps.database.db
+      .select({ id: backtestPreparationJobs.id })
+      .from(backtestPreparationJobs)
+      .where(and(
+        eq(backtestPreparationJobs.requestHash, requestHash),
+        eq(backtestPreparationJobs.status, 'COMPLETED'),
+        isNotNull(backtestPreparationJobs.previewJson),
+      ))
+      .orderBy(desc(backtestPreparationJobs.createdAtMs))
+      .limit(1)
+      .get()?.id ?? null;
+  }
+
+  private afterClaimedJobSettled(jobId: string): void {
+    this.deps.references?.collect();
+    const current = this.getRow(jobId);
+    if (!current) return;
+    if (!this.stopping && current.status === 'WAITING_DAILY_QUOTA' && current.cancelRequested) {
+      this.persistAndEmit(
+        jobId,
+        { status: 'CANCELLED', error: '사용자가 준비 작업을 취소했습니다.' },
+        ['WAITING_DAILY_QUOTA'],
+      );
+      return;
+    }
+    if (!this.stopping && current.status === 'RUNNING' && current.cancelRequested) {
+      this.finishCancelledIfRequested(jobId);
+      return;
+    }
+    if (!this.stopping && current.status === 'RUNNING') {
+      this.fail(jobId, '준비 자식 프로세스가 완료 상태를 저장하지 않고 종료됐습니다.');
+      return;
+    }
+    if (
+      !this.stopping
+      && current.status === 'WAITING_DAILY_QUOTA'
+      && current.nextResumeAtMs !== null
+    ) {
+      this.scheduleResume(jobId, current.nextResumeAtMs);
+    }
+    this.emitCurrent(jobId);
+  }
+
+  private emitCurrent(jobId: string): void {
+    const snapshot = this.get(jobId);
+    if (!snapshot) return;
+    for (const listener of this.listeners.get(jobId) ?? []) {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        this.deps.logger.warn(
+          { module: 'backtest', event: 'preparation.listener-failed', jobId, err: error },
+          'preparation listener failed',
+        );
+      }
+    }
+  }
+
+  private notifyFinished(jobId: string): void {
+    const snapshot = this.get(jobId);
+    if (!snapshot) return;
+    try {
+      this.deps.onJobFinished?.(snapshot);
+    } catch (error) {
+      this.deps.logger.warn(
+        { module: 'backtest', event: 'preparation.notification-failed', jobId, err: error },
+        '미리보기 종료 알림을 전달하지 못했습니다.',
+      );
+    }
+  }
+
+  /**
+   * 모든 job UPDATE와 그 결과 event는 이 경계 하나를 통과한다. builder는
+   * BEGIN IMMEDIATE 안에서 현재 row와 전역 quota 합계를 함께 읽을 수 있다.
+   */
+  private persistAndEmit(
+    jobId: string,
+    patchOrBuilder: PreparationJobPatch | ((row: PreparationJobRow) => PreparationJobPatch | null),
+    expectedStatuses?: readonly PreparationStatus[],
+    recoveryTransition = false,
+  ): BacktestPreparationJobDto | null {
+    const mutate = this.deps.database.sqlite.transaction(() => {
+      const current = this.getRow(jobId);
+      if (!current) return null;
+      const currentStatus = current.status as PreparationStatus;
+      if (expectedStatuses && !expectedStatuses.includes(currentStatus)) return null;
+      const patch = typeof patchOrBuilder === 'function' ? patchOrBuilder(current) : patchOrBuilder;
+      if (patch === null) return null;
+      const nextStatus = patch.status as PreparationStatus | undefined;
+      if (
+        nextStatus !== undefined
+        && nextStatus !== currentStatus
+        && !(recoveryTransition && currentStatus === 'RUNNING' && nextStatus === 'QUEUED')
+        && !ALLOWED_TRANSITIONS[currentStatus].includes(nextStatus)
+      ) {
+        throw new Error(`허용되지 않은 준비 작업 상태 전이: ${currentStatus} -> ${nextStatus}`);
+      }
+      const terminal = nextStatus !== undefined && TERMINAL_STATUSES.includes(nextStatus);
+      this.deps.database.db.update(backtestPreparationJobs).set({
+        ...patch,
+        overallProgress: Math.max(
+          current.overallProgress,
+          Math.min(99, Math.max(0, patch.overallProgress ?? current.overallProgress)),
+        ),
+        updatedAtMs: this.deps.clock.now(),
+        ...(terminal ? { completedAtMs: this.deps.clock.now(), nextResumeAtMs: null } : {}),
+      }).where(eq(backtestPreparationJobs.id, jobId)).run();
+      return { finished: terminal && nextStatus !== currentStatus };
+    });
+    const changed = mutate.immediate();
+    const snapshot = this.get(jobId);
+    if (!changed || !snapshot) return snapshot;
+    if (changed.finished) this.notifyFinished(jobId);
+    this.emitCurrent(jobId);
+    this.deps.onJobUpdated?.(jobId);
+    if (TERMINAL_STATUSES.includes(snapshot.status)) {
+      this.deps.references?.collect();
+    }
+    return snapshot;
+  }
+}
+
+/** from~to 를 포함하는 달력일 수 — MARKET_DATA 진행 분모가 ingest 루프와 같은 눈금을 쓴다. */
+function calendarDaysInclusive(from: string, to: string): number {
+  const days = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000;
+  return days < 0 ? 0 : Math.round(days) + 1;
+}
+
+function preparationRequest(input: PreparationInput): BacktestRequest {
+  // Planner는 이 네 필드만 읽는다. 전체 제출 요청의 자본·체결·risk는 준비 hash와
+  // 데이터 범위에 의도적으로 포함되지 않는다(Task 5 contract).
+  return input as BacktestRequest;
+}
+
+function parseStoredPreparationInput(requestJson: string): PreparationInput {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(requestJson);
+  } catch {
+    throw new PreparationInputError('저장된 준비 작업 요청 JSON을 해석할 수 없습니다.');
+  }
+  const parsed = preparationInputSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new PreparationInputError(
+      parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; '),
+    );
+  }
+  return parsed.data;
+}
+
+function unionSymbols(schedule: readonly UniverseScheduleEntry[]): string[] {
+  return [...new Set(schedule.flatMap((entry) => entry.members.map((member) => member.symbol)))].sort();
+}
+
+function isEmptySchedule(schedule: readonly UniverseScheduleEntry[]): boolean {
+  return schedule.every((entry) => entry.members.length === 0);
+}
+
+function scheduleHash(schedule: readonly UniverseScheduleEntry[]): string {
+  // request hash와 달리 schedule은 resolver가 이미 결정적인 순서로 만든 JSON이다.
+  return createHash('sha256').update(JSON.stringify(schedule)).digest('hex');
+}
+
+function nextKstMidnightMs(nowMs: number): number {
+  const [year, month, day] = kstDateOf(nowMs).split('-').map(Number) as [number, number, number];
+  return Date.UTC(year, month - 1, day + 1) - 9 * 60 * 60 * 1000;
+}
+
+function toDto(row: PreparationJobDtoRow): BacktestPreparationJobDto {
+  return {
+    id: row.id,
+    requestHash: row.requestHash,
+    status: row.status as PreparationStatus,
+    phase: row.phase as PreparationPhase,
+    overallProgress: row.status === 'COMPLETED' ? 100 : row.overallProgress,
+    doneSymbols: row.doneSymbols,
+    totalSymbols: row.totalSymbols,
+    savedFacts: row.savedFacts,
+    gapCount: row.gapCount,
+    nextResumeAtMs: row.nextResumeAtMs,
+    error: row.error,
+  };
+}

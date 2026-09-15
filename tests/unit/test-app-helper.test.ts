@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { BacktestPreparationJobDto } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
+import type { BacktestPreparationJobDto } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import { waitForPreparationFixture } from '../helpers/test-app.js';
 
 const activeJob = (overrides: Partial<BacktestPreparationJobDto> = {}): BacktestPreparationJobDto => ({

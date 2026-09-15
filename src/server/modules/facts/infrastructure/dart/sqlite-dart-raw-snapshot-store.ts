@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { and, eq, inArray, min, or, sql } from 'drizzle-orm';
-import type { AppDatabase } from '../../../../shared/db/database.js';
-import { dartRawApiSnapshots } from '../../../../shared/db/schema.js';
+import type { AppDatabase } from '../../../../../runtime/shared/db/database.js';
+import { dartRawApiSnapshots } from '../../../../shared/db/collection-schema.js';
 import type { DartReportCode } from './dart-report-parser.js';
 import {
   dartRawSnapshotKeyId,

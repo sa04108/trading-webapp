@@ -4,20 +4,20 @@ import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { openDatabase } from '../../src/server/shared/db/database.js';
+import { openDatabase } from '../../src/runtime/shared/db/database.js';
 import { backtestPreparationJobs } from '../../src/server/shared/db/schema.js';
 import {
   BacktestPreparationOrchestrator,
   type PreparationInput,
   type BacktestPreparationJobDto,
-} from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
-import { backtestPreparationRequestHash } from '../../src/server/modules/backtest/application/backtest-preparation-plan.js';
-import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
-import { KrxQuotaError } from '../../src/server/modules/market-data/application/ports.js';
-import type { SymbolMasterEntry } from '../../src/server/modules/market-data/domain/symbol-master.js';
+} from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
+import { backtestPreparationRequestHash } from '../../src/runtime/modules/backtest/application/backtest-preparation-plan.js';
+import { StrategyRegistry } from '../../src/runtime/modules/strategy/application/strategy-registry.js';
+import { KrxQuotaError } from '../../src/runtime/modules/market-data/application/ports.js';
+import type { SymbolMasterEntry } from '../../src/runtime/modules/market-data/domain/symbol-master.js';
 
 import { SqliteExternalApiUsage } from '../../src/server/shared/db/external-api-usage.js';
-import { kstDateOf } from '../../src/server/modules/market-data/domain/kst-date.js';
+import { kstDateOf } from '../../src/runtime/modules/market-data/domain/kst-date.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
 

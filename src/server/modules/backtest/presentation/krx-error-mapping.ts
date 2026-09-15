@@ -1,6 +1,6 @@
 import type { FastifyReply } from 'fastify';
-import { KrxNotConfiguredError, KrxQuotaError } from '../../market-data/application/ports.js';
-import { SymbolMasterNotCoveredError } from '../../market-data/application/symbol-master-service.js';
+import { KrxNotConfiguredError, KrxQuotaError } from '../../../../runtime/modules/market-data/application/ports.js';
+import { SymbolMasterNotCoveredError } from '../../../../runtime/modules/market-data/application/symbol-master-service.js';
 
 /**
  * `UniverseRuleResolver.resolve` (제출 검증·미리보기 공용)는 시총 캐시 미스일 때 KRX 를

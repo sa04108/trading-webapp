@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/runtime/modules/facts/domain/fact.js';
 import {
   alignCorporateActionEffectiveDates,
   type SharesChange,
-} from '../../src/server/modules/facts/domain/corporate-action-effective-date.js';
+} from '../../src/runtime/modules/facts/domain/corporate-action-effective-date.js';
 
 function splitFact(overrides: Partial<Fact> = {}): Fact {
   return {

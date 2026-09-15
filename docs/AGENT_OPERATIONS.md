@@ -9,7 +9,7 @@ Docker, 장치 SSH 배포, worker.env, GPU 실행은 사용하지 않는다.
 | 명칭 | 책임 | 코드 |
 | --- | --- | --- |
 | agent | N개의 worker 관리, 서버 연결, 자원·캐시·재전송 관리 | `src/agent/`, 서버 `AgentCoordinator` |
-| worker | 동시에 하나의 job 계산 | `src/workers/backtest-child.ts`, `preparation-child.ts` |
+| worker | 동시에 하나의 job 계산 | `src/runtime/workers/backtest-child.ts`, `preparation-child.ts` |
 | 임대 관리 | 어느 agent가 작업을 맡았는지와 만료·완료 검증 | `BacktestLeaseService`, `backtest_jobs.agent_id` |
 
 작업 전용 내부 환경 인자는 에이전트가 자식을 만들 때 전달한다. 예를 들어
@@ -81,7 +81,7 @@ WSL2는 Linux의 systemd를 활성화해야 한다. Windows 절전·종료나 WS
 | `./quant-agent setup` | 서버 주소와 토큰을 입력받아 설정 파일을 생성하거나 덮어쓴다. 서비스 설치나 재시작은 수행하지 않는다. |
 | `./quant-agent run` | 현재 터미널에서 Agent를 실행한다. 설정 파일이 없으면 먼저 서버 주소와 토큰을 입력받는다. `Ctrl+C`로 종료한다. |
 | `./quant-agent update` | 저장된 서버 주소와 토큰으로 게시된 최신 클라이언트를 확인하고 다운로드·검증 후 설치한다. 실행 중인 사용자 systemd 서비스는 재시작한다. 이미 최신이면 다운로드와 재시작을 생략한다. |
-| `./quant-agent --check` | 클라이언트의 Git 버전과 Linux 아키텍처를 출력하고 종료한다. 서버에 연결하거나 설정을 변경하지 않는다. |
+| `./quant-agent --check` | 클라이언트 내용 버전·빌드 커밋·Linux 아키텍처를 출력하고 종료한다. 서버에 연결하거나 설정을 변경하지 않는다. |
 
 `install`, `setup`, `run`, `update` 뒤에 `--state 경로`를 붙이면 설정·데이터 캐시·작업 상태를 저장할
 디렉터리를 지정할 수 있다. 예: `./quant-agent setup --state /home/사용자/agent-state`.
@@ -109,6 +109,7 @@ systemctl --user restart quant-agent
 | 서버 주소·장치 토큰 | `~/.local/state/quant-agent/settings.json` (600) |
 | 로컬 입력 스냅샷 | `~/.local/state/quant-agent/datasets/` |
 | 작업과 전송 대기 결과 | `~/.local/state/quant-agent/jobs/` |
+| 버전 전환 시 보관한 구형 미전송 결과 | `~/.local/state/quant-agent/legacy-jobs/` |
 | 설치 버전 | `~/.local/share/quant-agent/releases/` |
 | 현재 실행 버전 | `~/.local/share/quant-agent/current` |
 | 서비스 | `~/.config/systemd/user/quant-agent.service` |
@@ -147,9 +148,11 @@ WSS 연결 이력이 없어도 발급된 토큰이 유효하면 다운로드할 
   다시 실행한다. 상태 디렉터리를 지정했다면 재실행 때도 같은 `--state`를 사용한다.
 - 서비스 재시작만 실패하면 새 설치는 보존하고 `systemctl --user restart quant-agent`를 안내한다.
 
-현재 최신 여부는 게시 명세의 Git SHA와 설치된 Git SHA를 비교한다. 운영 배포와 독립적인
-agent 실행 버전은 아직 분리되지 않았다. 관련 코드의 격리 상태와 분리 경계는
-[Agent 실행 코드 경계 점검](AGENT_RUNTIME_BOUNDARY.md)에 정리한다.
+최신 여부는 게시 명세와 설치 패키지의 `agentVersion`을 비교한다. 운영 배포의 Git SHA와
+게시 시각은 출처 정보이며, 웹·인증 코드만 바뀌어 재게시된 패키지는 다시 설치하지 않는다.
+기존 SHA 방식 설치기는 한 번 새 설치기로 전환한 뒤 `content-v1`을 사용한다.
+미리보기·수집·백테스트·기간 검증도 별도 내용 버전을 갖는다. 자세한 입력 범위와 전환
+계약은 [Agent 실행 경계와 도메인 버전](AGENT_RUNTIME_BOUNDARY.md)에 정리한다.
 
 ## 작업 배정과 로컬 실행
 
@@ -184,7 +187,7 @@ WSS는 TLS 위의 WebSocket 연결이다. PC에서 운영 서버의 HTTPS 포트
 - 식별자: 장치·작업·attempt·새 난수 lease token을 대조한다. 이전 시도의 늦은 결과는 거부한다.
 - 결과 응답 유실: 디스크 outbox에서 재전송한다. 같은 완료 결과는 중복 저장하지 않는다.
 - 사용자 취소: 연결로 전달하고 자식 IPC → 2초 뒤 SIGTERM → 5초 뒤 SIGKILL 순서로 종료한다.
-- 서버 실행 버전 변경: 이전 리스를 폐기하고 작업을 재배정한다. 클라이언트는 계산·업로드를
+- 서버가 요구하는 `agentVersion` 변경: 이전 리스를 폐기하고 작업을 재배정한다. 클라이언트는 계산·업로드를
   정리한 뒤 새 파일의 해시와 실행 검사를 통과해야 현재 버전을 교체한다. 업데이트는 계산 실패로 세지 않는다.
 
 웹에서 장치를 해제하면 토큰과 연결이 더 이상 작업·데이터에 접근하지 못한다. 이미 장치에
@@ -239,13 +242,16 @@ DB 또는 새 DB만 지원한다. 분리 전 백업을 복원해야 한다면 �
 데이터 마이그레이션 `0001_retire_completed_conversions`는 완료된 SCD 변환의 임시 테이블과
 사용하지 않는 `symbol_facts_state.updated_at_ms`를 삭제한다. 미변환 체크포인트·이벤트나
 PENDING 상태의 종목 이력이 있으면 삭제하지 않고 중단한다. 현재 종목 버전, 재무·자본변동의
-독립 watermark는 보존한다. 데이터 스키마 버전은 2이며 revision을 올려 스냅샷을 다시 게시한다.
-에이전트는 같은 릴리스의 클라이언트로 업데이트해야 한다.
+독립 watermark는 보존한다. 이후 `0002_collection_coverage_version`은 KRX coverage의 수집
+내용 버전을 추가한다. 현재 데이터 스키마 버전은 3이며 필요한 새 스냅샷을 게시한다.
+에이전트의 실행·스키마 계약이 바뀌면 새 `agentVersion`의 클라이언트로 업데이트한다.
+수집 파서만 바뀌면 임대의 수집 버전을 따라 필요한 기간을 다시 확인한다.
 
 ## 빌드와 배포
 
 ```bash
 pnpm build:agent       # 현재 Linux 아키텍처의 독립 실행 패키지
+pnpm test:agent-package # 압축 파일로 준비·백테스트 실제 실행
 pnpm run deploy        # 앱 SSH 배포 + 같은 Git 버전 클라이언트 파일 게시
 ```
 

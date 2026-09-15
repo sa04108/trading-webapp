@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
-import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
-import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import type { TradingStrategy } from '../../src/server/modules/strategy/domain/strategy.js';
+import { runBacktest } from '../../src/runtime/modules/backtest/domain/engine.js';
+import type { ExecutionProfile } from '../../src/runtime/modules/backtest/domain/types.js';
+import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
+import type { TradingStrategy } from '../../src/runtime/modules/strategy/domain/strategy.js';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2025, 4, 12); // 2025-05-12

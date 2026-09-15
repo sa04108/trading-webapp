@@ -16,7 +16,7 @@ import {
   type BacktestFinishedAuditRow,
   type NumericDistribution,
 } from './modules/backtest/application/backtest-telemetry-report.js';
-import { newId } from './shared/ids.js';
+import { newId } from '../runtime/shared/ids.js';
 
 function ask(question: string, hidden = false): Promise<string> {
   const muted = new Writable({

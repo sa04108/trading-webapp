@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adjustForRatio } from '../../src/server/modules/backtest/domain/corporate-action-adjust.js';
+import { adjustForRatio } from '../../src/runtime/modules/backtest/domain/corporate-action-adjust.js';
 
 describe('adjustForRatio', () => {
   it('5:1 분할은 수량을 5배로 늘리고 단가를 5분의 1로 줄인다', () => {

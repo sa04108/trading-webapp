@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { AnyTradingStrategy } from '../../src/server/modules/strategy/domain/strategy.js';
+import type { AnyTradingStrategy } from '../../src/runtime/modules/strategy/domain/strategy.js';
 import type {
   BacktestRunInput,
   BacktestRunResult,
-} from '../../src/server/modules/backtest/domain/engine.js';
+} from '../../src/runtime/modules/backtest/domain/engine.js';
 import {
   measureBacktestArtifact,
   type BacktestResultArtifact,
-} from '../../src/server/modules/backtest/application/backtest-result-artifact.js';
-import { BacktestRunner } from '../../src/server/modules/backtest/application/backtest-runner.js';
+} from '../../src/runtime/modules/backtest/application/backtest-result-artifact.js';
+import { BacktestRunner } from '../../src/runtime/modules/backtest/application/backtest-runner.js';
 
 function engineResult(cancelled = false): BacktestRunResult {
   return {

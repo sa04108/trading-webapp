@@ -4,7 +4,7 @@ import {
   type StockInfo,
   type StockInfoBatchResult,
   type StockInfoSource,
-} from '../../../market-data/application/ports.js';
+} from '../../../../../runtime/modules/market-data/application/ports.js';
 import { RestClient, type TokenProvider } from '../../../../shared/rest-client.js';
 
 export interface TossConfig {

@@ -1,4 +1,4 @@
-import type { SymbolMasterEntry } from '../../src/server/modules/market-data/domain/symbol-master.js';
+import type { SymbolMasterEntry } from '../../src/runtime/modules/market-data/domain/symbol-master.js';
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
@@ -6,20 +6,20 @@ import {
   SymbolMasterService,
   type KnownRegisteredSymbolIdentity,
   type SymbolMasterServiceDeps,
-} from '../../src/server/modules/market-data/application/symbol-master-service.js';
-import { UniverseRuleResolver } from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
+} from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
+import { UniverseRuleResolver } from '../../src/runtime/modules/backtest/application/universe-rule-resolver.js';
 import type { UniverseRule } from '../../src/shared/schemas/universe-rule.js';
-import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
-import type { FactQuery } from '../../src/server/modules/facts/application/ports.js';
-import type { SharesChange } from '../../src/server/modules/facts/domain/corporate-action-effective-date.js';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import type { CandleQuery } from '../../src/server/modules/market-data/application/ports.js';
-import type { DailySelectionMetric } from '../../src/server/modules/market-data/application/selection-metric-repository.js';
+import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
+import type { FactQuery } from '../../src/runtime/modules/facts/application/ports.js';
+import type { SharesChange } from '../../src/runtime/modules/facts/domain/corporate-action-effective-date.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
+import type { CandleQuery } from '../../src/runtime/modules/market-data/application/ports.js';
+import type { DailySelectionMetric } from '../../src/runtime/modules/market-data/application/selection-metric-repository.js';
 import type {
   KnownSymbolIdentityVersion,
   SymbolIdentitySelection,
   SymbolIdentityValidationResult,
-} from '../../src/server/modules/market-data/domain/symbol-identity-lifetime.js';
+} from '../../src/runtime/modules/market-data/domain/symbol-identity-lifetime.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import {
   baseInfoFixture,

@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   buildFinancialExecutionWindows,
   financialFactCutoffsFromCandles,
-} from '../../src/server/modules/backtest/application/backtest-financial-execution-window.js';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
+} from '../../src/runtime/modules/backtest/application/backtest-financial-execution-window.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
 
 const midnight = (date: string): number => Date.parse(`${date}T00:00:00Z`);
 const period = { from: '2025-01-01', to: '2025-01-10' } as const;

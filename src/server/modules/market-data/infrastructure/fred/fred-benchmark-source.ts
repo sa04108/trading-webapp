@@ -6,7 +6,7 @@ import {
   FredContractError,
   FredNotConfiguredError,
   type FredBenchmarkSource,
-} from '../../application/ports.js';
+} from '../../../../../runtime/modules/market-data/application/ports.js';
 
 export interface FredConfig {
   readonly baseUrl: string;

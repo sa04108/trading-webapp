@@ -1,9 +1,10 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { describe, expect, it } from 'vitest';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
-} from '../../src/server/modules/market-data/application/symbol-master-service.js';
+} from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 import {
   krxDailyBars,
   krxNonTradingDays,
@@ -237,7 +238,7 @@ describe('거래불가일 조회', () => {
     expect(ctx.svc.isNonTradingRangeCovered('2021-06-01', '2021-06-30')).toBe(false);
 
     ctx.t.container.database.db.insert(krxNonTradingCoverage).values({
-      startDate: '2021-01-01', endDate: '2021-12-31', syncedAtMs: 0,
+      startDate: '2021-01-01', endDate: '2021-12-31', collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: 0,
     }).run();
 
     expect(ctx.svc.isNonTradingRangeCovered('2021-06-01', '2021-06-30')).toBe(true);

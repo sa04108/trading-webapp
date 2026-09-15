@@ -1,9 +1,10 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { describe, expect, it } from 'vitest';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
-} from '../../src/server/modules/market-data/application/symbol-master-service.js';
+} from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 import {
   symbolMasterCoverage,
   symbolMasterTradingDays,
@@ -372,8 +373,8 @@ describe('SymbolMasterService.ingestDate', () => {
     ]).run();
     db.insert(symbolMasterTradingDays).values([{ date: '2023-01-01' }, { date: '2023-01-10' }]).run();
     db.insert(symbolMasterCoverage).values([
-      { startDate: '2023-01-01', endDate: '2023-01-01', syncedAtMs: ctx.t.container.clock.now() },
-      { startDate: '2023-01-05', endDate: '2023-01-05', syncedAtMs: ctx.t.container.clock.now() },
+      { startDate: '2023-01-01', endDate: '2023-01-01', collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.t.container.clock.now() },
+      { startDate: '2023-01-05', endDate: '2023-01-05', collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.t.container.clock.now() },
     ]).run();
     ctx.fake.setResponse('stk_bydd_trd', '20230103', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230103', {

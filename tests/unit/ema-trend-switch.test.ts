@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { runBacktest } from '../../src/server/modules/backtest/domain/engine.js';
-import type { ExecutionProfile } from '../../src/server/modules/backtest/domain/types.js';
-import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/server/modules/facts/domain/fact.js';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
+import { runBacktest } from '../../src/runtime/modules/backtest/domain/engine.js';
+import type { ExecutionProfile } from '../../src/runtime/modules/backtest/domain/types.js';
+import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/runtime/modules/facts/domain/fact.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
+import { StrategyRegistry } from '../../src/runtime/modules/strategy/application/strategy-registry.js';
 import {
   emaTrendSwitchParameters,
   emaTrendSwitchStrategy,
-} from '../../src/server/modules/strategy/strategies/ema-trend-switch.js';
+} from '../../src/runtime/modules/strategy/strategies/ema-trend-switch.js';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2025, 0, 2);

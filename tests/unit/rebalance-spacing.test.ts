@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computeRebalanceActivations,
   findRebalanceSpacingViolation,
-} from '../../src/server/modules/backtest/domain/rebalance-spacing.js';
+} from '../../src/runtime/modules/backtest/domain/rebalance-spacing.js';
 
 const DAY = 86_400_000;
 const MONDAY = Date.UTC(2026, 0, 5);

@@ -6,6 +6,8 @@ import os from 'node:os';
 import process from 'node:process';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { runtimeGraph, AGENT_ENTRYPOINTS } from './lib/runtime-graph.mjs';
+import { generateRuntimeVersions } from './build-runtime-versions.mjs';
 
 function run(command, args, cwd = process.cwd()) {
   const result = spawnSync(command, args, { cwd, stdio: 'inherit' });
@@ -15,23 +17,40 @@ if (process.platform !== 'linux' || !['x64', 'arm64'].includes(process.arch) || 
   throw new Error('Linux x64/arm64의 Node 24 환경에서 클라이언트를 빌드하세요');
 }
 if (!process.argv.includes('--prepared')) {
-  run('pnpm', ['build:server']);
+  fs.mkdirSync('dist', { recursive: true });
   const git = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' });
   if (git.status !== 0) throw new Error('빌드의 Git 버전을 확인할 수 없습니다');
   fs.writeFileSync('dist/build-info.json', JSON.stringify({ gitSha: git.stdout.trim(), builtAt: new Date().toISOString() }));
 }
 const root = process.cwd();
 const metadata = JSON.parse(fs.readFileSync(path.join(root, 'dist/build-info.json'), 'utf8'));
+const versions = generateRuntimeVersions(root);
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'quant-agent-build-'));
 const output = path.join(root, 'dist/clients');
 fs.mkdirSync(output, { recursive: true });
 try {
-  for (const file of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']) fs.copyFileSync(path.join(root, file), path.join(temporary, file));
+  const compiled = path.join(temporary, 'compiled');
+  run('pnpm', ['exec', 'tsc', '-p', 'tsconfig.agent.json', '--outDir', compiled]);
+  const entries = AGENT_ENTRYPOINTS.map((file) => file.replace(/^src\//, 'dist/').replace(/\.ts$/, '.js'));
+  fs.renameSync(compiled, path.join(temporary, 'dist'));
+  const graph = runtimeGraph(temporary, entries, { compiled: true });
+  for (const file of graph.files.keys()) {
+    if (!/^dist\/(agent|runtime|shared)\//.test(file)) throw new Error(`서버 전용 코드가 agent 패키지에 들어왔습니다: ${file}`);
+  }
+  // 타입 검사 때문에 생성된 파일 중 실행 그래프에 없는 파일은 게시하지 않는다.
+  function prune(directory) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) prune(file);
+      else if (!graph.files.has(path.relative(temporary, file).replaceAll(path.sep, '/'))) fs.unlinkSync(file);
+    }
+  }
+  prune(path.join(temporary, 'dist'));
+  for (const file of ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']) fs.copyFileSync(path.join(root, 'packages/agent', file), path.join(temporary, file));
   run('pnpm', ['install', '--prod', '--offline', '--frozen-lockfile'], temporary);
-  fs.mkdirSync(path.join(temporary, 'dist'));
-  for (const name of ['agent', 'workers', 'server', 'shared']) fs.cpSync(path.join(root, 'dist', name), path.join(temporary, 'dist', name), { recursive: true });
   fs.copyFileSync(path.join(root, 'dist/build-info.json'), path.join(temporary, 'dist/build-info.json'));
-  fs.cpSync(path.join(root, 'migrations'), path.join(temporary, 'migrations'), { recursive: true });
+  fs.writeFileSync(path.join(temporary, 'dist/runtime-versions.json'), JSON.stringify(versions, null, 2));
+  fs.cpSync(path.join(root, 'migrations/agent'), path.join(temporary, 'migrations/agent'), { recursive: true });
   fs.mkdirSync(path.join(temporary, 'bin'));
   fs.copyFileSync(process.execPath, path.join(temporary, 'bin/node'));
   fs.chmodSync(path.join(temporary, 'bin/node'), 0o755);
@@ -47,10 +66,10 @@ try {
   fs.renameSync(stagedArchive, destination);
   const manifestPath = path.join(output, 'manifest.json');
   const previous = fs.existsSync(manifestPath) ? JSON.parse(fs.readFileSync(manifestPath, 'utf8')) : { clients: [] };
-  const clients = previous.runnerVersion === metadata.gitSha ? previous.clients.filter((client) => client.arch !== process.arch) : [];
-  clients.push({ arch: process.arch, file, sha256, bytes: fs.statSync(destination).size,
+  const clients = previous.runnerVersion === versions.agentVersion ? previous.clients.filter((client) => client.arch !== process.arch) : [];
+  clients.push({ buildGitSha: metadata.gitSha, arch: process.arch, file, sha256, bytes: fs.statSync(destination).size,
     minimumGlibc: process.report.getReport().header.glibcVersionRuntime });
-  fs.writeFileSync(`${manifestPath}.tmp`, JSON.stringify({ runnerVersion: metadata.gitSha, clients }, null, 2));
+  fs.writeFileSync(`${manifestPath}.tmp`, JSON.stringify({ versionScheme: 'content-v1', runnerVersion: versions.agentVersion, buildGitSha: metadata.gitSha, clients }, null, 2));
   fs.renameSync(`${manifestPath}.tmp`, manifestPath);
   process.stdout.write(`Linux 클라이언트 생성: ${destination}\n`);
 } finally { fs.rmSync(temporary, { recursive: true, force: true }); }

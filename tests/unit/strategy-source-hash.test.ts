@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { strategySourceHash } from '../../src/server/modules/strategy/application/strategy-source-hash.js';
-import { rangeBreakoutStrategy } from '../../src/server/modules/strategy/strategies/range-breakout.js';
-import type { AnyTradingStrategy } from '../../src/server/modules/strategy/domain/strategy.js';
+import { strategySourceHash } from '../../src/runtime/modules/strategy/application/strategy-source-hash.js';
+import { rangeBreakoutStrategy } from '../../src/runtime/modules/strategy/strategies/range-breakout.js';
+import type { AnyTradingStrategy } from '../../src/runtime/modules/strategy/domain/strategy.js';
 
 const bareParameters = z.object({
   lookbackBars: z.number().int().min(2).max(200).default(20),

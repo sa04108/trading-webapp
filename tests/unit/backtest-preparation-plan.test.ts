@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
-import type { UniverseDataNeed } from '../../src/server/modules/backtest/application/universe-rule-resolver.js';
-import { buildBacktestPreparationPlan } from '../../src/server/modules/backtest/application/backtest-preparation-plan.js';
-import { StrategyRegistry } from '../../src/server/modules/strategy/application/strategy-registry.js';
-import type { AnyTradingStrategy } from '../../src/server/modules/strategy/domain/strategy.js';
+import type { UniverseDataNeed } from '../../src/runtime/modules/backtest/application/universe-rule-resolver.js';
+import { buildBacktestPreparationPlan } from '../../src/runtime/modules/backtest/application/backtest-preparation-plan.js';
+import { StrategyRegistry } from '../../src/runtime/modules/strategy/application/strategy-registry.js';
+import type { AnyTradingStrategy } from '../../src/runtime/modules/strategy/domain/strategy.js';
 
 const BASE_REQUEST = {
   strategyId: 'test-strategy',

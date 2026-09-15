@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
-import { SqliteCorporateActionCoverageStore } from '../../src/server/modules/facts/application/corporate-action-coverage.js';
-import { SqliteFactCoverageStore } from '../../src/server/modules/facts/application/fact-coverage-store.js';
+import { SqliteCorporateActionCoverageStore } from '../../src/runtime/modules/facts/application/corporate-action-coverage.js';
+import { SqliteFactCoverageStore } from '../../src/runtime/modules/facts/application/fact-coverage-store.js';
 import { symbolFactsState, symbols as symbolsTable } from '../../src/server/shared/db/schema.js';
 
 let t: TestApp;

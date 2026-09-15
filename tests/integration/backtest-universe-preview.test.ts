@@ -1,8 +1,9 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { eq } from 'drizzle-orm';
 import { preparationInputSchema } from '../../src/shared/schemas/backtest-preparation.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { BacktestUniversePreview } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
-import type { Fact } from '../../src/server/modules/facts/domain/fact.js';
+import type { BacktestUniversePreview } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
+import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
 import {
   dailySelectionMetrics,
   krxDailyBars,
@@ -616,7 +617,7 @@ describe('POST /backtests/universe-preview', () => {
       // 이 반복된 결과다.
       ctx.container.database.db
         .insert(symbolMasterCoverage)
-        .values({ startDate: date, endDate: date, syncedAtMs: ctx.container.clock.now() })
+        .values({ startDate: date, endDate: date, collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.container.clock.now() })
         .run();
       ctx.container.database.db.insert(symbolMasterTradingDays).values({ date }).run();
       ctx.container.database.db
@@ -1075,7 +1076,7 @@ describe('POST /backtests/universe-preview — 준비 결과 재사용', () => {
     }).run();
     ctx.container.database.db
       .insert(symbolMasterCoverage)
-      .values({ startDate: date, endDate: date, syncedAtMs: ctx.container.clock.now() })
+      .values({ startDate: date, endDate: date, collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.container.clock.now() })
       .run();
     // staged resolver가 effective date를 해소할 수 있도록 이 날짜를 거래일로 기록한다.
     ctx.container.database.db.insert(symbolMasterTradingDays).values({ date }).run();

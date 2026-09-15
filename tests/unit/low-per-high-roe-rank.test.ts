@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { createRng } from '../../src/server/modules/backtest/domain/seeded-rng.js';
-import type { Position, SelectionMetricPin } from '../../src/server/modules/backtest/domain/types.js';
-import type { FundamentalField, FundamentalSnapshot } from '../../src/server/modules/facts/domain/fact.js';
-import type { Candle } from '../../src/server/modules/market-data/domain/candle.js';
-import type { StrategyBarContext } from '../../src/server/modules/strategy/domain/strategy.js';
+import { createRng } from '../../src/runtime/modules/backtest/domain/seeded-rng.js';
+import type { Position, SelectionMetricPin } from '../../src/runtime/modules/backtest/domain/types.js';
+import type { FundamentalField, FundamentalSnapshot } from '../../src/runtime/modules/facts/domain/fact.js';
+import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
+import type { StrategyBarContext } from '../../src/runtime/modules/strategy/domain/strategy.js';
 import {
   lowPerHighRoeRankParameters,
   lowPerHighRoeRankStrategy,
-} from '../../src/server/modules/strategy/strategies/low-per-high-roe-rank.js';
+} from '../../src/runtime/modules/strategy/strategies/low-per-high-roe-rank.js';
 import {
   rankLowPerHighRoe,
   scoreLowPerHighRoe,
-} from '../../src/server/modules/strategy/strategies/shared/fundamental-rank.js';
+} from '../../src/runtime/modules/strategy/strategies/shared/fundamental-rank.js';
 
 const AT = Date.UTC(2025, 0, 2);
 

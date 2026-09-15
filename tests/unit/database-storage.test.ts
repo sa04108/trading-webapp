@@ -4,8 +4,8 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
-import { openDatabase } from '../../src/server/shared/db/database.js';
-import { dataDatabasePath, datasetIdentity, initializeDatabaseIdentity, migrateDatabaseRole } from '../../src/server/shared/db/database-layout.js';
+import { openDatabase } from '../../src/runtime/shared/db/database.js';
+import { dataDatabasePath, datasetIdentity, initializeDatabaseIdentity, migrateDatabaseRole } from '../../src/runtime/shared/db/database-layout.js';
 import { DATA_TABLE_NAMES } from '../../src/server/shared/db/database-tables.js';
 
 let directory: string;

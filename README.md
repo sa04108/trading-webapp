@@ -56,7 +56,7 @@ IP 를 등록제로 운영하기 때문이다. 프로비저닝이 아웃바운�
 운영 서버의 자식 프로세스에서 즉시 실행한다. 양쪽 모두 자원이 부족하면 큐에 대기한다.
 운영 서버는 API 수집,
 영속 작업 큐, 버전별 계산 DB 게시와 결과 저장을 담당한다. 완료 미리보기는 DB에 저장한
-검증 결과를 반환하며, 계산 데이터 revision 또는 실행 버전이 달라지면 다시 준비한다.
+검증 결과를 반환하며, 계산 데이터 revision 또는 미리보기 버전이 달라지면 다시 준비한다.
 운영 상태 변경은 계산 데이터 revision에 영향을 주지 않는다.
 
 준비 결과의 보존은 참조 카운터가 아니라 외래 키와 실제 참조로 관리한다. 백테스트 job은
@@ -181,7 +181,8 @@ pnpm run deploy
 `QP_APP_HOST`와 필요한 `QP_APP_SSH_*` 설정만 사용한다. 배포는 앱·Linux 클라이언트를
 같은 Git 버전으로 검증하고 패키징한 뒤 앱 서버에 게시한다. 장치별 SSH 배포는 없다.
 서비스를 중지하고 두 DB를 함께 백업한 뒤 마이그레이션하며 readiness 실패 시 코드와
-DB를 복원한다. 에이전트는 연결 후 서버 버전에 맞는 클라이언트를 자동으로 받는다.
+DB를 복원한다. 에이전트는 연결 후 서버가 요구하는 agent 내용 버전에 맞는 클라이언트를 자동으로 받는다.
+웹·인증 코드 변경만으로는 업데이트하지 않는다. [버전 경계](docs/AGENT_RUNTIME_BOUNDARY.md)를 참고한다.
 
 배포 후 app 노드에서 관리자 생성과 TOTP 등록을 순서대로 한다 (정확한 명령은 bootstrap
 출력에 나온다):
@@ -200,13 +201,14 @@ TOTP 등록·재발급은 CLI 에서만 할 수 있다 — 웹 세션이 탈취�
 
 ```
 src/server/modules/{auth,strategy,market-data,backtest,broker,audit,system}
-src/workers/                            # 한 번에 한 job을 계산하는 자식 프로세스
+src/runtime/                            # 서버·agent 공용 계산 코드와 계산 worker
+src/workers/                            # 서버 전용 게시·결과 수신 worker
 src/agent/                              # N개 worker의 Linux 설치·연결·캐시·자원 관리
 src/web                          # React + shadcn/ui (모바일 우선)
 src/shared                       # 웹·서버 공유 스키마
 ```
 
-전략은 코드로 등록한다 (`src/server/modules/strategy/strategies/`). UI 는 전략을 만들거나 수정하지 못하고, 등록된 전략의 검증된 파라미터만 바꿀 수 있다 — 임의 코드가 UI 를 통해 실행되는 경로를 두지 않는다.
+전략은 코드로 등록한다 (`src/runtime/modules/strategy/strategies/`). UI 는 전략을 만들거나 수정하지 못하고, 등록된 전략의 검증된 파라미터만 바꿀 수 있다 — 임의 코드가 UI 를 통해 실행되는 경로를 두지 않는다.
 
 전략의 `supportsRandomSeed: false`는 전략 내부와 엔진의 동시 매수 순서까지 포함해
 시드가 결과에 영향을 주지 않음을 검증한 경우에만 선언한다. 미지정은 `true`이며 현재

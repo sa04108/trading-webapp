@@ -1,11 +1,9 @@
 import { and, eq } from 'drizzle-orm';
-import type { DatabaseHandle } from '../../../shared/db/database.js';
-import {
-  backtestPreparationJobs, backtestWizardDrafts,
-  preparationWizardReferences, preparationPreviewCache,
-} from '../../../shared/db/schema.js';
+import type { DatabaseHandle } from '../../../../runtime/shared/db/database.js';
+import { backtestPreparationJobs, preparationPreviewCache } from '../../../../runtime/shared/db/operations-schema.js';
+import { backtestWizardDrafts, preparationWizardReferences } from '../../../shared/db/preparation-owner-schema.js';
 import { preparationInputSchema } from '../../../../shared/schemas/backtest-preparation.js';
-import type { BacktestUniversePreview } from './backtest-preparation-orchestrator.js';
+import type { BacktestUniversePreview } from '../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 
 export class PreparationReferenceError extends Error {
   constructor() {

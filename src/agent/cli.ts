@@ -5,13 +5,14 @@ import { createInterface } from 'node:readline/promises';
 import { defaultStateDirectory, readSettings, writeSettings } from './config.js';
 import { installRoot, installService } from './install.js';
 import { updateAgent, withInstallLock } from './update.js';
-import { readGitCommitSha } from '../server/shared/build-info.js';
+import { readGitCommitSha } from '../runtime/shared/build-info.js';
+import { readRuntimeVersions } from '../runtime/shared/runtime-versions.js';
 
 export async function runAgentCli(args: string[] = process.argv.slice(2)): Promise<void> {
   if (process.platform !== 'linux') throw new Error('Linux 또는 WSL2에서 실행하세요');
   if (args[0] === '--check') {
     await import('./client.js');
-    console.log(`quant-agent ${readGitCommitSha()} linux-${process.arch}`);
+    console.log(`quant-agent ${readRuntimeVersions().agentVersion} (commit ${readGitCommitSha()}) linux-${process.arch}`);
     return;
   }
   if (process.getuid?.() === 0) throw new Error('에이전트는 root 대신 일반 사용자로 실행하세요');
@@ -33,7 +34,7 @@ export async function runAgentCli(args: string[] = process.argv.slice(2)): Promi
   }
   if (command === 'setup') return;
   if (command === 'install') {
-    await withInstallLock(() => installService(fileURLToPath(new URL('../../', import.meta.url)), readGitCommitSha(), state));
+    await withInstallLock(() => installService(fileURLToPath(new URL('../../', import.meta.url)), readRuntimeVersions().agentVersion, state));
     console.log('백그라운드 에이전트를 시작했습니다. 상태: systemctl --user status quant-agent');
     return;
   }
@@ -50,8 +51,8 @@ export async function runAgentCli(args: string[] = process.argv.slice(2)): Promi
   }
   // 설치·설정·업데이트 명령은 계산 런타임과 네이티브 DB 모듈을 로드하지 않는다.
   const { AgentClient } = await import('./client.js');
-  const client = new AgentClient(settings, state, async (version) => {
-    await updateAgent(settings, state, { expectedVersion: version });
+  const client = new AgentClient(settings, state, async (version, versionScheme) => {
+    await updateAgent(settings, state, { expectedVersion: version, versionScheme });
     await client.stop();
     console.log('클라이언트 업데이트 완료 — 백그라운드 서비스가 새 버전으로 재시작합니다');
     process.exit(75);

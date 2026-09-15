@@ -14,7 +14,7 @@ import {
   updateAtr,
   updateEma,
   updateRsi,
-} from '../../src/server/modules/strategy/strategies/shared/indicators.js';
+} from '../../src/runtime/modules/strategy/strategies/shared/indicators.js';
 
 describe('updateEma', () => {
   it('첫 값으로 시딩하고 이후 alpha=2/(n+1) 로 갱신한다', () => {

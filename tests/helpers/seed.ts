@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import type { Container } from '../../src/server/bootstrap/container.js';
-import type { AppDatabase } from '../../src/server/shared/db/database.js';
-import type { Candle, Market } from '../../src/server/modules/market-data/domain/candle.js';
+import type { AppDatabase } from '../../src/runtime/shared/db/database.js';
+import type { Candle, Market } from '../../src/runtime/modules/market-data/domain/candle.js';
 import { krxDailyBars, symbolMasterVersions } from '../../src/server/shared/db/schema.js';
 
 /**

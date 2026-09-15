@@ -1,3 +1,4 @@
+import { readRuntimeVersions, type RuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { fork } from 'node:child_process';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -5,7 +6,7 @@ import type { AgentLease } from '../../src/shared/agent-protocol.js';
 import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars } from '../helpers/seed.js';
-import type { PreparationInput } from '../../src/server/modules/backtest/application/backtest-preparation-orchestrator.js';
+import type { PreparationInput } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 
 let ctx: TestApp | undefined;
 afterEach(async () => { await ctx?.close(); });
@@ -29,10 +30,11 @@ interface PreparationChildExit {
   readonly messages: Array<{ type: string; outcome?: string }>;
 }
 
-function runPreparationChild(lease: AgentLease, jobPath: string, dataPath: string): Promise<PreparationChildExit> {
+function runPreparationChild(lease: AgentLease, jobPath: string, dataPath: string, sourceVersions?: RuntimeVersions): Promise<PreparationChildExit> {
   const env = { ...process.env };
   delete env.NODE_OPTIONS;
-  const child = fork(new URL('../../src/workers/preparation-child.ts', import.meta.url), [], {
+  if (sourceVersions) env.QUANT_SOURCE_RUNTIME_VERSIONS = JSON.stringify(sourceVersions);
+  const child = fork(new URL('../../src/runtime/workers/preparation-child.ts', import.meta.url), [], {
     env,
     execArgv: ['--import', 'tsx'],
     stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
@@ -87,6 +89,27 @@ describe('Linux 에이전트 유니버스 실행', () => {
     expect(exit.stderr).toBe('');
     expect(exit.messages).toContainEqual(expect.objectContaining({ type: 'FINISH', outcome: 'COMPLETED' }));
     expect(ctx.container.backtestPreparationOrchestrator.get(job.id)).toMatchObject({ status: 'RUNNING' });
+  });
+
+  it('설치된 에이전트의 수집 버전이 오래되어도 lease의 수집 버전으로 준비를 완료한다', { timeout: 45_000 }, async () => {
+    ctx = await createTestApp({}, undefined, true);
+    await seed();
+    await seedCorporateActionCoverage(ctx.container, ['005930'], [2024, 2025, 2026]);
+    ctx.container.backtestPreparationOrchestrator.start(input);
+    const manifest = await ctx.container.agentCoordinator.snapshots.ensureLatest();
+    const lease = ctx.container.agentCoordinator.preparations.claim('old-collection-metadata', manifest);
+    if (!lease) throw new Error('준비 작업 lease를 확보하지 못했습니다');
+    const oldAgentVersions = { ...readRuntimeVersions(), collectionVersion: 'a'.repeat(64) };
+    expect(lease.dataset.collectionVersion).not.toBe(oldAgentVersions.collectionVersion);
+    const exit = await runPreparationChild(
+      lease,
+      path.join(ctx.dir, 'old-collection-metadata.sqlite'),
+      ctx.container.agentCoordinator.snapshots.file(manifest),
+      oldAgentVersions,
+    );
+    expect(exit.code, exit.stderr).toBe(0);
+    expect(exit.messages).not.toContainEqual(expect.objectContaining({ type: 'NEEDS_DATA' }));
+    expect(exit.messages).toContainEqual(expect.objectContaining({ type: 'FINISH', outcome: 'COMPLETED' }));
   });
 
   it('데이터가 부족하면 서버에 수집을 요청하고 새 버전으로 이어가며 실패 횟수를 소비하지 않는다', { timeout: 120_000 }, async () => {

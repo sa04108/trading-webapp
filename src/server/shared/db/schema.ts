@@ -1,3 +1,3 @@
-// 운영 상태와 계산 데이터는 서로 다른 SQLite 파일에 저장한다.
+// 서버의 운영 테이블은 계산 worker의 스키마에 포함하지 않는다.
+export * from '../../../runtime/shared/db/schema.js';
 export * from './operations-schema.js';
-export * from './data-schema.js';

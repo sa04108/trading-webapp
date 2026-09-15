@@ -8,18 +8,18 @@ import type {
   SymbolMasterSyncDto,
   SymbolMasterUniverseDto,
 } from '../../../../shared/schemas/symbol-master.js';
-import type { SymbolMasterEntry } from '../domain/symbol-master.js';
+import type { SymbolMasterEntry } from '../../../../runtime/modules/market-data/domain/symbol-master.js';
 import {
   KrxNotConfiguredError,
   KrxQuotaError,
-} from '../application/ports.js';
+} from '../../../../runtime/modules/market-data/application/ports.js';
 import type { BenchmarkService } from '../application/benchmark-service.js';
 import type { SymbolMasterBackfill } from '../application/symbol-master-backfill.js';
 import {
   SymbolMasterNotCoveredError,
   type SymbolMasterEventRow,
   type SymbolMasterService,
-} from '../application/symbol-master-service.js';
+} from '../../../../runtime/modules/market-data/application/symbol-master-service.js';
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 

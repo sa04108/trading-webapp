@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
+import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
 import { PreparationReferenceService } from '../../src/server/modules/backtest/application/preparation-reference-service.js';
 
 describe('PreparationReferenceService', () => {

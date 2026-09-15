@@ -1,7 +1,9 @@
+import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
+import * as buildInfo from '../../src/runtime/shared/build-info.js';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
-import { BacktestResultArtifactRejectedError } from '../../src/server/modules/backtest/application/backtest-result-artifact.js';
+import { BacktestResultArtifactRejectedError } from '../../src/runtime/modules/backtest/application/backtest-result-artifact.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,7 +23,7 @@ class Peer extends EventEmitter {
 let ctx: TestApp;
 let id: string;
 let token: string;
-const dataset = { version: 1, datasetId: randomUUID(), sourceRevision: 0, schemaVersion: 1, sha256: 'a'.repeat(64), bytes: 1 };
+const dataset = { version: 1, datasetId: randomUUID(), sourceRevision: 0, collectionVersion: readRuntimeVersions().collectionVersion, schemaVersion: 1, sha256: 'a'.repeat(64), bytes: 1 };
 beforeEach(async () => {
   ctx = await createTestApp({}, undefined, true);
   const credential = ctx.container.agentCoordinator.registry.issue('device');
@@ -35,7 +37,7 @@ function enqueue() {
 async function connect(runnerVersion = ctx.container.agentCoordinator.runnerVersion): Promise<Peer> {
   const peer = new Peer();
   ctx.container.agentCoordinator.connect(id, peer as unknown as WebSocket);
-  peer.submit({ type: 'HELLO', protocolVersion: 1, runnerVersion });
+  peer.submit({ type: 'HELLO', versionScheme: 'content-v1', protocolVersion: 1, runnerVersion });
   await vi.waitFor(() => expect(peer.received.length).toBeGreaterThan(0));
   return peer;
 }
@@ -76,7 +78,7 @@ describe('연결과 리스 수명 분리', () => {
   it('미인증 데이터 요청과 과대 결과 업로드를 파일 처리 전에 거부한다', async () => {
     expect((await ctx.app.inject({ method: 'GET', url: '/api/agents/datasets/1' })).statusCode).toBe(401);
     enqueue();
-    ctx.container.agentCoordinator.backtests.claim(id, ctx.container.agentCoordinator.runnerVersion);
+    ctx.container.agentCoordinator.backtests.claim(id, readRuntimeVersions().executionVersion);
     const lease = ctx.container.jobQueue.getJob('job-one')!;
     const receive = vi.spyOn(ctx.container.remoteResultUploadManager, 'receive');
     const response = await ctx.app.inject({ method: 'POST', url: '/api/agents/jobs/job-one/result',
@@ -88,7 +90,7 @@ describe('연결과 리스 수명 분리', () => {
 
   it('결과 검증 자식이 거부한 파일은 일시 장애 대신 422로 응답한다', async () => {
     enqueue();
-    const claim = ctx.container.agentCoordinator.backtests.claim(id, ctx.container.agentCoordinator.runnerVersion);
+    const claim = ctx.container.agentCoordinator.backtests.claim(id, readRuntimeVersions().executionVersion);
     if (claim.status !== 'CLAIMED') throw new Error('리스 배정 실패');
     vi.spyOn(ctx.container.agentCoordinator.backtests, 'complete').mockRejectedValue(new BacktestResultArtifactRejectedError('invalid sqlite'));
     const payload = Buffer.from('invalid');
@@ -101,7 +103,7 @@ describe('연결과 리스 수명 분리', () => {
   it('준비된 연결도 실행 버전이 달라지면 유휴 실행기에서 즉시 제외한다', async () => {
     const peer = await connect(); capacity(peer);
     await vi.waitFor(() => expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(8_000_000));
-    peer.submit({ type: 'HELLO', protocolVersion: 1, runnerVersion: 'previous-release' });
+    peer.submit({ type: 'HELLO', versionScheme: 'content-v1', protocolVersion: 1, runnerVersion: 'previous-release' });
     await vi.waitFor(() => expect(peer.received.some((message) => message.type === 'UPDATE_REQUIRED')).toBe(true));
     const job = ctx.container.jobQueue.enqueue(request);
     await new Promise((resolve) => setImmediate(resolve));
@@ -130,6 +132,39 @@ describe('연결과 리스 수명 분리', () => {
     for (const url of endpoints) {
       expect((await ctx.app.inject({ method: 'GET', url, headers })).statusCode).toBe(401);
     }
+  });
+
+  it('배포 SHA가 바뀌어도 동일 내용 버전 클라이언트는 환영하고 실행 버전으로 배정한다', async () => {
+    vi.spyOn(buildInfo, 'readGitCommitSha').mockReturnValue('e'.repeat(40));
+    const peer = await connect();
+    expect(peer.received[0]).toMatchObject({ type: 'WELCOME', versionScheme: 'content-v1' });
+    enqueue(); capacity(peer);
+    await vi.waitFor(() => expect(peer.job()).toBeDefined());
+    expect(ctx.container.jobQueue.getJob('job-one')?.runnerVersion).toBe(readRuntimeVersions().executionVersion);
+  });
+
+  it('구형 SHA 설치 계약은 새 패키지로 한 번 전환하고 재연결부터 내용 버전으로 판정한다', async () => {
+    const sha = 'f'.repeat(40);
+    vi.spyOn(buildInfo, 'readGitCommitSha').mockReturnValue(sha);
+    const peer = new Peer();
+    ctx.container.agentCoordinator.connect(id, peer as unknown as WebSocket);
+    peer.submit({ type: 'HELLO', protocolVersion: 1, runnerVersion: sha });
+    await vi.waitFor(() => expect(peer.received[0]).toEqual({ type: 'UPDATE_REQUIRED', runnerVersion: sha, versionScheme: 'legacy-git-v1' }));
+    const manifestPath = path.resolve('dist/clients/manifest.json');
+    const manifest = { versionScheme: 'content-v1', runnerVersion: ctx.container.agentCoordinator.runnerVersion, buildGitSha: sha, clients: [{ arch: 'x64', buildGitSha: sha }, { arch: 'arm64', buildGitSha: 'a'.repeat(40) }] };
+    const exists = fs.existsSync;
+    const read = fs.readFileSync;
+    vi.spyOn(fs, 'existsSync').mockImplementation((file) => String(file) === manifestPath || exists(file));
+    vi.spyOn(fs, 'readFileSync').mockImplementation((...args: Parameters<typeof fs.readFileSync>) => String(args[0]) === manifestPath ? JSON.stringify(manifest) : read(...args));
+    const headers = { authorization: `Bearer ${token}` };
+    const legacy = await ctx.app.inject({ method: 'GET', url: '/api/agents/client/latest', headers });
+    expect(legacy.json()).toMatchObject({ runnerVersion: sha, versionScheme: 'legacy-git-v1', clients: [{ arch: 'x64' }] });
+    expect(legacy.json().clients).toHaveLength(1);
+    const content = await ctx.app.inject({ method: 'GET', url: '/api/agents/client/latest?versionScheme=content-v1', headers });
+    expect(content.json()).toEqual(manifest);
+    peer.close();
+    const upgraded = await connect();
+    expect(upgraded.received[0]).toMatchObject({ type: 'WELCOME', versionScheme: 'content-v1' });
   });
 
   it('장치 토큰은 해시만 저장하고 해제한 장치는 다시 인증할 수 없다', () => {

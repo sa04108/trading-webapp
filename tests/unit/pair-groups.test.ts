@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createRng } from '../../src/server/modules/backtest/domain/seeded-rng.js';
+import { createRng } from '../../src/runtime/modules/backtest/domain/seeded-rng.js';
 import {
   buildCorrelationGroups,
   newCorrelationGroupingState,
@@ -11,7 +11,7 @@ import {
   selectSeededGroupEntries,
   tryBuildGroups,
   updateCorrelationGrouping,
-} from '../../src/server/modules/strategy/strategies/shared/pair-groups.js';
+} from '../../src/runtime/modules/strategy/strategies/shared/pair-groups.js';
 
 /** 기하 경로 — B = 1e6/A 면 로그수익률이 정확히 반대(상관 −1)다 */
 function inversePath(path: readonly number[]): number[] {

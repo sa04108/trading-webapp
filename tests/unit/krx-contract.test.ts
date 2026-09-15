@@ -4,7 +4,7 @@ import {
   KrxContractError,
   KrxNotConfiguredError,
   KrxQuotaError,
-} from '../../src/server/modules/market-data/application/ports.js';
+} from '../../src/runtime/modules/market-data/application/ports.js';
 import {
   parseBaseInfoRows,
   parseDailyRows,

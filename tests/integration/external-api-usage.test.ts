@@ -3,8 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { NotificationService } from '../../src/server/modules/notification/application/notification-service.js';
-import { kstDateOf } from '../../src/server/modules/market-data/domain/kst-date.js';
-import { openDatabase, type DatabaseHandle } from '../../src/server/shared/db/database.js';
+import { kstDateOf } from '../../src/runtime/modules/market-data/domain/kst-date.js';
+import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
 import { SqliteExternalApiUsage } from '../../src/server/shared/db/external-api-usage.js';
 
 describe('SqliteExternalApiUsage', () => {

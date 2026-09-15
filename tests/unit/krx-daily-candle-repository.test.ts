@@ -1,12 +1,12 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { createTestApp } from '../helpers/test-app.js';
 import { krxDailyBars } from '../../src/server/shared/db/schema.js';
-import type { AppDatabase } from '../../src/server/shared/db/database.js';
+import type { AppDatabase } from '../../src/runtime/shared/db/database.js';
 import {
   KrxDailyCandleRepository,
   ceilToDate,
   floorToDate,
-} from '../../src/server/modules/market-data/infrastructure/krx-daily-candle-repository.js';
+} from '../../src/runtime/modules/market-data/infrastructure/krx-daily-candle-repository.js';
 
 const DAY = 86_400_000;
 const midnight = (date: string): number => Date.parse(`${date}T00:00:00Z`);

@@ -1,5 +1,5 @@
 import type { UniverseRebalancingEntryDto } from '../../../../shared/schemas/universe-rebalancing.js';
-import type { LegacyUniverseScheduleEntry } from './universe-rule-resolver.js';
+import type { LegacyUniverseScheduleEntry } from '../../../../runtime/modules/backtest/application/universe-rule-resolver.js';
 
 function differenceCount(left: ReadonlySet<string>, right: ReadonlySet<string>): number {
   let count = 0;

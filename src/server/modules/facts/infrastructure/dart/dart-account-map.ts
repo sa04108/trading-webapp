@@ -1,4 +1,4 @@
-import type { FundamentalField } from '../../domain/fact.js';
+import type { FundamentalField } from '../../../../../runtime/modules/facts/domain/fact.js';
 
 export interface DartAccountRule {
   readonly field: FundamentalField;

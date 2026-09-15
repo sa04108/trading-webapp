@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   FredContractError,
   FredNotConfiguredError,
-} from '../../src/server/modules/market-data/application/ports.js';
+} from '../../src/runtime/modules/market-data/application/ports.js';
 import { createFredBenchmarkSource } from '../../src/server/modules/market-data/infrastructure/fred/fred-benchmark-source.js';
 import type { Logger } from '../../src/server/shared/logger.js';
 

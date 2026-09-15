@@ -3,9 +3,9 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { BacktestResultArtifactRejectedError } from '../../backtest/application/backtest-result-artifact.js';
+import { BacktestResultArtifactRejectedError } from '../../../../runtime/modules/backtest/application/backtest-result-artifact.js';
 import { MAX_BACKTEST_RESULT_ARTIFACT_BYTES, InvalidBacktestResultArtifactError } from '../../backtest/infrastructure/sqlite-backtest-result-artifact-importer.js';
-import { backtestExecutionTelemetrySchema } from '../../backtest/application/backtest-execution-telemetry.js';
+import { backtestExecutionTelemetrySchema } from '../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js';
 import type { AgentCoordinator } from '../application/agent-coordinator.js';
 import type { RemoteResultUploadManager } from '../../backtest/infrastructure/remote-result-upload-manager.js';
 
@@ -45,10 +45,16 @@ export function registerAgentControlRoutes(app: FastifyInstance, coordinator: Ag
       .header('etag', `"${manifest.sha256}"`).header('cache-control', 'private, immutable')
       .send(fs.createReadStream(file));
   });
-  app.get('/client/latest', { preHandler: authenticate }, async (_request, reply) => {
+  app.get('/client/latest', { preHandler: authenticate }, async (request, reply) => {
+    const { versionScheme } = parseRequest(z.object({ versionScheme: z.enum(['content-v1', 'legacy-git-v1']).optional() }), request.query);
     const file = path.resolve('dist/clients/manifest.json');
     if (!fs.existsSync(file)) return reply.code(503).send({ error: 'Linux 클라이언트 파일이 아직 게시되지 않았습니다' });
-    return JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
+    const manifest = JSON.parse(fs.readFileSync(file, 'utf8')) as { versionScheme?: string; runnerVersion: string; buildGitSha?: string; clients: { buildGitSha?: string }[] };
+    if (manifest.versionScheme !== 'content-v1' || manifest.runnerVersion !== coordinator.runnerVersion) return reply.code(503).send({ error: '서버가 요구하는 클라이언트가 아직 게시되지 않았습니다' });
+    if (versionScheme === 'content-v1') return manifest;
+    // 구형 클라이언트는 기본 URL과 실제 Git SHA로 새 설치기를 부트스트랩한다.
+    if (!manifest.buildGitSha || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(manifest.buildGitSha)) return reply.code(503).send({ error: '구형 클라이언트 전환용 빌드 정보가 없습니다' });
+    return { ...manifest, versionScheme: 'legacy-git-v1', runnerVersion: manifest.buildGitSha, clients: manifest.clients.filter((client) => client.buildGitSha === manifest.buildGitSha) };
   });
   app.get('/client/:file', { preHandler: authenticate }, async (request, reply) => sendClient(request, reply));
   app.addContentTypeParser(ARTIFACT_TYPE, (_request, stream, done) => done(null, stream));
