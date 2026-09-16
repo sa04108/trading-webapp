@@ -39,6 +39,7 @@ export class RemoteResultUploadManager {
     jobId: string,
     attempt: number,
     onProgress?: (bytes: number) => void,
+    signal?: AbortSignal,
   ): Promise<ReceivedResultArtifact> {
     if (
       !/^[a-zA-Z0-9_-]{3,128}$/.test(jobId) ||
@@ -87,6 +88,7 @@ export class RemoteResultUploadManager {
         source,
         limiter,
         createWriteStream(artifactPath, { flags: "wx", mode: 0o600 }),
+        ...(signal === undefined ? [] : [{ signal }]),
       );
       if (size === 0)
         throw new ResultArtifactUploadError("빈 결과 artifact입니다", 400);

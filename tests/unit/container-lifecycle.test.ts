@@ -12,6 +12,39 @@ function deferred() {
 }
 
 describe('Container lifecycle', () => {
+  it('결과 import service가 끝난 뒤에만 SQLite를 닫는다', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-container-result-close-'));
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      DATABASE_PATH: path.join(dir, 'app.sqlite'),
+      DATA_ROOT: path.join(dir, 'market-data'),
+      IMPORT_ROOT: path.join(dir, 'imports'),
+      EXPORT_ROOT: path.join(dir, 'exports'),
+      TEMP_ROOT: path.join(dir, 'temp'),
+      SESSION_SECRET: 's'.repeat(48),
+      LOG_LEVEL: 'error',
+    });
+    const container = createContainer(config);
+    const stopGate = deferred();
+    container.backtestLeaseService.stop = (() => stopGate.promise) as never;
+    const originalDatabaseClose = container.database.close.bind(container.database);
+    const events: string[] = [];
+    container.database.close = (() => {
+      events.push('sqlite-closed');
+      originalDatabaseClose();
+    }) as never;
+
+    const closing = Promise.resolve(container.close());
+    await Promise.resolve();
+    const beforeStopBoundary = [...events];
+    stopGate.resolve();
+    await closing;
+
+    expect(beforeStopBoundary).toEqual([]);
+    expect(events).toEqual(['sqlite-closed']);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it('preparation stop이 symbol 경계에서 끝난 뒤에만 SQLite를 닫는다', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-container-close-'));
     const config = loadConfig({

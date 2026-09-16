@@ -60,6 +60,9 @@ function tokenHash(token: string): string {
 export class BacktestLeaseService {
   readonly events = new EventEmitter();
   private sweepTimer: NodeJS.Timeout | null = null;
+  private stopping = false;
+  private stoppingPromise: Promise<void> | null = null;
+  private readonly completions = new Set<Promise<BacktestCompleteResult>>();
 
   constructor(
     private readonly queue: JobQueue,
@@ -79,9 +82,18 @@ export class BacktestLeaseService {
     this.sweepTimer.unref();
   }
 
-  stop(): void {
+  stop(): Promise<void> {
+    if (this.stoppingPromise !== null) return this.stoppingPromise;
+    this.stopping = true;
     if (this.sweepTimer !== null) clearInterval(this.sweepTimer);
     this.sweepTimer = null;
+    this.stoppingPromise = this.stopOnce();
+    return this.stoppingPromise;
+  }
+
+  private async stopOnce(): Promise<void> {
+    await this.resultCompleter.stop();
+    await Promise.allSettled([...this.completions]);
   }
 
   claim(
@@ -264,6 +276,27 @@ export class BacktestLeaseService {
   }
 
   async complete(input: {
+    readonly jobId: string;
+    readonly attempt: number;
+    readonly leaseToken: string;
+    readonly artifactPath: string;
+    readonly checksum: string;
+    readonly telemetry?: BacktestExecutionTelemetry;
+  }): Promise<BacktestCompleteResult> {
+    if (this.stopping)
+      throw new BacktestResultPersistenceUnavailableError(
+        "서버가 종료 중이어서 결과를 저장할 수 없습니다.",
+      );
+    const completion = this.completeOnce(input);
+    this.completions.add(completion);
+    void completion.then(
+      () => this.completions.delete(completion),
+      () => this.completions.delete(completion),
+    );
+    return completion;
+  }
+
+  private async completeOnce(input: {
     readonly jobId: string;
     readonly attempt: number;
     readonly leaseToken: string;

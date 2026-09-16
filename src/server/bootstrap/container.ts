@@ -405,6 +405,20 @@ export function createContainer(
       )
         jobQueue.events.emit("job", { jobId: input.jobId, kind: "progress" });
     },
+    {
+      onProgressError: (error, input, activity) =>
+        logger.warn(
+          {
+            module: "backtest",
+            event: "backtest.result-progress-failed",
+            err: error,
+            jobId: input.jobId,
+            attempt: input.attempt,
+            activity,
+          },
+          "결과 import 진행률 저장 실패",
+        ),
+    },
   );
   const backtestLeaseService = new BacktestLeaseService(
     jobQueue,

@@ -11,6 +11,12 @@ import { createTestApp, type TestApp } from '../helpers/test-app.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import type { AgentLease, ServerAgentMessage } from '../../src/shared/agent-protocol.js';
 
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 class Peer extends EventEmitter {
   readyState = 1;
   readonly received: ServerAgentMessage[] = [];
@@ -44,6 +50,58 @@ async function connect(runnerVersion = ctx.container.agentCoordinator.runnerVers
 function capacity(peer: Peer, slots = 1) { peer.submit({ type: 'CAPACITY', slots, datasetVersion: 1, maxBars: 8_000_000 }); }
 
 describe('연결과 리스 수명 분리', () => {
+  it('종료 시 등록된 결과 작업을 abort하고 정리 완료까지 기다린다', async () => {
+    const finished = deferred();
+    let shutdownSignal: AbortSignal | null = null;
+    const operation = ctx.container.agentCoordinator.runResultOperation(async (signal) => {
+      shutdownSignal = signal;
+      try {
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      } finally {
+        await finished.promise;
+      }
+    });
+    const rejection = expect(operation).rejects.toMatchObject({
+      name: 'AgentCoordinatorStoppingError',
+      statusCode: 503,
+    });
+    let stopped = false;
+    const stopping = ctx.container.agentCoordinator.stop().then(() => { stopped = true; });
+
+    await vi.waitFor(() => expect(shutdownSignal?.aborted).toBe(true));
+    expect(stopped).toBe(false);
+    finished.resolve();
+
+    await rejection;
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
+  it('종료 전에 시작한 WebSocket 메시지 handler를 끝까지 기다린다', async () => {
+    const snapshot = deferred<typeof dataset>();
+    vi.mocked(ctx.container.agentCoordinator.snapshots.ensureLatest)
+      .mockReturnValueOnce(snapshot.promise);
+    const peer = new Peer();
+    ctx.container.agentCoordinator.connect(id, peer as unknown as WebSocket);
+    peer.submit({
+      type: 'HELLO',
+      protocolVersion: 3,
+      runnerVersion: ctx.container.agentCoordinator.runnerVersion,
+    });
+    await vi.waitFor(() => expect(peer.received[0]).toMatchObject({ type: 'WELCOME' }));
+    let stopped = false;
+    const stopping = ctx.container.agentCoordinator.stop().then(() => { stopped = true; });
+
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    snapshot.resolve(dataset);
+
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
   it('배정 전 데이터 동기화는 작업 lease 없이 장치명과 바이트 진행을 표시한다', async () => {
     ctx.container.database.sqlite.prepare(
       "INSERT INTO backtest_preparation_jobs (id, request_hash, request_json, status, phase, created_at_ms, updated_at_ms) VALUES ('prep-sync', 'hash-sync', '{}', 'QUEUED', 'MARKET_DATA', 1, 1)",
@@ -120,6 +178,40 @@ describe('연결과 리스 수명 분리', () => {
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
         'content-length': String(payload.length), 'x-agent-attempt': String(claim.lease.attempt), 'x-agent-lease-token': claim.lease.leaseToken, 'x-content-sha256': createHash('sha256').update(payload).digest('hex') }, payload });
     expect(response.statusCode).toBe(422);
+  });
+
+  it('서버 종료가 전송 중인 결과 업로드를 중단하고 503으로 응답한다', async () => {
+    enqueue();
+    const claim = ctx.container.agentCoordinator.backtests.claim(id, readRuntimeVersions().executionVersion);
+    if (claim.status !== 'CLAIMED') throw new Error('리스 배정 실패');
+    const payload = Buffer.from('partial-result');
+    const receive = vi.spyOn(ctx.container.remoteResultUploadManager, 'receive')
+      .mockImplementation(async (_source, _jobId, _attempt, _onProgress, signal) => {
+        if (signal === undefined) throw new Error('종료 signal이 필요합니다');
+        await new Promise<void>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+        throw new Error('도달할 수 없습니다');
+      });
+    const response = ctx.app.inject({
+      method: 'POST',
+      url: '/api/agents/jobs/job-one/result',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/vnd.quant-platform.backtest-result+sqlite',
+        'content-length': String(payload.length),
+        'x-agent-attempt': String(claim.lease.attempt),
+        'x-agent-lease-token': claim.lease.leaseToken,
+        'x-content-sha256': createHash('sha256').update(payload).digest('hex'),
+      },
+      payload,
+    });
+    await vi.waitFor(() => expect(receive).toHaveBeenCalledOnce());
+
+    const stopping = ctx.container.agentCoordinator.stop();
+
+    expect((await response).statusCode).toBe(503);
+    await stopping;
   });
 
   it('준비된 연결도 실행 버전이 달라지면 유휴 실행기에서 즉시 제외한다', async () => {
