@@ -27,7 +27,7 @@ export interface ProviderLocalState {
   readonly raw: "VALID" | "ABSENT" | "CORRUPT" | "IDENTITY_MISMATCH";
   readonly normalized: "VALID" | "MISSING" | "INVALID";
   readonly interpretation?: "REPLAY_REQUIRED" | "MISSING_FIELD" | "FAILED";
-  /** 原文/manifest/공시 사건 등 실제 상태의 식별자. 실행 해시는 넣지 않는다. */
+  /** 원문·manifest·공시 사건 등 실제 상태의 식별자. 실행 해시는 넣지 않는다. */
   readonly evidence: readonly string[];
   readonly sourceChange?: string;
   readonly publication?: string;
@@ -63,15 +63,17 @@ export function providerPlan(
   evidence: readonly string[],
   requiresApproval = false,
 ): ProviderRequestPlan {
-  const canonicalEvidence = [...new Set(evidence)].sort();
-  return {
-    key,
+  const canonicalEvidence = Object.freeze([...new Set(evidence)].sort());
+  // 호출자가 계획 작성 뒤 인자를 변경해도 승인 대상이 달라지지 않게 복사한다.
+  const immutableKey = Object.freeze({ ...key, parameters: Object.freeze({ ...key.parameters }) });
+  return Object.freeze({
+    key: immutableKey,
     action,
     reason,
     evidence: canonicalEvidence,
     requiresApproval,
-    fingerprint: JSON.stringify([providerRequestKeyId(key), action, reason, canonicalEvidence, requiresApproval]),
-  };
+    fingerprint: JSON.stringify([providerRequestKeyId(immutableKey), action, reason, canonicalEvidence, requiresApproval]),
+  });
 }
 
 /** 순수 로컬 판정이다. FULL/force/런타임 버전은 HTTP 권한을 부여하지 않는다. */
@@ -106,11 +108,13 @@ export class ProviderDataBlockedError extends Error {
   }
 }
 
-/** 매 HTTP attempt 직전에 현재 상태 및 현재 승인으로 다시 호출한다. */
+/** 매 HTTP attempt 직전에 서버가 다시 평가한 현재 상태 및 현재 승인으로 호출한다. */
 export function assertProviderRequestAllowed(
   plan: ProviderRequestPlan,
   approval?: ProviderRequestApproval | null,
 ): void {
+  const expected = providerPlan(plan.key, plan.action, plan.reason, plan.evidence, plan.requiresApproval).fingerprint;
+  if (expected !== plan.fingerprint) throw new ProviderDataBlockedError(plan);
   if (plan.action === "REQUEST" && !plan.requiresApproval) return;
   if (plan.requiresApproval && approval?.status === "APPROVED" && approval.fingerprint === plan.fingerprint) return;
   throw new ProviderDataBlockedError(plan);
