@@ -38,6 +38,7 @@ export class RemoteResultUploadManager {
     source: Readable,
     jobId: string,
     attempt: number,
+    onProgress?: (bytes: number) => void,
   ): Promise<ReceivedResultArtifact> {
     if (
       !/^[a-zA-Z0-9_-]{3,128}$/.test(jobId) ||
@@ -59,6 +60,7 @@ export class RemoteResultUploadManager {
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
     const hash = createHash("sha256");
     let size = 0;
+    let lastReportedAt = 0;
     const limiter = new Transform({
       transform(chunk: Buffer, _encoding, callback) {
         size += chunk.length;
@@ -72,6 +74,11 @@ export class RemoteResultUploadManager {
           return;
         }
         hash.update(chunk);
+        const now = Date.now();
+        if (now - lastReportedAt >= 1000) {
+          lastReportedAt = now;
+          onProgress?.(size);
+        }
         callback(null, chunk);
       },
     });
@@ -83,6 +90,7 @@ export class RemoteResultUploadManager {
       );
       if (size === 0)
         throw new ResultArtifactUploadError("빈 결과 artifact입니다", 400);
+      onProgress?.(size);
       return {
         path: artifactPath,
         sha256: hash.digest("hex"),

@@ -3,8 +3,9 @@ export const LOCAL_AGENT_ID = "server-local";
 
 import { z } from "zod";
 import { isoDateSchema } from "./schemas/backtest-request.js";
+import type { ExecutionActivity } from "./execution-progress.js";
 
-export const AGENT_PROTOCOL_VERSION = 2;
+export const AGENT_PROTOCOL_VERSION = 3;
 export const AGENT_LEASE_MS = 90_000;
 export const AGENT_HEARTBEAT_MS = 15_000;
 export const AGENT_MAX_ATTEMPTS = 3;
@@ -59,6 +60,30 @@ export const agentDataRequestSchema = z.discriminatedUnion("kind", [
 ]);
 export type AgentDataRequest = z.infer<typeof agentDataRequestSchema>;
 
+const executionActivitySchema = z.custom<ExecutionActivity>((value) =>
+  [
+    "DOWNLOADING_DATASET",
+    "VERIFYING_DATASET",
+    "LOADING_BACKTEST_INPUT",
+    "CALCULATING_BACKTEST",
+    "WRITING_RESULT",
+    "UPLOADING_RESULT",
+    "RESOLVING_UNIVERSE",
+    "VALIDATING_INPUT",
+    "SAVING_PREVIEW",
+  ].includes(String(value)),
+);
+
+const deviceActivitySchema = z.object({
+  activity: executionActivitySchema,
+  datasetId: z.string().uuid(),
+  datasetVersion: z.number().int().positive(),
+  completed: z.number().int().nonnegative().nullable(),
+  total: z.number().int().positive().nullable(),
+  detail: z.string().max(200).nullable(),
+  occurredAtMs: z.number().int().positive(),
+});
+
 /** 계산 장치가 API를 직접 호출하는 대신 중앙 수집 큐에 요구를 돌려보낸다. */
 export class AgentDataRequired extends Error {
   constructor(readonly request: AgentDataRequest) {
@@ -97,6 +122,10 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
     maxBars: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   }),
   z.object({
+    type: z.literal("DEVICE_ACTIVITY"),
+    progress: deviceActivitySchema,
+  }),
+  z.object({
     type: z.literal("HEARTBEAT"),
     ...identity,
     progress: z
@@ -104,6 +133,7 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
         processedBars: z.number().int().nonnegative(),
         totalBars: z.number().int().nonnegative(),
         progressLabel: z.string().max(200).nullable(),
+        activity: executionActivitySchema.optional(),
       })
       .optional(),
     preparationProgress: z
@@ -120,6 +150,8 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
         totalSymbols: z.number().int().nonnegative(),
         savedFacts: z.number().int().nonnegative(),
         gapCount: z.number().int().nonnegative(),
+        resolutionPass: z.number().int().nonnegative(),
+        activity: executionActivitySchema.optional(),
       })
       .optional(),
   }),

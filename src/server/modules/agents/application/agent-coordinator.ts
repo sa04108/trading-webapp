@@ -1,4 +1,6 @@
 import path from "node:path";
+import fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import { AgentClient } from "../../../../agent/client.js";
 import { availableServerResources } from "../../../../agent/resources.js";
 import { BacktestResultArtifactRejectedError } from "../../../../runtime/modules/backtest/application/backtest-result-artifact.js";
@@ -22,6 +24,8 @@ import type { AgentRegistry } from "./agent-registry.js";
 import type { DatasetSnapshots } from "./dataset-snapshots.js";
 import type { AgentPreparationQueue } from "./agent-preparation-queue.js";
 import type { AgentDataQueue } from "./agent-data-queue.js";
+import type { BacktestPreparationJobDto } from "../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js";
+import type { ExecutionProgress } from "../../../../shared/execution-progress.js";
 
 interface Connection {
   socket: {
@@ -35,6 +39,7 @@ interface Connection {
   maxBars: number;
   datasetVersion: number;
   lastMessageAt: number;
+  deviceProgress?: Extract<AgentMessage, { type: "DEVICE_ACTIVITY" }>["progress"];
 }
 
 /** PC가 먼저 만든 연결로 서버가 작업을 전달한다. 연결과 작업 lease의 수명은 분리한다. */
@@ -49,6 +54,8 @@ export class AgentCoordinator {
   private localConnection: Connection | null = null;
   private refreshingLocal = false;
   private closing: Promise<void> | null = null;
+  private readonly progressEpoch = randomUUID();
+  private readonly progressRevisions = new Map<string, { signature: string; revision: number }>();
 
   constructor(
     private readonly database: DatabaseHandle,
@@ -163,7 +170,17 @@ export class AgentCoordinator {
       connection.slots = message.slots;
       connection.maxBars = message.maxBars;
       connection.datasetVersion = message.datasetVersion;
+      if (
+        connection.deviceProgress &&
+        connection.deviceProgress.datasetVersion <= message.datasetVersion
+      )
+        connection.deviceProgress = undefined;
       if (!this.refreshingLocal || clientId !== LOCAL_AGENT_ID) this.wake();
+      return;
+    }
+    if (message.type === "DEVICE_ACTIVITY") {
+      connection.deviceProgress = message.progress;
+      this.preparations.notifyQueued();
       return;
     }
     const identity = {
@@ -318,6 +335,114 @@ export class AgentCoordinator {
       .filter((c) => c.ready && c.socket.readyState === 1 && c.maxBars > 0)
       .map((c) => c.maxBars);
     return Math.max(MAX_BACKTEST_BARS, ...capacities);
+  }
+
+  /** 준비 행과 서버 수집·게시·장치 상태를 GET/SSE가 함께 쓰는 한 DTO로 조합한다. */
+  preparationView(job: BacktestPreparationJobDto) {
+    const progress = this.preparationProgress(job);
+    const signature = JSON.stringify([job.status, job.phase, job.overallProgress, progress]);
+    const previous = this.progressRevisions.get(job.id);
+    const revision = previous?.signature === signature ? previous.revision : (previous?.revision ?? 0) + 1;
+    if (this.preparationsIsTerminal(job.status)) this.progressRevisions.delete(job.id);
+    else this.progressRevisions.set(job.id, { signature, revision });
+    return { ...job, progressEpoch: this.progressEpoch, progressRevision: revision, progress };
+  }
+
+  private preparationsIsTerminal(status: string): boolean {
+    return status === "COMPLETED" || status === "FAILED" || status === "CANCELLED";
+  }
+
+  private preparationProgress(job: BacktestPreparationJobDto): ExecutionProgress | null {
+    if (job.status === "WAITING_DATA") {
+      const collection = this.dataQueue.progressForJob(job.id);
+      const publishing = this.snapshots.publishProgress();
+      if (collection && publishing && collection.activity.startsWith("PUBLISHING_"))
+        return {
+          ...collection,
+          activity: publishing.activity,
+          startedAtMs: publishing.startedAtMs,
+          lastProgressAtMs: publishing.updatedAtMs,
+          lastReceivedAtMs: publishing.updatedAtMs,
+        };
+      return collection;
+    }
+    const times = this.database.sqlite
+      .prepare(
+        "SELECT created_at_ms, updated_at_ms FROM backtest_preparation_jobs WHERE id = ?",
+      )
+      .get(job.id) as { created_at_ms: number; updated_at_ms: number } | undefined;
+    const activityAt = times?.updated_at_ms ?? times?.created_at_ms ?? Date.now();
+    if (job.status === "WAITING_DAILY_QUOTA")
+      return {
+        activity: "WAITING_RETRY", detail: job.error, actorKind: "SERVER",
+        actorId: null, actorName: "운영 서버", unit: null, completed: null,
+        total: null, currentItem: null, attempt: null, retryCount: 0,
+        startedAtMs: activityAt, lastProgressAtMs: null, lastReceivedAtMs: activityAt,
+        nextResumeAtMs: job.nextResumeAtMs,
+      };
+    if (job.status === "RUNNING") {
+      const lease = this.database.sqlite.prepare(
+        `SELECT l.client_id, l.attempt, l.last_received_at_ms, c.name
+         FROM agent_preparation_leases l LEFT JOIN agent_clients c ON c.id = l.client_id
+         WHERE l.job_id = ?`,
+      ).get(job.id) as { client_id: string; attempt: number; last_received_at_ms: number | null; name: string | null } | undefined;
+      const actorKind = lease?.client_id === LOCAL_AGENT_ID ? "SERVER_AGENT" : "REMOTE_AGENT";
+      const activities = {
+        MARKET_DATA: "CHECKING_INPUT",
+        RESOLVING_STAGES: "RESOLVING_UNIVERSE",
+        VALIDATING_RESULT: "VALIDATING_INPUT",
+        SYNCING_FACTS: "CHECKING_INPUT",
+        FINALIZING: "SAVING_PREVIEW",
+      } as const;
+      return {
+        activity: activities[job.phase], detail: null, actorKind,
+        actorId: lease?.client_id ?? null,
+        actorName: actorKind === "SERVER_AGENT" ? "운영 서버 내부 agent" : (lease?.name ?? "원격 agent"),
+        unit: job.totalSymbols > 0 ? "SYMBOLS" : null,
+        completed: job.totalSymbols > 0 ? job.doneSymbols : null,
+        total: job.totalSymbols > 0 ? job.totalSymbols : null,
+        currentItem: null, attempt: lease?.attempt ?? null, retryCount: 0,
+        startedAtMs: times?.created_at_ms ?? activityAt, lastProgressAtMs: activityAt,
+        lastReceivedAtMs: lease?.last_received_at_ms ?? null, nextResumeAtMs: null,
+      };
+    }
+    if (job.status !== "QUEUED") return null;
+    const publishing = this.snapshots.publishProgress();
+    if (publishing)
+      return {
+        activity: publishing.activity, detail: null, actorKind: "SERVER", actorId: null,
+        actorName: "운영 서버", unit: null, completed: null, total: null,
+        currentItem: null, attempt: null, retryCount: 0,
+        startedAtMs: publishing.startedAtMs, lastProgressAtMs: publishing.updatedAtMs,
+        lastReceivedAtMs: publishing.updatedAtMs, nextResumeAtMs: null,
+      };
+    const syncing = [...this.connections.entries()]
+      .map(([id, connection]) => ({ id, progress: connection.deviceProgress }))
+      .find(({ progress }) => progress !== undefined);
+    if (syncing?.progress) {
+      const name = (this.database.sqlite.prepare("SELECT name FROM agent_clients WHERE id = ?").get(syncing.id) as { name: string } | undefined)?.name;
+      return {
+        activity: syncing.progress.activity, detail: syncing.progress.detail,
+        actorKind: "REMOTE_AGENT", actorId: syncing.id, actorName: name ?? "원격 agent",
+        unit: syncing.progress.total === null ? null : "BYTES",
+        completed: syncing.progress.completed, total: syncing.progress.total,
+        currentItem: null, attempt: null, retryCount: 0,
+        startedAtMs: syncing.progress.occurredAtMs,
+        lastProgressAtMs: syncing.progress.occurredAtMs,
+        lastReceivedAtMs: this.connections.get(syncing.id)?.lastMessageAt ?? null,
+        nextResumeAtMs: null,
+      };
+    }
+    const ready = [...this.connections.values()].filter((connection) => connection.ready).length;
+    const free = [...this.connections.entries()].some(([id, connection]) => this.available(id, connection));
+    return {
+      activity: "WAITING_FOR_EXECUTOR",
+      detail: ready === 0 ? "연결된 원격 agent가 없습니다" : free ? "입력 동기화 또는 작업 배정 중" : "연결된 agent의 계산 슬롯이 사용 중입니다",
+      actorKind: "SERVER", actorId: null, actorName: "운영 서버 배정기",
+      unit: null, completed: null, total: null, currentItem: null,
+      attempt: null, retryCount: 0, startedAtMs: activityAt,
+      lastProgressAtMs: null, lastReceivedAtMs: activityAt, nextResumeAtMs: null,
+    };
   }
 
   ownsBacktest(clientId: string, jobId: string): boolean {
@@ -531,6 +656,13 @@ export class AgentCoordinator {
           if (reserved.status === "STALE_LEASE" || reserved.cancelRequested)
             return 409;
           try {
+            const size = fs.statSync(input.artifactPath).size;
+            this.backtests.reportActivity({
+              ...input.lease,
+              activity: "VALIDATING_RESULT",
+              completed: size,
+              total: size,
+            });
             const status = await this.backtests.complete({
               ...identity,
               artifactPath: input.artifactPath,

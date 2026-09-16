@@ -37,13 +37,35 @@ function enqueue() {
 async function connect(runnerVersion = ctx.container.agentCoordinator.runnerVersion): Promise<Peer> {
   const peer = new Peer();
   ctx.container.agentCoordinator.connect(id, peer as unknown as WebSocket);
-  peer.submit({ type: 'HELLO', protocolVersion: 2, runnerVersion });
+  peer.submit({ type: 'HELLO', protocolVersion: 3, runnerVersion });
   await vi.waitFor(() => expect(peer.received.length).toBeGreaterThan(0));
   return peer;
 }
 function capacity(peer: Peer, slots = 1) { peer.submit({ type: 'CAPACITY', slots, datasetVersion: 1, maxBars: 8_000_000 }); }
 
 describe('연결과 리스 수명 분리', () => {
+  it('배정 전 데이터 동기화는 작업 lease 없이 장치명과 바이트 진행을 표시한다', async () => {
+    ctx.container.database.sqlite.prepare(
+      "INSERT INTO backtest_preparation_jobs (id, request_hash, request_json, status, phase, created_at_ms, updated_at_ms) VALUES ('prep-sync', 'hash-sync', '{}', 'QUEUED', 'MARKET_DATA', 1, 1)",
+    ).run();
+    const peer = await connect();
+    peer.submit({
+      type: 'DEVICE_ACTIVITY',
+      progress: {
+        activity: 'DOWNLOADING_DATASET', datasetId: dataset.datasetId,
+        datasetVersion: dataset.version, completed: 512, total: 1024,
+        detail: null, occurredAtMs: 100,
+      },
+    });
+    await vi.waitFor(() => {
+      const base = ctx.container.backtestPreparationOrchestrator.get('prep-sync')!;
+      expect(ctx.container.agentCoordinator.preparationView(base).progress).toMatchObject({
+        activity: 'DOWNLOADING_DATASET', actorName: 'device', completed: 512,
+        total: 1024, attempt: null,
+      });
+    });
+  });
+
   it('재접속과 중복 capacity 통지가 이미 배정한 작업을 중복 실행하지 않는다', async () => {
     enqueue();
     const first = await connect(); capacity(first); capacity(first);
@@ -103,7 +125,7 @@ describe('연결과 리스 수명 분리', () => {
   it('준비된 연결도 실행 버전이 달라지면 유휴 실행기에서 즉시 제외한다', async () => {
     const peer = await connect(); capacity(peer);
     await vi.waitFor(() => expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(8_000_000));
-    peer.submit({ type: 'HELLO', protocolVersion: 2, runnerVersion: 'b'.repeat(64) });
+    peer.submit({ type: 'HELLO', protocolVersion: 3, runnerVersion: 'b'.repeat(64) });
     await vi.waitFor(() => expect(peer.received.some((message) => message.type === 'UPDATE_REQUIRED')).toBe(true));
     const job = ctx.container.jobQueue.enqueue(request);
     await new Promise((resolve) => setImmediate(resolve));

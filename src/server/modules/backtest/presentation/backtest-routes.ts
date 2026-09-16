@@ -2,7 +2,7 @@ import type { PeriodValidationDto } from "../../../../shared/schemas/period-vali
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import { registerPeriodValidationRoutes } from "./period-validation-routes.js";
 import { PreparationReferenceService } from "../application/preparation-reference-service.js";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import os from "node:os";
 import fs from "node:fs";
@@ -178,7 +178,51 @@ function availableMemoryBytes(): number {
   return os.freemem();
 }
 
-function serializeJob(job: BacktestJobRow) {
+const BACKTEST_PROGRESS_EPOCH = randomUUID();
+const BACKTEST_PROGRESS_REVISIONS = new Map<
+  string,
+  { signature: string; revision: number }
+>();
+
+function serializeJob(job: BacktestJobRow, database?: DatabaseHandle) {
+  const agentName =
+    job.agentId && job.agentId !== "server-local" && database
+      ? (database.sqlite
+          .prepare("SELECT name FROM agent_clients WHERE id = ?")
+          .get(job.agentId) as { name: string } | undefined)?.name
+      : null;
+  const actorKind =
+    job.agentId === "server-local" ? "SERVER_AGENT" : "REMOTE_AGENT";
+  const activity =
+    job.executionActivity ??
+    (job.status === "QUEUED"
+      ? "WAITING_FOR_EXECUTOR"
+      : job.status === "STARTING"
+        ? "LOADING_BACKTEST_INPUT"
+        : null);
+  const signature = JSON.stringify([
+    job.status,
+    job.executionActivity,
+    job.progressBars,
+    job.totalBars,
+    job.progressLabel,
+    job.resultTransferBytes,
+    job.resultTransferTotalBytes,
+    job.lastProgressAtMs,
+    job.lastReceivedAtMs,
+  ]);
+  const previous = BACKTEST_PROGRESS_REVISIONS.get(job.id);
+  const progressRevision =
+    previous?.signature === signature
+      ? previous.revision
+      : (previous?.revision ?? 0) + 1;
+  if (["COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"].includes(job.status))
+    BACKTEST_PROGRESS_REVISIONS.delete(job.id);
+  else
+    BACKTEST_PROGRESS_REVISIONS.set(job.id, {
+      signature,
+      revision: progressRevision,
+    });
   return {
     id: job.id,
     status: job.status,
@@ -193,6 +237,51 @@ function serializeJob(job: BacktestJobRow) {
     completedAtMs: job.completedAtMs,
     cloneBatchId: job.cloneBatchId,
     cloneSourceJobId: job.cloneSourceJobId,
+    progressEpoch: BACKTEST_PROGRESS_EPOCH,
+    progressRevision,
+    progress:
+      activity === null
+        ? null
+        : {
+            activity,
+            detail:
+              job.status === "QUEUED"
+                ? "배정 가능한 계산 슬롯을 기다리는 중"
+                : job.progressLabel,
+            actorKind: job.status === "QUEUED" ? "SERVER" : actorKind,
+            actorId: job.status === "QUEUED" ? null : job.agentId,
+            actorName:
+              job.status === "QUEUED"
+                ? "운영 서버 배정기"
+                : actorKind === "SERVER_AGENT"
+                  ? "운영 서버 내부 agent"
+                  : (agentName ?? "원격 agent"),
+            unit:
+              activity === "UPLOADING_RESULT" && job.resultTransferTotalBytes
+                ? "BYTES"
+                : job.totalBars !== null && job.totalBars > 0
+                  ? "BARS"
+                  : null,
+            completed:
+              activity === "UPLOADING_RESULT"
+                ? job.resultTransferBytes
+                : job.totalBars !== null && job.totalBars > 0
+                  ? job.progressBars
+                  : null,
+            total:
+              activity === "UPLOADING_RESULT"
+                ? job.resultTransferTotalBytes
+                : job.totalBars !== null && job.totalBars > 0
+                  ? job.totalBars
+                  : null,
+            currentItem: job.progressLabel,
+            attempt: job.attempt || null,
+            retryCount: job.leaseFailures,
+            startedAtMs: job.activityStartedAtMs ?? job.startedAtMs ?? job.createdAtMs,
+            lastProgressAtMs: job.lastProgressAtMs,
+            lastReceivedAtMs: job.lastReceivedAtMs,
+            nextResumeAtMs: null,
+          },
   };
 }
 
@@ -379,7 +468,7 @@ export function registerBacktestRoutes(
   } = deps;
 
   const serializeJobSummary = (job: BacktestJobRow) => ({
-    ...serializeJob(job),
+    ...serializeJob(job, deps.database),
     metrics: job.status === "COMPLETED" ? results.getMetrics(job.id) : null,
   });
 
@@ -1276,7 +1365,7 @@ export function registerBacktestRoutes(
       });
       return reply
         .code(201)
-        .send({ job: serializeJob(job), warnings: validated.warnings });
+        .send({ job: serializeJob(job, deps.database), warnings: validated.warnings });
     },
   );
 
@@ -1308,7 +1397,7 @@ export function registerBacktestRoutes(
       if (!job)
         return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
       return {
-        job: serializeJob(job),
+        job: serializeJob(job, deps.database),
         run: results.getRun(id),
         metrics: results.getMetrics(id),
         benchmark: results.getBenchmark(id),
@@ -1457,7 +1546,7 @@ export function registerBacktestRoutes(
       });
       return reply
         .code(201)
-        .send({ job: serializeJob(cloned), warnings: cloneWarnings });
+        .send({ job: serializeJob(cloned, deps.database), warnings: cloneWarnings });
     },
   );
 
@@ -1580,7 +1669,7 @@ export function registerBacktestRoutes(
       );
       return reply
         .code(201)
-        .send({ job: serializeJob(cloned), warnings: cloneWarnings });
+        .send({ job: serializeJob(cloned, deps.database), warnings: cloneWarnings });
     },
   );
 
@@ -1916,7 +2005,7 @@ export function registerBacktestRoutes(
         `attachment; filename="backtest-${id}.json"`,
       );
       const fullExport = results.getFullExport(id);
-      return { job: serializeJob(job), ...fullExport };
+      return { job: serializeJob(job, deps.database), ...fullExport };
     },
   );
 
@@ -1943,7 +2032,9 @@ export function registerBacktestRoutes(
       const writeSnapshot = (): BacktestJobRow | null => {
         const current = queue.getJob(id);
         if (current) {
-          reply.raw.write(`data: ${JSON.stringify(serializeJob(current))}\n\n`);
+          reply.raw.write(
+            `data: ${JSON.stringify(serializeJob(current, deps.database))}\n\n`,
+          );
         }
         return current;
       };

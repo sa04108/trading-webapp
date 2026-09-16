@@ -16,6 +16,7 @@ import type { BacktestRequest } from "../../../../shared/schemas/backtest-reques
 import type { ProvenancePin } from "../../../../shared/schemas/provenance-pin.js";
 import type { LegacyUniverseScheduleEntry } from "../../../../runtime/modules/backtest/application/universe-rule-resolver.js";
 import type { BenchmarkPin } from "../../../../shared/schemas/benchmark.js";
+import type { ExecutionActivity } from "../../../../shared/execution-progress.js";
 
 export type BacktestJobStatus =
   | "QUEUED"
@@ -50,6 +51,17 @@ export interface LeaseHeartbeat {
   readonly processedBars: number | null;
   readonly totalBars: number | null;
   readonly progressLabel: string | null;
+  readonly activity?: ExecutionActivity | null;
+}
+
+export interface LeaseActivityUpdate {
+  readonly jobId: string;
+  readonly attempt: number;
+  readonly leaseTokenHash: string;
+  readonly nowMs: number;
+  readonly activity: ExecutionActivity;
+  readonly completed?: number | null;
+  readonly total?: number | null;
 }
 
 export interface ExpiredLease {
@@ -201,7 +213,13 @@ export class JobQueue {
            error = NULL,
            progress_bars = NULL,
            total_bars = NULL,
-           progress_label = NULL
+           progress_label = NULL,
+           execution_activity = 'LOADING_BACKTEST_INPUT',
+           activity_started_at_ms = ?,
+           last_progress_at_ms = NULL,
+           last_received_at_ms = NULL,
+           result_transfer_bytes = NULL,
+           result_transfer_total_bytes = NULL
        WHERE id = (
          SELECT id FROM backtest_jobs
          WHERE status = 'QUEUED' AND lease_failures < ? AND estimated_bars <= ?
@@ -217,6 +235,7 @@ export class JobQueue {
         options.leaseTokenHash,
         options.leaseExpiresAtMs,
         options.runnerVersion,
+        this.clock.now(),
         options.maxAttempts,
         options.maxBars ?? Number.MAX_SAFE_INTEGER,
       ) as { id: string } | undefined;
@@ -235,7 +254,16 @@ export class JobQueue {
            lease_expires_at_ms = ?,
            progress_bars = COALESCE(?, progress_bars),
            total_bars = COALESCE(?, total_bars),
-           progress_label = COALESCE(?, progress_label)
+           progress_label = COALESCE(?, progress_label),
+           activity_started_at_ms = CASE WHEN ? IS NOT NULL AND ? IS NOT execution_activity THEN ? ELSE activity_started_at_ms END,
+           execution_activity = COALESCE(?, execution_activity),
+           last_progress_at_ms = CASE
+             WHEN (? IS NOT NULL AND ? IS NOT progress_bars)
+               OR (? IS NOT NULL AND ? IS NOT total_bars)
+               OR (? IS NOT NULL AND ? IS NOT progress_label)
+               OR (? IS NOT NULL AND ? IS NOT execution_activity)
+             THEN ? ELSE last_progress_at_ms END,
+           last_received_at_ms = ?
        WHERE id = ?
          AND attempt = ?
          AND lease_token_hash = ?
@@ -248,12 +276,54 @@ export class JobQueue {
         input.processedBars,
         input.totalBars,
         input.progressLabel,
+        input.activity ?? null,
+        input.activity ?? null,
+        input.nowMs,
+        input.activity ?? null,
+        input.processedBars,
+        input.processedBars,
+        input.totalBars,
+        input.totalBars,
+        input.progressLabel,
+        input.progressLabel,
+        input.activity ?? null,
+        input.activity ?? null,
+        input.nowMs,
+        input.nowMs,
         input.jobId,
         input.attempt,
         input.leaseTokenHash,
         input.nowMs,
       ) as { status: BacktestJobStatus } | undefined;
     return row?.status ?? null;
+  }
+
+  updateLeaseActivity(input: LeaseActivityUpdate): boolean {
+    return (
+      this.handle.sqlite
+        .prepare(
+          `UPDATE backtest_jobs SET
+             activity_started_at_ms = CASE WHEN execution_activity IS NOT ? THEN ? ELSE activity_started_at_ms END,
+             execution_activity = ?,
+             result_transfer_bytes = COALESCE(?, result_transfer_bytes),
+             result_transfer_total_bytes = COALESCE(?, result_transfer_total_bytes),
+             last_progress_at_ms = ?, last_received_at_ms = ?
+           WHERE id = ? AND attempt = ? AND lease_token_hash = ?
+             AND status IN ('STARTING', 'RUNNING', 'CANCELLING')`,
+        )
+        .run(
+          input.activity,
+          input.nowMs,
+          input.activity,
+          input.completed ?? null,
+          input.total ?? null,
+          input.nowMs,
+          input.nowMs,
+          input.jobId,
+          input.attempt,
+          input.leaseTokenHash,
+        ).changes > 0
+    );
   }
 
   finishLease(input: {

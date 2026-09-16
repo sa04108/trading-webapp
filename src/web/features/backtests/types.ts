@@ -1,5 +1,6 @@
 import type { UniverseRule } from "../../../shared/schemas/universe-rule.js";
 import type { BenchmarkId } from "../../../shared/schemas/benchmark.js";
+import type { ExecutionProgress } from "../../../shared/execution-progress.js";
 
 export type BacktestStatus =
   | "QUEUED"
@@ -59,6 +60,9 @@ export interface JobSummary {
   completedAtMs: number | null;
   cloneBatchId: string | null;
   cloneSourceJobId: string | null;
+  progressEpoch?: string;
+  progressRevision?: number;
+  progress?: ExecutionProgress | null;
   metrics?: BacktestMetrics | null;
 }
 

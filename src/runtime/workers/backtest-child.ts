@@ -181,6 +181,13 @@ async function main(input: { lease: AgentLease }): Promise<void> {
   };
 
   try {
+    send({
+      type: "progress",
+      processedBars: 0,
+      totalBars: 0,
+      progressLabel: null,
+      activity: "LOADING_BACKTEST_INPUT",
+    });
     const job = db
       .select()
       .from(backtestJobs)
@@ -781,6 +788,13 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     };
     loadCompletedAtMs = Date.now();
     activeStage = "RUN";
+    send({
+      type: "progress",
+      processedBars: 0,
+      totalBars: 0,
+      progressLabel: null,
+      activity: "CALCULATING_BACKTEST",
+    });
     const startedAtMs = Date.now();
     let lastProgressSentAt = 0;
 
@@ -825,7 +839,13 @@ async function main(input: { lease: AgentLease }): Promise<void> {
           const progressLabel = new Date(currentTsMs)
             .toISOString()
             .slice(0, 10);
-          send({ type: "progress", processedBars, totalBars, progressLabel });
+          send({
+            type: "progress",
+            processedBars,
+            totalBars,
+            progressLabel,
+            activity: "CALCULATING_BACKTEST",
+          });
         },
       },
       datasetWarnings,
@@ -840,6 +860,13 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     }
     const artifact = runOutcome.artifact;
     activeStage = "PERSIST";
+    send({
+      type: "progress",
+      processedBars: artifact.processedBars,
+      totalBars: artifact.processedBars,
+      progressLabel: null,
+      activity: "WRITING_RESULT",
+    });
     outputSize = measureBacktestArtifact(artifact);
 
     // 계산이 오래 걸리는 동안 중앙 종목 마스터 수집이 과거 alias를 새로 발견할 수

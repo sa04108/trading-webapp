@@ -39,6 +39,29 @@ describe('에이전트 리스와 데이터 대기', () => {
     expect(preparations.heartbeat(clientId, next).accepted).toBe(true);
   });
 
+  it('같은 준비 진행률의 heartbeat는 마지막 진행 시각을 바꾸지 않는다', () => {
+    seedPreparation('prep-progress');
+    const lease = preparations.claim(clientId, dataset)!;
+    const progress = {
+      phase: 'RESOLVING_STAGES' as const,
+      overallProgress: 50,
+      doneSymbols: 1,
+      totalSymbols: 2,
+      savedFacts: 1,
+      gapCount: 0,
+      resolutionPass: 1,
+    };
+
+    vi.spyOn(Date, 'now').mockReturnValue(100);
+    expect(preparations.heartbeat(clientId, lease, progress).accepted).toBe(true);
+    vi.mocked(Date.now).mockReturnValue(200);
+    expect(preparations.heartbeat(clientId, lease, progress).accepted).toBe(true);
+
+    expect(database.sqlite.prepare(
+      'SELECT j.updated_at_ms, l.last_received_at_ms FROM backtest_preparation_jobs j JOIN agent_preparation_leases l ON l.job_id = j.id WHERE j.id = ?',
+    ).get(lease.jobId)).toEqual({ updated_at_ms: 100, last_received_at_ms: 200 });
+  });
+
   it('수집 대기는 실패 횟수를 소모하지 않고 다른 준비 작업을 실행한다', () => {
     seedPreparation('prep-one'); seedPreparation('prep-two');
     const lease = preparations.claim(clientId, dataset)!;
@@ -63,6 +86,31 @@ describe('에이전트 리스와 데이터 대기', () => {
     expect(collect).toHaveBeenCalledTimes(1);
     expect(database.sqlite.prepare('SELECT available_version FROM agent_data_requests').get()).toEqual({ available_version: 2 });
     expect(() => queue.request('PREPARATION', 'prep-three', 2, { kind: 'MARKET', dates: ['2026-01-05', '2026-01-06'] })).toThrow('같은 결손');
+  });
+
+  it('공유 수집 진행을 모든 대기 작업에 알리고 요청 행에서 한 번만 읽는다', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const collect = vi.fn(async (_request, _stop, report) => {
+      report({ activity: 'COLLECTING_MARKET', unit: 'DATES', completed: 1, total: 2, currentItem: '2026-01-05' });
+      await gate;
+      report({ activity: 'COLLECTING_MARKET', unit: 'DATES', completed: 2, total: 2, currentItem: '2026-01-06' });
+    });
+    const changed = vi.fn();
+    const snapshots = { ensureLatest: async () => ({ ...dataset, version: 2 }) } as DatasetSnapshots;
+    const queue = new AgentDataQueue(database, snapshots, collect, vi.fn(), pino({ enabled: false }), {
+      onProgress: changed,
+    });
+    queue.request('PREPARATION', 'shared-one', 1, { kind: 'MARKET', dates: ['2026-01-05', '2026-01-06'] });
+    queue.request('PREPARATION', 'shared-two', 1, { kind: 'MARKET', dates: ['2026-01-05', '2026-01-06'] });
+    queue.tick();
+    await vi.waitFor(() => expect(queue.progressForJob('shared-one')).toMatchObject({ completed: 1, total: 2, currentItem: '2026-01-05' }));
+    expect(queue.progressForJob('shared-two')).toMatchObject({ completed: 1, total: 2 });
+    expect(changed).toHaveBeenCalledWith('PREPARATION', 'shared-one');
+    expect(changed).toHaveBeenCalledWith('PREPARATION', 'shared-two');
+    release();
+    await vi.waitFor(() => expect(collect).toHaveBeenCalledTimes(1));
+    await queue.stop();
   });
 
   it('수집 버전이 달라지면 이전 완료 요청을 재사용하지 않고 새 수집을 실행한다', async () => {

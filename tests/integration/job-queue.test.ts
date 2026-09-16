@@ -716,6 +716,53 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(queue.getJob(job.id)!.progressBars).toBe(50);
   });
 
+  it('같은 백테스트 진행률의 heartbeat는 수신 시각만 갱신한다', () => {
+    const queue = ctx.container.jobQueue;
+    const job = queue.enqueue(buildRequest());
+    const tokenHash = 'a'.repeat(64);
+    const expiresAtMs = Date.now() + 90_000;
+    queue.claimNextLease({
+      agentId: 'agent-1', leaseTokenHash: tokenHash,
+      leaseExpiresAtMs: expiresAtMs, runnerVersion: 'test', maxAttempts: 3,
+    });
+    const heartbeat = {
+      jobId: job.id, attempt: 1, leaseTokenHash: tokenHash,
+      nextLeaseExpiresAtMs: expiresAtMs,
+      processedBars: 50, totalBars: 100, progressLabel: 'mid',
+      activity: 'CALCULATING_BACKTEST' as const,
+    };
+
+    expect(queue.heartbeatLease({ ...heartbeat, nowMs: 100 })).toBe('RUNNING');
+    expect(queue.heartbeatLease({ ...heartbeat, nowMs: 200 })).toBe('RUNNING');
+    expect(queue.getJob(job.id)).toMatchObject({
+      lastProgressAtMs: 100,
+      lastReceivedAtMs: 200,
+    });
+  });
+
+  it('결과 전송·검증 활동은 현재 attempt의 유효한 lease만 갱신한다', () => {
+    const queue = ctx.container.jobQueue;
+    const job = queue.enqueue(buildRequest());
+    const tokenHash = 'a'.repeat(64);
+    queue.claimNextLease({
+      agentId: 'agent-1', leaseTokenHash: tokenHash,
+      leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3,
+    });
+
+    expect(queue.updateLeaseActivity({
+      jobId: job.id, attempt: 1, leaseTokenHash: tokenHash, nowMs: 100,
+      activity: 'UPLOADING_RESULT', completed: 512, total: 1024,
+    })).toBe(true);
+    expect(queue.getJob(job.id)).toMatchObject({
+      executionActivity: 'UPLOADING_RESULT', resultTransferBytes: 512,
+      resultTransferTotalBytes: 1024, lastReceivedAtMs: 100,
+    });
+    expect(queue.updateLeaseActivity({
+      jobId: job.id, attempt: 0, leaseTokenHash: tokenHash, nowMs: 101,
+      activity: 'IMPORTING_RESULT',
+    })).toBe(false);
+  });
+
   it('recovers orphaned active jobs as INTERRUPTED on restart (스펙 §10)', () => {
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());

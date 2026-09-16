@@ -16,6 +16,7 @@ type ChildMessage =
       readonly type: "completed";
       readonly output: BacktestResultCompletionOutput;
     }
+  | { readonly type: "progress"; readonly activity: "VALIDATING_RESULT" | "IMPORTING_RESULT" }
   | { readonly type: "result-persistence-unavailable"; readonly error: string }
   | { readonly type: "invalid-result-artifact"; readonly error: string }
   | { readonly type: "result-import-internal-error"; readonly error: string };
@@ -24,7 +25,13 @@ type ChildMessage =
 export class ForkedBacktestResultCompleter implements BacktestResultCompleter {
   private tail: Promise<void> = Promise.resolve();
 
-  constructor(private readonly databasePath: string) {}
+  constructor(
+    private readonly databasePath: string,
+    private readonly onProgress?: (
+      input: BacktestResultCompletionInput,
+      activity: "VALIDATING_RESULT" | "IMPORTING_RESULT",
+    ) => void,
+  ) {}
 
   complete(
     input: BacktestResultCompletionInput,
@@ -70,6 +77,8 @@ export class ForkedBacktestResultCompleter implements BacktestResultCompleter {
       });
       child.on("message", (message: ChildMessage) => {
         if (message.type === "completed") output = message.output;
+        else if (message.type === "progress")
+          this.onProgress?.(input, message.activity);
         else if (message.type === "result-persistence-unavailable") {
           persistenceError = message.error;
         } else if (message.type === "invalid-result-artifact") {

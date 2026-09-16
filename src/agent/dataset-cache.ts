@@ -13,6 +13,20 @@ import {
   datasetManifestSchema,
   type DatasetManifest,
 } from "../shared/agent-protocol.js";
+import type { ExecutionActivity } from "../shared/execution-progress.js";
+
+export interface DatasetCacheProgress {
+  readonly activity: Extract<
+    ExecutionActivity,
+    "DOWNLOADING_DATASET" | "VERIFYING_DATASET"
+  >;
+  readonly datasetId: string;
+  readonly datasetVersion: number;
+  readonly completed: number | null;
+  readonly total: number | null;
+  readonly detail: string | null;
+  readonly occurredAtMs: number;
+}
 
 export function durableJson(file: string, value: unknown): void {
   const temporary = `${file}.tmp`;
@@ -39,6 +53,7 @@ export class AgentDatasetCache {
   constructor(
     readonly directory: string,
     private readonly settings: AgentSettings,
+    private readonly onProgress?: (progress: DatasetCacheProgress) => void,
   ) {
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     // 재시작 후에도 서버 명세의 해시로 로컬 파일을 확인한 뒤 계산에 사용한다.
@@ -80,6 +95,7 @@ export class AgentDatasetCache {
       throw new Error("계산 DB 스키마가 달라 클라이언트를 업데이트해야 합니다");
     const file = this.file(manifest);
     if (fs.existsSync(file)) {
+      this.report(manifest, "VERIFYING_DATASET", null, null, "기존 파일 확인 중");
       const hash = createHash("sha256");
       for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
       if (
@@ -87,6 +103,7 @@ export class AgentDatasetCache {
         hash.digest("hex") === manifest.sha256
       ) {
         this.validate(file, manifest);
+        this.report(manifest, "VERIFYING_DATASET", null, null, "검증 완료");
         this.current = manifest;
         return;
       }
@@ -111,7 +128,9 @@ export class AgentDatasetCache {
       if (!response.ok || !response.body)
         throw new Error(`계산 데이터 다운로드 실패: HTTP ${response.status}`);
       let bytes = 0;
+      let lastReportedAt = 0;
       const hash = createHash("sha256");
+      const report = this.report.bind(this);
       const verify = new Transform({
         transform(chunk: Buffer, _encoding, callback) {
           bytes += chunk.length;
@@ -120,6 +139,17 @@ export class AgentDatasetCache {
             return;
           }
           hash.update(chunk);
+          const now = Date.now();
+          if (now - lastReportedAt >= 1000 || bytes === manifest.bytes) {
+            lastReportedAt = now;
+            report(
+              manifest,
+              "DOWNLOADING_DATASET",
+              bytes,
+              manifest.bytes,
+              null,
+            );
+          }
           callback(null, chunk);
         },
       });
@@ -130,6 +160,7 @@ export class AgentDatasetCache {
       );
       if (bytes !== manifest.bytes || hash.digest("hex") !== manifest.sha256)
         throw new Error("계산 데이터 해시 또는 길이 불일치");
+      this.report(manifest, "VERIFYING_DATASET", null, null, "해시·DB 확인 중");
       this.validate(temporary, manifest);
       fs.chmodSync(temporary, 0o444);
       const fd = fs.openSync(temporary, "r");
@@ -141,10 +172,29 @@ export class AgentDatasetCache {
       fs.renameSync(temporary, file);
       durableJson(path.join(this.directory, "current.json"), manifest);
       this.current = manifest;
+      this.report(manifest, "VERIFYING_DATASET", null, null, "검증 완료");
     } catch (error) {
       fs.rmSync(temporary, { force: true });
       throw error;
     }
+  }
+
+  private report(
+    manifest: DatasetManifest,
+    activity: DatasetCacheProgress["activity"],
+    completed: number | null,
+    total: number | null,
+    detail: string | null,
+  ): void {
+    this.onProgress?.({
+      activity,
+      datasetId: manifest.datasetId,
+      datasetVersion: manifest.version,
+      completed,
+      total,
+      detail,
+      occurredAtMs: Date.now(),
+    });
   }
 
   private validate(file: string, manifest: DatasetManifest): void {

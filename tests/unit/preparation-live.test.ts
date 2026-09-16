@@ -3,6 +3,7 @@ import { QueryClient } from '@tanstack/react-query';
 import {
   formatPreparationResumeTime,
   isPreparingCurrentParams,
+  newerPreparationJob,
   pollInterval,
   preparationJobQueryKey,
   seedPreparationJob,
@@ -29,6 +30,26 @@ describe('pollInterval (SSE 실패 시 폴백 규칙 — useBacktestLive 와 같
 
   it('아직 job 이 없으면(null) 폴링하지 않는다', () => {
     expect(pollInterval(null, true)).toBe(false);
+  });
+});
+
+describe('newerPreparationJob', () => {
+  const snapshot = (revision: number, status: BacktestPreparationJob['status'] = 'RUNNING'):
+    BacktestPreparationJob => ({
+      id: 'prep_revision', requestHash: 'hash', status, phase: 'MARKET_DATA',
+      overallProgress: 0, doneSymbols: 0, totalSymbols: 0, savedFacts: 0,
+      gapCount: 0, nextResumeAtMs: null, error: null,
+      progressEpoch: 'server-one', progressRevision: revision, progress: null,
+    });
+
+  it('같은 서버 세대의 늦은 응답과 종료 뒤 RUNNING 역행을 거부한다', () => {
+    expect(newerPreparationJob(snapshot(3), snapshot(2)).progressRevision).toBe(3);
+    expect(newerPreparationJob(snapshot(3, 'COMPLETED'), snapshot(4)).status).toBe('COMPLETED');
+  });
+
+  it('서버 재시작 세대의 snapshot은 revision을 새로 시작해도 받는다', () => {
+    const restarted = { ...snapshot(1), progressEpoch: 'server-two' };
+    expect(newerPreparationJob(snapshot(50), restarted)).toBe(restarted);
   });
 });
 
@@ -106,6 +127,9 @@ describe('seedPreparationJob', () => {
       gapCount: 0,
       nextResumeAtMs: null,
       error: null,
+      progressEpoch: "server-one",
+      progressRevision: 1,
+      progress: null,
     };
 
     seedPreparationJob(client, job);

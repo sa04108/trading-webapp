@@ -17,7 +17,10 @@ import { FactSyncService } from "../../facts/application/fact-sync-service.js";
 import { createDartFactSource } from "../../facts/infrastructure/dart/dart-fact-source.js";
 import { SqliteDartRawSnapshotStore } from "../../facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js";
 import { createKrxHistoricalUniverseSource } from "../../market-data/infrastructure/krx/krx-historical-universe-source.js";
-import { AgentCollectionPaused } from "./agent-data-queue.js";
+import {
+  AgentCollectionPaused,
+  type CollectionProgressReport,
+} from "./agent-data-queue.js";
 
 type CollectionConfig = Pick<
   AppConfig,
@@ -114,20 +117,46 @@ export function createAgentCollectionRuntime(input: {
   const collect = async (
     request: AgentDataRequest,
     shouldStop: () => boolean,
+    onProgress: (progress: CollectionProgressReport) => void,
   ): Promise<void> => {
     if (request.kind === "MARKET") {
-      for (const date of request.dates) {
+      for (const [index, date] of request.dates.entries()) {
         if (shouldStop()) return;
         await symbolMasterService.ensureTradingDay(date);
+        onProgress({
+          activity: "COLLECTING_MARKET",
+          unit: "DATES",
+          completed: index + 1,
+          total: request.dates.length,
+          currentItem: date,
+        });
       }
     } else if (request.kind === "SELECTION") {
-      await symbolMasterService.ensureSelectionMetrics(request.dates);
+      for (const [index, date] of request.dates.entries()) {
+        if (shouldStop()) return;
+        await symbolMasterService.ensureSelectionMetrics([date]);
+        onProgress({
+          activity: "COLLECTING_SELECTION",
+          unit: "DATES",
+          completed: index + 1,
+          total: request.dates.length,
+          currentItem: date,
+        });
+      }
     } else if (request.kind === "REGISTER") {
-      for (const entry of request.symbols) {
+      for (const [index, entry] of request.symbols.entries()) {
+        if (shouldStop()) return;
         const registered = symbolService.getRegisteredIdentity(entry.symbol);
         if (registered) {
           if (registered.standardCode !== entry.standardCode)
             throw new Error("종목 표준코드가 기존 등록과 다릅니다");
+          onProgress({
+            activity: "REGISTERING_SYMBOLS",
+            unit: "SYMBOLS",
+            completed: index + 1,
+            total: request.symbols.length,
+            currentItem: entry.symbol,
+          });
           continue;
         }
         const row = database.sqlite
@@ -143,6 +172,13 @@ export function createAgentCollectionRuntime(input: {
           row.name,
           entry.standardCode,
         );
+        onProgress({
+          activity: "REGISTERING_SYMBOLS",
+          unit: "SYMBOLS",
+          completed: index + 1,
+          total: request.symbols.length,
+          currentItem: entry.symbol,
+        });
       }
     } else {
       const input = {
@@ -150,21 +186,38 @@ export function createAgentCollectionRuntime(input: {
         mode: "INCREMENTAL" as const,
         consolidated: true,
       };
-      const report =
+      const reportSymbol = (progress: { symbol: string; index: number; total: number }) =>
+        onProgress({
+          activity:
+            request.kind === "FINANCIAL"
+              ? "COLLECTING_FINANCIALS"
+              : "COLLECTING_ACTIONS",
+          unit: "SYMBOLS",
+          completed: progress.index,
+          total: progress.total,
+          currentItem: progress.symbol,
+        });
+      const syncReport =
         request.kind === "FINANCIAL"
-          ? await factSyncService.sync(input, { shouldStop })
-          : await factSyncService.syncCorporateActions(input, { shouldStop });
-      if (report.stopReason === "DAILY_QUOTA") {
+          ? await factSyncService.sync(input, {
+              shouldStop,
+              onSymbolDone: reportSymbol,
+            })
+          : await factSyncService.syncCorporateActions(input, {
+              shouldStop,
+              onSymbolDone: reportSymbol,
+            });
+      if (syncReport.stopReason === "DAILY_QUOTA") {
         const next =
           Math.floor((clock.now() + 9 * 3600_000) / 86400_000 + 1) * 86400_000 -
           9 * 3600_000;
         throw new AgentCollectionPaused(
-          report.failureMessage ?? "DART 일일 호출 한도 대기",
+          syncReport.failureMessage ?? "DART 일일 호출 한도 대기",
           next,
         );
       }
-      if (report.stopReason === "ERROR")
-        throw new Error(report.failureMessage ?? "DART 수집 실패");
+      if (syncReport.stopReason === "ERROR")
+        throw new Error(syncReport.failureMessage ?? "DART 수집 실패");
     }
   };
   return {

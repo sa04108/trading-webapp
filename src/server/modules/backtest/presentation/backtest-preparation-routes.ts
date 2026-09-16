@@ -14,6 +14,7 @@ import type { FinancialFactAvailabilityService } from "../../../../runtime/modul
 import type { CandleCoverageService } from "../../../../runtime/modules/market-data/application/candle-coverage-service.js";
 import type { SymbolMasterService } from "../../../../runtime/modules/market-data/application/symbol-master-service.js";
 import { sendIfKrxError, sendIfNotCovered } from "./krx-error-mapping.js";
+import type { AgentCoordinator } from "../../agents/application/agent-coordinator.js";
 
 type PreHandler = (
   request: FastifyRequest,
@@ -29,6 +30,7 @@ export interface BacktestPreparationRouteDeps {
   readonly candles: Pick<CandleCoverageService, "getLastTsInWindows">;
   readonly symbolMaster: Pick<SymbolMasterService, "delistedEventsBetween">;
   readonly dartApiKeyAvailable: boolean;
+  readonly progress: Pick<AgentCoordinator, "preparationView">;
 }
 
 const previewRequestSchema = z.object({
@@ -97,7 +99,7 @@ export function registerBacktestPreparationRoutes(
         const active = orchestrator.getActive(input);
         if (active !== null) {
           orchestrator.bindWizard(owner.userId, owner.context, active.id);
-          return reply.code(202).send({ job: active });
+          return reply.code(202).send({ job: deps.progress.preparationView(active) });
         }
 
         const ready = orchestrator.getFreshPreviewDetails(input);
@@ -121,7 +123,9 @@ export function registerBacktestPreparationRoutes(
               "DART API 키가 설정되지 않아 필요한 재무·자본변동 데이터를 동기화할 수 없습니다.",
           });
         }
-        return reply.code(202).send({ job: orchestrator.start(input, owner) });
+        return reply.code(202).send({
+          job: deps.progress.preparationView(orchestrator.start(input, owner)),
+        });
       } catch (error) {
         // resolver 경유 오류는 제출 라우트와 같은 코드로 매핑한다. 그 밖의 오류를
         // 일괄 400 으로 접으면 내부 wiring 결함까지 사용자 요청 문제로 둔갑한다 —
@@ -152,7 +156,7 @@ export function registerBacktestPreparationRoutes(
       const job = orchestrator.get(id);
       if (!job)
         return reply.code(404).send({ error: "준비 작업을 찾을 수 없습니다." });
-      return { job };
+      return { job: deps.progress.preparationView(job) };
     },
   );
 
@@ -164,7 +168,8 @@ export function registerBacktestPreparationRoutes(
       if (!orchestrator.cancel(id)) {
         return reply.code(404).send({ error: "준비 작업을 찾을 수 없습니다." });
       }
-      return { job: orchestrator.get(id) };
+      const job = orchestrator.get(id);
+      return { job: job ? deps.progress.preparationView(job) : null };
     },
   );
 
@@ -186,7 +191,9 @@ export function registerBacktestPreparationRoutes(
         "x-accel-buffering": "no",
       });
       const write = (job: typeof initial): void => {
-        reply.raw.write(`data: ${JSON.stringify(job)}\n\n`);
+        reply.raw.write(
+          `data: ${JSON.stringify(deps.progress.preparationView(job))}\n\n`,
+        );
       };
       let closed = false;
       let unsubscribe = (): void => {};

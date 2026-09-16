@@ -135,6 +135,7 @@ export class BacktestLeaseService {
     readonly processedBars?: number;
     readonly totalBars?: number;
     readonly progressLabel?: string | null;
+    readonly activity?: import("../../../../shared/execution-progress.js").ExecutionActivity;
   }): BacktestHeartbeatResult {
     const nowMs = this.clock.now();
     const leaseExpiresAtMs = nowMs + this.leaseDurationMs();
@@ -147,6 +148,7 @@ export class BacktestLeaseService {
       processedBars: input.processedBars ?? null,
       totalBars: input.totalBars ?? null,
       progressLabel: input.progressLabel ?? null,
+      activity: input.activity ?? null,
     });
     if (status === null) return { status: "STALE_LEASE" };
     this.emitJob({
@@ -178,6 +180,7 @@ export class BacktestLeaseService {
       processedBars: null,
       totalBars: null,
       progressLabel: null,
+      activity: null,
     });
     if (status === null) return { status: "STALE_LEASE" };
     return {
@@ -185,6 +188,23 @@ export class BacktestLeaseService {
       cancelRequested: status === "CANCELLING",
       leaseExpiresAtMs,
     };
+  }
+
+  reportActivity(input: {
+    readonly jobId: string;
+    readonly attempt: number;
+    readonly leaseToken: string;
+    readonly activity: import("../../../../shared/execution-progress.js").ExecutionActivity;
+    readonly completed?: number | null;
+    readonly total?: number | null;
+  }): boolean {
+    const accepted = this.queue.updateLeaseActivity({
+      ...input,
+      leaseTokenHash: tokenHash(input.leaseToken),
+      nowMs: this.clock.now(),
+    });
+    if (accepted) this.emitJob({ jobId: input.jobId, kind: "progress" });
+    return accepted;
   }
 
   /** 응답 유실 뒤 같은 checksum을 재업로드하는 경우 body를 다시 받기 전에 완료를 확인한다. */

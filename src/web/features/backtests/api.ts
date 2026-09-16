@@ -91,19 +91,34 @@ export interface BacktestDetail {
   universeRebalancing: UniverseRebalancingEntryDto[];
 }
 
+export function newerBacktestJob(
+  current: JobSummary | null | undefined,
+  incoming: JobSummary,
+): JobSummary {
+  if (!current || current.id !== incoming.id) return incoming;
+  if (isTerminal(current.status) && !isTerminal(incoming.status)) return current;
+  if (current.progressEpoch !== incoming.progressEpoch) return incoming;
+  return (incoming.progressRevision ?? 0) >= (current.progressRevision ?? 0)
+    ? incoming
+    : current;
+}
+
 /**
  * 작업 상세 + 실시간 진행률 (스펙 §14):
  * SSE 를 기본으로 하고, 연결이 실패하면 2초 polling 으로 fallback 한다.
  */
 export function useBacktestLive(jobId: string) {
   const queryClient = useQueryClient();
-  const [ssePayload, setSsePayload] = useState<JobSummary | null>(null);
   const [sseFailed, setSseFailed] = useState(false);
   const sourceRef = useRef<EventSource | null>(null);
 
   const detail = useQuery({
     queryKey: ["backtests", jobId],
-    queryFn: () => api<BacktestDetail>(`/backtests/${jobId}`),
+    queryFn: async () => {
+      const incoming = await api<BacktestDetail>(`/backtests/${jobId}`);
+      const current = queryClient.getQueryData<BacktestDetail>(["backtests", jobId]);
+      return { ...incoming, job: newerBacktestJob(current?.job, incoming.job) };
+    },
     refetchInterval: (query) => {
       const status = query.state.data?.job.status;
       if (!status) return false;
@@ -113,7 +128,7 @@ export function useBacktestLive(jobId: string) {
     },
   });
 
-  const status = ssePayload?.status ?? detail.data?.job.status;
+  const status = detail.data?.job.status;
 
   useEffect(() => {
     if (!status || isTerminal(status)) {
@@ -127,7 +142,9 @@ export function useBacktestLive(jobId: string) {
     sourceRef.current = source;
     source.onmessage = (event) => {
       const payload = JSON.parse(event.data as string) as JobSummary;
-      setSsePayload(payload);
+      queryClient.setQueryData<BacktestDetail>(["backtests", jobId], (current) =>
+        current ? { ...current, job: newerBacktestJob(current.job, payload) } : current,
+      );
       if (isTerminal(payload.status)) {
         source.close();
         sourceRef.current = null;
@@ -145,10 +162,7 @@ export function useBacktestLive(jobId: string) {
     };
   }, [jobId, status, sseFailed, queryClient]);
 
-  const job: JobSummary | undefined =
-    ssePayload && detail.data && ssePayload.id === detail.data.job.id
-      ? { ...detail.data.job, ...ssePayload }
-      : detail.data?.job;
+  const job: JobSummary | undefined = detail.data?.job;
 
   return {
     ...detail,

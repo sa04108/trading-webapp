@@ -56,6 +56,9 @@ async function publish(input: {
   version: number;
   collectionVersion: string;
 }): Promise<DatasetManifest> {
+  const progress = (activity: string): void => {
+    process.send?.({ type: "progress", activity });
+  };
   const temporary = path.join(
     input.directory,
     `.${input.version}-${randomUUID()}.sqlite`,
@@ -65,11 +68,13 @@ async function publish(input: {
     fileMustExist: true,
   });
   try {
+    progress("PUBLISHING_COPY");
     await source.backup(temporary);
   } finally {
     source.close();
   }
   try {
+    progress("PUBLISHING_VERIFY");
     const snapshot = new Database(temporary, { fileMustExist: true });
     let identity: ReturnType<typeof datasetIdentity>;
     try {
@@ -91,6 +96,7 @@ async function publish(input: {
     } finally {
       snapshot.close();
     }
+    progress("PUBLISHING_HASH");
     const hash = createHash("sha256");
     for await (const chunk of fs.createReadStream(temporary))
       hash.update(chunk);
@@ -103,6 +109,7 @@ async function publish(input: {
       sha256: hash.digest("hex"),
       bytes: fs.statSync(temporary).size,
     };
+    progress("PUBLISHING_COMMIT");
     fs.chmodSync(temporary, 0o444);
     syncFile(temporary);
     fs.renameSync(

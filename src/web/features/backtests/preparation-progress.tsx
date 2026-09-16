@@ -14,6 +14,7 @@ import {
   type BacktestPreparationJob,
   type PreparationPhase,
 } from "./preparation-live";
+import type { ExecutionActivity } from "../../../shared/execution-progress.js";
 
 const PHASE_LABELS: Record<PreparationPhase, string> = {
   MARKET_DATA: "KRX 시장 데이터 수집",
@@ -21,6 +22,32 @@ const PHASE_LABELS: Record<PreparationPhase, string> = {
   VALIDATING_RESULT: "미리보기 결과 검증",
   SYNCING_FACTS: "DART 재무·자본변동 수집",
   FINALIZING: "미리보기 결과 저장",
+};
+
+const ACTIVITY_LABELS: Record<ExecutionActivity, string> = {
+  WAITING_FOR_EXECUTOR: "실행 자원 대기",
+  CHECKING_INPUT: "계산 입력 확인",
+  COLLECTING_MARKET: "KRX 시장 데이터 수집·확인",
+  COLLECTING_SELECTION: "선정 지표 수집",
+  REGISTERING_SYMBOLS: "종목 등록",
+  COLLECTING_FINANCIALS: "DART 재무 데이터 수집",
+  COLLECTING_ACTIONS: "DART 자본변동 수집",
+  WAITING_RETRY: "수집 재개 대기",
+  PUBLISHING_COPY: "계산 스냅샷 복사",
+  PUBLISHING_VERIFY: "계산 스냅샷 무결성 확인",
+  PUBLISHING_HASH: "계산 스냅샷 해시 계산",
+  PUBLISHING_COMMIT: "계산 스냅샷 게시",
+  DOWNLOADING_DATASET: "계산 데이터 다운로드",
+  VERIFYING_DATASET: "계산 데이터 검증",
+  RESOLVING_UNIVERSE: "유니버스 선정 계산",
+  VALIDATING_INPUT: "최종 입력 검증",
+  SAVING_PREVIEW: "미리보기 결과 반영",
+  LOADING_BACKTEST_INPUT: "백테스트 입력 적재",
+  CALCULATING_BACKTEST: "백테스트 계산",
+  WRITING_RESULT: "결과 파일 작성",
+  UPLOADING_RESULT: "결과 전송",
+  VALIDATING_RESULT: "결과 검증",
+  IMPORTING_RESULT: "결과 DB 반영",
 };
 
 /** 버튼 옆 상태와 준비 카드가 같은 용어로 실제 작업 위치를 설명하게 한다. */
@@ -73,6 +100,15 @@ export function PreparationProgress({
     job.status === "COMPLETED"
       ? 100
       : Math.min(99, Math.max(0, Math.floor(job.overallProgress ?? 0)));
+  const progress = job.progress;
+  const activityProgress =
+    progress !== null &&
+    progress !== undefined &&
+    progress.completed !== null &&
+    progress.total !== null &&
+    progress.total > 0
+      ? Math.min(100, Math.round((progress.completed / progress.total) * 100))
+      : null;
 
   return (
     <Card>
@@ -81,10 +117,11 @@ export function PreparationProgress({
         <CardDescription>{preparationStatusDescription(job)}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
-        <div className="space-y-2">
+        {job.status === "COMPLETED" ? (
+          <div className="space-y-2">
           <div className="flex items-center justify-between">
             <span>
-              전체 진행률 <span className="text-muted-foreground">(예상)</span>
+              완료
             </span>
             <span className="tabular-nums" aria-live="polite">
               {overallProgress}%
@@ -96,7 +133,40 @@ export function PreparationProgress({
             aria-valuenow={overallProgress}
             aria-valuetext={`${overallProgress}%`}
           />
-        </div>
+          </div>
+        ) : progress ? (
+          <div className="space-y-2" aria-live="polite">
+            <div className="flex items-center justify-between gap-3">
+              <span>{ACTIVITY_LABELS[progress.activity]}</span>
+              <span className="tabular-nums">
+                {progress.completed !== null && progress.total !== null
+                  ? `${progress.completed.toLocaleString()} / ${progress.total.toLocaleString()} ${progress.unit === "DATES" ? "일" : progress.unit === "SYMBOLS" ? "종목" : progress.unit === "BYTES" ? "bytes" : "봉"}`
+                  : "진행 중"}
+              </span>
+            </div>
+            {activityProgress !== null ? (
+              <Progress
+                value={activityProgress}
+                aria-label="현재 단계 진행률"
+                aria-valuenow={activityProgress}
+                aria-valuetext={`${activityProgress}%`}
+              />
+            ) : null}
+            <p className="text-xs text-muted-foreground">
+              수행: {progress.actorName}
+              {progress.currentItem ? ` · 현재 ${progress.currentItem}` : ""}
+              {progress.detail ? ` · ${progress.detail}` : ""}
+              {(job.resolutionPass ?? 0) > 0
+                ? ` · 선정·검증 ${job.resolutionPass}회차`
+                : ""}
+            </p>
+            {progress.lastReceivedAtMs !== null ? (
+              <p className="text-xs text-muted-foreground">
+                마지막 소식: {new Date(progress.lastReceivedAtMs).toLocaleString("ko-KR")}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         {job.status === "WAITING_DAILY_QUOTA" ? (
           <Alert role="alert">

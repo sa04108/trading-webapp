@@ -159,7 +159,24 @@ export function registerAgentControlRoutes(
       let artifact:
         Awaited<ReturnType<RemoteResultUploadManager["receive"]>> | undefined;
       try {
-        artifact = await uploads.receive(request.body, jobId, identity.attempt);
+        coordinator.backtests.reportActivity({
+          ...identity,
+          activity: "UPLOADING_RESULT",
+          completed: 0,
+          total: headers["content-length"],
+        });
+        artifact = await uploads.receive(
+          request.body,
+          jobId,
+          identity.attempt,
+          (bytes) =>
+            coordinator.backtests.reportActivity({
+              ...identity,
+              activity: "UPLOADING_RESULT",
+              completed: bytes,
+              total: headers["content-length"],
+            }),
+        );
         if (
           artifact.size !== headers["content-length"] ||
           artifact.sha256 !== checksum
@@ -172,6 +189,12 @@ export function registerAgentControlRoutes(
           typeof rawTelemetry === "string" && rawTelemetry.length < 8192
             ? backtestExecutionTelemetrySchema.parse(JSON.parse(rawTelemetry))
             : undefined;
+        coordinator.backtests.reportActivity({
+          ...identity,
+          activity: "VALIDATING_RESULT",
+          completed: artifact.size,
+          total: headers["content-length"],
+        });
         const status = await coordinator.backtests.complete({
           ...identity,
           checksum,

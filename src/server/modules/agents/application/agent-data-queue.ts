@@ -9,6 +9,19 @@ import {
   type AgentLease,
 } from "../../../../shared/agent-protocol.js";
 import type { DatasetSnapshots } from "./dataset-snapshots.js";
+import type {
+  ExecutionActivity,
+  ExecutionProgress,
+  ExecutionProgressUnit,
+} from "../../../../shared/execution-progress.js";
+
+export interface CollectionProgressReport {
+  readonly activity: ExecutionActivity;
+  readonly unit: ExecutionProgressUnit;
+  readonly completed: number;
+  readonly total: number;
+  readonly currentItem: string | null;
+}
 
 export class AgentCollectionPaused extends Error {
   constructor(
@@ -24,6 +37,9 @@ interface DataRequestRow {
   status: string;
   available_version: number | null;
   attempts: number;
+  updated_at_ms: number;
+  next_attempt_at_ms: number;
+  error: string | null;
 }
 
 export class AgentDataQueue {
@@ -37,6 +53,7 @@ export class AgentDataQueue {
     private readonly collect: (
       request: AgentDataRequest,
       shouldStop: () => boolean,
+      report: (progress: CollectionProgressReport) => void,
     ) => Promise<void>,
     private readonly onReady: (
       kind: AgentLease["kind"],
@@ -44,10 +61,58 @@ export class AgentDataQueue {
       error?: string,
     ) => void,
     private readonly logger: Logger,
-    options?: { readonly collectionVersion: string },
+    private readonly options?: {
+      readonly collectionVersion?: string;
+      readonly onProgress?: (kind: AgentLease["kind"], jobId: string) => void;
+    },
   ) {
     this.collectionVersion =
       options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
+  }
+
+  /** 공유 수집 요청의 현재 상태를 작업별 행에 복사하지 않고 대기 연결로 조합한다. */
+  progressForJob(jobId: string): ExecutionProgress | null {
+    const row = this.database.sqlite
+      .prepare(
+        `SELECT r.*, w.kind FROM agent_data_waits w
+         JOIN agent_data_requests r ON r.id = w.request_id
+         WHERE w.job_id = ? LIMIT 1`,
+      )
+      .get(jobId) as
+      | (DataRequestRow & {
+          activity: ExecutionActivity | null;
+          progress_unit: ExecutionProgressUnit | null;
+          progress_completed: number | null;
+          progress_total: number | null;
+          current_item: string | null;
+          activity_started_at_ms: number | null;
+          last_progress_at_ms: number | null;
+        })
+      | undefined;
+    if (!row) return null;
+    const queued = row.status === "QUEUED";
+    const waiting = queued && row.next_attempt_at_ms > Date.now();
+    return {
+      activity: queued ? "WAITING_RETRY" : (row.activity ?? "CHECKING_INPUT"),
+      detail: waiting
+        ? row.error
+        : queued
+          ? "앞선 수집 요청 완료 대기"
+          : null,
+      actorKind: "SERVER",
+      actorId: null,
+      actorName: "운영 서버",
+      unit: row.progress_unit,
+      completed: row.progress_completed,
+      total: row.progress_total,
+      currentItem: row.current_item,
+      attempt: null,
+      retryCount: row.attempts,
+      startedAtMs: row.activity_started_at_ms ?? row.updated_at_ms,
+      lastProgressAtMs: row.last_progress_at_ms,
+      lastReceivedAtMs: row.updated_at_ms,
+      nextResumeAtMs: waiting ? row.next_attempt_at_ms : null,
+    };
   }
 
   recover(): void {
@@ -133,21 +198,56 @@ export class AgentDataQueue {
     if (!row) return;
     this.database.sqlite
       .prepare(
-        "UPDATE agent_data_requests SET status = 'RUNNING', updated_at_ms = ? WHERE id = ?",
+        "UPDATE agent_data_requests SET status = 'RUNNING', activity = 'CHECKING_INPUT', activity_started_at_ms = ?, last_progress_at_ms = NULL, error = NULL, updated_at_ms = ? WHERE id = ?",
       )
-      .run(Date.now(), row.id);
+      .run(Date.now(), Date.now(), row.id);
+    this.notifyWaiters(row.id);
+    let lastSavedAt = 0;
     try {
       await this.collect(
         agentDataRequestSchema.parse(JSON.parse(row.request_json)),
         () => this.stopped,
+        (progress) => {
+          const now = Date.now();
+          if (now - lastSavedAt < 1000 && progress.completed < progress.total)
+            return;
+          lastSavedAt = now;
+          this.database.sqlite
+            .prepare(
+              `UPDATE agent_data_requests SET activity = ?, progress_unit = ?,
+               progress_completed = ?, progress_total = ?, current_item = ?,
+               activity_started_at_ms = CASE WHEN activity = ? THEN activity_started_at_ms ELSE ? END,
+               last_progress_at_ms = ?, updated_at_ms = ? WHERE id = ?`,
+            )
+            .run(
+              progress.activity,
+              progress.unit,
+              progress.completed,
+              progress.total,
+              progress.currentItem,
+              progress.activity,
+              now,
+              now,
+              now,
+              row.id,
+            );
+          this.notifyWaiters(row.id);
+        },
       );
       if (this.stopped) return;
+      this.database.sqlite
+        .prepare(
+          "UPDATE agent_data_requests SET activity = 'PUBLISHING_COPY', activity_started_at_ms = ?, current_item = NULL, updated_at_ms = ? WHERE id = ?",
+        )
+        .run(Date.now(), Date.now(), row.id);
+      this.notifyWaiters(row.id);
       const manifest = await this.snapshots.ensureLatest();
       this.database.sqlite
         .prepare(
           "UPDATE agent_data_requests SET status = 'COMPLETED', available_version = ?, error = NULL, updated_at_ms = ? WHERE id = ?",
         )
         .run(manifest.version, Date.now(), row.id);
+      this.notifyWaiters(row.id);
     } catch (error) {
       if (this.stopped) return;
       const quota =
@@ -175,8 +275,21 @@ export class AgentDataQueue {
           Date.now(),
           row.id,
         );
+      this.database.sqlite
+        .prepare(
+          "UPDATE agent_data_requests SET activity = 'WAITING_RETRY', activity_started_at_ms = ?, updated_at_ms = ? WHERE id = ?",
+        )
+        .run(Date.now(), Date.now(), row.id);
+      this.notifyWaiters(row.id);
     }
     this.resumeReady();
+  }
+
+  private notifyWaiters(requestId: string): void {
+    const rows = this.database.sqlite
+      .prepare("SELECT kind, job_id FROM agent_data_waits WHERE request_id = ?")
+      .all(requestId) as Array<{ kind: AgentLease["kind"]; job_id: string }>;
+    for (const row of rows) this.options?.onProgress?.(row.kind, row.job_id);
   }
 
   private resumeReady(): void {

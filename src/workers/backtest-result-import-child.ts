@@ -70,6 +70,7 @@ function main(): void {
 
   const destination = openDatabase(databasePath);
   try {
+    process.send?.({ type: "progress", activity: "VALIDATING_RESULT" });
     const queue = new JobQueue(destination, systemClock);
     const importer = new SqliteBacktestResultArtifactImporter(destination);
     const artifact = importer.validate(artifactPath, jobId);
@@ -217,7 +218,10 @@ function main(): void {
           throw error;
         }
       },
-      persist: () => importer.write(artifact),
+      persist: () => {
+        process.send?.({ type: "progress", activity: "IMPORTING_RESULT" });
+        return importer.write(artifact);
+      },
     });
     send({
       status,

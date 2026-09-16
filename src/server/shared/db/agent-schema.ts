@@ -29,6 +29,7 @@ export const agentPreparationLeases = sqliteTable("agent_preparation_leases", {
   datasetVersion: integer("dataset_version").notNull(),
   failures: integer("failures").notNull().default(0),
   resultHash: text("result_hash"),
+  lastReceivedAtMs: integer("last_received_at_ms"),
 });
 
 export const agentDataRequests = sqliteTable("agent_data_requests", {
@@ -39,6 +40,13 @@ export const agentDataRequests = sqliteTable("agent_data_requests", {
   availableVersion: integer("available_version"),
   nextAttemptAtMs: integer("next_attempt_at_ms").notNull().default(0),
   error: text("error"),
+  activity: text("activity"),
+  progressUnit: text("progress_unit"),
+  progressCompleted: integer("progress_completed"),
+  progressTotal: integer("progress_total"),
+  currentItem: text("current_item"),
+  activityStartedAtMs: integer("activity_started_at_ms"),
+  lastProgressAtMs: integer("last_progress_at_ms"),
   createdAtMs: integer("created_at_ms").notNull(),
   updatedAtMs: integer("updated_at_ms").notNull(),
 });

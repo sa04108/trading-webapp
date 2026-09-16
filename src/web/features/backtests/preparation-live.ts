@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api-client.js";
+import type { ExecutionProgress } from "../../../shared/execution-progress.js";
 
 export type PreparationStatus =
   | "QUEUED"
@@ -37,8 +38,12 @@ export interface BacktestPreparationJob {
   readonly totalSymbols: number;
   readonly savedFacts: number;
   readonly gapCount: number;
+  readonly resolutionPass?: number;
   readonly nextResumeAtMs: number | null;
   readonly error: string | null;
+  readonly progressEpoch?: string;
+  readonly progressRevision?: number;
+  readonly progress?: ExecutionProgress | null;
 }
 
 export interface PreparationLiveResult {
@@ -57,6 +62,20 @@ export function seedPreparationJob(
   job: BacktestPreparationJob,
 ): void {
   queryClient.setQueryData(preparationJobQueryKey(job.id), { job });
+}
+
+/** HTTP와 SSE가 뒤섞여 도착해도 종료 상태와 같은 서버 세대의 최신 revision을 보존한다. */
+export function newerPreparationJob(
+  current: BacktestPreparationJob | null | undefined,
+  incoming: BacktestPreparationJob,
+): BacktestPreparationJob {
+  if (!current || current.id !== incoming.id) return incoming;
+  if (shouldCloseStream(current.status) && !shouldCloseStream(incoming.status))
+    return current;
+  if (current.progressEpoch !== incoming.progressEpoch) return incoming;
+  return (incoming.progressRevision ?? 0) >= (current.progressRevision ?? 0)
+    ? incoming
+    : current;
 }
 
 const TERMINAL_STATUSES: readonly PreparationStatus[] = [
@@ -146,9 +165,6 @@ export function usePreparationLive(
   jobId: string | null,
 ): PreparationLiveResult {
   const queryClient = useQueryClient();
-  const [ssePayload, setSsePayload] = useState<BacktestPreparationJob | null>(
-    null,
-  );
   const [sseFailed, setSseFailed] = useState(false);
   const sourceRef = useRef<EventSource | null>(null);
   // terminal 알림(캐시 무효화)을 잡 하나당 한 번만 보낸다 — SSE·폴링 모두 같은
@@ -158,22 +174,26 @@ export function usePreparationLive(
   // 새 잡에 붙을 때마다 이전 잡의 흔적을 지운다 — 지우지 않으면 이전 잡이 남긴
   // sseFailed=true 가 새 잡에도 남아 SSE 를 아예 열지 않는다.
   useEffect(() => {
-    setSsePayload(null);
     setSseFailed(false);
   }, [jobId]);
 
   const detail = useQuery({
     queryKey: preparationJobQueryKey(jobId),
-    queryFn: () =>
-      api<{ job: BacktestPreparationJob }>(
+    queryFn: async () => {
+      const incoming = await api<{ job: BacktestPreparationJob }>(
         `/backtests/preparation-jobs/${jobId}`,
-      ),
+      );
+      const current = queryClient.getQueryData<{ job: BacktestPreparationJob }>(
+        preparationJobQueryKey(jobId),
+      );
+      return { job: newerPreparationJob(current?.job, incoming.job) };
+    },
     enabled: jobId !== null,
     refetchInterval: (query) =>
       pollInterval(query.state.data?.job.status ?? null, sseFailed),
   });
 
-  const status = ssePayload?.status ?? detail.data?.job.status ?? null;
+  const status = detail.data?.job.status ?? null;
 
   useEffect(() => {
     if (jobId === null || (status !== null && shouldCloseStream(status))) {
@@ -188,7 +208,11 @@ export function usePreparationLive(
     );
     sourceRef.current = source;
     source.onmessage = (event) => {
-      setSsePayload(JSON.parse(event.data as string) as BacktestPreparationJob);
+      const incoming = JSON.parse(event.data as string) as BacktestPreparationJob;
+      queryClient.setQueryData<{ job: BacktestPreparationJob }>(
+        preparationJobQueryKey(jobId),
+        (current) => ({ job: newerPreparationJob(current?.job, incoming) }),
+      );
     };
     source.onerror = () => {
       source.close();
@@ -199,12 +223,9 @@ export function usePreparationLive(
       source.close();
       sourceRef.current = null;
     };
-  }, [jobId, status, sseFailed]);
+  }, [jobId, status, sseFailed, queryClient]);
 
-  const job: BacktestPreparationJob | null =
-    ssePayload && detail.data && ssePayload.id === detail.data.job.id
-      ? { ...detail.data.job, ...ssePayload }
-      : (detail.data?.job ?? null);
+  const job: BacktestPreparationJob | null = detail.data?.job ?? null;
 
   // SSE·폴링 어느 경로로 terminal 이 왔든 여기 한 곳에서만 무효화한다 — 위 두
   // 갈래에 각각 심으면 어느 한쪽이 늦게 도착했을 때 중복 호출을 다시 걱정해야 한다.

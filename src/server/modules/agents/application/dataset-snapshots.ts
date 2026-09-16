@@ -12,6 +12,19 @@ import {
   datasetManifestSchema,
   type DatasetManifest,
 } from "../../../../shared/agent-protocol.js";
+import type { ExecutionActivity } from "../../../../shared/execution-progress.js";
+
+export interface DatasetPublishProgress {
+  readonly activity: Extract<
+    ExecutionActivity,
+    | "PUBLISHING_COPY"
+    | "PUBLISHING_VERIFY"
+    | "PUBLISHING_HASH"
+    | "PUBLISHING_COMMIT"
+  >;
+  readonly startedAtMs: number;
+  readonly updatedAtMs: number;
+}
 
 /** 준비가 끝난 파일만 latest에 게시한다. 작업별 입력 DB를 다시 구성하지 않는다. */
 export class DatasetSnapshots {
@@ -20,6 +33,8 @@ export class DatasetSnapshots {
   private stopped = false;
   private current: DatasetManifest | null;
   private readonly collectionVersion: string;
+  private progress: DatasetPublishProgress | null = null;
+  private readonly listeners = new Set<(progress: DatasetPublishProgress | null) => void>();
 
   constructor(
     private readonly database: DatabaseHandle,
@@ -37,6 +52,29 @@ export class DatasetSnapshots {
 
   latest(): DatasetManifest | null {
     return this.current;
+  }
+
+  publishProgress(): DatasetPublishProgress | null {
+    return this.progress;
+  }
+
+  subscribe(listener: (progress: DatasetPublishProgress | null) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private setProgress(activity: DatasetPublishProgress["activity"] | null): void {
+    const now = Date.now();
+    this.progress =
+      activity === null
+        ? null
+        : {
+            activity,
+            startedAtMs:
+              this.progress?.activity === activity ? this.progress.startedAtMs : now,
+            updatedAtMs: now,
+          };
+    for (const listener of this.listeners) listener(this.progress);
   }
 
   file(manifest: DatasetManifest): string {
@@ -116,11 +154,22 @@ export class DatasetSnapshots {
         if (error.length < 4000) error += chunk.toString();
       });
       child.on("message", (message: unknown) => {
+        if (
+          typeof message === "object" &&
+          message !== null &&
+          "type" in message &&
+          message.type === "progress" &&
+          "activity" in message
+        ) {
+          this.setProgress(message.activity as DatasetPublishProgress["activity"]);
+          return;
+        }
         result = datasetManifestSchema.parse(message);
       });
       child.once("error", reject);
       child.once("exit", (code) => {
         if (this.child === child) this.child = null;
+        this.setProgress(null);
         if (code === 0 && result) resolve(result);
         else reject(new Error(`계산 DB 게시 실패: ${error.trim()}`));
       });

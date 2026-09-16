@@ -122,7 +122,7 @@ coverage 검사에 사용한다. 따라서 수집 전용 코드 변경이 agent 
 
 | 이전 사용처 | 현재 기준 |
 | --- | --- |
-| agent HELLO와 서버 요구 버전 비교 | 프로토콜 2의 `agentVersion` |
+| agent HELLO와 서버 요구 버전 비교 | 프로토콜 3의 `agentVersion` |
 | 최신 명세·설치 디렉터리·패키지 내부 버전 | `agentVersion` |
 | 백테스트 임대 및 결과 import의 SHA 일치 검사 | `executionVersion` |
 | 미리보기 `2:<git sha>` 캐시 표식 | `previewVersion` + 데이터 revision |
@@ -140,7 +140,7 @@ coverage 검사에 사용한다. 따라서 수집 전용 코드 변경이 agent 
 
 ## 설치 기준
 
-서버와 agent는 프로토콜 2와 내용 버전만 사용한다. `HELLO`는 64자리 `agentVersion`을
+서버와 agent는 프로토콜 3과 내용 버전만 사용한다. `HELLO`는 64자리 `agentVersion`을
 전달하고 `/api/agents/client/latest`는 같은 버전의 패키지 명세를 반환한다.
 버전 체계 선택·SHA 설치·구형 서버 롤백·미전송 작업 이관 경로는 두지 않는다.
 

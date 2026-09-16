@@ -73,7 +73,7 @@ describe('에이전트 미전송 결과 복구', () => {
     const agent = harness();
 
     agent.client.start();
-    expect(agent.sent).toEqual([{ type: 'HELLO', protocolVersion: 2, runnerVersion: 'a'.repeat(64) }]);
+    expect(agent.sent).toEqual([{ type: 'HELLO', protocolVersion: 3, runnerVersion: 'a'.repeat(64) }]);
     agent.receive({ type: 'WELCOME', runnerVersion: 'a'.repeat(64) });
     expect(agent.sent.filter((message) => message.type === 'FINISH')).toHaveLength(1);
     expect(fs.existsSync(jobDirectory)).toBe(true);

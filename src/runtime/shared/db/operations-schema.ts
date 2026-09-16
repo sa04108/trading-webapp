@@ -38,6 +38,8 @@ export const backtestPreparationJobs = sqliteTable(
     totalSymbols: integer("total_symbols").notNull().default(0),
     savedFacts: integer("saved_facts").notNull().default(0),
     gapCount: integer("gap_count").notNull().default(0),
+    /** 결손 수집 뒤 resolver를 다시 실행한 횟수를 포함한 선정·검증 회차. */
+    resolutionPass: integer("resolution_pass").notNull().default(0),
     dartQuotaDateKst: text("dart_quota_date_kst"),
     dartCallsUsed: integer("dart_calls_used").notNull().default(0),
     nextResumeAtMs: integer("next_resume_at_ms"),
@@ -114,6 +116,13 @@ export const backtestJobs = sqliteTable(
     leaseFailures: integer("lease_failures").notNull().default(0),
     // 진행 위치 표시용 텍스트 (엔진이 시간 우선이라 날짜가 들어간다) — "심볼" 이 아니다
     progressLabel: text("progress_label"),
+    /** 계산·파일 작성·전송·검증 중 현재 활동을 표시한다. */
+    executionActivity: text("execution_activity"),
+    activityStartedAtMs: integer("activity_started_at_ms"),
+    lastProgressAtMs: integer("last_progress_at_ms"),
+    lastReceivedAtMs: integer("last_received_at_ms"),
+    resultTransferBytes: integer("result_transfer_bytes"),
+    resultTransferTotalBytes: integer("result_transfer_total_bytes"),
     error: text("error"),
     /**
      * 제출·복제 검증이 만든 경고 원문(string[]). 화면 토스트는 10초 뒤 사라지므로

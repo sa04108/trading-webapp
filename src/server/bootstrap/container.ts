@@ -393,6 +393,18 @@ export function createContainer(
   const jobQueue = new JobQueue(database, clock);
   const backtestResultCompleter = new ForkedBacktestResultCompleter(
     config.databasePath,
+    (input, activity) => {
+      if (
+        jobQueue.updateLeaseActivity({
+          jobId: input.jobId,
+          attempt: input.attempt,
+          leaseTokenHash: input.leaseTokenHash,
+          nowMs: clock.now(),
+          activity,
+        })
+      )
+        jobQueue.events.emit("job", { jobId: input.jobId, kind: "progress" });
+    },
   );
   const backtestLeaseService = new BacktestLeaseService(
     jobQueue,
@@ -420,6 +432,11 @@ export function createContainer(
       if (kind === "PREPARATION") preparations.resume(jobId, error);
     },
     logger,
+    {
+      onProgress: (kind, jobId) => {
+        if (kind === "PREPARATION") preparations.notify(jobId);
+      },
+    },
   );
   const agentCoordinator = new AgentCoordinator(
     database,
@@ -433,6 +450,7 @@ export function createContainer(
     logger,
     readRuntimeVersions().executionVersion,
   );
+  snapshots.subscribe(() => preparations.notifyQueued());
   const remoteResultUploadManager = new RemoteResultUploadManager(
     config.tempRoot,
   );

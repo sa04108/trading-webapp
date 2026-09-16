@@ -195,6 +195,48 @@
           "notNull": false,
           "autoincrement": false
         },
+        "execution_activity": {
+          "name": "execution_activity",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "activity_started_at_ms": {
+          "name": "activity_started_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_progress_at_ms": {
+          "name": "last_progress_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "last_received_at_ms": {
+          "name": "last_received_at_ms",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "result_transfer_bytes": {
+          "name": "result_transfer_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "result_transfer_total_bytes": {
+          "name": "result_transfer_total_bytes",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
         "error": {
           "name": "error",
           "type": "text",
@@ -411,6 +453,14 @@
         },
         "gap_count": {
           "name": "gap_count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": 0
+        },
+        "resolution_pass": {
+          "name": "resolution_pass",
           "type": "integer",
           "primaryKey": false,
           "notNull": true,

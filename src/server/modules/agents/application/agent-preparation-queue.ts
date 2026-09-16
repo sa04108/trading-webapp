@@ -65,6 +65,19 @@ export class AgentPreparationQueue {
     private readonly changed: (jobId: string) => void,
   ) {}
 
+  notify(jobId: string): void {
+    this.changed(jobId);
+  }
+
+  notifyQueued(): void {
+    const rows = this.database.sqlite
+      .prepare(
+        "SELECT id FROM backtest_preparation_jobs WHERE status IN ('QUEUED', 'WAITING_DATA')",
+      )
+      .all() as Array<{ id: string }>;
+    for (const row of rows) this.changed(row.id);
+  }
+
   claim(clientId: string, dataset: DatasetManifest): AgentLease | null {
     const lease = this.database.sqlite
       .transaction(() => {
@@ -149,29 +162,59 @@ export class AgentPreparationQueue {
   } {
     if (!this.owns(clientId, identity))
       return { accepted: false, cancelRequested: false };
+    const nowMs = Date.now();
     if (progress) {
-      this.database.sqlite
+      const current = this.database.sqlite
         .prepare(
-          "UPDATE backtest_preparation_jobs SET phase = ?, overall_progress = MAX(overall_progress, ?), done_symbols = ?, total_symbols = ?, saved_facts = ?, gap_count = ?, updated_at_ms = ? WHERE id = ?",
+          "SELECT phase, overall_progress, done_symbols, total_symbols, saved_facts, gap_count, resolution_pass FROM backtest_preparation_jobs WHERE id = ?",
         )
-        .run(
-          progress.phase,
-          progress.overallProgress,
-          progress.doneSymbols,
-          progress.totalSymbols,
-          progress.savedFacts,
-          progress.gapCount,
-          Date.now(),
-          identity.jobId,
-        );
-      this.changed(identity.jobId);
+        .get(identity.jobId) as {
+          phase: string;
+          overall_progress: number;
+          done_symbols: number;
+          total_symbols: number;
+          saved_facts: number;
+          gap_count: number;
+          resolution_pass: number;
+        } | undefined;
+      const overallProgress = Math.max(
+        current?.overall_progress ?? 0,
+        progress.overallProgress,
+      );
+      const changed =
+        !current ||
+        current.phase !== progress.phase ||
+        current.overall_progress !== overallProgress ||
+        current.done_symbols !== progress.doneSymbols ||
+        current.total_symbols !== progress.totalSymbols ||
+        current.saved_facts !== progress.savedFacts ||
+        current.gap_count !== progress.gapCount ||
+        current.resolution_pass !== progress.resolutionPass;
+      if (changed) {
+        this.database.sqlite
+          .prepare(
+            "UPDATE backtest_preparation_jobs SET phase = ?, overall_progress = ?, done_symbols = ?, total_symbols = ?, saved_facts = ?, gap_count = ?, resolution_pass = ?, updated_at_ms = ? WHERE id = ?",
+          )
+          .run(
+            progress.phase,
+            overallProgress,
+            progress.doneSymbols,
+            progress.totalSymbols,
+            progress.savedFacts,
+            progress.gapCount,
+            progress.resolutionPass,
+            nowMs,
+            identity.jobId,
+          );
+      }
     }
-    const expires = Date.now() + AGENT_LEASE_MS;
+    const expires = nowMs + AGENT_LEASE_MS;
     this.database.sqlite
       .prepare(
-        "UPDATE agent_preparation_leases SET lease_expires_at_ms = ? WHERE job_id = ?",
+        "UPDATE agent_preparation_leases SET lease_expires_at_ms = ?, last_received_at_ms = ? WHERE job_id = ?",
       )
-      .run(expires, identity.jobId);
+      .run(expires, nowMs, identity.jobId);
+    this.changed(identity.jobId);
     return {
       accepted: true,
       cancelRequested: this.row(identity.jobId)?.cancel_requested === 1,

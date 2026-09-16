@@ -860,6 +860,24 @@ export function BacktestDetailPage() {
     job.progressBars !== null && job.totalBars !== null && job.totalBars > 0
       ? Math.round((job.progressBars / job.totalBars) * 100)
       : null;
+  const activity = job.progress;
+  const activityLabels: Record<string, string> = {
+    WAITING_FOR_EXECUTOR: "실행 자원 대기",
+    LOADING_BACKTEST_INPUT: "백테스트 입력 적재",
+    CALCULATING_BACKTEST: "백테스트 계산",
+    WRITING_RESULT: "결과 파일 작성",
+    UPLOADING_RESULT: "결과 전송",
+    VALIDATING_RESULT: "결과 검증",
+    IMPORTING_RESULT: "결과 DB 반영",
+  };
+  const displayedProgress =
+    activity !== null &&
+    activity !== undefined &&
+    activity.completed !== null &&
+    activity.total !== null &&
+    activity.total > 0
+      ? Math.round((activity.completed / activity.total) * 100)
+      : progress;
 
   return (
     <div className="space-y-4">
@@ -958,16 +976,19 @@ export function BacktestDetailPage() {
             <div className="flex items-center justify-between text-sm">
               <span>진행률</span>
               <span className="tabular-nums" aria-live="polite">
-                {progress !== null ? `${progress}%` : "준비 중"}
-                {job.progressBars !== null && job.totalBars !== null
-                  ? ` (${job.progressBars.toLocaleString()} / ${job.totalBars.toLocaleString()} 봉)`
+                {displayedProgress !== null ? `${displayedProgress}%` : "진행 중"}
+                {activity !== null && activity !== undefined && activity.completed !== null && activity.total !== null
+                  ? ` (${activity.completed.toLocaleString()} / ${activity.total.toLocaleString()} ${activity.unit === "BYTES" ? "bytes" : "봉"})`
                   : ""}
               </span>
             </div>
-            <Progress value={progress ?? 0} aria-label="백테스트 진행률" />
-            {job.progressLabel ? (
+            {displayedProgress !== null ? (
+              <Progress value={displayedProgress} aria-label="백테스트 현재 단계 진행률" />
+            ) : null}
+            {activity ? (
               <p className="text-xs text-muted-foreground">
-                처리 중: {job.progressLabel}
+                {activityLabels[activity.activity] ?? activity.activity} · 수행: {activity.actorName}
+                {activity.currentItem ? ` · 현재 ${activity.currentItem}` : ""}
               </p>
             ) : null}
           </CardContent>

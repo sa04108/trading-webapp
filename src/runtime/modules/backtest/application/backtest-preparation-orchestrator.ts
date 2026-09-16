@@ -106,6 +106,7 @@ export interface BacktestPreparationJobDto {
   readonly totalSymbols: number;
   readonly savedFacts: number;
   readonly gapCount: number;
+  readonly resolutionPass?: number;
   readonly nextResumeAtMs: number | null;
   readonly error: string | null;
 }
@@ -142,6 +143,7 @@ type PreparationJobDtoRow = Pick<
   | "totalSymbols"
   | "savedFacts"
   | "gapCount"
+  | "resolutionPass"
   | "nextResumeAtMs"
   | "error"
 >;
@@ -186,6 +188,7 @@ const PREPARATION_DTO_SELECTION = {
   totalSymbols: backtestPreparationJobs.totalSymbols,
   savedFacts: backtestPreparationJobs.savedFacts,
   gapCount: backtestPreparationJobs.gapCount,
+  resolutionPass: backtestPreparationJobs.resolutionPass,
   nextResumeAtMs: backtestPreparationJobs.nextResumeAtMs,
   error: backtestPreparationJobs.error,
 } as const;
@@ -384,6 +387,7 @@ export class BacktestPreparationOrchestrator {
             totalSymbols: 0,
             savedFacts: 0,
             gapCount: 0,
+            resolutionPass: 0,
             dartCallsUsed: 0,
             cancelRequested: false,
             createdAtMs: now,
@@ -1216,12 +1220,13 @@ export class BacktestPreparationOrchestrator {
       : [0, 10];
     this.persistAndEmit(
       jobId,
-      {
+      (row) => ({
         phase,
         overallProgress: progressRange[0],
         doneSymbols: 0,
         totalSymbols: 0,
-      },
+        resolutionPass: row.resolutionPass + 1,
+      }),
       ["RUNNING"],
     );
     let lastPersistedCompleted = -1;
@@ -2561,6 +2566,7 @@ function toDto(row: PreparationJobDtoRow): BacktestPreparationJobDto {
     totalSymbols: row.totalSymbols,
     savedFacts: row.savedFacts,
     gapCount: row.gapCount,
+    resolutionPass: row.resolutionPass,
     nextResumeAtMs: row.nextResumeAtMs,
     error: row.error,
   };

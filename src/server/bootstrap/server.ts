@@ -117,6 +117,7 @@ export async function buildServer(
           jobEvents: [
             container.jobOrchestrator.events,
             container.backtestLeaseService.events,
+            container.jobQueue.events,
           ],
           results: container.resultsService,
           strategies: container.strategyRegistry,
@@ -166,6 +167,7 @@ export async function buildServer(
           candles: container.candleCoverageService,
           symbolMaster: container.symbolMasterService,
           dartApiKeyAvailable: container.config.dartApiKey !== null,
+          progress: container.agentCoordinator,
         },
         requireAuth,
       );

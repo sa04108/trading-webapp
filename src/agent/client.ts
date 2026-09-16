@@ -116,7 +116,9 @@ export class AgentClient {
     });
     this.cache =
       runtime?.cache ??
-      new AgentDatasetCache(path.join(directory, "datasets"), settings);
+      new AgentDatasetCache(path.join(directory, "datasets"), settings, (progress) => {
+        this.send({ type: "DEVICE_ACTIVITY", progress });
+      });
   }
 
   start(): void {
@@ -475,6 +477,7 @@ export class AgentClient {
         processedBars?: number;
         totalBars?: number;
         progressLabel?: string | null;
+        activity?: NonNullable<Running["progress"]>["activity"];
         progress?: Extract<
           AgentMessage,
           { type: "HEARTBEAT" }
@@ -489,15 +492,23 @@ export class AgentClient {
           message.type === "progress" &&
           message.processedBars !== undefined &&
           message.totalBars !== undefined
-        )
+        ) {
+          const activityChanged =
+            message.activity !== undefined &&
+            message.activity !== running.progress?.activity;
           running.progress = {
             processedBars: message.processedBars,
             totalBars: message.totalBars,
             progressLabel: message.progressLabel ?? null,
+            ...(message.activity ? { activity: message.activity } : {}),
           };
-        else if (message.type === "PROGRESS" && message.progress)
+          if (activityChanged) this.heartbeat();
+        } else if (message.type === "PROGRESS" && message.progress) {
+          const phaseChanged =
+            message.progress.phase !== running.preparationProgress?.phase;
           running.preparationProgress = message.progress;
-        else if (message.type === "NEEDS_DATA" && message.request)
+          if (phaseChanged) this.heartbeat();
+        } else if (message.type === "NEEDS_DATA" && message.request)
           pending = {
             type: "NEEDS_DATA",
             ...this.identity(lease),
