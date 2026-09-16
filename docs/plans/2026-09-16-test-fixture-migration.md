@@ -3,7 +3,7 @@
 - 작성일: 2026-09-16
 - 기준 코드: `7d7720c` (`test: bind backtest apps to scoped fixtures`)
 - 선행 변경: `b9c55f5`의 결과 처리 종료 계약, `7d7720c`의 테스트 앱 helper와 초기 fixture
-- 상태: 후속 구현 계획. 이 문서 추가 작업에서는 제품 코드나 테스트를 변경하지 않았다.
+- 상태: 구현 완료. 아래 체크리스트와 제10절에 2026-09-16 검증 결과를 기록했다.
 - 대상: 이전 대화를 보지 않은 구현 담당 모델. 아래 단계와 파일 목록을 모두 처리하고 검증 증거를 남긴다.
 - 관련 문서: [결과 import 종료 계약 계획 및 이전 구현 기록](2026-09-16-test-isolation-and-result-shutdown.md)
 
@@ -298,63 +298,63 @@ helper의 실제 자원 소유권을 검증한다. fixture 내부 함수가 호�
 
 ### A. P2 — 준비 wrapper와 실행 회귀 (6개)
 
-- [ ] `tests/integration/backtest-universe-rule-run.test.ts`
-- [ ] `tests/integration/job-queue.test.ts`
-- [ ] `tests/integration/backtest-facts-worker.test.ts`
-- [ ] `tests/integration/backtest-split-alignment.test.ts`
-- [ ] `tests/integration/preparation-reference-lifecycle.test.ts`
-- [ ] `tests/integration/backtest-universe-preview.test.ts`
+- [x] `tests/integration/backtest-universe-rule-run.test.ts`
+- [x] `tests/integration/job-queue.test.ts`
+- [x] `tests/integration/backtest-facts-worker.test.ts`
+- [x] `tests/integration/backtest-split-alignment.test.ts`
+- [x] `tests/integration/preparation-reference-lifecycle.test.ts`
+- [x] `tests/integration/backtest-universe-preview.test.ts`
 
 ### B. P3 — 실제 agent와 종료 (3개)
 
-- [ ] `tests/unit/agent-coordinator.test.ts`
-- [ ] `tests/integration/local-agent-fallback.test.ts`
-- [ ] `tests/integration/native-agent-preparation.test.ts`
+- [x] `tests/unit/agent-coordinator.test.ts`
+- [x] `tests/integration/local-agent-fallback.test.ts`
+- [x] `tests/integration/native-agent-preparation.test.ts`
 
 ### C. P4 — fake KRX와 조합 자원 (11개)
 
-- [ ] `tests/integration/symbol-master-routes.test.ts`
-- [ ] `tests/unit/symbol-master-backfill.test.ts`
-- [ ] `tests/unit/symbol-master-daily-bars.test.ts`
-- [ ] `tests/unit/symbol-master-ensure-trading-day.test.ts`
-- [ ] `tests/unit/symbol-master-ingest.test.ts`
-- [ ] `tests/unit/symbol-master-market-caps.test.ts`
-- [ ] `tests/unit/symbol-master-non-trading.test.ts`
-- [ ] `tests/unit/symbol-master-shares-changes.test.ts`
-- [ ] `tests/unit/symbol-master-trading-days.test.ts`
-- [ ] `tests/unit/symbol-master-version-ingest.test.ts`
-- [ ] `tests/unit/universe-rule-resolver.test.ts`
+- [x] `tests/integration/symbol-master-routes.test.ts`
+- [x] `tests/unit/symbol-master-backfill.test.ts`
+- [x] `tests/unit/symbol-master-daily-bars.test.ts`
+- [x] `tests/unit/symbol-master-ensure-trading-day.test.ts`
+- [x] `tests/unit/symbol-master-ingest.test.ts`
+- [x] `tests/unit/symbol-master-market-caps.test.ts`
+- [x] `tests/unit/symbol-master-non-trading.test.ts`
+- [x] `tests/unit/symbol-master-shares-changes.test.ts`
+- [x] `tests/unit/symbol-master-trading-days.test.ts`
+- [x] `tests/unit/symbol-master-version-ingest.test.ts`
+- [x] `tests/unit/universe-rule-resolver.test.ts`
 
 ### D. P1 pilot 및 P5 — 일반 앱·인증·DB (20개)
 
-- [ ] `tests/unit/security-headers.test.ts` — P1 pilot
-- [ ] `tests/unit/compression.test.ts` — P1 pilot, configure 보존
-- [ ] `tests/integration/auth.test.ts`
-- [ ] `tests/integration/backtest-preparation.test.ts` — SSE/gate/중간 close
-- [ ] `tests/integration/backtest-wizard-drafts.test.ts`
-- [ ] `tests/integration/maintenance.test.ts`
-- [ ] `tests/integration/notification-routes.test.ts`
-- [ ] `tests/integration/notification-service.test.ts`
-- [ ] `tests/integration/route-surface.test.ts`
-- [ ] `tests/integration/symbol-info-fallback.test.ts`
-- [ ] `tests/unit/backtest-results-service.test.ts`
-- [ ] `tests/unit/candle-coverage-service.test.ts`
-- [ ] `tests/unit/corporate-action-coverage.test.ts`
-- [ ] `tests/unit/krx-daily-bars-schema.test.ts`
-- [ ] `tests/unit/krx-daily-candle-repository.test.ts`
-- [ ] `tests/unit/preparation-reference-seed-batch.test.ts`
-- [ ] `tests/unit/selection-metric-repository.test.ts`
-- [ ] `tests/unit/symbol-identity-lifetime.test.ts`
-- [ ] `tests/unit/symbol-master-schema.test.ts`
-- [ ] `tests/unit/symbol-master-service.test.ts`
+- [x] `tests/unit/security-headers.test.ts` — P1 pilot
+- [x] `tests/unit/compression.test.ts` — P1 pilot, configure 보존
+- [x] `tests/integration/auth.test.ts`
+- [x] `tests/integration/backtest-preparation.test.ts` — SSE/gate/중간 close
+- [x] `tests/integration/backtest-wizard-drafts.test.ts`
+- [x] `tests/integration/maintenance.test.ts`
+- [x] `tests/integration/notification-routes.test.ts`
+- [x] `tests/integration/notification-service.test.ts`
+- [x] `tests/integration/route-surface.test.ts`
+- [x] `tests/integration/symbol-info-fallback.test.ts`
+- [x] `tests/unit/backtest-results-service.test.ts`
+- [x] `tests/unit/candle-coverage-service.test.ts`
+- [x] `tests/unit/corporate-action-coverage.test.ts`
+- [x] `tests/unit/krx-daily-bars-schema.test.ts`
+- [x] `tests/unit/krx-daily-candle-repository.test.ts`
+- [x] `tests/unit/preparation-reference-seed-batch.test.ts`
+- [x] `tests/unit/selection-metric-repository.test.ts`
+- [x] `tests/unit/symbol-identity-lifetime.test.ts`
+- [x] `tests/unit/symbol-master-schema.test.ts`
+- [x] `tests/unit/symbol-master-service.test.ts`
 
 ### E. P6 — 전용 config (1개)
 
-- [ ] `tests/integration/packaged-agent-runtime.check.ts`
+- [x] `tests/integration/packaged-agent-runtime.check.ts`
 
 ### F. 의도적인 직접 생성 예외 (1개)
 
-- [ ] `tests/unit/test-app-helper.test.ts` — factory/close 자체 검증이므로 직접 호출 유지. 예외 검토 및 실패 cleanup 보강 여부를 기록한 뒤 체크한다.
+- [x] `tests/unit/test-app-helper.test.ts` — factory/close 자체 검증이므로 직접 호출을 유지했고 생성 실패 cleanup 회귀를 확인했다.
 
 `container-lifecycle`, `backtest-result-artifact-versions`처럼 `createContainer`나 DB를 직접 만들고 그 수명을 검증하는 테스트는 위 42개 전환 집계에 포함되지 않는다. fixture 문법 변경을 강제하지 않고 기존 회귀 검증으로 유지한다. 이번에 추가하는 fixture factory의 lifecycle 테스트도 필요한 직접 호출 예외를 구체적으로 기록한다.
 
@@ -422,27 +422,35 @@ rg -n 'beforeAll|afterAll|useFakeTimers|restoreAllMocks' tests/helpers tests/uni
 
 처음 네 검색의 잔여 항목은 실제 코드와 예외 목록을 대조한다. 주석 또는 다른 목적의 유효한 사례는 이유를 기록한다. 마지막 검색은 자동 실패 조건이 아니라 공유 자원·timer·복원 순서 검토 목록이다. `const context = await setup()` 같은 간접 생성도 파일별 diff 검토에서 놓치지 않는다.
 
-## 10. 구현 담당자의 최종 기록 양식
+## 10. 구현·검증 결과
 
-이 절을 실제 결과로 채우고 제8절 체크리스트와 일치시킨다.
-
-```text
-기준/최종 커밋:
-완료한 P 단계 및 전환 파일 수:
-남은 파일과 이유:
-직접 생성·file scope 유지 예외와 수명 보장 방식:
-세 inject wrapper 제거 여부:
-의도적으로 유지한 sparse/preview coverage 가정:
-실패·취소 cleanup 검증 결과:
-파일별/묶음별 테스트 명령과 결과:
-shuffle seed와 결과:
-pnpm test / typecheck / lint 결과:
-패키지 빌드·전용 테스트·단독 실행 결과:
-예상 밖 skip/unhandled error/남은 자원 유무:
-commit/push 상태:
-```
-
-이번 문서 작성 시점에는 위 후속 구현과 검증을 수행하지 않았다. 이전 전체 suite 통과 기록을 새 전환의 결과로 복사하지 않는다.
+- 기준 커밋은 `dc00df5`, 구현 브랜치는 `refactor/test-scoped-fixtures`다. 구현 단위는
+  `f4e5469`, `b912c49`, `3a89a73`, `10db6db`, `d930229`, `c529960`에 나눠 기록했다.
+- P1~P6과 제8절의 전환 대상 41개를 완료했다. 직접 생성 예외
+  `tests/unit/test-app-helper.test.ts`도 factory/close 자체 검증임을 다시 확인했다.
+- 직접 `createTestApp` 호출은 앱 fixture 구현 두 파일과 위 helper lifecycle 테스트에만
+  남는다. 패키지 archive 해제 결과는 읽기 전용 file scope로 유지하고, 앱·child·state·
+  output은 테스트 scope로 옮겼다.
+- `installPreparedSubmissionFixture` 두 구현과 `installPreparedPreviewFixture`를 제거했다.
+  `app.inject` 대입도 남지 않는다. 제출·clone·preview의 409/202/200 전이는 테스트가
+  명시적으로 준비하고 원래 요청을 다시 보내도록 바뀌었다.
+- queue/worker 시나리오의 sparse candle 가정은 `withSparseQueuePreparation`, preview
+  모양 가정은 `installPreviewShapeStubs`로 이름과 적용 범위를 드러냈다. 실제 결손과
+  준비 후 coverage/identity drift 테스트에서는 재준비하지 않는다.
+- P2 전체는 6파일 131개, P3 lifecycle 묶음은 7파일 36개, P4는 11파일 133개,
+  P5는 18파일 137개가 통과했다. 공통 helper/pilot 묶음도 21개가 통과했다.
+- 원래 오류의 clone 단독 실행은 1개 통과(17개 필터 제외)했다. shuffle seed
+  `20260916`, `20260917`은 각각 3파일 110개가 통과했다.
+- 기본 전체 suite는 188파일 2086개가 통과했다. `pnpm typecheck`, `pnpm lint`,
+  `git diff --check`도 종료 코드 0이었다.
+- `pnpm build:agent`로 `linux-x64` 패키지를 현재 소스에서 만들었다.
+  `pnpm test:agent-package`는 2개 모두 통과했고, `게시 checksum`, `동봉 Node` 필터는
+  각각 1개 통과·1개 필터 제외로 단독 실행됐다.
+- 예상 밖 skip, unhandled rejection, 닫힌 SQLite 접근, 종료 뒤 남은 소유 child는
+  관측되지 않았다. preparation 실패, 강제 enqueue 실패, 종료 중 503 로그는 해당
+  오류 경로를 검증하는 기존 테스트의 예상 로그였다.
+- 정적 감사에서 wrapper 이름, `app.inject` 대입, `openCtxs`, 파일 전역 가변 `ctx`는
+  남지 않았다. push 결과는 최종 인계 메시지에 기록한다.
 
 ## 11. API 근거
 
