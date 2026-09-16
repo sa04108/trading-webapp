@@ -1,8 +1,9 @@
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import { SelectionMetricRepository } from '../../src/runtime/modules/market-data/application/selection-metric-repository.js';
 import type { DailySelectionMetric } from '../../src/runtime/modules/market-data/application/selection-metric-repository.js';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import { type TestApp } from '../helpers/test-app.js';
+import { test as it } from '../helpers/test-fixtures.js';
 
 // better-sqlite3 in this project accepts 250,000 variables. This deliberately
 // crosses that real execution boundary; production batching remains 500 to
@@ -10,8 +11,7 @@ import { createTestApp, type TestApp } from '../helpers/test-app.js';
 const OVER_SQLITE_BIND_LIMIT = 250_001;
 
 describe('SelectionMetricRepository', () => {
-  it('저장된 metric을 bigint 정밀도 그대로 읽는다', async () => {
-    const t = await createTestApp();
+  it('저장된 metric을 bigint 정밀도 그대로 읽는다', async ({ ctx: t }) => {
     const repository = new SelectionMetricRepository(t.container.database.db);
 
     // 2^53+1 과 2^63 초과 값 — 내부에서 Number() 를 거치는 구현은 여기서 깨진다.
@@ -42,11 +42,9 @@ describe('SelectionMetricRepository', () => {
         tradingValueKrw: overInt64TradingValue,
       },
     ]]));
-    await t.close();
   });
 
-  it('지표 행이 있어도 coverage 표식이 없는 날짜는 다시 수집 대상으로 돌려준다', async () => {
-    const t = await createTestApp();
+  it('지표 행이 있어도 coverage 표식이 없는 날짜는 다시 수집 대상으로 돌려준다', async ({ ctx: t }) => {
     const repository = new SelectionMetricRepository(t.container.database.db);
     seedMetrics(t, [{
       date: '2026-08-07',
@@ -65,11 +63,9 @@ describe('SelectionMetricRepository', () => {
 
     expect(repository.findMissingTradingValueDates(['2026-08-06', '2026-08-07', '2026-08-08']))
       .toEqual(['2026-08-06', '2026-08-07']);
-    await t.close();
   });
 
-  it('일부 종목의 거래대금이 영영 null 이어도 ingest 흔적이 있는 날짜는 재수집하지 않는다', async () => {
-    const t = await createTestApp();
+  it('일부 종목의 거래대금이 영영 null 이어도 ingest 흔적이 있는 날짜는 재수집하지 않는다', async ({ ctx: t }) => {
     const repository = new SelectionMetricRepository(t.container.database.db);
     // KRX 가 '-' 거래대금을 준 종목은 null 로 남는다. 값 유무와 별개로 API 조회를
     // 완료한 날짜라는 표식이 있으면 재수집하지 않는다.
@@ -89,11 +85,9 @@ describe('SelectionMetricRepository', () => {
     seedMetricCoverage(t, ['2026-08-07'], t.container.clock.now());
 
     expect(repository.findMissingTradingValueDates(['2026-08-07'])).toEqual([]);
-    await t.close();
   });
 
-  it('표준코드가 SQLite bind 한도를 넘어도 getAt 결과를 합친다', async () => {
-    const t = await createTestApp();
+  it('표준코드가 SQLite bind 한도를 넘어도 getAt 결과를 합친다', async ({ ctx: t }) => {
     const repository = new SelectionMetricRepository(t.container.database.db);
     seedMetrics(t, [{
       date: '2026-08-07', standardCode: 'KR7005930003',
@@ -107,11 +101,9 @@ describe('SelectionMetricRepository', () => {
     expect(repository.getAt('2026-08-07', codes).get('KR7005930003')).toMatchObject({
       marketCapKrw: 1n, volume: 2, tradingValueKrw: 3n,
     });
-    await t.close();
   });
 
-  it('큰 후보는 날짜 범위 한 번으로 읽되 요청하지 않은 metric은 반환하지 않는다', async () => {
-    const t = await createTestApp();
+  it('큰 후보는 날짜 범위 한 번으로 읽되 요청하지 않은 metric은 반환하지 않는다', async ({ ctx: t }) => {
     const repository = new SelectionMetricRepository(t.container.database.db);
     seedMetrics(t, [{
       date: '2026-08-07', standardCode: 'KR7005930003',
@@ -128,11 +120,9 @@ describe('SelectionMetricRepository', () => {
     const metrics = repository.getAt('2026-08-07', requested);
 
     expect([...metrics.keys()]).toEqual(['KR7005930003']);
-    await t.close();
   });
 
-  it('날짜가 SQLite bind 한도를 넘어도 findMissingTradingValueDates 결과를 합친다', async () => {
-    const t = await createTestApp();
+  it('날짜가 SQLite bind 한도를 넘어도 findMissingTradingValueDates 결과를 합친다', async ({ ctx: t }) => {
     const repository = new SelectionMetricRepository(t.container.database.db);
     seedMetrics(t, [{
       date: '2026-08-07', standardCode: 'KR7005930003',
@@ -148,7 +138,6 @@ describe('SelectionMetricRepository', () => {
 
     expect(missing).toHaveLength(OVER_SQLITE_BIND_LIMIT - 1);
     expect(missing).not.toContain('2026-08-07');
-    await t.close();
   });
 });
 

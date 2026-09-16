@@ -1,20 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import { notifications } from '../../src/server/shared/db/schema.js';
 import type { NotificationRow } from '../../src/server/modules/notification/application/notification-service.js';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import { test as it } from '../helpers/test-fixtures.js';
 
 describe('NotificationService', () => {
-  let ctx: TestApp;
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-  });
-
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  it('creates a notification, persists it, and emits an event', () => {
+  it('creates a notification, persists it, and emits an event', ({ ctx }) => {
     const service = ctx.container.notificationService;
     const emitted: NotificationRow[] = [];
     service.events.on('notification', (row: NotificationRow) => emitted.push(row));
@@ -34,7 +24,7 @@ describe('NotificationService', () => {
     expect(service.unreadCount()).toBe(1);
   });
 
-  it('API 한도 초과는 같은 KST 날짜와 scope에 한 건의 영속 오류 알림을 만든다', () => {
+  it('API 한도 초과는 같은 KST 날짜와 scope에 한 건의 영속 오류 알림을 만든다', ({ ctx }) => {
     const usage = ctx.container.externalApiUsage;
     usage.recordCall('DART', 'daily');
 
@@ -52,7 +42,7 @@ describe('NotificationService', () => {
     expect(notification?.body).toContain('기록 호출 수: 1회');
   });
 
-  it('lists newest first with a 200-row cap', () => {
+  it('lists newest first with a 200-row cap', ({ ctx }) => {
     const db = ctx.container.database.db;
     const base = Date.now();
     db.insert(notifications)
@@ -74,7 +64,7 @@ describe('NotificationService', () => {
     expect(listed[199]?.id).toBe('ntf_005'); // 가장 오래된 5건이 잘린다
   });
 
-  it('marks all read and deletes by ids or all', () => {
+  it('marks all read and deletes by ids or all', ({ ctx }) => {
     const service = ctx.container.notificationService;
     const a = service.create({ type: 'backtest', severity: 'info', title: 'a' });
     const b = service.create({ type: 'data-sync', severity: 'info', title: 'b' });

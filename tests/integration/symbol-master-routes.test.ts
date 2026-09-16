@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import { describe, expect, vi } from 'vitest';
+import { createTestAdmin, type TestApp } from '../helpers/test-app.js';
+import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
 import {
   baseInfoFixture,
   dailyFixture,
   krxEnvelope,
-  startKrxFakeServer,
   type KrxFakeServer,
 } from '../helpers/krx-fixtures.js';
 
@@ -41,15 +41,8 @@ interface Ctx {
   readonly cookie: string;
 }
 
-const openCtxs: Ctx[] = [];
-
-async function setup(env: Record<string, string> = {}): Promise<Ctx> {
-  const fake = await startKrxFakeServer();
-  const app = await createTestApp({
-    KRX_BASE_URL: fake.baseUrl,
-    KRX_API_KEY: 'test-krx-key',
-    ...env,
-  });
+async function setup(krxApps: KrxTestFactory, env: Record<string, string> = {}): Promise<Ctx> {
+  const { t: app, fake } = await krxApps.create({ KRX_API_KEY: 'test-krx-key', ...env });
   const { username, password } = await createTestAdmin(app.container);
   const login = await app.app.inject({
     method: 'POST',
@@ -57,21 +50,12 @@ async function setup(env: Record<string, string> = {}): Promise<Ctx> {
     payload: { username, password },
   });
   const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
-  const ctx = { app, fake, cookie };
-  openCtxs.push(ctx);
-  return ctx;
+  return { app, fake, cookie };
 }
 
-afterEach(async () => {
-  for (const ctx of openCtxs.splice(0)) {
-    await ctx.app.close();
-    await ctx.fake.close();
-  }
-});
-
 describe('symbol-master routes', () => {
-  it('sync 로 수집한 날짜는 universe 조회에서 covered:true 로 왕복된다', async () => {
-    const { app, fake, cookie } = await setup();
+  it('sync 로 수집한 날짜는 universe 조회에서 covered:true 로 왕복된다', async ({ krxApps }) => {
+    const { app, fake, cookie } = await setup(krxApps);
     seedTradingDay(fake, '2025-01-06');
 
     const sync = await app.app.inject({
@@ -102,8 +86,8 @@ describe('symbol-master routes', () => {
     expect(body.symbols[0]).toMatchObject({ market: expect.stringMatching(/^(KOSPI|KOSDAQ)$/) });
   });
 
-  it('휴장일 sync 요청은 직전 거래일까지 소급한 결과를 돌려준다', async () => {
-    const { app, fake, cookie } = await setup();
+  it('휴장일 sync 요청은 직전 거래일까지 소급한 결과를 돌려준다', async ({ krxApps }) => {
+    const { app, fake, cookie } = await setup(krxApps);
     seedTradingDay(fake, '2025-01-06');
     // 01-07·01-08 은 별도 세팅 없이 기본값(빈 응답 = 휴장)으로 둔다
 
@@ -131,8 +115,8 @@ describe('symbol-master routes', () => {
     expect(universe.json().covered).toBe(true);
   });
 
-  it('커버되지 않은 날짜는 오류 없이 covered:false 와 빈 배열을 준다', async () => {
-    const { app, cookie } = await setup();
+  it('커버되지 않은 날짜는 오류 없이 covered:false 와 빈 배열을 준다', async ({ krxApps }) => {
+    const { app, cookie } = await setup(krxApps);
 
     const res = await app.app.inject({
       method: 'GET',
@@ -143,8 +127,8 @@ describe('symbol-master routes', () => {
     expect(res.json()).toEqual({ date: '2025-01-06', covered: false, symbols: [] });
   });
 
-  it('coverage 는 구간·백필 상태를 담는다', async () => {
-    const { app, fake, cookie } = await setup();
+  it('coverage 는 구간·백필 상태를 담는다', async ({ krxApps }) => {
+    const { app, fake, cookie } = await setup(krxApps);
     seedTradingDay(fake, '2025-01-06');
     await app.app.inject({
       method: 'POST',
@@ -173,8 +157,8 @@ describe('symbol-master routes', () => {
     });
   });
 
-  it('backfill 은 toDate 를 받으면 그 날짜까지만 채우고 끝난다 (Task 4)', async () => {
-    const { app, fake, cookie } = await setup();
+  it('backfill 은 toDate 를 받으면 그 날짜까지만 채우고 끝난다 (Task 4)', async ({ krxApps }) => {
+    const { app, fake, cookie } = await setup(krxApps);
     seedTradingDay(fake, '2025-01-06');
     seedTradingDay(fake, '2025-01-07');
     // 2025-01-08 은 세팅하지 않는다 — toDate(01-07) 밖이라 건드리지 않아야 한다.
@@ -216,11 +200,11 @@ describe('symbol-master routes', () => {
     expect(fake.requests.some((r) => r.basDd === '20250108')).toBe(false);
   });
 
-  it('coverage 는 진행 중인 백필의 대상 구간을 완료 전에도 보여준다 (리뷰 finding)', async () => {
+  it('coverage 는 진행 중인 백필의 대상 구간을 완료 전에도 보여준다 (리뷰 finding)', async ({ krxApps }) => {
     // 위저드가 "지금 도는 백필이 내 요청 범위인지" 를 판단하려면 완료를 기다리지
     // 않고도 targetStartDate/targetEndDate 를 볼 수 있어야 한다 — RUNNING 편승
     // 상황을 설명하려면 이 값이 폴링 도중 내내 노출돼야 하기 때문이다.
-    const { app, fake, cookie } = await setup();
+    const { app, fake, cookie } = await setup(krxApps);
     for (let i = 6; i <= 10; i += 1) {
       seedTradingDay(fake, `2025-01-${String(i).padStart(2, '0')}`);
     }
@@ -267,8 +251,8 @@ describe('symbol-master routes', () => {
     );
   });
 
-  it('커버 이력이 없으면 lastSyncedAtMs 는 null 이다', async () => {
-    const { app, cookie } = await setup();
+  it('커버 이력이 없으면 lastSyncedAtMs 는 null 이다', async ({ krxApps }) => {
+    const { app, cookie } = await setup(krxApps);
 
     const res = await app.app.inject({
       method: 'GET',
@@ -281,8 +265,8 @@ describe('symbol-master routes', () => {
     expect(body.lastSyncedAtMs).toBeNull();
   });
 
-  it('events 는 최대 500행·effectiveDate 내림차순으로 변경 이력을 반환한다', async () => {
-    const { app, fake, cookie } = await setup();
+  it('events 는 최대 500행·effectiveDate 내림차순으로 변경 이력을 반환한다', async ({ krxApps }) => {
+    const { app, fake, cookie } = await setup(krxApps);
     seedTradingDay(fake, '2025-01-06');
     await app.app.inject({
       method: 'POST',
@@ -320,8 +304,8 @@ describe('symbol-master routes', () => {
     });
   });
 
-  it('미인증 요청은 전부 401 이다', async () => {
-    const { app } = await setup();
+  it('미인증 요청은 전부 401 이다', async ({ krxApps }) => {
+    const { app } = await setup(krxApps);
 
     for (const [method, url] of [
       ['GET', '/api/v1/symbol-master/universe?date=2025-01-06'],

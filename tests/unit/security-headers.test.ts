@@ -1,16 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import { describe, expect } from 'vitest';
+import { test } from '../helpers/test-fixtures.js';
 
 describe('보안 헤더', () => {
-  let testApp: TestApp;
-
-  afterEach(async () => {
-    await testApp.close();
-  });
-
-  it('모든 응답에 보안 헤더를 설정한다', async () => {
-    testApp = await createTestApp();
-    const res = await testApp.app.inject({ method: 'GET', url: '/api/v1/health/live' });
+  test('모든 응답에 보안 헤더를 설정한다', async ({ ctx }) => {
+    const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/health/live' });
 
     expect(res.statusCode).toBe(200);
     expect(res.headers['strict-transport-security']).toBe('max-age=31536000');

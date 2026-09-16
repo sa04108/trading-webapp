@@ -1,7 +1,7 @@
 import { and, asc, eq, gt, isNull, lte, or } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import { symbolMasterVersions } from '../../src/server/shared/db/schema.js';
-import { createTestApp } from '../helpers/test-app.js';
+import { test as it } from '../helpers/test-fixtures.js';
 
 const SAMSUNG = {
   standardCode: 'KR7005930003',
@@ -15,8 +15,7 @@ const SAMSUNG = {
 } as const;
 
 describe('symbol_master_versions 스키마', () => {
-  it('인접 버전을 허용하고 [validFromDate, validToDate) 경계에서 새 버전만 조회한다', async () => {
-    const t = await createTestApp();
+  it('인접 버전을 허용하고 [validFromDate, validToDate) 경계에서 새 버전만 조회한다', async ({ ctx: t }) => {
     try {
       const db = t.container.database.db;
       db.insert(symbolMasterVersions).values({
@@ -52,8 +51,7 @@ describe('symbol_master_versions 스키마', () => {
     }
   });
 
-  it('빈 구간과 겹치는 INSERT를 데이터베이스 제약으로 거부한다', async () => {
-    const t = await createTestApp();
+  it('빈 구간과 겹치는 INSERT를 데이터베이스 제약으로 거부한다', async ({ ctx: t }) => {
     try {
       const db = t.container.database.db;
       db.insert(symbolMasterVersions).values({
@@ -83,8 +81,7 @@ describe('symbol_master_versions 스키마', () => {
     }
   });
 
-  it('UPDATE로 기존 기간과 겹치게 만드는 것도 거부한다', async () => {
-    const t = await createTestApp();
+  it('UPDATE로 기존 기간과 겹치게 만드는 것도 거부한다', async ({ ctx: t }) => {
     try {
       const db = t.container.database.db;
       db.insert(symbolMasterVersions).values({

@@ -1,17 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import { describe, expect } from 'vitest';
+import type { TestApp } from '../helpers/test-app.js';
+import { test as it } from '../helpers/test-fixtures.js';
 import { SqliteCorporateActionCoverageStore } from '../../src/runtime/modules/facts/application/corporate-action-coverage.js';
 import { SqliteFactCoverageStore } from '../../src/runtime/modules/facts/application/fact-coverage-store.js';
 import { symbolFactsState, symbols as symbolsTable } from '../../src/server/shared/db/schema.js';
 
-let t: TestApp;
-
-afterEach(async () => {
-  await t.close();
-});
-
-async function setup() {
-  t = await createTestApp();
+async function setup(t: TestApp) {
   const db = t.container.database.db;
   db.insert(symbolsTable)
     .values([
@@ -23,23 +17,23 @@ async function setup() {
 }
 
 describe('SqliteCorporateActionCoverageStore', () => {
-  it('수집 연도를 합집합으로 더한다', async () => {
-    const { store } = await setup();
+  it('수집 연도를 합집합으로 더한다', async ({ ctx }) => {
+    const { store } = await setup(ctx);
     store.addCoveredYears('005930', [2025], 100);
     store.addCoveredYears('005930', [2026], 200);
     expect(store.getCoveredYears().get('005930')).toEqual([2025, 2026]);
   });
 
-  it('gap 연도를 따로 관리한다', async () => {
-    const { store } = await setup();
+  it('gap 연도를 따로 관리한다', async ({ ctx }) => {
+    const { store } = await setup(ctx);
     store.addCoveredYears('005930', [2025], 100);
     store.addGapYears('005930', [2026], 100);
     expect(store.getCoveredYears().get('005930')).toEqual([2025]);
     expect(store.getGapYears().get('005930')).toEqual([2026]);
   });
 
-  it('다른 연도의 coverage와 gap은 보존한다', async () => {
-    const { store } = await setup();
+  it('다른 연도의 coverage와 gap은 보존한다', async ({ ctx }) => {
+    const { store } = await setup(ctx);
     store.addCoverageResult('005930', [2025], [2025], 100);
     store.addCoverageResult('005930', [2026], [], 200);
 
@@ -48,8 +42,8 @@ describe('SqliteCorporateActionCoverageStore', () => {
     expect(store.getUpdatedAtMs(['005930']).get('005930')).toBe(200);
   });
 
-  it('같은 연도를 재수집하면 옛 gap 상세를 최신 결과로 교체한다', async () => {
-    const { store } = await setup();
+  it('같은 연도를 재수집하면 옛 gap 상세를 최신 결과로 교체한다', async ({ ctx }) => {
+    const { store } = await setup(ctx);
     store.addCoverageResult('005930', [2025], [2025], 100, [{
       year: 2025,
       periodKey: '2025-05-01',
@@ -70,8 +64,8 @@ describe('SqliteCorporateActionCoverageStore', () => {
     expect(store.getGapDetails(['005930']).get('005930')).toEqual([]);
   });
 
-  it('구버전 coverage는 신뢰하지 않고 필요한 연도를 현재 프로토콜로 재수집하게 연다', async () => {
-    const { db, store } = await setup();
+  it('구버전 coverage는 신뢰하지 않고 필요한 연도를 현재 프로토콜로 재수집하게 연다', async ({ ctx }) => {
+    const { db, store } = await setup(ctx);
     db.insert(symbolFactsState).values({
       code: '005930',
       coveredYearsJson: '[]',
@@ -88,8 +82,8 @@ describe('SqliteCorporateActionCoverageStore', () => {
     expect(store.getCoveredYears(['005930']).get('005930')).toEqual([2025]);
   });
 
-  it('재무 커버리지를 건드리지 않는다', async () => {
-    const { db, store } = await setup();
+  it('재무 커버리지를 건드리지 않는다', async ({ ctx }) => {
+    const { db, store } = await setup(ctx);
     db.insert(symbolFactsState)
       .values({ code: '005930', coveredYearsJson: JSON.stringify([2019]) })
       .run();
@@ -105,14 +99,14 @@ describe('SqliteCorporateActionCoverageStore', () => {
     expect(store.getCoveredYears().get('005930')).toEqual([2025]);
   });
 
-  it('없는 종목은 조회되지 않는다', async () => {
-    const { store } = await setup();
+  it('없는 종목은 조회되지 않는다', async ({ ctx }) => {
+    const { store } = await setup(ctx);
     expect(store.getCoveredYears().get('999999')).toBeUndefined();
     expect(store.getGapYears().get('999999')).toBeUndefined();
   });
 
-  it('요청한 종목만 coverage·gap·watermark에서 반환하고 빈 입력은 전체 조회가 아니다', async () => {
-    const { store } = await setup();
+  it('요청한 종목만 coverage·gap·watermark에서 반환하고 빈 입력은 전체 조회가 아니다', async ({ ctx }) => {
+    const { store } = await setup(ctx);
     store.addCoverageResult('005930', [2025], [2025], 100);
     store.addCoverageResult('000660', [2026], [], 200);
 
@@ -124,14 +118,14 @@ describe('SqliteCorporateActionCoverageStore', () => {
     expect(store.getUpdatedAtMs([]).size).toBe(0);
   });
 
-  it('연도를 오름차순으로 돌려준다', async () => {
-    const { store } = await setup();
+  it('연도를 오름차순으로 돌려준다', async ({ ctx }) => {
+    const { store } = await setup(ctx);
     store.addCoveredYears('005930', [2026, 2020, 2023], 100);
     expect(store.getCoveredYears().get('005930')).toEqual([2020, 2023, 2026]);
   });
 
-  it('재무와 자본변동 watermark를 서로 덮어쓰지 않는다', async () => {
-    const { db, store: actionStore } = await setup();
+  it('재무와 자본변동 watermark를 서로 덮어쓰지 않는다', async ({ ctx }) => {
+    const { db, store: actionStore } = await setup(ctx);
     const financialStore = new SqliteFactCoverageStore(db);
 
     financialStore.addCoveredYears('005930', [2024], 100);

@@ -1,5 +1,5 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { createTestApp } from '../helpers/test-app.js';
+import { describe, expect } from 'vitest';
+import { test as base } from '../helpers/test-fixtures.js';
 import { krxDailyBars } from '../../src/server/shared/db/schema.js';
 import type { AppDatabase } from '../../src/runtime/shared/db/database.js';
 import {
@@ -12,55 +12,53 @@ const DAY = 86_400_000;
 const midnight = (date: string): number => Date.parse(`${date}T00:00:00Z`);
 
 describe('날짜 경계 변환', () => {
-  it('하한이 정확히 자정이면 그 날을 포함한다', () => {
+  base('하한이 정확히 자정이면 그 날을 포함한다', () => {
     expect(ceilToDate(midnight('2026-08-07'))).toBe('2026-08-07');
   });
 
-  it('하한이 자정이 아니면 다음 날로 올린다', () => {
+  base('하한이 자정이 아니면 다음 날로 올린다', () => {
     expect(ceilToDate(midnight('2026-08-07') + 1)).toBe('2026-08-08');
     expect(ceilToDate(Date.parse('2026-08-07T05:00:00Z'))).toBe('2026-08-08');
   });
 
-  it('상한은 그 시각이 속한 날로 내린다', () => {
+  base('상한은 그 시각이 속한 날로 내린다', () => {
     expect(floorToDate(Date.parse('2026-08-07T23:59:59.999Z'))).toBe('2026-08-07');
     expect(floorToDate(midnight('2026-08-07'))).toBe('2026-08-07');
   });
 });
 
 describe('KrxDailyCandleRepository', () => {
-  let t: Awaited<ReturnType<typeof createTestApp>>;
-  let db: AppDatabase;
-  let repository: KrxDailyCandleRepository;
-
-  beforeEach(async () => {
-    t = await createTestApp();
-    db = t.container.database.db;
-    db.insert(krxDailyBars)
-      .values([
-        { shortCode: '005930', date: '2026-08-05', market: 'KOSPI', open: 100, high: 110, low: 90, close: 105, volume: 1000 },
-        { shortCode: '005930', date: '2026-08-06', market: 'KOSPI', open: 105, high: 115, low: 95, close: 110, volume: 2000 },
-        { shortCode: '005930', date: '2026-08-07', market: 'KOSPI', open: 110, high: 120, low: 100, close: 115, volume: 3000 },
-        { shortCode: '000660', date: '2026-08-06', market: 'KOSPI', open: 200, high: 210, low: 190, close: 205, volume: 500 },
-        { shortCode: 'INVALID', date: '2026-08-06', market: 'UNKNOWN', open: 100, high: 110, low: 90, close: 105, volume: 100 },
-        { shortCode: 'BADBAR', date: '2026-08-06', market: 'KOSDAQ', open: 100, high: 90, low: 80, close: 105, volume: 100 },
-      ])
-      .run();
-    repository = new KrxDailyCandleRepository(db);
+  const it = base.extend<{ db: AppDatabase; repository: KrxDailyCandleRepository }>({
+    db: async ({ ctx }, use) => {
+      const db = ctx.container.database.db;
+      db.insert(krxDailyBars)
+        .values([
+          { shortCode: '005930', date: '2026-08-05', market: 'KOSPI', open: 100, high: 110, low: 90, close: 105, volume: 1000 },
+          { shortCode: '005930', date: '2026-08-06', market: 'KOSPI', open: 105, high: 115, low: 95, close: 110, volume: 2000 },
+          { shortCode: '005930', date: '2026-08-07', market: 'KOSPI', open: 110, high: 120, low: 100, close: 115, volume: 3000 },
+          { shortCode: '000660', date: '2026-08-06', market: 'KOSPI', open: 200, high: 210, low: 190, close: 205, volume: 500 },
+          { shortCode: 'INVALID', date: '2026-08-06', market: 'UNKNOWN', open: 100, high: 110, low: 90, close: 105, volume: 100 },
+          { shortCode: 'BADBAR', date: '2026-08-06', market: 'KOSDAQ', open: 100, high: 90, low: 80, close: 105, volume: 100 },
+        ])
+        .run();
+      await use(db);
+    },
+    repository: async ({ db }, use) => {
+      await use(new KrxDailyCandleRepository(db));
+    },
   });
 
-  // 임시 디렉터리와 sqlite 핸들이 테스트마다 누적되지 않도록 앱을 닫는다.
-  afterEach(async () => {
-    await t.close();
-  });
-
-  const collect = async (query: Parameters<KrxDailyCandleRepository['getCandles']>[0]) => {
+  const collect = async (
+    repository: KrxDailyCandleRepository,
+    query: Parameters<KrxDailyCandleRepository['getCandles']>[0],
+  ) => {
     const out = [];
     for await (const candle of repository.getCandles(query)) out.push(candle);
     return out;
   };
 
-  it('요청 범위 안의 봉만 낸다', async () => {
-    const candles = await collect({
+  it('요청 범위 안의 봉만 낸다', async ({ repository }) => {
+    const candles = await collect(repository, {
       market: 'KR',
       timeframe: '1d',
       symbols: ['005930'],
@@ -73,8 +71,8 @@ describe('KrxDailyCandleRepository', () => {
     expect(candles[0]?.venue).toBe('KOSPI');
   });
 
-  it('경계가 자정이 아니면 그 날을 제외한다', async () => {
-    const candles = await collect({
+  it('경계가 자정이 아니면 그 날을 제외한다', async ({ repository }) => {
+    const candles = await collect(repository, {
       market: 'KR',
       timeframe: '1d',
       symbols: ['005930'],
@@ -87,13 +85,13 @@ describe('KrxDailyCandleRepository', () => {
     ]);
   });
 
-  it('경계를 주지 않으면 종목의 모든 봉을 낸다', async () => {
-    const candles = await collect({ market: 'KR', timeframe: '1d', symbols: ['005930'] });
+  it('경계를 주지 않으면 종목의 모든 봉을 낸다', async ({ repository }) => {
+    const candles = await collect(repository, { market: 'KR', timeframe: '1d', symbols: ['005930'] });
     expect(candles).toHaveLength(3);
   });
 
-  it('여러 종목을 요청하면 종목별로 날짜 오름차순으로 낸다', async () => {
-    const candles = await collect({
+  it('여러 종목을 요청하면 종목별로 날짜 오름차순으로 낸다', async ({ repository }) => {
+    const candles = await collect(repository, {
       market: 'KR',
       timeframe: '1d',
       symbols: ['005930', '000660', 'INVALID', 'BADBAR'],
@@ -110,7 +108,7 @@ describe('KrxDailyCandleRepository', () => {
     ]);
   });
 
-  it('bulk 조회도 streaming과 같은 순서·날짜 경계·검증 결과를 낸다', async () => {
+  it('bulk 조회도 streaming과 같은 순서·날짜 경계·검증 결과를 낸다', async ({ repository }) => {
     const query = {
       market: 'KR' as const,
       timeframe: '1d' as const,
@@ -119,14 +117,14 @@ describe('KrxDailyCandleRepository', () => {
       toTsMs: Date.parse('2026-08-07T23:59:59.999Z'),
     };
 
-    const streamed = await collect(query);
+    const streamed = await collect(repository, query);
     const bulk = await repository.getCandlesArray(query);
 
     expect(bulk).toEqual(streamed);
     expect(bulk.map((candle) => candle.symbol)).toEqual(['005930', '005930', '000660']);
   });
 
-  it('종가 전용 bulk 조회는 유효 봉의 시간·종가만 종목별로 돌려준다', async () => {
+  it('종가 전용 bulk 조회는 유효 봉의 시간·종가만 종목별로 돌려준다', async ({ repository }) => {
     const query = {
       market: 'KR' as const,
       timeframe: '1d' as const,
@@ -210,17 +208,17 @@ describe('KrxDailyCandleRepository', () => {
     expect(selectCalls).toBe(1);
   });
 
-  it('KR 이 아닌 시장은 빈 결과를 낸다', async () => {
-    const candles = await collect({ market: 'US', timeframe: '1d', symbols: ['005930'] });
+  it('KR 이 아닌 시장은 빈 결과를 낸다', async ({ repository }) => {
+    const candles = await collect(repository, { market: 'US', timeframe: '1d', symbols: ['005930'] });
     expect(candles).toHaveLength(0);
   });
 
-  it('알 수 없는 실제 거래시장의 봉은 내보내지 않는다', async () => {
-    const candles = await collect({ market: 'KR', timeframe: '1d', symbols: ['INVALID'] });
+  it('알 수 없는 실제 거래시장의 봉은 내보내지 않는다', async ({ repository }) => {
+    const candles = await collect(repository, { market: 'KR', timeframe: '1d', symbols: ['INVALID'] });
     expect(candles).toHaveLength(0);
   });
 
-  it('getTimestamps 는 저장된 봉의 시각을 오름차순으로 준다', async () => {
+  it('getTimestamps 는 저장된 봉의 시각을 오름차순으로 준다', async ({ repository }) => {
     const timestamps = await repository.getTimestamps('KR', '1d', '005930');
     expect(timestamps).toEqual([
       midnight('2026-08-05'),
@@ -229,7 +227,7 @@ describe('KrxDailyCandleRepository', () => {
     ]);
   });
 
-  it('거래불가 형태로 잘못 남은 행은 봉과 시각에서 모두 제외한다', async () => {
+  it('거래불가 형태로 잘못 남은 행은 봉과 시각에서 모두 제외한다', async ({ db, repository }) => {
     db.insert(krxDailyBars)
       .values({
         shortCode: '005930',
@@ -243,7 +241,7 @@ describe('KrxDailyCandleRepository', () => {
       })
       .run();
 
-    const candles = await collect({ market: 'KR', timeframe: '1d', symbols: ['005930'] });
+    const candles = await collect(repository, { market: 'KR', timeframe: '1d', symbols: ['005930'] });
     const timestamps = await repository.getTimestamps('KR', '1d', '005930');
 
     expect(candles.map((candle) => candle.tsMs)).toEqual([

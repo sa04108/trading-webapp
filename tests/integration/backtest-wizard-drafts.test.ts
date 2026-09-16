@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import { describe, expect } from 'vitest';
+import { createTestAdmin, type TestApp } from '../helpers/test-app.js';
+import { authenticatedTest as it } from '../helpers/test-fixtures.js';
 
 async function login(ctx: TestApp, username: string, password: string): Promise<string> {
   const response = await ctx.app.inject({
@@ -12,20 +13,7 @@ async function login(ctx: TestApp, username: string, password: string): Promise<
 }
 
 describe('backtest wizard draft routes', () => {
-  let ctx: TestApp;
-  let cookie: string;
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-    const admin = await createTestAdmin(ctx.container);
-    cookie = await login(ctx, admin.username, admin.password);
-  });
-
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  it('requires authentication for reading, saving, and clearing drafts', async () => {
+  it('requires authentication for reading, saving, and clearing drafts', async ({ ctx }) => {
     for (const [method, url, payload] of [
       ['GET', '/api/v1/backtests/wizard-draft', undefined],
       ['GET', '/api/v1/backtests/wizard-draft/strategy', undefined],
@@ -42,7 +30,7 @@ describe('backtest wizard draft routes', () => {
     }
   });
 
-  it('persists each validated step independently', async () => {
+  it('persists each validated step independently', async ({ ctx, cookie }) => {
     const payloads = {
       strategy: { strategyId: 'range-breakout', parameters: { lookbackBars: '17' } },
       period: {
@@ -89,7 +77,7 @@ describe('backtest wizard draft routes', () => {
     }
   });
 
-  it('separates new and clone contexts and clears only the requested context', async () => {
+  it('separates new and clone contexts and clears only the requested context', async ({ ctx, cookie }) => {
     const newPayload = { strategyId: 'range-breakout', parameters: { lookbackBars: '17' } };
     const clonePayload = { strategyId: 'range-breakout', parameters: { lookbackBars: '33' } };
     for (const [query, payload] of [
@@ -126,7 +114,7 @@ describe('backtest wizard draft routes', () => {
     expect(clone.json().draft.payload).toEqual(clonePayload);
   });
 
-  it('returns the latest unfinished context and can clear every context explicitly', async () => {
+  it('returns the latest unfinished context and can clear every context explicitly', async ({ ctx, cookie }) => {
     await ctx.app.inject({
       method: 'PUT',
       url: '/api/v1/backtests/wizard-draft/strategy',
@@ -176,7 +164,7 @@ describe('backtest wizard draft routes', () => {
     }
   });
 
-  it('does not expose another user draft', async () => {
+  it('does not expose another user draft', async ({ ctx, cookie }) => {
     await ctx.app.inject({
       method: 'PUT',
       url: '/api/v1/backtests/wizard-draft/strategy',
@@ -202,7 +190,7 @@ describe('backtest wizard draft routes', () => {
     expect(candidate.json()).toEqual({ candidate: null });
   });
 
-  it('rejects unknown steps and malformed payloads', async () => {
+  it('rejects unknown steps and malformed payloads', async ({ ctx, cookie }) => {
     const unknown = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/backtests/wizard-draft/review',

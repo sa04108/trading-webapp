@@ -1,23 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import { pruneExpiredRows } from '../../src/server/shared/db/maintenance.js';
 import { auditLogs, loginAttempts, notifications, sessions, users } from '../../src/server/shared/db/schema.js';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import { test as it } from '../helpers/test-fixtures.js';
 
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
 describe('DB maintenance (무한 증가 방지)', () => {
-  let ctx: TestApp;
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-  });
-
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  it('prunes expired sessions, stale login attempts, and old audit logs', () => {
+  it('prunes expired sessions, stale login attempts, and old audit logs', ({ ctx }) => {
     const db = ctx.container.database.db;
     const now = Date.now();
     const options = {
@@ -64,7 +54,7 @@ describe('DB maintenance (무한 증가 방지)', () => {
     expect(db.select().from(auditLogs).all().map((a) => a.event)).toEqual(['recent']);
   });
 
-  it('keeps every audit log when retention is disabled (D-011)', () => {
+  it('keeps every audit log when retention is disabled (D-011)', ({ ctx }) => {
     const db = ctx.container.database.db;
     const now = Date.now();
 
@@ -96,7 +86,7 @@ describe('DB maintenance (무한 증가 방지)', () => {
     expect(db.select().from(notifications).all()).toHaveLength(1);
   });
 
-  it('prunes notifications older than retention', () => {
+  it('prunes notifications older than retention', ({ ctx }) => {
     const db = ctx.container.database.db;
     const now = Date.now();
 

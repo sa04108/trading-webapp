@@ -42,6 +42,15 @@ interface Connection {
   deviceProgress?: Extract<AgentMessage, { type: "DEVICE_ACTIVITY" }>["progress"];
 }
 
+export class AgentCoordinatorStoppingError extends Error {
+  readonly statusCode = 503;
+
+  constructor() {
+    super("서버가 종료 중이어서 결과를 처리할 수 없습니다.");
+    this.name = "AgentCoordinatorStoppingError";
+  }
+}
+
 /** PC가 먼저 만든 연결로 서버가 작업을 전달한다. 연결과 작업 lease의 수명은 분리한다. */
 export class AgentCoordinator {
   private readonly connections = new Map<string, Connection>();
@@ -54,6 +63,9 @@ export class AgentCoordinator {
   private localConnection: Connection | null = null;
   private refreshingLocal = false;
   private closing: Promise<void> | null = null;
+  private readonly messageOperations = new Set<Promise<void>>();
+  private readonly resultOperations = new Set<Promise<unknown>>();
+  private readonly resultAbort = new AbortController();
   private readonly progressEpoch = randomUUID();
   private readonly progressRevisions = new Map<string, { signature: string; revision: number }>();
 
@@ -120,6 +132,7 @@ export class AgentCoordinator {
           );
           socket.close(4002, "invalid message or state");
         });
+      this.track(this.messageOperations, tail);
     });
     socket.on("error", (error) =>
       this.logger.debug({ err: error, clientId }, "에이전트 연결 오류"),
@@ -449,6 +462,39 @@ export class AgentCoordinator {
     return this.queue.getJob(jobId)?.agentId === clientId;
   }
 
+  /** HTTP와 로컬 agent의 결과 수신 전체를 종료 시점까지 추적한다. */
+  runResultOperation<T>(
+    operation: (shutdownSignal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    if (this.stopped) return Promise.reject(new AgentCoordinatorStoppingError());
+    let started: Promise<T>;
+    try {
+      started = operation(this.resultAbort.signal);
+    } catch (error) {
+      started = Promise.reject(error);
+    }
+    const tracked = started.catch((error: unknown) => {
+      if (this.resultAbort.signal.aborted)
+        throw new AgentCoordinatorStoppingError();
+      throw error;
+    });
+    this.track(this.resultOperations, tracked);
+    return tracked;
+  }
+
+  private track<T>(operations: Set<Promise<T>>, operation: Promise<T>): void {
+    operations.add(operation);
+    void operation.then(
+      () => operations.delete(operation),
+      () => operations.delete(operation),
+    );
+  }
+
+  private async drain(operations: Set<Promise<unknown>>): Promise<void> {
+    while (operations.size > 0)
+      await Promise.allSettled([...operations]);
+  }
+
   /** 큐 등록·슬롯 반환·재연결은 주기 타이머를 기다리지 않고 배정을 깨운다. */
   readonly wake = (): void => {
     if (this.stopped) return;
@@ -629,9 +675,13 @@ export class AgentCoordinator {
         send: (message) => {
           if (!open || this.stopped) return;
           // 배정 직전 자원 측정은 같은 호출 안에서 반영하고 나머지 메시지는 순서대로 처리한다.
-          if (message.type === "CAPACITY")
-            void this.message(LOCAL_AGENT_ID, connection, message);
-          else
+          let operation: Promise<void>;
+          if (message.type === "CAPACITY") {
+            operation = this.message(LOCAL_AGENT_ID, connection, message).catch(
+              (error: unknown) =>
+                this.logger.warn({ err: error }, "로컬 계산 메시지 처리 실패"),
+            );
+          } else {
             tail = tail
               .then(() =>
                 this.stopped
@@ -641,42 +691,48 @@ export class AgentCoordinator {
               .catch((error: unknown) =>
                 this.logger.warn({ err: error }, "로컬 계산 메시지 처리 실패"),
               );
+            operation = tail;
+          }
+          this.track(this.messageOperations, operation);
         },
         upload: async (input, signal) => {
-          signal.throwIfAborted();
-          if (!this.ownsBacktest(LOCAL_AGENT_ID, input.lease.jobId)) return 409;
-          const identity = {
-            jobId: input.lease.jobId,
-            attempt: input.lease.attempt,
-            leaseToken: input.lease.leaseToken,
-            checksum: input.sha256,
-          };
-          const reserved = this.backtests.reserveResultTransfer(identity);
-          if (reserved.status === "IDEMPOTENT") return 200;
-          if (reserved.status === "STALE_LEASE" || reserved.cancelRequested)
-            return 409;
-          try {
-            const size = fs.statSync(input.artifactPath).size;
-            this.backtests.reportActivity({
-              ...input.lease,
-              activity: "VALIDATING_RESULT",
-              completed: size,
-              total: size,
-            });
-            const status = await this.backtests.complete({
-              ...identity,
-              artifactPath: input.artifactPath,
-              telemetry: input.telemetry,
-            });
-            return status === "ACCEPTED" || status === "IDEMPOTENT" ? 200 : 409;
-          } catch (error) {
-            if (
-              error instanceof BacktestResultArtifactRejectedError ||
-              error instanceof InvalidBacktestResultArtifactError
-            )
-              return 422;
-            throw error;
-          }
+          return this.runResultOperation(async (shutdownSignal) => {
+            signal.throwIfAborted();
+            shutdownSignal.throwIfAborted();
+            if (!this.ownsBacktest(LOCAL_AGENT_ID, input.lease.jobId)) return 409;
+            const identity = {
+              jobId: input.lease.jobId,
+              attempt: input.lease.attempt,
+              leaseToken: input.lease.leaseToken,
+              checksum: input.sha256,
+            };
+            const reserved = this.backtests.reserveResultTransfer(identity);
+            if (reserved.status === "IDEMPOTENT") return 200;
+            if (reserved.status === "STALE_LEASE" || reserved.cancelRequested)
+              return 409;
+            try {
+              const size = fs.statSync(input.artifactPath).size;
+              this.backtests.reportActivity({
+                ...input.lease,
+                activity: "VALIDATING_RESULT",
+                completed: size,
+                total: size,
+              });
+              const status = await this.backtests.complete({
+                ...identity,
+                artifactPath: input.artifactPath,
+                telemetry: input.telemetry,
+              });
+              return status === "ACCEPTED" || status === "IDEMPOTENT" ? 200 : 409;
+            } catch (error) {
+              if (
+                error instanceof BacktestResultArtifactRejectedError ||
+                error instanceof InvalidBacktestResultArtifactError
+              )
+                return 422;
+              throw error;
+            }
+          });
         },
       },
     );
@@ -770,14 +826,27 @@ export class AgentCoordinator {
 
   private async shutdown(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
+    this.resultAbort.abort(new AgentCoordinatorStoppingError());
+    const backtestsStopping = this.backtests.stop();
     for (const { socket } of this.connections.values()) socket.terminate();
     this.connections.clear();
-    await this.localClient?.stop();
+    const primary = await Promise.allSettled([
+      this.localClient?.stop() ?? Promise.resolve(),
+      this.drain(this.messageOperations),
+      this.drain(this.resultOperations),
+      backtestsStopping,
+      this.dispatching ?? Promise.resolve(),
+    ]);
     // 서버 자식의 종료를 확인한 뒤에만 로컬 리스를 반환한다. 원격 리스는 만료까지 유지한다.
     if (this.localClient) this.invalidateClientLeases(LOCAL_AGENT_ID);
-    this.backtests.stop();
-    await this.dataQueue.stop();
-    await this.snapshots.stop();
-    await this.dispatching;
+    const secondary = await Promise.allSettled([
+      this.dataQueue.stop(),
+      this.snapshots.stop(),
+    ]);
+    const errors = [...primary, ...secondary]
+      .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      .map((result) => result.reason);
+    if (errors.length > 0)
+      throw new AggregateError(errors, "에이전트 종료 중 일부 자원을 정리하지 못했습니다.");
   }
 }

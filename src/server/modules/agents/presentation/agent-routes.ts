@@ -148,76 +148,80 @@ export function registerAgentControlRoutes(
         return reply
           .code(415)
           .send({ error: "결과 파일 형식이 올바르지 않습니다" });
-      const renewal = setInterval(() => {
+      return coordinator.runResultOperation(async (shutdownSignal) => {
+        const renewal = setInterval(() => {
+          try {
+            coordinator.backtests.reserveArtifactTransfer(identity);
+          } catch {
+            /* 다음 갱신 때 다시 확인한다. */
+          }
+        }, 30_000);
+        renewal.unref();
+        let artifact:
+          | Awaited<ReturnType<RemoteResultUploadManager["receive"]>>
+          | undefined;
         try {
-          coordinator.backtests.reserveArtifactTransfer(identity);
-        } catch {
-          /* 다음 갱신 때 다시 확인한다. */
+          coordinator.backtests.reportActivity({
+            ...identity,
+            activity: "UPLOADING_RESULT",
+            completed: 0,
+            total: headers["content-length"],
+          });
+          artifact = await uploads.receive(
+            request.body as Readable,
+            jobId,
+            identity.attempt,
+            (bytes) =>
+              coordinator.backtests.reportActivity({
+                ...identity,
+                activity: "UPLOADING_RESULT",
+                completed: bytes,
+                total: headers["content-length"],
+              }),
+            shutdownSignal,
+          );
+          if (
+            artifact.size !== headers["content-length"] ||
+            artifact.sha256 !== checksum
+          )
+            return reply
+              .code(400)
+              .send({ error: "결과 파일 길이 또는 해시가 다릅니다" });
+          const rawTelemetry = request.headers["x-agent-telemetry"];
+          const telemetry =
+            typeof rawTelemetry === "string" && rawTelemetry.length < 8192
+              ? backtestExecutionTelemetrySchema.parse(JSON.parse(rawTelemetry))
+              : undefined;
+          coordinator.backtests.reportActivity({
+            ...identity,
+            activity: "VALIDATING_RESULT",
+            completed: artifact.size,
+            total: headers["content-length"],
+          });
+          const status = await coordinator.backtests.complete({
+            ...identity,
+            checksum,
+            artifactPath: artifact.path,
+            telemetry,
+          });
+          return reply
+            .code(status === "ACCEPTED" || status === "IDEMPOTENT" ? 200 : 409)
+            .send({ status });
+        } catch (error) {
+          if (
+            error instanceof BacktestResultArtifactRejectedError ||
+            error instanceof InvalidBacktestResultArtifactError ||
+            error instanceof z.ZodError
+          )
+            return reply
+              .code(422)
+              .send({ error: "결과 파일 검증에 실패했습니다" });
+          throw error;
+        } finally {
+          clearInterval(renewal);
+          await artifact?.cleanup();
         }
-      }, 30_000);
-      renewal.unref();
-      let artifact:
-        Awaited<ReturnType<RemoteResultUploadManager["receive"]>> | undefined;
-      try {
-        coordinator.backtests.reportActivity({
-          ...identity,
-          activity: "UPLOADING_RESULT",
-          completed: 0,
-          total: headers["content-length"],
-        });
-        artifact = await uploads.receive(
-          request.body,
-          jobId,
-          identity.attempt,
-          (bytes) =>
-            coordinator.backtests.reportActivity({
-              ...identity,
-              activity: "UPLOADING_RESULT",
-              completed: bytes,
-              total: headers["content-length"],
-            }),
-        );
-        if (
-          artifact.size !== headers["content-length"] ||
-          artifact.sha256 !== checksum
-        )
-          return reply
-            .code(400)
-            .send({ error: "결과 파일 길이 또는 해시가 다릅니다" });
-        const rawTelemetry = request.headers["x-agent-telemetry"];
-        const telemetry =
-          typeof rawTelemetry === "string" && rawTelemetry.length < 8192
-            ? backtestExecutionTelemetrySchema.parse(JSON.parse(rawTelemetry))
-            : undefined;
-        coordinator.backtests.reportActivity({
-          ...identity,
-          activity: "VALIDATING_RESULT",
-          completed: artifact.size,
-          total: headers["content-length"],
-        });
-        const status = await coordinator.backtests.complete({
-          ...identity,
-          checksum,
-          artifactPath: artifact.path,
-          telemetry,
-        });
-        return reply
-          .code(status === "ACCEPTED" || status === "IDEMPOTENT" ? 200 : 409)
-          .send({ status });
-      } catch (error) {
-        if (
-          error instanceof BacktestResultArtifactRejectedError ||
-          error instanceof InvalidBacktestResultArtifactError ||
-          error instanceof z.ZodError
-        )
-          return reply
-            .code(422)
-            .send({ error: "결과 파일 검증에 실패했습니다" });
-        throw error;
-      } finally {
-        clearInterval(renewal);
-        await artifact?.cleanup();
-      }
+      });
     },
   );
 }

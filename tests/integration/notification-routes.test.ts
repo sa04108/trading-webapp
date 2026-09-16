@@ -1,27 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import { notifications } from '../../src/server/shared/db/schema.js';
-import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import { authenticatedTest as it } from '../helpers/test-fixtures.js';
 
 describe('notification routes', () => {
-  let ctx: TestApp;
-  let cookie: string;
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-    const { username, password } = await createTestAdmin(ctx.container);
-    const login = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { username, password },
-    });
-    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
-  });
-
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  it('requires auth on every endpoint', async () => {
+  it('requires auth on every endpoint', async ({ ctx }) => {
     for (const [method, url] of [
       ['GET', '/api/v1/notifications'],
       ['GET', '/api/v1/notifications/unread-count'],
@@ -34,7 +16,7 @@ describe('notification routes', () => {
     }
   });
 
-  it('lists newest first and counts unread', async () => {
+  it('lists newest first and counts unread', async ({ ctx, cookie }) => {
     const base = Date.now();
     ctx.container.database.db
       .insert(notifications)
@@ -61,7 +43,7 @@ describe('notification routes', () => {
     expect(countRes.json()).toEqual({ count: 1 });
   });
 
-  it('SSE 연결 직후 최초 REST 조회와의 경합을 닫는 sync 이벤트를 보낸다', async () => {
+  it('SSE 연결 직후 최초 REST 조회와의 경합을 닫는 sync 이벤트를 보낸다', async ({ ctx, cookie }) => {
     const address = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
     const controller = new AbortController();
     const response = await fetch(`${address}/api/v1/notifications/events`, {
@@ -80,7 +62,7 @@ describe('notification routes', () => {
     controller.abort();
   });
 
-  it('marks all read', async () => {
+  it('marks all read', async ({ ctx, cookie }) => {
     ctx.container.notificationService.create({ type: 'backtest', severity: 'info', title: 'x' });
 
     const res = await ctx.app.inject({
@@ -92,7 +74,7 @@ describe('notification routes', () => {
     expect(ctx.container.notificationService.unreadCount()).toBe(0);
   });
 
-  it('deletes by ids, deletes all, rejects empty selection', async () => {
+  it('deletes by ids, deletes all, rejects empty selection', async ({ ctx, cookie }) => {
     const service = ctx.container.notificationService;
     const a = service.create({ type: 'backtest', severity: 'info', title: 'a' });
     service.create({ type: 'backtest', severity: 'info', title: 'b' });

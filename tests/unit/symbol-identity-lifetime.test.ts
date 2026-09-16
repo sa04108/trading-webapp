@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import {
   facts,
   krxDailyBars,
@@ -6,7 +6,8 @@ import {
   symbols,
 } from '../../src/server/shared/db/schema.js';
 import { inferUniqueSymbolIdentities, validateSymbolIdentityLifetime, type SymbolIdentitySelection } from '../../src/runtime/modules/market-data/domain/symbol-identity-lifetime.js';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import { type TestApp } from '../helpers/test-app.js';
+import { test as it } from '../helpers/test-fixtures.js';
 
 interface VersionInput {
   readonly standardCode: string;
@@ -29,8 +30,7 @@ function insertVersion(t: TestApp, version: VersionInput): void {
 }
 
 describe('종목 이력 snapshot과 생애 검증', () => {
-  it('선택 pair와 알려진 전체 생애가 1:1이면 안전하다', async () => {
-    const t = await createTestApp();
+  it('선택 pair와 알려진 전체 생애가 1:1이면 안전하다', async ({ ctx: t }) => {
     insertVersion(t, {
       standardCode: 'KR7000000001', shortCode: '000001',
       validFromDate: '2000-01-01', validToDate: null,
@@ -39,11 +39,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
     expect(validateLifetime(t, [{
       standardCode: 'KR7000000001', shortCode: '000001', effectiveDate: '2020-01-02',
     }])).toEqual({ safe: true, conflicts: [] });
-    await t.close();
   });
 
-  it('SCD 역방향 alias와 현재 등록 owner를 한 identity snapshot에 담는다', async () => {
-    const t = await createTestApp();
+  it('SCD 역방향 alias와 현재 등록 owner를 한 identity snapshot에 담는다', async ({ ctx: t }) => {
     insertVersion(t, {
       standardCode: 'KR7000000001', shortCode: '000002',
       validFromDate: '1990-01-01', validToDate: '2000-01-01',
@@ -71,11 +69,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
       { code: '000001', standardCode: null },
       { code: '000002', standardCode: 'KR7000000001' },
     ]);
-    await t.close();
   });
 
-  it('미등록 shortCode의 orphan fact와 SCD 구간 밖 봉을 snapshot에서 찾는다', async () => {
-    const t = await createTestApp();
+  it('미등록 shortCode의 orphan fact와 SCD 구간 밖 봉을 snapshot에서 찾는다', async ({ ctx: t }) => {
     insertVersion(t, {
       standardCode: 'KR7000000001', shortCode: '000001',
       validFromDate: '2020-01-01', validToDate: null,
@@ -105,11 +101,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
     expect(snapshot.registrations).toEqual([]);
     expect(snapshot.unregisteredFactShortCodes).toEqual(['000001']);
     expect(snapshot.uncoveredBarShortCodes).toEqual(['000001']);
-    await t.close();
   });
 
-  it('알려진 SCD version이 전혀 없는 shortCode의 봉도 orphan으로 찾는다', async () => {
-    const t = await createTestApp();
+  it('알려진 SCD version이 전혀 없는 shortCode의 봉도 orphan으로 찾는다', async ({ ctx: t }) => {
     t.container.database.db.insert(symbols).values({
       code: '000001', market: 'KR', name: '등록됐지만 이력 없음', standardCode: 'KR7000000001',
       createdAtMs: t.container.clock.now(),
@@ -126,11 +120,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
 
     expect(snapshot.versions).toEqual([]);
     expect(snapshot.uncoveredBarShortCodes).toEqual(['000001']);
-    await t.close();
   });
 
-  it('이미 정확히 등록된 shortCode도 SCD 구간 밖의 과거 봉을 숨기지 않는다', async () => {
-    const t = await createTestApp();
+  it('이미 정확히 등록된 shortCode도 SCD 구간 밖의 과거 봉을 숨기지 않는다', async ({ ctx: t }) => {
     insertVersion(t, {
       standardCode: 'KR7000000001', shortCode: '000001',
       validFromDate: '2020-01-01', validToDate: null,
@@ -153,11 +145,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
       code: '000001', standardCode: 'KR7000000001',
     }]);
     expect(snapshot.uncoveredBarShortCodes).toEqual(['000001']);
-    await t.close();
   });
 
-  it('최종 폐지일은 SCD 유효구간 밖의 첫날로 정확히 차단한다', async () => {
-    const t = await createTestApp();
+  it('최종 폐지일은 SCD 유효구간 밖의 첫날로 정확히 차단한다', async ({ ctx: t }) => {
     insertVersion(t, {
       standardCode: 'KR7000000001', shortCode: '000001',
       validFromDate: '2020-01-01', validToDate: '2025-01-02',
@@ -184,11 +174,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
       ['000001'],
       ['KR7000000001'],
     ).uncoveredBarShortCodes).toEqual(['000001']);
-    await t.close();
   });
 
-  it('같은 exact pair가 다시 열린 내부 SCD gap의 봉은 base-info 일시 결측으로 본다', async () => {
-    const t = await createTestApp();
+  it('같은 exact pair가 다시 열린 내부 SCD gap의 봉은 base-info 일시 결측으로 본다', async ({ ctx: t }) => {
     insertVersion(t, {
       standardCode: 'KR7000000001', shortCode: '000001',
       validFromDate: '2020-01-01', validToDate: '2025-01-02',
@@ -212,11 +200,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
     );
 
     expect(snapshot.uncoveredBarShortCodes).toEqual([]);
-    await t.close();
   });
 
-  it('먼 미래에 같은 pair가 돌아와도 중간의 다른 pair 앞 gap 봉은 숨기지 않는다', async () => {
-    const t = await createTestApp();
+  it('먼 미래에 같은 pair가 돌아와도 중간의 다른 pair 앞 gap 봉은 숨기지 않는다', async ({ ctx: t }) => {
     insertVersion(t, {
       standardCode: 'KR7000000001', shortCode: '000001',
       validFromDate: '2020-01-01', validToDate: '2020-02-01',
@@ -244,11 +230,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
     );
 
     expect(snapshot.uncoveredBarShortCodes).toEqual(['000001']);
-    await t.close();
   });
 
-  it('선택 기간 밖의 과거 발행사까지 읽어 단축코드 재사용을 탐지한다', async () => {
-    const t = await createTestApp();
+  it('선택 기간 밖의 과거 발행사까지 읽어 단축코드 재사용을 탐지한다', async ({ ctx: t }) => {
     insertVersion(t, {
       standardCode: 'KR7000000002', shortCode: '000001',
       validFromDate: '1990-01-01', validToDate: '2000-01-01',
@@ -268,11 +252,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
         standardCodes: ['KR7000000001', 'KR7000000002'],
       }],
     });
-    await t.close();
   });
 
-  it('표준코드가 생애 중 여러 단축코드에 연결된 경우도 탐지한다', async () => {
-    const t = await createTestApp();
+  it('표준코드가 생애 중 여러 단축코드에 연결된 경우도 탐지한다', async ({ ctx: t }) => {
     insertVersion(t, {
       standardCode: 'KR7000000001', shortCode: '000002',
       validFromDate: '2000-01-01', validToDate: '2010-01-01',
@@ -292,11 +274,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
         shortCodes: ['000001', '000002'],
       }],
     });
-    await t.close();
   });
 
-  it('effectiveDate에 정확한 pair가 없으면 당시 실제 pair와 함께 보고한다', async () => {
-    const t = await createTestApp();
+  it('effectiveDate에 정확한 pair가 없으면 당시 실제 pair와 함께 보고한다', async ({ ctx: t }) => {
     insertVersion(t, {
       standardCode: 'KR7000000001', shortCode: '000001',
       validFromDate: '2000-01-01', validToDate: '2020-01-01',
@@ -325,11 +305,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
         },
       ],
     });
-    await t.close();
   });
 
-  it('동일 pair의 메타데이터 버전과 폐지 후 재개는 허용한다', async () => {
-    const t = await createTestApp();
+  it('동일 pair의 메타데이터 버전과 폐지 후 재개는 허용한다', async ({ ctx: t }) => {
     insertVersion(t, {
       standardCode: 'KR7000000001', shortCode: '000001', name: '과거 이름',
       validFromDate: '2000-01-01', validToDate: '2010-01-01',
@@ -347,11 +325,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
       { standardCode: 'KR7000000001', shortCode: '000001', effectiveDate: '2005-01-03' },
       { standardCode: 'KR7000000001', shortCode: '000001', effectiveDate: '2022-01-03' },
     ])).toEqual({ safe: true, conflicts: [] });
-    await t.close();
   });
 
-  it('500개를 넘는 양쪽 key도 batch 조회한다', async () => {
-    const t = await createTestApp();
+  it('500개를 넘는 양쪽 key도 batch 조회한다', async ({ ctx: t }) => {
     const selections: SymbolIdentitySelection[] = Array.from({ length: 501 }, (_, index) => ({
       shortCode: String(index).padStart(6, '0'),
       standardCode: `KR7${String(index).padStart(9, '0')}`,
@@ -397,11 +373,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
           },
         ],
       });
-    await t.close();
   });
 
-  it('legacy 단축코드는 전체 생애가 양방향 1:1일 때만 추론한다', async () => {
-    const t = await createTestApp();
+  it('legacy 단축코드는 전체 생애가 양방향 1:1일 때만 추론한다', async ({ ctx: t }) => {
     insertVersion(t, {
       standardCode: 'KR7000000001', shortCode: '000001',
       validFromDate: '2000-01-01', validToDate: '2010-01-01',
@@ -418,11 +392,9 @@ describe('종목 이력 snapshot과 생애 검증', () => {
       identities: [{ standardCode: 'KR7000000001', shortCode: '000001' }],
       conflicts: [],
     });
-    await t.close();
   });
 
-  it('legacy 추론은 재사용·반대방향 변경·unknown을 구조적으로 보고한다', async () => {
-    const t = await createTestApp();
+  it('legacy 추론은 재사용·반대방향 변경·unknown을 구조적으로 보고한다', async ({ ctx: t }) => {
     insertVersion(t, {
       standardCode: 'KR7000000001', shortCode: '000002',
       validFromDate: '1990-01-01', validToDate: '2000-01-01',
@@ -455,7 +427,6 @@ describe('종목 이력 snapshot과 생애 검증', () => {
         { kind: 'SHORT_CODE_UNKNOWN', shortCode: '999999' },
       ],
     });
-    await t.close();
   });
 });
 

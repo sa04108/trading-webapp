@@ -1,17 +1,13 @@
-import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { AgentClient } from '../../src/agent/client.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { AsyncLocalStorage } from 'node:async_hooks';
 import type { FastifyInstance } from 'fastify';
 import type { BacktestPreparationJobDto } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
-import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 import { createContainer, type Container } from '../../src/server/bootstrap/container.js';
 import { buildServer } from '../../src/server/bootstrap/server.js';
 import { newId } from '../../src/runtime/shared/ids.js';
-import { symbolMasterCoverage } from '../../src/server/shared/db/schema.js';
 
 export interface TestApp {
   app: FastifyInstance;
@@ -27,46 +23,77 @@ export async function createTestApp(
   agentPreparation = false,
 ): Promise<TestApp> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-test-'));
-  const config = loadConfig({
-    NODE_ENV: 'test',
-    DATABASE_PATH: path.join(dir, 'app.sqlite'),
-    DATA_ROOT: path.join(dir, 'market-data'),
-    IMPORT_ROOT: path.join(dir, 'imports'),
-    EXPORT_ROOT: path.join(dir, 'exports'),
-    TEMP_ROOT: path.join(dir, 'temp'),
-    SESSION_SECRET: 's'.repeat(48),
-    LOG_LEVEL: 'error',
-    ...env,
-  });
-  const container = createContainer(config, { inlinePreparation: !agentPreparation });
-  const app = await buildServer(container);
-  configure?.(app); // 테스트 전용 라우트 등록 등 — ready() 전에만 가능
-  await app.ready();
+  let container: Container | null = null;
+  let app: FastifyInstance | null = null;
+  try {
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      DATABASE_PATH: path.join(dir, 'app.sqlite'),
+      DATA_ROOT: path.join(dir, 'market-data'),
+      IMPORT_ROOT: path.join(dir, 'imports'),
+      EXPORT_ROOT: path.join(dir, 'exports'),
+      TEMP_ROOT: path.join(dir, 'temp'),
+      SESSION_SECRET: 's'.repeat(48),
+      LOG_LEVEL: 'error',
+      ...env,
+    });
+    container = createContainer(config, { inlinePreparation: !agentPreparation });
+    app = await buildServer(container);
+    configure?.(app); // 테스트 전용 라우트 등록 등 — ready() 전에만 가능
+    await app.ready();
+  } catch (error) {
+    const cleanupErrors: unknown[] = [];
+    if (app !== null) {
+      try { await app.close(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+    }
+    if (container !== null) {
+      try { await container.close(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+    }
+    if (cleanupErrors.length === 0) fs.rmSync(dir, { recursive: true, force: true });
+    if (cleanupErrors.length > 0)
+      throw new AggregateError(
+        cleanupErrors,
+        '테스트 앱 생성과 정리에 실패했습니다.',
+        { cause: error },
+      );
+    throw error;
+  }
+
+  if (container === null || app === null)
+    throw new Error('테스트 앱 초기화 결과가 없습니다');
+
+  const readyContainer = container;
+  const readyApp = app;
 
   let agent: AgentClient | null = null;
+  let closing: Promise<void> | null = null;
   return {
-    app,
-    container,
+    app: readyApp,
+    container: readyContainer,
     dir,
     async startAgent() {
+      if (closing !== null) throw new Error('종료 중인 테스트 앱은 agent를 시작할 수 없습니다');
       if (agent) return;
-      const address = await app.listen({ host: '127.0.0.1', port: 0 });
-      const credential = container.agentCoordinator.registry.issue('integration-test');
-      container.agentCoordinator.start({ local: false });
+      const address = await readyApp.listen({ host: '127.0.0.1', port: 0 });
+      const credential = readyContainer.agentCoordinator.registry.issue('integration-test');
+      readyContainer.agentCoordinator.start({ local: false });
       agent = new AgentClient({ serverUrl: address, token: credential.token }, path.join(dir, 'agent'), undefined, () => undefined);
       agent.start();
     },
-    async close() {
-      await agent?.stop();
-      await app.close();
-      await container.close();
-      fs.rmSync(dir, { recursive: true, force: true });
+    close() {
+      if (closing !== null) return closing;
+      closing = (async () => {
+        const errors: unknown[] = [];
+        try { await agent?.stop(); } catch (error) { errors.push(error); }
+        try { await readyApp.close(); } catch (error) { errors.push(error); }
+        try { await readyContainer.close(); } catch (error) { errors.push(error); }
+        if (errors.length === 0) fs.rmSync(dir, { recursive: true, force: true });
+        if (errors.length > 0)
+          throw new AggregateError(errors, '테스트 앱 자원 정리에 실패했습니다.');
+      })();
+      return closing;
     },
   };
-}
-
-export interface PreparedSubmissionFixtureOptions {
-  preparationTimeoutMs?: number;
 }
 
 const PREPARATION_FIXTURE_TIMEOUT_MS = 5_000;
@@ -99,180 +126,6 @@ export async function waitForPreparationFixture(
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-}
-
-/**
- * Task 6 이전부터 있던 제출/worker 통합 테스트가 관찰하려는 것은 queue 이후다.
- * 그 테스트들에서만 DART 외부 호출을 no-op으로 격리하고, 첫 409 뒤 동일 요청의
- * durable preparation을 완료한 다음 원 요청을 재시도한다. preparation 자체의 실제
- * registry/coverage/DART 계약은 backtest-preparation.test.ts가 별도로 검증한다.
- */
-export function installPreparedSubmissionFixture(
-  ctx: TestApp,
-  fixtureOptions: PreparedSubmissionFixtureOptions = {},
-): void {
-  const readActualValidDates = ctx.container.candleCoverageService
-    .getValidDatesByCodeBetween.bind(ctx.container.candleCoverageService);
-  const preparationPeriod = new AsyncLocalStorage<BacktestRequest['period']>();
-  const preparation = ctx.container.backtestPreparationOrchestrator;
-  const runClaimedJob = preparation.runClaimedJob.bind(preparation);
-  preparation.runClaimedJob = (jobId) => {
-    const row = ctx.container.database.sqlite.prepare(
-      'SELECT request_json FROM backtest_preparation_jobs WHERE id = ?',
-    ).get(jobId) as { request_json: string } | undefined;
-    if (row === undefined) return runClaimedJob(jobId);
-    const input = JSON.parse(row.request_json) as { period: BacktestRequest['period'] };
-    return preparationPeriod.run(input.period, () => runClaimedJob(jobId));
-  };
-  const getReadyPreview = preparation.getReadyPreview.bind(preparation);
-  preparation.getReadyPreview = (input) => preparationPeriod.run(
-    input.period,
-    () => getReadyPreview(input),
-  );
-  const noWorkPlan = {
-    yearsBySymbol: new Map(),
-    shareYearsBySymbol: new Map(),
-    todayKstDate: '2026-01-01',
-    calls: 0,
-    estimatedMs: 0,
-    overDailyLimit: false,
-  };
-  const planFinancialSync: typeof ctx.container.factSyncService.planFinancialSync = () => noWorkPlan;
-  const planCorporateActionSync: typeof ctx.container.factSyncService.planCorporateActionSync = () => noWorkPlan;
-  ctx.container.factSyncService.planFinancialSync = planFinancialSync;
-  ctx.container.factSyncService.planCorporateActionSync = planCorporateActionSync;
-  ctx.container.factSyncService.sync = async (request) => {
-    // DART가 공시 0건을 정상 반환해도 요청한 연도는 완전히 조회한 상태다. 준비 완료
-    // 불변식을 실제 서비스와 같게 만들되, 외부 호출과 fact 행 생성만 생략한다.
-    const years: number[] = [];
-    for (let year = request.fromYear; year <= request.toYear; year += 1) years.push(year);
-    for (const symbol of request.symbols) {
-      ctx.container.factCoverageStore.addCoveredYears(
-        symbol,
-        years,
-        ctx.container.clock.now(),
-      );
-    }
-    return {
-      savedFacts: 0,
-      gapCount: 0,
-      gaps: [],
-      stoppedAtSymbol: null,
-      stopReason: null,
-      failureMessage: null,
-    };
-  };
-  ctx.container.factSyncService.syncCorporateActions = async (request) => {
-    // 외부 DART만 no-op으로 격리하되, 성공한 준비가 남겨야 할 현재 protocol coverage는
-    // 실제 서비스와 동일하게 기록한다. 그렇지 않으면 worker의 최종 fail-closed가
-    // 테스트 fixture 자체를 구버전/미수집 데이터로 올바르게 거부한다.
-    const years: number[] = [];
-    for (let year = request.fromYear; year <= request.toYear; year += 1) years.push(year);
-    for (const symbol of request.symbols) {
-      ctx.container.actionCoverageStore.addCoverageResult(
-        symbol,
-        years,
-        [],
-        ctx.container.clock.now(),
-      );
-    }
-    return {
-      savedFacts: 0,
-      gapCount: 0,
-      gaps: [],
-      stoppedAtSymbol: null,
-      stopReason: null,
-      failureMessage: null,
-    };
-  };
-  ctx.container.candleCoverageService.getValidDatesByCodeBetween = (codes, from, to) => {
-    const tradingDays = ctx.container.symbolMasterService.tradingDaysBetween(from, to);
-    // Production now validates in bounded ranges. This queue-focused fixture still models the
-    // old contract: one valid candle anywhere in the submitted period makes that symbol complete
-    // for preparation only. Scope the probe to that submitted period so a future candle cannot
-    // accidentally make an intentionally empty historical period look covered.
-    const scopedPeriod = preparationPeriod.getStore();
-    const actual = readActualValidDates(
-      codes,
-      scopedPeriod?.from ?? from,
-      scopedPeriod?.to ?? to,
-    );
-    return new Map(codes.map((code) => [
-      code,
-      (actual.get(code)?.length ?? 0) > 0
-        ? [...new Set([
-            ...(actual.get(code) ?? []).filter((date) => date >= from && date <= to),
-            ...tradingDays,
-          ])].sort()
-        : [],
-    ]));
-  };
-
-  const rawInject = ctx.app.inject.bind(ctx.app);
-  ctx.app.inject = (async (options: unknown) => {
-    const request = options as {
-      method?: string;
-      url?: string;
-      payload?: BacktestRequest;
-      cookies?: Record<string, string>;
-    };
-    const first = await rawInject(options as never);
-    const isSubmit = request.method === 'POST' && request.url === '/api/v1/backtests';
-    const cloneMatch = request.method === 'POST'
-      ? /^\/api\/v1\/backtests\/([^/]+)\/clone$/.exec(request.url ?? '')
-      : null;
-    if (
-      (!isSubmit && cloneMatch === null)
-      || first.statusCode !== 409
-      || (first.json() as { error?: string }).error !== 'PREPARATION_REQUIRED'
-    ) return first;
-
-    let body = request.payload;
-    if (body === undefined && cloneMatch !== null) {
-      const draft = await rawInject({
-        method: 'GET',
-        url: `/api/v1/backtests/${cloneMatch[1]}/clone-draft`,
-        cookies: request.cookies,
-      });
-      if (draft.statusCode !== 200) return first;
-      body = (draft.json() as { request: BacktestRequest }).request;
-    }
-    if (body === undefined) return first;
-
-    // queue 이후를 검증하는 fixture이므로 preparation의 기간 전체 KRX 백필은 외부 호출
-    // 없이 완료된 것으로 만든다. 개별 테스트가 coverage drift를 검증할 때는 이 준비 뒤
-    // 행을 삭제·교체하므로 실제 제출/worker 방어선은 그대로 탄다.
-    ctx.container.database.db.insert(symbolMasterCoverage).values({
-      startDate: body.period.from,
-      endDate: body.period.to,
-      collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.container.clock.now(),
-    }).run();
-
-    const preparationJob = preparation.start({
-      universeRule: body.universeRule,
-      period: body.period,
-      strategyId: body.strategyId,
-      parameters: body.parameters,
-    });
-    if (!await waitForPreparationFixture(
-      () => preparation.get(preparationJob.id),
-      preparationJob.id,
-      fixtureOptions.preparationTimeoutMs,
-    )) return first;
-    const preview = await rawInject({
-      method: 'POST',
-      url: '/api/v1/backtests/universe-preview',
-      cookies: request.cookies,
-      payload: {
-        universeRule: body.universeRule,
-        period: body.period,
-        strategyId: body.strategyId,
-        parameters: body.parameters,
-      },
-    });
-    if (preview.statusCode !== 200) return first;
-    return rawInject(options as never);
-  }) as typeof ctx.app.inject;
 }
 
 export interface TestAdminOptions {

@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import * as OTPAuth from 'otpauth';
-import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import { createTestAdmin } from '../helpers/test-app.js';
+import { test as it } from '../helpers/test-fixtures.js';
 import { newId } from '../../src/runtime/shared/ids.js';
 
 function sessionCookie(response: { cookies: Array<{ name: string; value: string }> }): string {
@@ -19,24 +20,14 @@ function totpToken(secret: string): string {
 }
 
 describe('auth flow (스펙 §14, §16)', () => {
-  let ctx: TestApp;
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-  });
-
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  it('rejects unauthenticated /auth/me and /system/info', async () => {
+  it('rejects unauthenticated /auth/me and /system/info', async ({ ctx }) => {
     const me = await ctx.app.inject({ method: 'GET', url: '/api/v1/auth/me' });
     expect(me.statusCode).toBe(401);
     const info = await ctx.app.inject({ method: 'GET', url: '/api/v1/system/info' });
     expect(info.statusCode).toBe(401);
   });
 
-  it('logs in with a password alone when TOTP is not enrolled, then logs out', async () => {
+  it('logs in with a password alone when TOTP is not enrolled, then logs out', async ({ ctx }) => {
     const { username, password } = await createTestAdmin(ctx.container);
 
     const login = await ctx.app.inject({
@@ -71,7 +62,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     expect(meAfter.statusCode).toBe(401);
   });
 
-  it('issues a fresh session id on every login', async () => {
+  it('issues a fresh session id on every login', async ({ ctx }) => {
     const { username, password } = await createTestAdmin(ctx.container);
 
     const first = await ctx.app.inject({
@@ -88,7 +79,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     expect(sessionCookie(first)).not.toBe(sessionCookie(second));
   });
 
-  it('requires TOTP as a second step and rotates the session id', async () => {
+  it('requires TOTP as a second step and rotates the session id', async ({ ctx }) => {
     const { username, password, totpSecret } = await createTestAdmin(ctx.container, {
       totpEnabled: true,
     });
@@ -135,7 +126,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     expect(me.statusCode).toBe(200);
   });
 
-  it('fails closed when totpEnabled is set but totpSecret is null (corrupted state)', async () => {
+  it('fails closed when totpEnabled is set but totpSecret is null (corrupted state)', async ({ ctx }) => {
     const username = 'corrupted-totp';
     const password = 'correct-horse-battery-staple';
     ctx.container.userRepository.create(
@@ -176,7 +167,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     expect(me.statusCode).toBe(401);
   });
 
-  it('counts TOTP verification failures toward the login lockout', async () => {
+  it('counts TOTP verification failures toward the login lockout', async ({ ctx }) => {
     const { username, password, totpSecret } = await createTestAdmin(ctx.container, {
       totpEnabled: true,
     });
@@ -218,7 +209,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     expect(lockedLogin.statusCode).toBe(429);
   });
 
-  it('accepts a recovery code once', async () => {
+  it('accepts a recovery code once', async ({ ctx }) => {
     const recoveryCodes = ['aaaa11112222', 'bbbb33334444'];
     const { username, password } = await createTestAdmin(ctx.container, {
       totpEnabled: true,
@@ -256,7 +247,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     expect(reuse.statusCode).toBe(401);
   });
 
-  it('refuses to reuse a TOTP code that was already redeemed (RFC 6238 §5.2)', async () => {
+  it('refuses to reuse a TOTP code that was already redeemed (RFC 6238 §5.2)', async ({ ctx }) => {
     const { username, password, totpSecret } = await createTestAdmin(ctx.container, {
       totpEnabled: true,
     });
@@ -304,7 +295,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     expect(replayAudit.length).toBe(1);
   });
 
-  it('audits a password that stops at the second factor', async () => {
+  it('audits a password that stops at the second factor', async ({ ctx }) => {
     // 비밀번호가 샜다는 가장 강한 신호다 — 성공도 실패도 아니라는 이유로
     // 아무 기록 없이 지나가면 audit 에도 login_attempts 에도 남지 않는다.
     const { username, password } = await createTestAdmin(ctx.container, { totpEnabled: true });
@@ -322,7 +313,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     expect(rows.length).toBe(1);
   });
 
-  it('locks the account after 5 failed attempts (스펙 §16 로그인 rate limit)', async () => {
+  it('locks the account after 5 failed attempts (스펙 §16 로그인 rate limit)', async ({ ctx }) => {
     const { username } = await createTestAdmin(ctx.container);
 
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -342,7 +333,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     expect(locked.statusCode).toBe(429);
   });
 
-  it('denies cross-origin mutations (CSRF, 스펙 §16)', async () => {
+  it('denies cross-origin mutations (CSRF, 스펙 §16)', async ({ ctx }) => {
     const response = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/auth/login',
@@ -352,7 +343,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     expect(response.statusCode).toBe(403);
   });
 
-  it('writes audit logs for login failures', async () => {
+  it('writes audit logs for login failures', async ({ ctx }) => {
     await createTestAdmin(ctx.container);
     await ctx.app.inject({
       method: 'POST',

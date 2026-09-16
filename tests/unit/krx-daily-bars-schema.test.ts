@@ -1,10 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { createTestApp } from '../helpers/test-app.js';
+import { describe, expect } from 'vitest';
+import { test as it } from '../helpers/test-fixtures.js';
 import { krxDailyBars } from '../../src/server/shared/db/schema.js';
 
 describe('krx_daily_bars 스키마', () => {
-  it('삽입·조회가 왕복한다', async () => {
-    const t = await createTestApp();
+  it('삽입·조회가 왕복한다', async ({ ctx: t }) => {
     const db = t.container.database.db;
 
     db.insert(krxDailyBars).values({
@@ -32,11 +31,9 @@ describe('krx_daily_bars 스키마', () => {
       },
     ]);
 
-    await t.close();
   });
 
-  it('(shortCode, date) 가 같으면 덮어쓴다', async () => {
-    const t = await createTestApp();
+  it('(shortCode, date) 가 같으면 덮어쓴다', async ({ ctx: t }) => {
     const db = t.container.database.db;
 
     db.insert(krxDailyBars).values({
@@ -75,6 +72,5 @@ describe('krx_daily_bars 스키마', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ open: 71_600, volume: 9_999_999 });
 
-    await t.close();
   });
 });

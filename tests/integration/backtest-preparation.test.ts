@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { get as httpGet, type IncomingMessage } from 'node:http';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import { eq } from 'drizzle-orm';
 import type { PreparationInput } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import {
@@ -8,7 +8,8 @@ import {
   dailySelectionMetrics,
   symbolFactsState,
 } from '../../src/server/shared/db/schema.js';
-import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import { createTestAdmin, type TestApp } from '../helpers/test-app.js';
+import { authenticatedTest as it, test } from '../helpers/test-fixtures.js';
 import {
   registerSymbols,
   seedCorporateActionCoverage,
@@ -47,25 +48,7 @@ async function waitFor<T>(read: () => T, predicate: (value: T) => boolean): Prom
 }
 
 describe('backtest preparation HTTP/SSE', () => {
-  let ctx: TestApp;
-  let cookie: string;
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-    const credentials = await createTestAdmin(ctx.container);
-    const login = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: credentials,
-    });
-    cookie = login.cookies.find((item) => item.name === 'qp_session')!.value;
-  });
-
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  const seedReadyUniverse = async (entries = [{
+  const seedReadyUniverse = async (ctx: TestApp, entries = [{
     standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자',
     market: 'KOSPI' as const, marketCapKrw: '500000000000000',
   }], withActionCoverage = true) => {
@@ -88,8 +71,8 @@ describe('backtest preparation HTTP/SSE', () => {
     }
   };
 
-  it('준비가 필요하면 202 job을 주고 완료된 같은 hash는 재확인 후 200 preview를 준다', async () => {
-    await seedReadyUniverse();
+  it('준비가 필요하면 202 job을 주고 완료된 같은 hash는 재확인 후 200 preview를 준다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx);
 
     const started = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
@@ -115,8 +98,8 @@ describe('backtest preparation HTTP/SSE', () => {
     });
   });
 
-  it('완료 preview는 action protocol이 구버전이면 캐시 대신 재준비를 요구한다', async () => {
-    await seedReadyUniverse();
+  it('완료 preview는 action protocol이 구버전이면 캐시 대신 재준비를 요구한다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx);
 
     const started = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
@@ -153,8 +136,8 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(invalidated.json<{ error: string }>().error).toMatch(/DART/);
   });
 
-  it('같은 request hash라도 resolver schedule이 달라졌으면 완료 결과를 재사용하지 않는다', async () => {
-    await seedReadyUniverse([
+  it('같은 request hash라도 resolver schedule이 달라졌으면 완료 결과를 재사용하지 않는다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx, [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '200' },
       { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '100' },
     ]);
@@ -181,8 +164,8 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(changed.json<{ job: { id: string } }>().job.id).not.toBe(firstId);
   });
 
-  it('백테스트 제출은 같은 hash 준비 전 409이고 완료 뒤 staged schedule을 그대로 pin한다', async () => {
-    await seedReadyUniverse();
+  it('백테스트 제출은 같은 hash 준비 전 409이고 완료 뒤 staged schedule을 그대로 pin한다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx);
     const preparation = {
       ...previewInput(),
       universeRule: {
@@ -272,8 +255,8 @@ describe('backtest preparation HTTP/SSE', () => {
     );
   });
 
-  it('GET snapshot은 status·phase·progress·nextResumeAtMs를 반환한다', async () => {
-    await seedReadyUniverse();
+  it('GET snapshot은 status·phase·progress·nextResumeAtMs를 반환한다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx);
     const id = ctx.container.backtestPreparationOrchestrator.start(previewInput()).id;
 
     const response = await ctx.app.inject({
@@ -294,8 +277,8 @@ describe('backtest preparation HTTP/SSE', () => {
     }) });
   });
 
-  it('SSE는 첫 terminal snapshot을 즉시 전송하고 연결을 닫는다', async () => {
-    await seedReadyUniverse();
+  it('SSE는 첫 terminal snapshot을 즉시 전송하고 연결을 닫는다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx);
     const id = ctx.container.backtestPreparationOrchestrator.start(previewInput()).id;
     await waitFor(
       () => ctx.container.backtestPreparationOrchestrator.get(id),
@@ -313,8 +296,8 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(response.body).toContain('"status":"COMPLETED"');
   });
 
-  it('SSE initial 조회 직후 terminal이 된 race도 최신 snapshot을 보내고 닫는다', async () => {
-    await seedReadyUniverse();
+  it('SSE initial 조회 직후 terminal이 된 race도 최신 snapshot을 보내고 닫는다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx);
     const orchestrator = ctx.container.backtestPreparationOrchestrator;
     const id = orchestrator.start(previewInput()).id;
     await waitFor(() => orchestrator.get(id), (job) => job?.status === 'COMPLETED');
@@ -339,19 +322,20 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(response.body).toContain('"status":"COMPLETED"');
   });
 
-  it('app.close는 active preparation SSE heartbeat와 구독을 먼저 정리한다', async () => {
-    await ctx.close();
+  test('app.close는 active preparation SSE heartbeat와 구독을 먼저 정리한다', async ({ apps }) => {
     let unsubscribedBeforeServerClose: boolean | null = null;
     let subscriptionClosed = false;
-    ctx = await createTestApp({}, (app) => {
-      app.addHook('preClose', async () => {
-        unsubscribedBeforeServerClose = subscriptionClosed;
-      });
+    const ctx = await apps.create({
+      configure: (app) => {
+        app.addHook('preClose', async () => {
+          unsubscribedBeforeServerClose = subscriptionClosed;
+        });
+      },
     });
     const credentials = await createTestAdmin(ctx.container);
     const login = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: credentials });
-    cookie = login.cookies.find((item) => item.name === 'qp_session')!.value;
-    await seedReadyUniverse();
+    const cookie = login.cookies.find((item) => item.name === 'qp_session')!.value;
+    await seedReadyUniverse(ctx);
     let releaseResolver!: () => void;
     const resolverGate = new Promise<void>((resolve) => { releaseResolver = resolve; });
     const resolver = ctx.container.universeRuleResolver;
@@ -383,28 +367,33 @@ describe('backtest preparation HTTP/SSE', () => {
       request.once('error', reject);
     });
     const response = await responsePromise;
-    const firstEvent = new Promise<string>((resolve) => {
-      response.once('data', (chunk) => resolve(String(chunk)));
-    });
-    await subscribedPromise;
-    const body = await firstEvent;
+    try {
+      const firstEvent = new Promise<string>((resolve) => {
+        response.once('data', (chunk) => resolve(String(chunk)));
+      });
+      await subscribedPromise;
+      const body = await firstEvent;
 
-    const closePromise = ctx.app.close();
-    const closedBeforeForcedClientDisconnect = await Promise.race([
-      closePromise.then(() => true),
-      new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
-    ]);
-    if (!closedBeforeForcedClientDisconnect) response.destroy();
-    releaseResolver();
-    await closePromise;
+      const closePromise = ctx.app.close();
+      const closedBeforeForcedClientDisconnect = await Promise.race([
+        closePromise.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
+      ]);
+      if (!closedBeforeForcedClientDisconnect) response.destroy();
+      releaseResolver();
+      await closePromise;
 
-    expect(closedBeforeForcedClientDisconnect).toBe(true);
-    expect(unsubscribedBeforeServerClose).toBe(true);
-    expect(body).toContain('"status":"RUNNING"');
+      expect(closedBeforeForcedClientDisconnect).toBe(true);
+      expect(unsubscribedBeforeServerClose).toBe(true);
+      expect(body).toContain('"status":"RUNNING"');
+    } finally {
+      releaseResolver();
+      response.destroy();
+    }
   });
 
-  it('cancel은 idempotent하고 job을 terminal CANCELLED로 만든다', async () => {
-    await seedReadyUniverse();
+  it('cancel은 idempotent하고 job을 terminal CANCELLED로 만든다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const original = ctx.container.universeRuleResolver.resolveOrDescribeNeeds.bind(ctx.container.universeRuleResolver);
@@ -435,8 +424,8 @@ describe('backtest preparation HTTP/SSE', () => {
     );
   });
 
-  it('DART key가 없으면 PER 후보 재무 동기화가 필요한 요청만 503이다', async () => {
-    await seedReadyUniverse();
+  it('DART key가 없으면 PER 후보 재무 동기화가 필요한 요청만 503이다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx);
 
     const response = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
@@ -447,10 +436,9 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(response.json<{ error: string }>().error).toMatch(/DART/);
   });
 
-  it.each(['range-breakout', 'value-quality-rank'])(
-    'DART key가 없고 %s 실전 전략의 final-union sync가 실제 필요하면 503이다',
-    async (strategyId) => {
-      await seedReadyUniverse(undefined, false);
+  for (const strategyId of ['range-breakout', 'value-quality-rank']) {
+    it(`DART key가 없고 ${strategyId} 실전 전략의 final-union sync가 실제 필요하면 503이다`, async ({ ctx, cookie }) => {
+      await seedReadyUniverse(ctx, undefined, false);
 
       const response = await ctx.app.inject({
         method: 'POST', url: '/api/v1/backtests/universe-preview',
@@ -460,11 +448,11 @@ describe('backtest preparation HTTP/SSE', () => {
 
       expect(response.statusCode).toBe(503);
       expect(response.json<{ error: string }>().error).toMatch(/DART/);
-    },
-  );
+    });
+  }
 
-  it('market-data만 NEEDS_DATA여도 value 전략의 알려진 후보가 있으면 DART 503이다', async () => {
-    await seedReadyUniverse(undefined, false);
+  it('market-data만 NEEDS_DATA여도 value 전략의 알려진 후보가 있으면 DART 503이다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx, undefined, false);
     ctx.container.database.db.delete(dailySelectionMetricCoverage).run();
     const input = previewInput();
     const universeRule = {
@@ -500,8 +488,8 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(response.json<{ error: string }>().error).toMatch(/DART/);
   });
 
-  it('unresolved 후보를 후속 ready stage가 좁혀도 누락 후보의 DART 작업을 gate한다', async () => {
-    await seedReadyUniverse([
+  it('unresolved 후보를 후속 ready stage가 좁혀도 누락 후보의 DART 작업을 gate한다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx, [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '200' },
       { standardCode: 'KR7000660001', shortCode: '000660', name: 'SK하이닉스', market: 'KOSPI', marketCapKrw: '100' },
     ], false);
@@ -532,8 +520,8 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(response.json<{ error: string }>().error).toMatch(/DART/);
   });
 
-  it('이전 PER이 unresolved여도 후속 ready stage가 최종 empty를 증명하면 DART를 gate하지 않는다', async () => {
-    await seedReadyUniverse(undefined, false);
+  it('이전 PER이 unresolved여도 후속 ready stage가 최종 empty를 증명하면 DART를 gate하지 않는다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx, undefined, false);
     // 거래대금을 채워 이 날짜를 ingest 완료로 만든다 — ingest 흔적 없는 날짜의
     // 시총 null 은 empty 증명이 아니라 NEEDS_DATA(metric 수집) 신호이기 때문이다.
     ctx.container.database.db.update(dailySelectionMetrics)
@@ -562,8 +550,8 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(response.json()).toMatchObject({ job: { status: 'QUEUED' } });
   });
 
-  it('재무 coverage가 있어도 value 전략의 독립된 action coverage가 비면 DART 503이다', async () => {
-    await seedReadyUniverse(undefined, false);
+  it('재무 coverage가 있어도 value 전략의 독립된 action coverage가 비면 DART 503이다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx, undefined, false);
     registerSymbols(ctx.container, 'KR', ['005930']);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
 
@@ -576,10 +564,9 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(response.statusCode).toBe(503);
   });
 
-  it.each(['range-breakout', 'value-quality-rank'])(
-    'DART key가 없어도 %s 실전 전략의 필요한 연도를 모두 시도했으면 503이 아니다',
-    async (strategyId) => {
-      await seedReadyUniverse();
+  for (const strategyId of ['range-breakout', 'value-quality-rank']) {
+    it(`DART key가 없어도 ${strategyId} 실전 전략의 필요한 연도를 모두 시도했으면 503이 아니다`, async ({ ctx, cookie }) => {
+      await seedReadyUniverse(ctx);
       registerSymbols(ctx.container, 'KR', ['005930']);
       await seedCorporateActionCoverage(ctx.container, ['005930'], [2025, 2026]);
       seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
@@ -591,11 +578,11 @@ describe('backtest preparation HTTP/SSE', () => {
       });
 
       expect(response.statusCode).toBe(202);
-    },
-  );
+    });
+  }
 
-  it('최종 유니버스가 0이면 FAILED와 사용자용 한국어 원인을 남긴다', async () => {
-    await seedReadyUniverse([]);
+  it('최종 유니버스가 0이면 FAILED와 사용자용 한국어 원인을 남긴다', async ({ ctx, cookie }) => {
+    await seedReadyUniverse(ctx, []);
     const response = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie }, payload: previewInput(),

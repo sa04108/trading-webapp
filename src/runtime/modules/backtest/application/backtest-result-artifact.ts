@@ -185,6 +185,8 @@ export interface BacktestResultCompleter {
   complete(
     input: BacktestResultCompletionInput,
   ): Promise<BacktestResultCompletionOutput>;
+  /** 새 import를 막고 이미 수락한 자식 작업과 IPC 정리를 끝낸다. */
+  stop(): Promise<void>;
 }
 
 /** 저장 구현을 로컬 SQLite에서 artifact importer로 교체할 때 지켜야 할 port. */

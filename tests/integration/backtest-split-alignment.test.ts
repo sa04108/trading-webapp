@@ -1,15 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/runtime/modules/facts/domain/fact.js';
 import { backtestJobs, symbolMasterVersions } from '../../src/server/shared/db/schema.js';
 import { eq } from 'drizzle-orm';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
-import {
-  createTestAdmin,
-  createTestApp,
-  installPreparedSubmissionFixture,
-  type TestApp,
-} from '../helpers/test-app.js';
+import type { TestApp } from '../helpers/test-app.js';
+import { authenticatedTest as base } from '../helpers/test-fixtures.js';
+import { prepareSubmission } from '../helpers/backtest-preparation.js';
+import { installEmptyDartSyncStub, withSparseQueuePreparation } from '../helpers/backtest-preparation-stubs.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
@@ -89,45 +87,44 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
 }
 
 describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
-  let ctx: TestApp;
-  let cookie: string;
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-    const { username, password } = await createTestAdmin(ctx.container);
-    const login = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { username, password },
-    });
-    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
-    installPreparedSubmissionFixture(ctx);
-
-    registerSymbols(ctx.container, 'KR', [SYMBOL]);
-    // 모든 봉 날짜를 거래일로 남긴다 — listEvents 가 변경일 직전 관측일을 찾아야
-    // 상장주식수 변경을 이벤트로 파생한다 (첫 관측은 LISTED 라 걸리지 않는다).
-    seedSymbolMasterUniverse(
-      ctx.container,
-      Array.from({ length: BARS }, (_, index) => dateOf(index)),
-      [{
-        standardCode: STANDARD_CODE,
-        shortCode: SYMBOL,
-        name: SYMBOL,
-        market: 'KOSPI',
-        marketCapKrw: '300000000000',
-      }],
-    );
-    seedDailyBars(ctx.container.database.db, candles());
-    await seedCorporateActionCoverage(ctx.container, [SYMBOL], yearRange(2024, 2025));
-    await ctx.container.factRepository.saveFacts([splitFact()]);
-  });
-
-  afterEach(async () => {
-    await ctx.close();
+  type Scenario = { ctx: TestApp; cookie: string; prepare(payload: BacktestRequest): Promise<void> };
+  const it = base.extend<{ scenario: Scenario }>({
+    scenario: async ({ ctx, cookie, signal }, use) => {
+      const restoreDart = installEmptyDartSyncStub(ctx);
+      registerSymbols(ctx.container, 'KR', [SYMBOL]);
+      seedSymbolMasterUniverse(
+        ctx.container,
+        Array.from({ length: BARS }, (_, index) => dateOf(index)),
+        [{
+          standardCode: STANDARD_CODE,
+          shortCode: SYMBOL,
+          name: SYMBOL,
+          market: 'KOSPI',
+          marketCapKrw: '300000000000',
+        }],
+      );
+      seedDailyBars(ctx.container.database.db, candles());
+      await seedCorporateActionCoverage(ctx.container, [SYMBOL], yearRange(2024, 2025));
+      await ctx.container.factRepository.saveFacts([splitFact()]);
+      try {
+        await use({
+          ctx,
+          cookie,
+          async prepare(payload) {
+            await withSparseQueuePreparation(ctx, payload, async () => {
+              await prepareSubmission(ctx, cookie, payload, { signal });
+            });
+          },
+        });
+      } finally {
+        await ctx.close();
+        restoreDart();
+      }
+    },
   });
 
   /** 변경상장일에 상장주식수가 5배가 되는 SCD 버전 두 벌 — 헬퍼는 열린 버전 하나만 심는다 */
-  function seedSharesChange(): void {
+  function seedSharesChange(ctx: TestApp): void {
     const db = ctx.container.database.db;
     db.delete(symbolMasterVersions).run();
     db.insert(symbolMasterVersions).values([
@@ -158,7 +155,7 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
     ]).run();
   }
 
-  function removeSharesChange(): void {
+  function removeSharesChange(ctx: TestApp): void {
     const db = ctx.container.database.db;
     db.delete(symbolMasterVersions).run();
     db.insert(symbolMasterVersions).values({
@@ -176,8 +173,10 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
   }
 
   async function submitBacktest(
+    scenario: Scenario,
     afterCreate?: (jobId: string) => void | Promise<void>,
   ): Promise<string> {
+    const { ctx, cookie } = scenario;
     const payload: BacktestRequest = {
       strategyId: 'range-breakout',
       // 손절·익절·보유 상한을 사실상 끄고 분할 구간까지 들고 가게 한다
@@ -206,6 +205,7 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
       randomSeed: 1,
     };
 
+    await scenario.prepare(payload);
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -225,12 +225,13 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
     return jobId;
   }
 
-  async function runBacktest(): Promise<{
+  async function runBacktest(scenario: Scenario): Promise<{
     equity: number[];
     warnings: string[];
     openSymbols: string[];
   }> {
-    const jobId = await submitBacktest();
+    const { ctx } = scenario;
+    const jobId = await submitBacktest(scenario);
 
     const job = ctx.container.jobQueue.getJob(jobId)!;
     expect(job.error).toBeNull();
@@ -258,10 +259,10 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
   it(
     '기준일과 변경상장일이 달라도 자산곡선이 튀지 않는다',
     { timeout: 90_000 },
-    async () => {
-      seedSharesChange();
+    async ({ scenario }) => {
+      seedSharesChange(scenario.ctx);
 
-      const { equity, warnings, openSymbols } = await runBacktest();
+      const { equity, warnings, openSymbols } = await runBacktest(scenario);
 
       // 주가는 분할 말고는 움직이지 않게 심었다. 분할이 부(富)를 만들지 않으므로
       // 자산곡선도 평평해야 한다. 정렬 전에는 기준일 봉에서 +12%, 변경상장일 봉에서
@@ -276,11 +277,12 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
   it(
     '제출 시점의 유니버스 제외 경고를 최종 결과에 보존한다',
     { timeout: 90_000 },
-    async () => {
-      seedSharesChange();
+    async ({ scenario }) => {
+      const { ctx } = scenario;
+      seedSharesChange(ctx);
       const warning =
         '자본변동 정보를 온전히 확보할 수 없어 종목 063080을 매매 대상에서 제외했습니다.';
-      const jobId = await submitBacktest((createdJobId) => {
+      const jobId = await submitBacktest(scenario, (createdJobId) => {
         ctx.container.database.db.update(backtestJobs)
           .set({ submitWarningsJson: JSON.stringify([warning]) })
           .where(eq(backtestJobs.id, createdJobId))
@@ -296,11 +298,12 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
   it(
     '짝이 될 상장주식수 변경이 없으면 왜곡된 결과를 만들지 않고 실패한다',
     { timeout: 90_000 },
-    async () => {
+    async ({ scenario }) => {
+      const { ctx } = scenario;
       // 정상 preparation은 정렬 불가 종목을 제외한다. 이 테스트는 제출 뒤 KRX
       // 변경 이력이 사라진 drift를 만들어 worker의 마지막 fail-closed만 검증한다.
-      seedSharesChange();
-      const jobId = await submitBacktest(() => removeSharesChange());
+      seedSharesChange(ctx);
+      const jobId = await submitBacktest(scenario, () => removeSharesChange(ctx));
       const job = ctx.container.jobQueue.getJob(jobId)!;
 
       expect(job.status).toBe('FAILED');
@@ -319,9 +322,10 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
   it(
     '같은 기준일의 상충 비율 공시가 있으면 KRX와 한쪽이 맞아도 실패한다',
     { timeout: 90_000 },
-    async () => {
-      seedSharesChange();
-      const jobId = await submitBacktest(async () => {
+    async ({ scenario }) => {
+      const { ctx } = scenario;
+      seedSharesChange(ctx);
+      const jobId = await submitBacktest(scenario, async () => {
         // preparation 완료 뒤 상충 fact가 추가된 drift에서 worker가 pin을 임의로
         // 재선정하지 않고 실패하는지 확인한다.
         await ctx.container.factRepository.saveFacts([{
@@ -342,12 +346,13 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
   it(
     'DART가 자본변동 행을 보았지만 비율을 만들지 못한 gap이면 raw fact가 없어도 실패한다',
     { timeout: 90_000 },
-    async () => {
+    async ({ scenario }) => {
+      const { ctx } = scenario;
       // 파서가 fact를 만들지 못한 실제 경로를 재현한다. 기존 정상 fact는 지우지 않아도
       // gap 자체가 다른 미표현 사건일 수 있으므로 worker는 결과 생성을 막아야 한다.
-      seedSharesChange();
+      seedSharesChange(ctx);
 
-      const jobId = await submitBacktest(() => {
+      const jobId = await submitBacktest(scenario, () => {
         // preparation 완료 뒤 worker 시작 전에 gap이 새로 생기는 drift/원격 bundle
         // 경로를 재현해 마지막 실행 경계가 독립적으로 막는지 검증한다.
         ctx.container.actionCoverageStore.addGapYears(SYMBOL, [2025], ctx.container.clock.now());
