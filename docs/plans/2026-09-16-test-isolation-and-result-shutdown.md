@@ -2,7 +2,7 @@
 
 - 작성일: 2026-09-16
 - 조사 기준: `c36e570` (`feat: expose agent and preparation progress`)
-- 상태: 구현 인계용 계획. 이 문서 작성 단계에서는 제품 코드와 테스트를 변경하지 않았다.
+- 상태: 핵심 종료 계약과 문제 시나리오의 test-scoped fixture 구현·검증 완료. 나머지 앱 테스트의 fixture 전환은 아래 진행 기록에 남겼다.
 - 목적: 다음 구현 담당자가 기존 대화를 읽지 않아도 문제, 변경 범위, 구현 순서, 검증 기준을 이해할 수 있게 한다.
 
 ## 1. 사용자 목표와 범위
@@ -332,9 +332,43 @@ pnpm lint
 - 검증 명령, 결과, shuffle seed, unhandled error 유무.
 - commit/push 상태와 남은 운영·검증 제한.
 
-문서를 작성한 시점에는 이 절의 구현·검증 작업을 완료하지 않았다. 다음 담당자가 계획의 완료와 구현의 완료를 혼동하지 않도록 실제 진행에 맞춰 상태를 갱신한다.
+위 진행 기록과 검증 결과를 실제 상태의 기준으로 사용한다.
 
-## 10. 공식 참고 자료
+## 10. 2026-09-16 구현 결과
+
+완료한 범위:
+
+- 결과 completer에 중복 호출 가능한 비동기 `stop()`을 추가하고, 대기 요청 거부와 실행 중 child의 `close` 확인, `SIGTERM`/`SIGKILL` 상한을 구현했다.
+- progress callback 오류를 artifact 결과와 분리해 기록하며, 종료 시작 뒤 늦은 progress는 DB에 전달하지 않는다.
+- lease service가 child 뒤의 감사 기록과 이벤트 발행까지 추적하고 종료 시 기다리게 했다.
+- 원격 업로드, 로컬 결과 처리, WebSocket·로컬 메시지 처리를 coordinator가 추적한다. 종료 시 업로드 stream을 abort하고 handler `finally`와 결과 service 종료를 기다린 뒤 DB 종료가 가능하다.
+- 테스트 앱 생성 실패와 중복 `close()`를 보강했다. 정리 실패 시 임시 디렉터리를 지우지 않아 증거와 살아 있는 소비자를 숨기지 않는다.
+- `tests/helpers/test-fixtures.ts`에 Vitest `test.extend` 기반 앱 fixture를 추가했다. 보고된 worker/clone 두 시나리오는 fixture로 전환했고, worker 시나리오는 preparation을 명시적으로 완료한 뒤 제출한다.
+- 두 앱의 DB·임시 디렉터리 격리, child 오류/close 경합, 강제 종료, service 후속 작업, HTTP 업로드 abort와 cleanup, container DB close 순서를 결정적인 테스트로 고정했다.
+
+검증 결과:
+
+```text
+관련 lifecycle 단위 테스트: 6 files, 35 tests passed
+결과 lease/outbox/artifact/local-agent 회귀: 4 files, 20 tests passed
+문제의 두 테스트 단독 실행: 2 passed, 16 skipped
+shuffle seed 20260916: 18 passed
+shuffle seed 20260917: 18 passed
+pnpm lint: passed
+pnpm typecheck: passed
+pnpm test: 185 files, 2076 tests passed
+```
+
+원래 간헐 오류는 수정 전 집중 실행에서 항상 재현되지는 않았다. 따라서 완료 근거는 재현 횟수가 아니라 child `error`/`exit`/`close`, 늦은 progress, service 후속 처리, 업로드 abort 경계를 제어한 회귀 테스트와 전체 suite에서 unhandled SQLite 오류가 없었다는 결과다.
+
+단계적 전환의 남은 범위:
+
+- 현재 `rg -l 'createTestApp\(' tests/unit tests/integration` 기준 42개 파일이 직접 helper를 사용한다. 각 호출은 이미 별도 DB·디렉터리를 소유하고 보강된 `close()`를 사용하지만, `test.extend` 문법으로는 아직 옮기지 않았다.
+- 문제 파일 안에서도 이번 원인과 직접 관련된 worker/clone 시나리오 외 describe는 기존 `beforeEach`/`afterEach`를 유지한다.
+- 기존 `installPreparedSubmissionFixture()`의 자동 inject 재시도는 아직 사용하는 이전 시나리오가 있어 제거하지 않았다. 전환한 worker 시나리오는 새 명시적 `prepareSubmission()`을 사용하며 clone 시나리오는 원래처럼 409→준비→재요청을 직접 검증한다.
+- 이 잔여 작업은 계산·검증 의미를 바꾸지 않는 파일별 후속 변경으로 진행한다. 이번 종료 race 수정의 완료 조건이나 DB 안전성을 막는 항목은 아니다.
+
+## 11. 공식 참고 자료
 
 - [Vitest Test Context / test.extend](https://vitest.dev/guide/test-context.html): 테스트별 fixture와 setup/teardown 소유권.
 - [Vitest Hooks](https://vitest.dev/api/hooks.html): Promise를 반환하는 hook과 테스트 종료 정리.

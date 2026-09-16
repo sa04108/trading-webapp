@@ -27,40 +27,75 @@ export async function createTestApp(
   agentPreparation = false,
 ): Promise<TestApp> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-test-'));
-  const config = loadConfig({
-    NODE_ENV: 'test',
-    DATABASE_PATH: path.join(dir, 'app.sqlite'),
-    DATA_ROOT: path.join(dir, 'market-data'),
-    IMPORT_ROOT: path.join(dir, 'imports'),
-    EXPORT_ROOT: path.join(dir, 'exports'),
-    TEMP_ROOT: path.join(dir, 'temp'),
-    SESSION_SECRET: 's'.repeat(48),
-    LOG_LEVEL: 'error',
-    ...env,
-  });
-  const container = createContainer(config, { inlinePreparation: !agentPreparation });
-  const app = await buildServer(container);
-  configure?.(app); // 테스트 전용 라우트 등록 등 — ready() 전에만 가능
-  await app.ready();
+  let container: Container | null = null;
+  let app: FastifyInstance | null = null;
+  try {
+    const config = loadConfig({
+      NODE_ENV: 'test',
+      DATABASE_PATH: path.join(dir, 'app.sqlite'),
+      DATA_ROOT: path.join(dir, 'market-data'),
+      IMPORT_ROOT: path.join(dir, 'imports'),
+      EXPORT_ROOT: path.join(dir, 'exports'),
+      TEMP_ROOT: path.join(dir, 'temp'),
+      SESSION_SECRET: 's'.repeat(48),
+      LOG_LEVEL: 'error',
+      ...env,
+    });
+    container = createContainer(config, { inlinePreparation: !agentPreparation });
+    app = await buildServer(container);
+    configure?.(app); // 테스트 전용 라우트 등록 등 — ready() 전에만 가능
+    await app.ready();
+  } catch (error) {
+    const cleanupErrors: unknown[] = [];
+    if (app !== null) {
+      try { await app.close(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+    }
+    if (container !== null) {
+      try { await container.close(); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+    }
+    if (cleanupErrors.length === 0) fs.rmSync(dir, { recursive: true, force: true });
+    if (cleanupErrors.length > 0)
+      throw new AggregateError(
+        cleanupErrors,
+        '테스트 앱 생성과 정리에 실패했습니다.',
+        { cause: error },
+      );
+    throw error;
+  }
+
+  if (container === null || app === null)
+    throw new Error('테스트 앱 초기화 결과가 없습니다');
+
+  const readyContainer = container;
+  const readyApp = app;
 
   let agent: AgentClient | null = null;
+  let closing: Promise<void> | null = null;
   return {
-    app,
-    container,
+    app: readyApp,
+    container: readyContainer,
     dir,
     async startAgent() {
+      if (closing !== null) throw new Error('종료 중인 테스트 앱은 agent를 시작할 수 없습니다');
       if (agent) return;
-      const address = await app.listen({ host: '127.0.0.1', port: 0 });
-      const credential = container.agentCoordinator.registry.issue('integration-test');
-      container.agentCoordinator.start({ local: false });
+      const address = await readyApp.listen({ host: '127.0.0.1', port: 0 });
+      const credential = readyContainer.agentCoordinator.registry.issue('integration-test');
+      readyContainer.agentCoordinator.start({ local: false });
       agent = new AgentClient({ serverUrl: address, token: credential.token }, path.join(dir, 'agent'), undefined, () => undefined);
       agent.start();
     },
-    async close() {
-      await agent?.stop();
-      await app.close();
-      await container.close();
-      fs.rmSync(dir, { recursive: true, force: true });
+    close() {
+      if (closing !== null) return closing;
+      closing = (async () => {
+        const errors: unknown[] = [];
+        try { await agent?.stop(); } catch (error) { errors.push(error); }
+        try { await readyApp.close(); } catch (error) { errors.push(error); }
+        try { await readyContainer.close(); } catch (error) { errors.push(error); }
+        if (errors.length === 0) fs.rmSync(dir, { recursive: true, force: true });
+        if (errors.length > 0)
+          throw new AggregateError(errors, '테스트 앱 자원 정리에 실패했습니다.');
+      })();
+      return closing;
     },
   };
 }
