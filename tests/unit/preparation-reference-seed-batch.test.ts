@@ -1,6 +1,7 @@
 import { readBacktestJobs } from '../helpers/backtest-jobs.js';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import { describe, expect } from 'vitest';
+import type { TestApp } from '../helpers/test-app.js';
+import { test as it } from '../helpers/test-fixtures.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../../src/shared/schemas/provenance-pin.js';
 import type { BenchmarkPin } from '../../src/shared/schemas/benchmark.js';
@@ -27,21 +28,7 @@ const request: BacktestRequest = {
 };
 
 describe('seed clone preparation ownership', () => {
-  let ctx: TestApp;
-  let seedBatchService: SeedCloneBatchService;
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-    seedBatchService = new SeedCloneBatchService(
-      ctx.container.database, ctx.container.jobQueue, 20, ctx.container.clock, () => {},
-    );
-  });
-
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  function seedPreparation(id: string): void {
+  function seedPreparation(ctx: TestApp, id: string): void {
     ctx.container.database.sqlite.prepare(`
       INSERT INTO backtest_preparation_jobs
         (id, request_hash, request_json, status, phase, lifecycle_managed,
@@ -89,8 +76,11 @@ describe('seed clone preparation ownership', () => {
     };
   }
 
-  it('대기 batch와 생성 child가 준비 ID를 보존하고 source 삭제 뒤 마지막 소유자 삭제로 준비와 cache를 수집한다', () => {
-    seedPreparation('prep_seed_batch');
+  it('대기 batch와 생성 child가 준비 ID를 보존하고 source 삭제 뒤 마지막 소유자 삭제로 준비와 cache를 수집한다', ({ ctx }) => {
+    const seedBatchService = new SeedCloneBatchService(
+      ctx.container.database, ctx.container.jobQueue, 20, ctx.container.clock, () => {},
+    );
+    seedPreparation(ctx, 'prep_seed_batch');
     const source = ctx.container.jobQueue.enqueue(request, [], undefined, null, [], undefined, {
       preparationJobId: 'prep_seed_batch',
     });
@@ -123,7 +113,10 @@ describe('seed clone preparation ownership', () => {
     ).get('prep_seed_batch')).toBeUndefined();
   });
 
-  it('원본의 준비 ID가 없으면 batch 생성이 실패하고 batch와 child를 만들지 않는다', () => {
+  it('원본의 준비 ID가 없으면 batch 생성이 실패하고 batch와 child를 만들지 않는다', ({ ctx }) => {
+    const seedBatchService = new SeedCloneBatchService(
+      ctx.container.database, ctx.container.jobQueue, 20, ctx.container.clock, () => {},
+    );
     const source = ctx.container.jobQueue.enqueue(request);
     expect(() => seedBatchService.create(source.id, 2, snapshot('missing-preparation')))
       .toThrow();

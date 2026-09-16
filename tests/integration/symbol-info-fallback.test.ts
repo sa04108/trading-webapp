@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import { describe, expect } from 'vitest';
+import { createTestAdmin, type TestApp } from '../helpers/test-app.js';
+import { test as it } from '../helpers/test-fixtures.js';
 import { registerSymbols } from '../helpers/seed.js';
 import type { SymbolInfoService } from '../../src/server/modules/market-data/application/symbol-info-service.js';
 import type {
@@ -67,16 +68,7 @@ function buildChunkedFakeSource(config: {
 }
 
 describe('GET /symbols/info — 로컬 종목 마스터 폴백', () => {
-  let ctx: TestApp;
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-  });
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  async function loginCookie(): Promise<string> {
+  async function loginCookie(ctx: TestApp): Promise<string> {
     const { username, password } = await createTestAdmin(ctx.container);
     const login = await ctx.app.inject({
       method: 'POST',
@@ -89,8 +81,8 @@ describe('GET /symbols/info — 로컬 종목 마스터 폴백', () => {
   it(
     '증권사가 코드 하나(같은 청크)를 통째로 실패시켜도 나머지 종목 이름은 정상 반환하고, ' +
       '실패한 종목도 로컬 이름이 있으면 그것으로 채운다',
-    async () => {
-      const cookie = await loginCookie();
+    async ({ ctx }) => {
+      const cookie = await loginCookie(ctx);
       registerSymbols(ctx.container, 'KR', ['005930', '000660', '999999']);
       // 유니버스 미리보기 자동 등록이 미리 채워 둔 로컬 이름 — 999999 는 증권사 청크가
       // 실패하는 코드지만 로컬은 이미 이름을 안다.
@@ -128,8 +120,8 @@ describe('GET /symbols/info — 로컬 종목 마스터 폴백', () => {
     },
   );
 
-  it('증권사 자격 증명이 미설정이어도 로컬 종목 마스터의 이름은 그대로 나온다', async () => {
-    const cookie = await loginCookie();
+  it('증권사 자격 증명이 미설정이어도 로컬 종목 마스터의 이름은 그대로 나온다', async ({ ctx }) => {
+    const cookie = await loginCookie(ctx);
     // 이 테스트 앱은 TOSS_CLIENT_ID/SECRET 을 넘기지 않으므로 소스가 비활성(미설정) 상태다
     registerSymbols(ctx.container, 'KR', ['005930']);
     ctx.container.symbolService.setName('005930', '로컬종목마스터이름');
@@ -153,8 +145,8 @@ describe('GET /symbols/info — 로컬 종목 마스터 폴백', () => {
     ]);
   });
 
-  it('로컬에도 이름이 없는 코드는 여전히 빈 목록이다 (기존 계약 유지)', async () => {
-    const cookie = await loginCookie();
+  it('로컬에도 이름이 없는 코드는 여전히 빈 목록이다 (기존 계약 유지)', async ({ ctx }) => {
+    const cookie = await loginCookie(ctx);
     registerSymbols(ctx.container, 'KR', ['005930']); // 이름 없이 등록
 
     const res = await ctx.app.inject({

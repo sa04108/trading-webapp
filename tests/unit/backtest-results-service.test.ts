@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import {
   backtestMonthlyReturns,
   backtestTrades,
 } from '../../src/server/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
-import { createTestApp } from '../helpers/test-app.js';
+import { test as it } from '../helpers/test-fixtures.js';
 
 const REQUEST: BacktestRequest = {
   strategyId: 'range-breakout',
@@ -26,9 +26,7 @@ const REQUEST: BacktestRequest = {
 };
 
 describe('ResultsService.getChartSeries', () => {
-  it('차트 API용 종목 목록은 거래 내역에서 중복 없이 조회한다', async () => {
-    const context = await createTestApp();
-    try {
+  it('차트 API용 종목 목록은 거래 내역에서 중복 없이 조회한다', async ({ ctx: context }) => {
       const job = context.container.jobQueue.enqueue(REQUEST);
       context.container.database.db.insert(backtestTrades).values([
         trade(job.id, '005930', 1),
@@ -40,14 +38,9 @@ describe('ResultsService.getChartSeries', () => {
         '000660',
         '005930',
       ]);
-    } finally {
-      await context.close();
-    }
   });
 
-  it('월별 결과는 삽입 순서와 무관하게 차트와 export에서 연월순으로 조회한다', async () => {
-    const context = await createTestApp();
-    try {
+  it('월별 결과는 삽입 순서와 무관하게 차트와 export에서 연월순으로 조회한다', async ({ ctx: context }) => {
       const job = context.container.jobQueue.enqueue(REQUEST);
       context.container.database.db.insert(backtestMonthlyReturns).values([
         { jobId: job.id, year: 2026, month: 2, returnPct: 2 },
@@ -68,9 +61,6 @@ describe('ResultsService.getChartSeries', () => {
         context.container.resultsService.getFullExport(job.id).monthlyReturns
           .map(({ year, month }) => ({ year, month })),
       ).toEqual(expected);
-    } finally {
-      await context.close();
-    }
   });
 });
 
