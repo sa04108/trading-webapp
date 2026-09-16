@@ -1,16 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
 } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 import { krxDailyBars } from '../../src/server/shared/db/schema.js';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import type { TestApp } from '../helpers/test-app.js';
+import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
 import {
   baseInfoFixture,
   dailyFixture,
   krxEnvelope,
-  startKrxFakeServer,
   type KrxFakeServer,
 } from '../helpers/krx-fixtures.js';
 
@@ -23,9 +23,8 @@ interface Ctx {
   readonly svc: SymbolMasterService;
 }
 
-async function setup(): Promise<Ctx> {
-  const t = await createTestApp();
-  const fake = await startKrxFakeServer();
+async function setup(krxApps: KrxTestFactory): Promise<Ctx> {
+  const { t, fake } = await krxApps.create();
   const source = createKrxHistoricalUniverseSource(
     { baseUrl: fake.baseUrl, apiKey: API_KEY, approvalExpiry: null },
     t.container.clock,
@@ -41,11 +40,6 @@ async function setup(): Promise<Ctx> {
   return { t, fake, svc: new SymbolMasterService(deps) };
 }
 
-async function teardown(ctx: Ctx): Promise<void> {
-  await ctx.fake.close();
-  await ctx.t.close();
-}
-
 function allBars(ctx: Ctx) {
   return ctx.t.container.database.db
     .select()
@@ -55,8 +49,8 @@ function allBars(ctx: Ctx) {
 }
 
 describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
-  it('최초 baseline 수집에서 두 시장의 일봉을 함께 저장한다', async () => {
-    const ctx = await setup();
+  it('최초 baseline 수집에서 두 시장의 일봉을 함께 저장한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     const date = '2023-01-02';
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
@@ -108,11 +102,10 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
         volume: 12_345_678,
       },
     ]);
-    await teardown(ctx);
   });
 
-  it('둘째 날 일반 diff 경로에서도 그 날의 일봉이 저장된다', async () => {
-    const ctx = await setup();
+  it('둘째 날 일반 diff 경로에서도 그 날의 일봉이 저장된다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
     await ctx.svc.ingestDate('2023-01-02');
@@ -139,11 +132,10 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
       .all()
       .find((r) => r.date === '2023-01-02');
     expect(day1Row).toMatchObject({ shortCode: '005930', date: '2023-01-02', close: 71_800 });
-    await teardown(ctx);
   });
 
-  it('미검증 일봉은 재조회한 응답으로 갱신한다', async () => {
-    const ctx = await setup();
+  it('미검증 일봉은 재조회한 응답으로 갱신한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     const date = '2023-01-02';
 
     // 현재 수집 버전으로 검증하지 않은 일봉이 남은 상태를 흉내낸다.
@@ -189,11 +181,10 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
       { shortCode: '000660', date, market: 'KOSDAQ', open: 100_000, high: 101_000, low: 99_000, close: 100_500, volume: 500_000 },
       { shortCode: '005930', date, market: 'KOSPI', open: 71_500, high: 72_000, low: 71_000, close: 71_800, volume: 12_345_678 },
     ]);
-    await teardown(ctx);
   });
 
-  it('가격 4개나 거래량 중 하나라도 null 인 행은 건너뛰고 건수를 warn 으로 남긴다', async () => {
-    const ctx = await setup();
+  it('가격 4개나 거래량 중 하나라도 null 인 행은 건너뛰고 건수를 warn 으로 남긴다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     const date = '2023-01-02';
     const warnSpy = vi.spyOn(ctx.t.container.logger, 'warn');
     ctx.fake.setResponse('stk_bydd_trd', '20230102', {
@@ -213,11 +204,10 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
       expect.objectContaining({ skipped: 1 }),
       expect.any(String),
     );
-    await teardown(ctx);
   });
 
-  it('high < low 인 행을 저장하지 않는다', async () => {
-    const ctx = await setup();
+  it('high < low 인 행을 저장하지 않는다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     const date = '2023-01-02';
     ctx.fake.setResponse('stk_bydd_trd', '20230102', {
       body: krxEnvelope([
@@ -239,11 +229,10 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     const rows = allBars(ctx);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ shortCode: '005930' });
-    await teardown(ctx);
   });
 
-  it('어긋난 행 건수를 로그에 남긴다', async () => {
-    const ctx = await setup();
+  it('어긋난 행 건수를 로그에 남긴다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     const date = '2023-01-02';
     const warnSpy = vi.spyOn(ctx.t.container.logger, 'warn');
     ctx.fake.setResponse('stk_bydd_trd', '20230102', {
@@ -267,6 +256,5 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
       expect.objectContaining({ invalidCount: 1 }),
       expect.any(String),
     );
-    await teardown(ctx);
   });
 });

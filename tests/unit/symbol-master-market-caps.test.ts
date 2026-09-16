@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import {
@@ -7,12 +7,12 @@ import {
   type SymbolMasterServiceDeps,
 } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 import { symbolMasterMarketCaps } from '../../src/server/shared/db/schema.js';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import type { TestApp } from '../helpers/test-app.js';
+import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
 import {
   baseInfoFixture,
   dailyFixture,
   krxEnvelope,
-  startKrxFakeServer,
   type KrxFakeServer,
 } from '../helpers/krx-fixtures.js';
 
@@ -25,9 +25,8 @@ interface Ctx {
   readonly svc: SymbolMasterService;
 }
 
-async function setup(): Promise<Ctx> {
-  const t = await createTestApp();
-  const fake = await startKrxFakeServer();
+async function setup(krxApps: KrxTestFactory): Promise<Ctx> {
+  const { t, fake } = await krxApps.create();
   const source = createKrxHistoricalUniverseSource(
     { baseUrl: fake.baseUrl, apiKey: API_KEY, approvalExpiry: null },
     t.container.clock,
@@ -43,11 +42,6 @@ async function setup(): Promise<Ctx> {
   return { t, fake, svc: new SymbolMasterService(deps) };
 }
 
-async function teardown(ctx: Ctx): Promise<void> {
-  await ctx.fake.close();
-  await ctx.t.close();
-}
-
 /** 종목 마스터가 2023-01-02 하루를 커버하도록 최초 수집을 태운다 — 삼성전자 하나뿐인 유니버스다 */
 async function ingestSingleSymbolUniverse(ctx: Ctx, date: string, basDd: string): Promise<void> {
   ctx.fake.setResponse('stk_bydd_trd', basDd, { body: krxEnvelope([dailyFixture()]) });
@@ -56,8 +50,8 @@ async function ingestSingleSymbolUniverse(ctx: Ctx, date: string, basDd: string)
 }
 
 describe('SymbolMasterService.getMarketCapsAt', () => {
-  it('캐시 미스: KRX 를 2회(KOSPI·KOSDAQ) 조회해 맵을 반환하고 캐시 테이블에 저장한다', async () => {
-    const ctx = await setup();
+  it('캐시 미스: KRX 를 2회(KOSPI·KOSDAQ) 조회해 맵을 반환하고 캐시 테이블에 저장한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     await ingestSingleSymbolUniverse(ctx, '2023-01-02', '20230102');
 
     // 일별 거래 응답을 다시 세팅한다 — ingestDate 가 이미 같은 basDd 를 한 번 조회했으므로
@@ -81,11 +75,10 @@ describe('SymbolMasterService.getMarketCapsAt', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ standardCode: 'KR7005930003', marketCapKrw: '350000000000000' });
 
-    await teardown(ctx);
   });
 
-  it('캐시 히트: 재호출해도 fake 서버 요청 수가 늘지 않는다', async () => {
-    const ctx = await setup();
+  it('캐시 히트: 재호출해도 fake 서버 요청 수가 늘지 않는다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     await ingestSingleSymbolUniverse(ctx, '2023-01-02', '20230102');
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     const first = await ctx.svc.getMarketCapsAt('2023-01-02');
@@ -96,23 +89,21 @@ describe('SymbolMasterService.getMarketCapsAt', () => {
     expect(ctx.fake.requests.length).toBe(before);
     expect(second.get('KR7005930003')).toBe(first.get('KR7005930003'));
 
-    await teardown(ctx);
   });
 
-  it('커버 밖 date 는 SymbolMasterNotCoveredError 를 던진다', async () => {
+  it('커버 밖 date 는 SymbolMasterNotCoveredError 를 던진다', async ({ krxApps }) => {
     // coverage와 거래일 anchor가 없는 초기 상태라 어떤 날짜도 조회할 수 없다.
-    const ctx = await setup();
+    const ctx = await setup(krxApps);
 
     const before = ctx.fake.requests.length;
     await expect(ctx.svc.getMarketCapsAt('2023-01-02')).rejects.toThrow(SymbolMasterNotCoveredError);
     // 유니버스 조회에서 먼저 걸러져야 한다 — KRX 를 헛되이 부르지 않는다.
     expect(ctx.fake.requests.length).toBe(before);
 
-    await teardown(ctx);
   });
 
-  it('SCD 버전이 관통해도 coverage 갭인 날짜는 캐시를 반환하지 않는다', async () => {
-    const ctx = await setup();
+  it('SCD 버전이 관통해도 coverage 갭인 날짜는 캐시를 반환하지 않는다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     // 01-02 최초 수집 후 01-03~04 를 건너뛰고 01-05 를 수집한다. 열린 SCD 버전은
     // 01-03을 관통하지만 coverage는 [01-02,01-02], [01-05,01-05]뿐이라 갭이다.
     await ingestSingleSymbolUniverse(ctx, '2023-01-02', '20230102');
@@ -133,14 +124,13 @@ describe('SymbolMasterService.getMarketCapsAt', () => {
     // 당연히 일어나지 않는다.
     expect(ctx.fake.requests.length).toBe(before);
 
-    await teardown(ctx);
   });
 
-  it('캐시 미스에 같은 date 로 동시 호출 2회 — KRX 는 1회분만 조회하고 같은 Promise 를 반환하며 UNIQUE 위반 없이 둘 다 성공한다', async () => {
+  it('캐시 미스에 같은 date 로 동시 호출 2회 — KRX 는 1회분만 조회하고 같은 Promise 를 반환하며 UNIQUE 위반 없이 둘 다 성공한다', async ({ krxApps }) => {
     // inflightIngests 와 같은 이유의 dedup 가드(Finding 3, T6 최종 리뷰)가 없으면
     // 두 호출이 각각 KRX 를 부르고 각각 writeMarketCaps 로 같은 (date, standardCode)
     // 행을 넣으려다 idx_smmc_date_code UNIQUE 위반으로 하나가 죽는다.
-    const ctx = await setup();
+    const ctx = await setup(krxApps);
     await ingestSingleSymbolUniverse(ctx, '2023-01-02', '20230102');
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     const before = ctx.fake.requests.length;
@@ -166,6 +156,5 @@ describe('SymbolMasterService.getMarketCapsAt', () => {
       .all();
     expect(rows).toHaveLength(1);
 
-    await teardown(ctx);
   });
 });

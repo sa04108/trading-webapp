@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import type { Clock } from '../../src/runtime/shared/clock.js';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import type { KrxHistoricalUniverseSource } from '../../src/runtime/modules/market-data/application/ports.js';
@@ -7,12 +7,12 @@ import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
 } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import type { TestApp } from '../helpers/test-app.js';
+import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
 import {
   baseInfoFixture,
   dailyFixture,
   krxEnvelope,
-  startKrxFakeServer,
   type KrxFakeServer,
 } from '../helpers/krx-fixtures.js';
 
@@ -44,9 +44,8 @@ interface Ctx {
   readonly sourceClock: MutableClock;
 }
 
-async function setup(): Promise<Ctx> {
-  const t = await createTestApp();
-  const fake = await startKrxFakeServer();
+async function setup(krxApps: KrxTestFactory): Promise<Ctx> {
+  const { t, fake } = await krxApps.create();
   const sourceClock = new MutableClock(kstNoonMs('2023-06-01'));
   const source = createKrxHistoricalUniverseSource(
     { baseUrl: fake.baseUrl, apiKey: API_KEY, approvalExpiry: null },
@@ -68,14 +67,9 @@ function setTradingDay(fake: KrxFakeServer, basDd: string): void {
   fake.setResponse('stk_isu_base_info', basDd, { body: krxEnvelope([baseInfoFixture()]) });
 }
 
-async function teardown(ctx: Ctx): Promise<void> {
-  await ctx.fake.close();
-  await ctx.t.close();
-}
-
 describe('SymbolMasterBackfill', () => {
-  it('3일 범위를 예산 안에서 끝까지 채우면 IDLE + cursorDate null 로 돌아온다', async () => {
-    const ctx = await setup();
+  it('3일 범위를 예산 안에서 끝까지 채우면 IDLE + cursorDate null 로 돌아온다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     setTradingDay(ctx.fake, '20230102');
     setTradingDay(ctx.fake, '20230103');
     setTradingDay(ctx.fake, '20230104');
@@ -102,11 +96,10 @@ describe('SymbolMasterBackfill', () => {
     expect(ctx.svc.isCovered('2023-01-02')).toBe(true);
     expect(ctx.svc.isCovered('2023-01-03')).toBe(true);
     expect(ctx.svc.isCovered('2023-01-04')).toBe(true);
-    await teardown(ctx);
   });
 
-  it('toDate 를 받으면 그 날짜까지만 채우고, 오늘이 더 뒤여도 거기서 멈춘다', async () => {
-    const ctx = await setup();
+  it('toDate 를 받으면 그 날짜까지만 채우고, 오늘이 더 뒤여도 거기서 멈춘다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     setTradingDay(ctx.fake, '20230102');
     setTradingDay(ctx.fake, '20230103');
     setTradingDay(ctx.fake, '20230104');
@@ -139,11 +132,10 @@ describe('SymbolMasterBackfill', () => {
     expect(ctx.svc.isCovered('2023-01-05')).toBe(false);
     expect(ctx.fake.requests.some((r) => r.basDd === '20230105')).toBe(false);
 
-    await teardown(ctx);
   });
 
-  it('예산 소진으로 정지한 뒤 같은 fromDate 로 재개하면 이미 커버된 날은 공짜로 넘기고 완주한다', async () => {
-    const ctx = await setup();
+  it('예산 소진으로 정지한 뒤 같은 fromDate 로 재개하면 이미 커버된 날은 공짜로 넘기고 완주한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     setTradingDay(ctx.fake, '20230102');
     setTradingDay(ctx.fake, '20230103');
 
@@ -174,11 +166,10 @@ describe('SymbolMasterBackfill', () => {
     expect(runner.status().cursorDate).toBeNull();
     expect(ctx.svc.isCovered('2023-01-02')).toBe(true);
     expect(ctx.svc.isCovered('2023-01-03')).toBe(true);
-    await teardown(ctx);
   });
 
-  it('429 응답은 BUDGET_EXHAUSTED 로 취급하고 cursorDate 를 재개 지점으로 남긴다', async () => {
-    const ctx = await setup();
+  it('429 응답은 BUDGET_EXHAUSTED 로 취급하고 cursorDate 를 재개 지점으로 남긴다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { status: 429, body: krxEnvelope([]) });
 
     const backfillClock = new MutableClock(kstNoonMs('2023-01-02'));
@@ -197,6 +188,5 @@ describe('SymbolMasterBackfill', () => {
     expect(runner.status().targetStartDate).toBe('2023-01-02');
     expect(runner.status().error).toBeNull();
     expect(ctx.svc.isCovered('2023-01-02')).toBe(false);
-    await teardown(ctx);
   });
 });

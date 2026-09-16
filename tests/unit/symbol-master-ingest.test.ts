@@ -1,5 +1,5 @@
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import {
   SymbolMasterService,
@@ -10,12 +10,12 @@ import {
   symbolMasterTradingDays,
   symbolMasterVersions,
 } from '../../src/server/shared/db/schema.js';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import type { TestApp } from '../helpers/test-app.js';
+import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
 import {
   baseInfoFixture,
   dailyFixture,
   krxEnvelope,
-  startKrxFakeServer,
   type KrxFakeServer,
 } from '../helpers/krx-fixtures.js';
 
@@ -28,9 +28,8 @@ interface Ctx {
   readonly svc: SymbolMasterService;
 }
 
-async function setup(): Promise<Ctx> {
-  const t = await createTestApp();
-  const fake = await startKrxFakeServer();
+async function setup(krxApps: KrxTestFactory): Promise<Ctx> {
+  const { t, fake } = await krxApps.create();
   const source = createKrxHistoricalUniverseSource(
     { baseUrl: fake.baseUrl, apiKey: API_KEY, approvalExpiry: null },
     t.container.clock,
@@ -46,14 +45,9 @@ async function setup(): Promise<Ctx> {
   return { t, fake, svc: new SymbolMasterService(deps) };
 }
 
-async function teardown(ctx: Ctx): Promise<void> {
-  await ctx.fake.close();
-  await ctx.t.close();
-}
-
 describe('SymbolMasterService.ingestDate', () => {
-  it('최초 수집은 baseline 버전을 만들고 이벤트가 없다', async () => {
-    const ctx = await setup();
+  it('최초 수집은 baseline 버전을 만들고 이벤트가 없다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
 
@@ -62,11 +56,10 @@ describe('SymbolMasterService.ingestDate', () => {
     expect(result).toEqual({ kind: 'TRADING_DAY' });
     expect(ctx.svc.getUniverseAsOf('2023-01-02').size).toBe(1);
     expect(ctx.svc.isCovered('2023-01-02')).toBe(true);
-    await teardown(ctx);
   });
 
-  it('둘째 날 상장주식수 변경은 SHARES_CHANGED 하나를 만든다', async () => {
-    const ctx = await setup();
+  it('둘째 날 상장주식수 변경은 SHARES_CHANGED 하나를 만든다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
     await ctx.svc.ingestDate('2023-01-02');
@@ -85,22 +78,20 @@ describe('SymbolMasterService.ingestDate', () => {
     expect(ctx.svc.listEvents('2023-01-03', '2023-01-03')).toMatchObject([
       { eventType: 'SHARES_CHANGED' },
     ]);
-    await teardown(ctx);
   });
 
-  it('두 시장 모두 빈 응답이면 휴장이다 — coverage 는 늘고 이벤트는 없다', async () => {
-    const ctx = await setup();
+  it('두 시장 모두 빈 응답이면 휴장이다 — coverage 는 늘고 이벤트는 없다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
 
     const result = await ctx.svc.ingestDate('2023-01-01');
 
     expect(result).toEqual({ kind: 'HOLIDAY' });
     expect(ctx.svc.isCovered('2023-01-01')).toBe(true);
     expect(ctx.svc.listEvents('2023-01-01', '2023-01-01')).toHaveLength(0);
-    await teardown(ctx);
   });
 
-  it('이미 커버된 날짜는 KRX 를 부르지 않는다', async () => {
-    const ctx = await setup();
+  it('이미 커버된 날짜는 KRX 를 부르지 않는다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
     await ctx.svc.ingestDate('2023-01-02');
@@ -110,11 +101,10 @@ describe('SymbolMasterService.ingestDate', () => {
 
     expect(result).toEqual({ kind: 'ALREADY_COVERED' });
     expect(ctx.fake.requests.length).toBe(before);
-    await teardown(ctx);
   });
 
-  it('갭 메우기: 사이 날짜 수집이 다음 커버일 이벤트를 재계산한다', async () => {
-    const ctx = await setup();
+  it('갭 메우기: 사이 날짜 수집이 다음 커버일 이벤트를 재계산한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
 
     // 01-02: 기준 상태 (상장주식수 1,000,000)
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
@@ -150,11 +140,10 @@ describe('SymbolMasterService.ingestDate', () => {
     // 01-04 는 아직 아무도 수집하지 않았다 — 갭으로 남는다
     expect(ctx.svc.isCovered('2023-01-04')).toBe(false);
     expect(ctx.svc.isCovered('2023-01-03')).toBe(true);
-    await teardown(ctx);
   });
 
-  it('갭 메우기: 사이에 무변화(이벤트 0개) 커버 거래일이 있어도 다음 커버 구간을 정확히 찾는다', async () => {
-    const ctx = await setup();
+  it('갭 메우기: 사이에 무변화(이벤트 0개) 커버 거래일이 있어도 다음 커버 구간을 정확히 찾는다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
 
     // 01-02: 기준 상태 (상장주식수 1,000,000)
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
@@ -202,11 +191,10 @@ describe('SymbolMasterService.ingestDate', () => {
     expect(ctx.svc.isCovered('2023-01-03')).toBe(true);
     expect(ctx.svc.isCovered('2023-01-04')).toBe(true);
     expect(ctx.svc.isCovered('2023-01-05')).toBe(false);
-    await teardown(ctx);
   });
 
-  it('baseline 버전만 남고 coverage 가 비어 있어도 재수집이 안전하게 복구한다', async () => {
-    const ctx = await setup();
+  it('baseline 버전만 남고 coverage 가 비어 있어도 재수집이 안전하게 복구한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
 
@@ -228,11 +216,10 @@ describe('SymbolMasterService.ingestDate', () => {
 
     expect(result).toEqual({ kind: 'TRADING_DAY' });
     expect(ctx.svc.isCovered('2023-01-02')).toBe(true);
-    await teardown(ctx);
   });
 
-  it('고립된 휴장일은 먼 과거의 열린 버전을 유니버스로 노출하지 않는다', async () => {
-    const ctx = await setup();
+  it('고립된 휴장일은 먼 과거의 열린 버전을 유니버스로 노출하지 않는다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
     await ctx.svc.ingestDate('2023-01-02');
@@ -241,11 +228,10 @@ describe('SymbolMasterService.ingestDate', () => {
     expect(ctx.svc.isCovered('2023-01-10')).toBe(true);
     expect(ctx.svc.canResolveUniverseAsOf('2023-01-10')).toBe(false);
     expect(() => ctx.svc.getUniverseAsOf('2023-01-10')).toThrow('커버하지 않는다');
-    await teardown(ctx);
   });
 
-  it('거래가 있는데 기본정보가 비면 기존 종목을 상폐 처리하지 않고 실패한다', async () => {
-    const ctx = await setup();
+  it('거래가 있는데 기본정보가 비면 기존 종목을 상폐 처리하지 않고 실패한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
 
     await expect(ctx.svc.ingestDate('2023-01-02')).rejects.toThrow(
@@ -253,11 +239,10 @@ describe('SymbolMasterService.ingestDate', () => {
     );
     expect(ctx.svc.isCovered('2023-01-02')).toBe(false);
     expect(ctx.t.container.database.db.select().from(symbolMasterVersions).all()).toHaveLength(0);
-    await teardown(ctx);
   });
 
-  it('분류 필드를 해석할 수 없는 한 종목은 비매매 상태로 저장하고 날짜 수집을 완료한다', async () => {
-    const ctx = await setup();
+  it('분류 필드를 해석할 수 없는 한 종목은 비매매 상태로 저장하고 날짜 수집을 완료한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', {
       body: krxEnvelope([baseInfoFixture({ SECUGRP_NM: '새로운증권분류' })]),
@@ -267,11 +252,10 @@ describe('SymbolMasterService.ingestDate', () => {
     expect(
       ctx.svc.getUniverseAsOf('2023-01-02').get('KR7005930003')?.instrumentType,
     ).toBe('UNKNOWN_CLASSIFICATION');
-    await teardown(ctx);
   });
 
-  it('상장주식수가 없는 보통주는 비매매 상태로 저장하고 날짜 수집을 완료한다', async () => {
-    const ctx = await setup();
+  it('상장주식수가 없는 보통주는 비매매 상태로 저장하고 날짜 수집을 완료한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', {
       body: krxEnvelope([baseInfoFixture({ LIST_SHRS: '-' })]),
@@ -281,11 +265,10 @@ describe('SymbolMasterService.ingestDate', () => {
     expect(
       ctx.svc.getUniverseAsOf('2023-01-02').get('KR7005930003'),
     ).toMatchObject({ sharesOutstanding: '0', instrumentType: 'MISSING_SHARES' });
-    await teardown(ctx);
   });
 
-  it('중복 표준코드 한 종목은 비매매 상태로 격리하고 날짜 수집을 완료한다', async () => {
-    const ctx = await setup();
+  it('중복 표준코드 한 종목은 비매매 상태로 격리하고 날짜 수집을 완료한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', {
       body: krxEnvelope([
@@ -298,11 +281,10 @@ describe('SymbolMasterService.ingestDate', () => {
     expect(
       ctx.svc.getUniverseAsOf('2023-01-02').get('KR7005930003')?.instrumentType,
     ).toBe('UNKNOWN_CLASSIFICATION');
-    await teardown(ctx);
   });
 
-  it('일별매매에만 남은 한 종목은 기존 identity를 보존하고 비매매 상태로 바꾼다', async () => {
-    const ctx = await setup();
+  it('일별매매에만 남은 한 종목은 기존 identity를 보존하고 비매매 상태로 바꾼다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     const secondBase = baseInfoFixture({
       ISU_CD: 'KR7000660001',
       ISU_SRT_CD: '000660',
@@ -329,11 +311,10 @@ describe('SymbolMasterService.ingestDate', () => {
     expect(preserved).toMatchObject({ shortCode: '000660', instrumentType: 'MISSING_BASE_INFO' });
     expect(ctx.svc.listEvents('2023-01-03', '2023-01-03').map((event) => event.eventType))
       .toEqual(['TYPE_CHANGED']);
-    await teardown(ctx);
   });
 
-  it('같은 상태의 과거 날짜를 하루씩 prepend 해도 버전 행은 늘지 않는다', async () => {
-    const ctx = await setup();
+  it('같은 상태의 과거 날짜를 하루씩 prepend 해도 버전 행은 늘지 않는다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     for (const compactDate of ['20230104', '20230103', '20230102']) {
       ctx.fake.setResponse('stk_bydd_trd', compactDate, { body: krxEnvelope([dailyFixture()]) });
       ctx.fake.setResponse('stk_isu_base_info', compactDate, {
@@ -352,11 +333,10 @@ describe('SymbolMasterService.ingestDate', () => {
       validFromDate: '2023-01-02',
       validToDate: null,
     });
-    await teardown(ctx);
   });
 
-  it('trading_days에서 빠진 미래 버전 경계도 과거 overlay가 덮지 않는다', async () => {
-    const ctx = await setup();
+  it('trading_days에서 빠진 미래 버전 경계도 과거 overlay가 덮지 않는다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     const db = ctx.t.container.database.db;
     const common = {
       standardCode: 'KR7005930003',
@@ -389,13 +369,12 @@ describe('SymbolMasterService.ingestDate', () => {
       { validFromDate: '2023-01-03', validToDate: '2023-01-05', sharesOutstanding: '1500000' },
       { validFromDate: '2023-01-05', validToDate: null, sharesOutstanding: '2000000' },
     ]);
-    await teardown(ctx);
   });
 });
 
 describe('SymbolMasterService.ingestDate 동시 호출 가드', () => {
-  it('같은 날짜 동시 호출은 KRX 를 한 번만 부르고 baseline·coverage 를 하나만 남긴다', async () => {
-    const ctx = await setup();
+  it('같은 날짜 동시 호출은 KRX 를 한 번만 부르고 baseline·coverage 를 하나만 남긴다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     const date = '2023-01-02';
     // KOSPI 일별매매 응답을 지연시켜 첫 호출이 KRX await 중일 때 두 번째 호출이 들어오게 한다.
     ctx.fake.setResponse('stk_bydd_trd', '20230102', {
@@ -418,11 +397,10 @@ describe('SymbolMasterService.ingestDate 동시 호출 가드', () => {
     expect(coverage).toHaveLength(1);
     expect(coverage[0]).toMatchObject({ startDate: date, endDate: date });
     expect(ctx.svc.listEvents(date, date)).toHaveLength(0);
-    await teardown(ctx);
   });
 
-  it('다른 날짜의 동시 호출은 서로 기다리지 않고 각자 진행된다', async () => {
-    const ctx = await setup();
+  it('다른 날짜의 동시 호출은 서로 기다리지 않고 각자 진행된다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', {
       body: krxEnvelope([dailyFixture()]),
       delayMs: 80,
@@ -454,6 +432,5 @@ describe('SymbolMasterService.ingestDate 동시 호출 가드', () => {
     expect(ctx.fake.requests.length).toBe(8);
     expect(ctx.svc.isCovered('2023-01-02')).toBe(true);
     expect(ctx.svc.isCovered('2023-03-01')).toBe(true);
-    await teardown(ctx);
   });
 });

@@ -1,6 +1,6 @@
 import type { SymbolMasterEntry } from '../../src/runtime/modules/market-data/domain/symbol-master.js';
 import { createHash } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect } from 'vitest';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import {
   SymbolMasterService,
@@ -20,12 +20,12 @@ import type {
   SymbolIdentitySelection,
   SymbolIdentityValidationResult,
 } from '../../src/runtime/modules/market-data/domain/symbol-identity-lifetime.js';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import type { TestApp } from '../helpers/test-app.js';
+import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
 import {
   baseInfoFixture,
   dailyFixture,
   krxEnvelope,
-  startKrxFakeServer,
   type KrxFakeServer,
 } from '../helpers/krx-fixtures.js';
 
@@ -39,9 +39,8 @@ interface Ctx {
   readonly resolver: UniverseRuleResolver;
 }
 
-async function setup(): Promise<Ctx> {
-  const t = await createTestApp();
-  const fake = await startKrxFakeServer();
+async function setup(krxApps: KrxTestFactory): Promise<Ctx> {
+  const { t, fake } = await krxApps.create();
   const source = createKrxHistoricalUniverseSource(
     { baseUrl: fake.baseUrl, apiKey: API_KEY, approvalExpiry: null },
     t.container.clock,
@@ -57,11 +56,6 @@ async function setup(): Promise<Ctx> {
   const svc = new SymbolMasterService(deps);
   const resolver = new UniverseRuleResolver({ symbolMaster: svc, logger: t.container.logger });
   return { t, fake, svc, resolver };
-}
-
-async function teardown(ctx: Ctx): Promise<void> {
-  await ctx.fake.close();
-  await ctx.t.close();
 }
 
 /**
@@ -122,8 +116,8 @@ describe('UniverseRuleResolver.resolve', () => {
     rebalanceInterval: { value: 1, unit: 'MONTH' },
   });
 
-  it('시총 상위 N 을 내림차순으로 고르고, 시장·instrumentType·시총 유무로 거른다', async () => {
-    const ctx = await setup();
+  it('시총 상위 N 을 내림차순으로 고르고, 시장·instrumentType·시총 유무로 거른다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     await ingestFixtureUniverse(ctx);
 
     const rule = marketCapRule(3);
@@ -156,22 +150,20 @@ describe('UniverseRuleResolver.resolve', () => {
     const expectedHash = createHash('sha256').update(JSON.stringify(result.schedule)).digest('hex');
     expect(result.scheduleHash).toBe(expectedHash);
 
-    await teardown(ctx);
   });
 
-  it('시가총액 LOW는 작은 시가총액부터 N개를 고른다', async () => {
-    const ctx = await setup();
+  it('시가총액 LOW는 작은 시가총액부터 N개를 고른다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     await ingestFixtureUniverse(ctx);
 
     const result = await ctx.resolver.resolve(marketCapRule(2, 'LOW'), ['2023-01-02']);
 
     expect(result.schedule[0]?.symbols).toEqual(['000030', '000020']);
     expect(result.unionSymbols).toEqual(['000020', '000030']);
-    await teardown(ctx);
   });
 
-  it('마스터가 커버하지 않는 날짜는 uncoveredDates 로 분리하고 KRX 를 부르지 않는다', async () => {
-    const ctx = await setup();
+  it('마스터가 커버하지 않는 날짜는 uncoveredDates 로 분리하고 KRX 를 부르지 않는다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     await ingestFixtureUniverse(ctx);
 
     const rule = marketCapRule(3);
@@ -193,11 +185,10 @@ describe('UniverseRuleResolver.resolve', () => {
     // 커버 밖 날짜는 isCovered 에서 걸러져 KRX 호출 예산을 쓰지 않는다.
     expect(duringResolve).toHaveLength(2);
 
-    await teardown(ctx);
   });
 
-  it('휴장 리밸런스 날짜는 직전 거래일 유니버스로 해소한다', async () => {
-    const ctx = await setup();
+  it('휴장 리밸런스 날짜는 직전 거래일 유니버스로 해소한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     await ingestFixtureUniverse(ctx); // 2023-01-02 거래일 수집
     await ctx.svc.ingestDate('2023-01-03'); // fake 서버 기본값(빈 응답) → 휴장으로 수집된다
 
@@ -215,11 +206,10 @@ describe('UniverseRuleResolver.resolve', () => {
       },
     ]);
 
-    await teardown(ctx);
   });
 
-  it('적용 거래일이 없으면 uncovered 로 분류한다', async () => {
-    const ctx = await setup();
+  it('적용 거래일이 없으면 uncovered 로 분류한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     // 휴장만 수집된 상태 — coverage 는 생기지만 거래일 기록은 하나도 없다
     await ctx.svc.ingestDate('2023-01-03');
 
@@ -229,11 +219,10 @@ describe('UniverseRuleResolver.resolve', () => {
     expect(result.uncoveredDates).toEqual(['2023-01-03']);
     expect(result.schedule).toEqual([]);
 
-    await teardown(ctx);
   });
 
-  it('coverage 밖 날짜는 적용 거래일이 있어도 uncovered 다', async () => {
-    const ctx = await setup();
+  it('coverage 밖 날짜는 적용 거래일이 있어도 uncovered 다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     await ingestFixtureUniverse(ctx); // 2023-01-02 만 커버
 
     // effectiveTradingDate 는 date 이하 최근 거래일을 찾을 뿐이라, coverage 를 한참
@@ -248,11 +237,10 @@ describe('UniverseRuleResolver.resolve', () => {
     expect(result.uncoveredDates).toEqual(['2026-01-01']);
     expect(result.schedule).toEqual([]);
 
-    await teardown(ctx);
   });
 
-  it('date 자체가 고립된 coverage 섬이어도, 안 이어진 옛 거래일로 조용히 해소되지 않는다', async () => {
-    const ctx = await setup();
+  it('date 자체가 고립된 coverage 섬이어도, 안 이어진 옛 거래일로 조용히 해소되지 않는다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
     await ingestFixtureUniverse(ctx); // 2023-01-02 거래일 수집(coverage: [2023-01-02, 2023-01-02])
 
     // 2023-06-01 을 직접 휴장으로 ingest — ensureTradingDay 의 소급 없이, 그 날짜
@@ -273,7 +261,6 @@ describe('UniverseRuleResolver.resolve', () => {
     expect(result.uncoveredDates).toEqual(['2023-06-01']);
     expect(result.schedule).toEqual([]);
 
-    await teardown(ctx);
   });
 });
 
