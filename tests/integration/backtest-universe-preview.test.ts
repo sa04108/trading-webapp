@@ -1,7 +1,8 @@
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { eq } from 'drizzle-orm';
 import { preparationInputSchema } from '../../src/shared/schemas/backtest-preparation.js';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, vi } from 'vitest';
+import type { LightMyRequestResponse } from 'fastify';
 import type { BacktestUniversePreview } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
 import {
@@ -14,7 +15,9 @@ import {
   symbolMasterVersions,
   symbols as symbolsTable,
 } from '../../src/server/shared/db/schema.js';
-import { createTestAdmin, createTestApp, type TestApp } from '../helpers/test-app.js';
+import type { TestApp } from '../helpers/test-app.js';
+import { authenticatedTest as base } from '../helpers/test-fixtures.js';
+import { installPreviewShapeStubs } from '../helpers/backtest-preparation-stubs.js';
 import {
   registerSymbols,
   seedCorporateActionCoverage,
@@ -23,7 +26,9 @@ import {
   yearRange,
 } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
-import { startKrxFakeServer, type KrxFakeServer } from '../helpers/krx-fixtures.js';
+import type { KrxFakeServer } from '../helpers/krx-fixtures.js';
+import { test as krxBase } from '../helpers/krx-test-fixtures.js';
+import { createTestAdmin } from '../helpers/test-app.js';
 
 // 이 파일 대부분은 period 가 하루짜리다 — rebalanceInterval 은 그 하루를 리밸런스
 // 날짜로 잡는 데만 쓰이고 실제 간격은 의미가 없다. 기본값을 DAY 로 둬 그런 호출이
@@ -48,73 +53,29 @@ async function waitForPreparation(ctx: TestApp, jobId: string): Promise<'COMPLET
   }
 }
 
-function installPreparedPreviewFixture(ctx: TestApp): void {
-  // 이 파일은 preview 내용·자동 등록만 격리해 본다. 실전 registry의 DART 요구와
-  // 실제 coverage gate는 backtest-preparation.test.ts가 별도로 검증한다.
-  const noActionWork: typeof ctx.container.factSyncService.planCorporateActionSync = () => ({
-    yearsBySymbol: new Map(),
-    shareYearsBySymbol: new Map(),
-    todayKstDate: '2026-01-01',
-    calls: 0,
-    estimatedMs: 0,
-    overDailyLimit: false,
-  });
-  ctx.container.factSyncService.planCorporateActionSync = noActionWork;
-  const noActionSync: typeof ctx.container.factSyncService.syncCorporateActions = async (request) => {
-    const years = yearRange(request.fromYear, request.toYear);
-    for (const symbol of request.symbols) {
-      ctx.container.actionCoverageStore.addCoverageResult(
-        symbol,
-        years,
-        [],
-        ctx.container.clock.now(),
-      );
-    }
-    return {
-      savedFacts: 0,
-      gapCount: 0,
-      gaps: [],
-      stoppedAtSymbol: null,
-      stopReason: null,
-      failureMessage: null,
-    };
+/** durable preview를 시작하고 완료된 동일 요청을 명시적으로 다시 조회한다. */
+async function injectPreparedPreview(
+  ctx: TestApp,
+  options: {
+    method: 'POST';
+    url: '/api/v1/backtests/universe-preview';
+    cookies: { qp_session: string };
+    payload: Record<string, unknown>;
+  },
+): Promise<LightMyRequestResponse> {
+  const enriched = {
+    ...options,
+    payload: {
+      ...options.payload,
+      strategyId: options.payload.strategyId ?? 'range-breakout',
+      parameters: options.payload.parameters ?? {},
+    },
   };
-  ctx.container.factSyncService.syncCorporateActions = noActionSync;
-  const noMarketSync: typeof ctx.container.symbolMasterService.ingestDate = async () => ({
-    kind: 'ALREADY_COVERED',
-  });
-  ctx.container.symbolMasterService.ingestDate = noMarketSync;
-  const readActualValidDates = ctx.container.candleCoverageService
-    .getValidDatesByCodeBetween.bind(ctx.container.candleCoverageService);
-  ctx.container.candleCoverageService.getValidDatesByCodeBetween = (codes, from, to) => {
-    const actual = readActualValidDates(codes, from, to);
-    // 이 파일의 기존 preview 모양 테스트는 시장 sync를 no-op으로 격리한다. 전 종목이
-    // 빈 fixture일 때만 실행 봉 준비가 끝났다고 가정하고, 하나라도 실제 봉이 있으면
-    // production 검사를 그대로 써 종목별 가격 결손 제외 테스트가 가능하게 한다.
-    if ([...actual.values()].some((dates) => dates.length > 0)) return actual;
-    const assumedDates = ctx.container.symbolMasterService.tradingDaysBetween(from, to);
-    return new Map(codes.map((code) => [code, assumedDates.length > 0 ? assumedDates : [from]]));
-  };
-  const rawInject = ctx.app.inject.bind(ctx.app);
-  ctx.app.inject = (async (options: unknown) => {
-    const request = options as { method?: string; url?: string; payload?: Record<string, unknown> };
-    if (request.method === 'POST' && request.url === '/api/v1/backtests/universe-preview') {
-      const enriched = {
-        ...request,
-        payload: {
-          ...request.payload,
-          strategyId: request.payload?.strategyId ?? 'range-breakout',
-          parameters: request.payload?.parameters ?? {},
-        },
-      };
-      const first = await rawInject(enriched as never);
-      if (first.statusCode !== 202) return first;
-      const jobId = (first.json() as { job: { id: string } }).job.id;
-      if (await waitForPreparation(ctx, jobId) !== 'COMPLETED') return first;
-      return rawInject(enriched as never);
-    }
-    return rawInject(options as never);
-  }) as typeof ctx.app.inject;
+  const first = await ctx.app.inject(enriched);
+  if (first.statusCode !== 202) return first;
+  const jobId = first.json<{ job: { id: string } }>().job.id;
+  if (await waitForPreparation(ctx, jobId) !== 'COMPLETED') return first;
+  return ctx.app.inject(enriched);
 }
 
 /**
@@ -124,29 +85,19 @@ function installPreparedPreviewFixture(ctx: TestApp): void {
  * `tests/unit/universe-rule-resolver.test.ts` 가 이미 촘촘히 덮는다.
  */
 describe('POST /backtests/universe-preview', () => {
-  let ctx: TestApp;
-  let cookie: string;
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-    const { username, password } = await createTestAdmin(ctx.container);
-    const login = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { username, password },
-    });
-    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
-
-    // 이 파일은 staged preview 내용·자동 등록 회귀를 검증한다. Task 6부터 첫 호출은
-    // durable job(202)을 만들므로 fixture가 그 전제만 완료한 뒤 같은 hash를 재조회한다.
-    installPreparedPreviewFixture(ctx);
+  const it = base.extend<{ preparedPreview: typeof injectPreparedPreview }>({
+    preparedPreview: async ({ ctx }, use) => {
+      const restore = installPreviewShapeStubs(ctx);
+      try {
+        await use((target, options) => injectPreparedPreview(target, options));
+      } finally {
+        await ctx.close();
+        restore();
+      }
+    },
   });
 
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  it('단계 파이프라인이 준비되면 pin된 member와 날짜별 단계 진단을 반환한다', async () => {
+  it('단계 파이프라인이 준비되면 pin된 member와 날짜별 단계 진단을 반환한다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
@@ -161,7 +112,7 @@ describe('POST /backtests/universe-preview', () => {
       set: { marketCapKrw: '500000000000000', volume: 1_000, tradingValueKrw: '1000000000' },
     }).run();
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -206,7 +157,7 @@ describe('POST /backtests/universe-preview', () => {
     });
   });
 
-  it('PER 후보 재무가 필요하고 DART key가 없으면 그 요청만 503이다', async () => {
+  it('PER 후보 재무가 필요하고 DART key가 없으면 그 요청만 503이다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
@@ -221,7 +172,7 @@ describe('POST /backtests/universe-preview', () => {
       set: { marketCapKrw: '500000000000000', volume: 1_000, tradingValueKrw: '1000000000' },
     }).run();
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -240,7 +191,7 @@ describe('POST /backtests/universe-preview', () => {
     expect((res.json() as { error: string }).error).toContain('DART');
   });
 
-  it('정상 요청은 schedule·unionSymbols·실제 재무 보유·missingCandleSymbols 를 담아 200 이다', async () => {
+  it('정상 요청은 schedule·unionSymbols·실제 재무 보유·missingCandleSymbols 를 담아 200 이다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
@@ -292,7 +243,7 @@ describe('POST /backtests/universe-preview', () => {
     ctx.container.database.db.insert(symbolMasterTradingDays).values({ date: '2025-03-13' }).run();
     ctx.container.factCoverageStore.addCoveredYears('005930', [2025], Date.now());
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -335,7 +286,7 @@ describe('POST /backtests/universe-preview', () => {
     expect(body.fundamentalSymbols).toEqual([]);
   });
 
-  it('실제 재무 행이 있는 유니버스 종목만 fundamentalSymbols로 반환한다', async () => {
+  it('실제 재무 행이 있는 유니버스 종목만 fundamentalSymbols로 반환한다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
@@ -363,7 +314,7 @@ describe('POST /backtests/universe-preview', () => {
     await ctx.container.factRepository.saveFacts([financialFact]);
     ctx.container.factCoverageStore.addCoveredYears('005930', [2025], Date.now());
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -377,7 +328,7 @@ describe('POST /backtests/universe-preview', () => {
     expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual(['005930']);
   });
 
-  it('마지막 실행 봉 뒤 공시된 재무 행은 같은 종료일이어도 fundamentalSymbols에서 제외한다', async () => {
+  it('마지막 실행 봉 뒤 공시된 재무 행은 같은 종료일이어도 fundamentalSymbols에서 제외한다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
@@ -396,7 +347,7 @@ describe('POST /backtests/universe-preview', () => {
       unit: 'KRW',
     }]);
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -410,7 +361,7 @@ describe('POST /backtests/universe-preview', () => {
     expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual([]);
   });
 
-  it('다른 종목의 더 늦은 봉이 있어도 개별 종목 마지막 봉 뒤 공시를 재무 보유로 세지 않는다', async () => {
+  it('다른 종목의 더 늦은 봉이 있어도 개별 종목 마지막 봉 뒤 공시를 재무 보유로 세지 않는다', async ({ ctx, cookie, preparedPreview }) => {
     const entries = [
       { standardCode: 'KR7000010000', shortCode: 'EARLY_STOP', name: 'EARLY_STOP', market: 'KOSPI' as const, marketCapKrw: '200000000000' },
       { standardCode: 'KR7000020000', shortCode: 'LATE_BAR', name: 'LATE_BAR', market: 'KOSPI' as const, marketCapKrw: '100000000000' },
@@ -436,7 +387,7 @@ describe('POST /backtests/universe-preview', () => {
       value: 1_000, asOfTsMs: Date.parse('2026-01-05T01:00:00Z'), unit: 'KRW',
     }]);
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -450,7 +401,7 @@ describe('POST /backtests/universe-preview', () => {
     expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual([]);
   });
 
-  it('동적 유니버스 편출 뒤의 고아 봉·공시는 fundamentalSymbols로 세지 않는다', async () => {
+  it('동적 유니버스 편출 뒤의 고아 봉·공시는 fundamentalSymbols로 세지 않는다', async ({ ctx, cookie, preparedPreview }) => {
     registerSymbols(ctx.container, 'KR', ['EXITED', 'ACTIVE']);
     seedDailyBars(ctx.container.database.db, [
       {
@@ -502,7 +453,7 @@ describe('POST /backtests/universe-preview', () => {
         warnings: [],
       });
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -516,7 +467,7 @@ describe('POST /backtests/universe-preview', () => {
     expect((res.json() as { fundamentalSymbols: string[] }).fundamentalSymbols).toEqual([]);
   });
 
-  it('빈 유니버스는 전체 재무 저장소를 조회하지 않는다', async () => {
+  it('빈 유니버스는 전체 재무 저장소를 조회하지 않는다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
@@ -538,7 +489,7 @@ describe('POST /backtests/universe-preview', () => {
     };
 
     // 첫 요청에서 durable preparation을 완료해 다음 요청이 READY 경로로 바로 들어가게 한다.
-    const prepared = await ctx.app.inject({
+    const prepared = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -569,9 +520,9 @@ describe('POST /backtests/universe-preview', () => {
     expect(availability).toHaveBeenCalledWith(new Map());
   });
 
-  it('종목 마스터가 커버하지 않는 날짜는 durable preparation job을 시작한다', async () => {
+  it('종목 마스터가 커버하지 않는 날짜는 durable preparation job을 시작한다', async ({ ctx, cookie, preparedPreview }) => {
     // 마스터를 전혀 채우지 않는다 — 어떤 날짜도 커버되지 않는다
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -594,7 +545,7 @@ describe('POST /backtests/universe-preview', () => {
    * 반드시 404 로 실패했다. `periodCovered` 가 이 틈을 정확히 false 로 보고해야
    * 위저드가 올바른 버튼을 계속 띄울 수 있다.
    */
-  it('리밸런스 날짜는 전부 커버돼도 그 사이 기간이 비어 있으면 periodCovered 를 false 로 보고한다', async () => {
+  it('리밸런스 날짜는 전부 커버돼도 그 사이 기간이 비어 있으면 periodCovered 를 false 로 보고한다', async ({ ctx, cookie, preparedPreview }) => {
     const rebalanceDates = ['2026-01-05', '2026-02-05', '2026-03-05'];
     const entry = {
       standardCode: 'KR7005930003',
@@ -633,7 +584,7 @@ describe('POST /backtests/universe-preview', () => {
       }).run();
     }
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -658,7 +609,7 @@ describe('POST /backtests/universe-preview', () => {
     expect(body.periodCovered).toBe(false);
   });
 
-  it('리밸런싱하지 않으면 최초 선정 종목의 기간 내 거래불가와 상장폐지를 경고한다', async () => {
+  it('리밸런싱하지 않으면 최초 선정 종목의 기간 내 거래불가와 상장폐지를 경고한다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       {
         standardCode: 'KR7900010009',
@@ -689,7 +640,7 @@ describe('POST /backtests/universe-preview', () => {
       volume: 1_000,
     }).run();
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -709,7 +660,7 @@ describe('POST /backtests/universe-preview', () => {
     });
   });
 
-  it('종목 마스터와 기간 밖 옛 봉만 있는 종목을 missingCandleSymbols 로 밝힌다', async () => {
+  it('종목 마스터와 기간 밖 옛 봉만 있는 종목을 missingCandleSymbols 로 밝힌다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
@@ -722,7 +673,7 @@ describe('POST /backtests/universe-preview', () => {
     // 자동 등록하므로(Task 4, 아래 describe 참고), 여기서는 등록 여부와 무관하게
     // 요청 기간 안의 봉이 없다는 사실만 검증한다. 기간 밖 옛 봉으로 통과하면 안 된다.
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -737,8 +688,8 @@ describe('POST /backtests/universe-preview', () => {
     expect(body.missingCandleSymbols).toEqual(['005930']);
   });
 
-  it('markets 가 2개면 스키마 위반으로 400 이다', async () => {
-    const res = await ctx.app.inject({
+  it('markets 가 2개면 스키마 위반으로 400 이다', async ({ ctx, cookie, preparedPreview }) => {
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -750,11 +701,11 @@ describe('POST /backtests/universe-preview', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('rule의 shared interval로 단일 리밸런스 일정을 만든다', async () => {
+  it('rule의 shared interval로 단일 리밸런스 일정을 만든다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -768,8 +719,8 @@ describe('POST /backtests/universe-preview', () => {
     expect(body.schedule).toHaveLength(1);
   });
 
-  it('기간이 뒤집히면 400 이다', async () => {
-    const res = await ctx.app.inject({
+  it('기간이 뒤집히면 400 이다', async ({ ctx, cookie, preparedPreview }) => {
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -781,8 +732,8 @@ describe('POST /backtests/universe-preview', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('리밸런싱 주기가 기간을 넘으면 400 이다 (backtest-request.ts superRefine과 같은 검사)', async () => {
-    const res = await ctx.app.inject({
+  it('리밸런싱 주기가 기간을 넘으면 400 이다 (backtest-request.ts superRefine과 같은 검사)', async ({ ctx, cookie, preparedPreview }) => {
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -799,10 +750,10 @@ describe('POST /backtests/universe-preview', () => {
     expect((res.json() as { error: string }).error).toContain('리밸런싱 주기가 백테스트 전체 기간을 초과합니다');
   });
 
-  it('존재하지 않는 날짜(2026-13-45)는 500 이 아니라 400 이다', async () => {
+  it('존재하지 않는 날짜(2026-13-45)는 500 이 아니라 400 이다', async ({ ctx, cookie, preparedPreview }) => {
     // 정규식만으로는 자릿수만 보고 통과시킨다 — 그러면 준비 파이프라인이 리밸런스
     // 날짜를 계산할 때 RangeError 를 던져 500 이 된다(리뷰 finding, 2026-08-09).
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -823,33 +774,26 @@ describe('POST /backtests/universe-preview', () => {
  * backtest-routes.ts registerUniverseSymbols 주석 참고.
  */
 describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록', () => {
-  let ctx: TestApp;
-  let cookie: string;
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-    const { username, password } = await createTestAdmin(ctx.container);
-    const login = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { username, password },
-    });
-    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
-    installPreparedPreviewFixture(ctx);
+  const it = base.extend<{ preparedPreview: typeof injectPreparedPreview }>({
+    preparedPreview: async ({ ctx }, use) => {
+      const restore = installPreviewShapeStubs(ctx);
+      try {
+        await use((target, options) => injectPreparedPreview(target, options));
+      } finally {
+        await ctx.close();
+        restore();
+      }
+    },
   });
 
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  const readStandardCode = (code: string): string | null =>
+  const readStandardCode = (ctx: TestApp, code: string): string | null =>
     ctx.container.database.db
       .select({ standardCode: symbolsTable.standardCode })
       .from(symbolsTable)
       .where(eq(symbolsTable.code, code))
       .get()?.standardCode ?? null;
 
-  it('unionSymbols 를 종목 마스터의 이름·시장·표준코드로 자동 등록한다', async () => {
+  it('unionSymbols 를 종목 마스터의 이름·시장·표준코드로 자동 등록한다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
       { standardCode: 'KR7035720002', shortCode: '035720', name: '카카오', market: 'KOSDAQ', marketCapKrw: '20000000000000' },
@@ -857,7 +801,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     expect(ctx.container.symbolService.exists('005930')).toBe(false);
     expect(ctx.container.symbolService.exists('035720')).toBe(false);
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -873,10 +817,10 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
 
     const registered = ctx.container.symbolService.getSymbol('005930');
     expect(registered).toMatchObject({ code: '005930', market: 'KR', name: '삼성전자' });
-    expect(readStandardCode('005930')).toBe('KR7005930003');
+    expect(readStandardCode(ctx, '005930')).toBe('KR7005930003');
   });
 
-  it('VOLUME-first READY는 staged member만 해당 master entry로 등록한다', async () => {
+  it('VOLUME-first READY는 staged member만 해당 master entry로 등록한다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7000001001', shortCode: '000001', name: '시총상위', market: 'KOSPI', marketCapKrw: '500000000000000' },
       { standardCode: 'KR7000002002', shortCode: '000002', name: '거래량상위', market: 'KOSPI', marketCapKrw: '20000000000000' },
@@ -888,7 +832,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
       .set({ volume: 10_000, tradingValueKrw: '2000000' })
       .where(eq(dailySelectionMetrics.standardCode, 'KR7000002002')).run();
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -916,18 +860,18 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     expect(ctx.container.symbolService.getSymbol('000002')).toMatchObject({
       code: '000002', market: 'KR', name: '거래량상위',
     });
-    expect(readStandardCode('000002')).toBe('KR7000002002');
+    expect(readStandardCode(ctx, '000002')).toBe('KR7000002002');
   });
 
-  it('표준코드 없는 기존 등록은 자동 병합하지 않고 준비를 실패시킨다', async () => {
+  it('표준코드 없는 기존 등록은 자동 병합하지 않고 준비를 실패시킨다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
     ]);
     // 사용자가 이미 손으로(또는 이전 실행에서) 등록해 뒀다 — 이름·표준코드 없이.
     ctx.container.symbolService.addSymbol('005930', 'KR');
-    expect(readStandardCode('005930')).toBeNull();
+    expect(readStandardCode(ctx, '005930')).toBeNull();
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -944,11 +888,11 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
 
     // 실패해도 기존 값은 몰래 백필하지 않는다 — 검증 없는 덮어쓰기는 단축코드가
     // 재사용된 경우 다른 증권의 데이터를 합치는 근거가 된다.
-    expect(readStandardCode('005930')).toBeNull();
+    expect(readStandardCode(ctx, '005930')).toBeNull();
     expect(ctx.container.symbolService.getSymbol('005930')?.name).toBeNull();
   });
 
-  it('미등록 단축코드에 orphan fact가 남아 있으면 새 identity로 자동 등록하지 않는다', async () => {
+  it('미등록 단축코드에 orphan fact가 남아 있으면 새 identity로 자동 등록하지 않는다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [{
       standardCode: 'KR7005930003',
       shortCode: '005930',
@@ -968,7 +912,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
       unit: 'KRW',
     }]);
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -988,7 +932,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
    * `krx_daily_bars` 를 직접 집계해야 한다. 백필된 KRX 일봉만 있는 자동 등록 종목도
    * 실행 가능한 가격 데이터로 판정하는지 확인한다.
    */
-  it('krx_daily_bars 가 있는 자동 등록 종목은 missingCandleSymbols 에서 빠진다', async () => {
+  it('krx_daily_bars 가 있는 자동 등록 종목은 missingCandleSymbols 에서 빠진다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       {
         standardCode: 'KR7900010009',
@@ -1013,7 +957,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
       })
       .run();
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -1035,29 +979,32 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
 
 /** 준비된 선정 지표는 같은 요청에서 재사용한다. */
 describe('POST /backtests/universe-preview — 준비 결과 재사용', () => {
-  let ctx: TestApp;
-  let fake: KrxFakeServer;
-  let cookie: string;
-
-  beforeEach(async () => {
-    fake = await startKrxFakeServer();
-    ctx = await createTestApp({ KRX_BASE_URL: fake.baseUrl, KRX_API_KEY: 'test-krx-key' });
-    const { username, password } = await createTestAdmin(ctx.container);
-    const login = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { username, password },
-    });
-    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
-    installPreparedPreviewFixture(ctx);
+  const it = krxBase.extend<{ scenario: {
+    ctx: TestApp;
+    fake: KrxFakeServer;
+    cookie: string;
+    preparedPreview: typeof injectPreparedPreview;
+  } }>({
+    scenario: async ({ krxApps }, use) => {
+      const { t: ctx, fake } = await krxApps.create({ KRX_API_KEY: 'test-krx-key' });
+      const admin = await createTestAdmin(ctx.container);
+      const login = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { username: admin.username, password: admin.password },
+      });
+      const cookie = login.cookies.find((item) => item.name === 'qp_session')!.value;
+      const restore = installPreviewShapeStubs(ctx);
+      try {
+        await use({ ctx, fake, cookie, preparedPreview: injectPreparedPreview });
+      } finally {
+        restore();
+      }
+    },
   });
 
-  afterEach(async () => {
-    await ctx.close();
-    await fake.close();
-  });
-
-  it('선정 지표가 준비됐으면 KRX를 다시 부르지 않고 200이다', async () => {
+  it('선정 지표가 준비됐으면 KRX를 다시 부르지 않고 200이다', async ({ scenario }) => {
+    const { ctx, fake, cookie, preparedPreview } = scenario;
     const date = '2026-01-05';
     const basDd = date.replaceAll('-', '');
 
@@ -1091,7 +1038,7 @@ describe('POST /backtests/universe-preview — 준비 결과 재사용', () => {
     fake.setResponse('stk_bydd_trd', basDd, { status: 429, body: { error: 'quota exceeded' } });
     fake.setResponse('ksq_bydd_trd', basDd, { status: 429, body: { error: 'quota exceeded' } });
 
-    const res = await ctx.app.inject({
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -1121,34 +1068,27 @@ describe('POST /backtests/universe-preview — 준비 결과 재사용', () => {
  * 그대로 남겨 둔다 — 제거 대상이 아니다.
  */
 describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매핑', () => {
-  let ctx: TestApp;
-  let fake: KrxFakeServer;
-  let cookie: string;
-
-  beforeEach(async () => {
-    fake = await startKrxFakeServer();
-    ctx = await createTestApp({
-      KRX_BASE_URL: fake.baseUrl,
-      KRX_API_KEY: 'test-krx-key',
-      // 이 describe는 master anchor 해소 경로가 대상이다. 후보 scope가
-      // 미상인 range-breakout의 정상 DART gate가 그 경로를 가리지 않게 한다.
-      DART_API_KEY: 'test-dart-key',
-    });
-    const { username, password } = await createTestAdmin(ctx.container);
-    const login = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { username, password },
-    });
-    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+  const it = krxBase.extend<{ scenario: { ctx: TestApp; cookie: string } }>({
+    scenario: async ({ krxApps }, use) => {
+      const { t: ctx } = await krxApps.create({
+        KRX_API_KEY: 'test-krx-key',
+        DART_API_KEY: 'test-dart-key',
+      });
+      const admin = await createTestAdmin(ctx.container);
+      const login = await ctx.app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        payload: { username: admin.username, password: admin.password },
+      });
+      await use({
+        ctx,
+        cookie: login.cookies.find((item) => item.name === 'qp_session')!.value,
+      });
+    },
   });
 
-  afterEach(async () => {
-    await ctx.close();
-    await fake.close();
-  });
-
-  it('휴장일만 수집돼 거래일 anchor가 없으면 durable preparation job을 시작한다', async () => {
+  it('휴장일만 수집돼 거래일 anchor가 없으면 durable preparation job을 시작한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const date = '2026-01-05';
     // KOSPI·KOSDAQ 양쪽 다 fake 서버 기본값(빈 응답)이라 ingestDate 는 이 날짜를
     // 휴장으로 처리한다 — coverage 는 생기지만 거래일 기록은 생기지 않는다.
@@ -1176,28 +1116,17 @@ describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매�
 /**
  * Task 12 — 3단계(시가총액→PER→급하락) 파이프라인의 단계별 진단(N·missing 제외 수·
  * effective date)을 preview 응답만으로 확인한다. DART·자본변동은 이 test의 관심사가
- * 아니므로 직접 seed해 durable job을 거치더라도(`installPreparedPreviewFixture`가
- * 그 202→완료→재조회를 자동으로 처리한다) 실제 sync 호출 없이 곧바로 해소되게 한다.
+ * 아니므로 직접 seed하고 명시적 준비 helper로 202→완료→재조회하더라도 실제 sync
+ * 호출 없이 곧바로 해소되게 한다.
  */
 describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (Task 12)', () => {
-  let ctx: TestApp;
-  let cookie: string;
   const EFFECTIVE_DATE = '2025-06-02';
   const CANDLE_START_MS = Date.parse('2025-05-01T00:00:00Z');
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-    const { username, password } = await createTestAdmin(ctx.container);
-    const login = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { username, password },
-    });
-    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
-    installPreparedPreviewFixture(ctx);
-
-    registerSymbols(ctx.container, 'KR', ['X', 'Y', 'Z']);
-    seedSymbolMasterUniverse(ctx.container, [EFFECTIVE_DATE], [
+  const it = base.extend<{ preparedPreview: typeof injectPreparedPreview }>({
+    preparedPreview: async ({ ctx }, use) => {
+      const restore = installPreviewShapeStubs(ctx);
+      registerSymbols(ctx.container, 'KR', ['X', 'Y', 'Z']);
+      seedSymbolMasterUniverse(ctx.container, [EFFECTIVE_DATE], [
       { standardCode: 'KR7000101000', shortCode: 'X', name: 'X', market: 'KOSPI', marketCapKrw: '300' },
       { standardCode: 'KR7000102000', shortCode: 'Y', name: 'Y', market: 'KOSPI', marketCapKrw: '200' },
       { standardCode: 'KR7000103000', shortCode: 'Z', name: 'Z', market: 'KOSPI', marketCapKrw: '100' },
@@ -1205,21 +1134,21 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
 
     // 급하락(5일) stage 조회 하한(effectiveDate - 5*2-14 = 24일) 보다 이르게 캔들을 채운다.
     // X는 마지막 5일 사이 1000→500으로 급락, Y는 평탄해 X만 급하락 상위로 뽑힌다.
-    const candles = [];
-    for (let ts = CANDLE_START_MS; ts <= Date.parse(`${EFFECTIVE_DATE}T00:00:00Z`); ts += 86_400_000) {
-      const daysFromEffective = Math.round((Date.parse(`${EFFECTIVE_DATE}T00:00:00Z`) - ts) / 86_400_000);
-      const xClose = daysFromEffective >= 4 ? 1_000 : 1_000 - (4 - daysFromEffective) * 100;
-      candles.push(
-        { symbol: 'X', market: 'KR' as const, timeframe: '1d' as const, tsMs: ts, open: xClose, high: xClose, low: xClose, close: xClose, volume: 1_000 },
-        { symbol: 'Y', market: 'KR' as const, timeframe: '1d' as const, tsMs: ts, open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000 },
-      );
-    }
-    seedDailyBars(ctx.container.database.db, candles);
-    await seedCorporateActionCoverage(ctx.container, ['X', 'Y'], yearRange(2024, 2025));
+      const candles = [];
+      for (let ts = CANDLE_START_MS; ts <= Date.parse(`${EFFECTIVE_DATE}T00:00:00Z`); ts += 86_400_000) {
+        const daysFromEffective = Math.round((Date.parse(`${EFFECTIVE_DATE}T00:00:00Z`) - ts) / 86_400_000);
+        const xClose = daysFromEffective >= 4 ? 1_000 : 1_000 - (4 - daysFromEffective) * 100;
+        candles.push(
+          { symbol: 'X', market: 'KR' as const, timeframe: '1d' as const, tsMs: ts, open: xClose, high: xClose, low: xClose, close: xClose, volume: 1_000 },
+          { symbol: 'Y', market: 'KR' as const, timeframe: '1d' as const, tsMs: ts, open: 1_000, high: 1_000, low: 1_000, close: 1_000, volume: 1_000 },
+        );
+      }
+      seedDailyBars(ctx.container.database.db, candles);
+      await seedCorporateActionCoverage(ctx.container, ['X', 'Y'], yearRange(2024, 2025));
 
     // PER stage: X·Y는 순이익이 있어 통과하고, Z는 재무가 전혀 없어 missing 제외된다.
     // Z 는 coverage만 있고 fact 행은 없는 "시도했지만 공시 0건" 상태다.
-    const netIncomeFacts: Fact[] = ['X', 'Y'].flatMap((symbol) =>
+      const netIncomeFacts: Fact[] = ['X', 'Y'].flatMap((symbol) =>
       [40, 30, 20, 10].map((value, offset) => ({
         scope: 'SYMBOL' as const,
         key: symbol,
@@ -1230,22 +1159,25 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
         unit: 'KRW',
       })),
     );
-    const equityFacts: Fact[] = [
-      { scope: 'SYMBOL', key: 'X', field: 'TOTAL_EQUITY', periodKey: '2025Q1', asOfTsMs: Date.parse('2025-01-01T00:00:00Z'), value: 200, unit: 'KRW' },
-      { scope: 'SYMBOL', key: 'Y', field: 'TOTAL_EQUITY', periodKey: '2025Q1', asOfTsMs: Date.parse('2025-01-01T00:00:00Z'), value: 400, unit: 'KRW' },
-    ];
-    await ctx.container.factRepository.saveFacts([...netIncomeFacts, ...equityFacts]);
+      const equityFacts: Fact[] = [
+        { scope: 'SYMBOL', key: 'X', field: 'TOTAL_EQUITY', periodKey: '2025Q1', asOfTsMs: Date.parse('2025-01-01T00:00:00Z'), value: 200, unit: 'KRW' },
+        { scope: 'SYMBOL', key: 'Y', field: 'TOTAL_EQUITY', periodKey: '2025Q1', asOfTsMs: Date.parse('2025-01-01T00:00:00Z'), value: 400, unit: 'KRW' },
+      ];
+      await ctx.container.factRepository.saveFacts([...netIncomeFacts, ...equityFacts]);
     // manifest는 저장된 snapshot으로 만들어야 한다. coverage부터 심고 뒤에서 fact를
     // 넣는 순서는 운영에서는 불가능하며 새 무결성 검사가 정확히 stale로 판정한다.
-    seedFinancialCoverage(ctx.container, ['X', 'Y', 'Z'], [2024, 2025]);
+      seedFinancialCoverage(ctx.container, ['X', 'Y', 'Z'], [2024, 2025]);
+      try {
+        await use((target, options) => injectPreparedPreview(target, options));
+      } finally {
+        await ctx.close();
+        restore();
+      }
+    },
   });
 
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  it('시가총액→PER→급하락 단계별로 N·missing 제외 수·effective date를 정확히 보고한다', async () => {
-    const res = await ctx.app.inject({
+  it('시가총액→PER→급하락 단계별로 N·missing 제외 수·effective date를 정확히 보고한다', async ({ ctx, cookie, preparedPreview }) => {
+    const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
       cookies: { qp_session: cookie },
@@ -1297,29 +1229,31 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
     });
   });
 
-  it.each([
+  for (const [direction, symbol] of [
     ['HIGH', 'X'],
     ['LOW', 'Y'],
-  ] as const)('ROE %s preview가 %s를 고르고 방향 진단을 반환한다', async (direction, symbol) => {
-    const res = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
-      payload: {
-        universeRule: {
-          markets: ['KOSPI'],
-          stages: [{ criterion: 'ROE', direction, limit: 1 }],
-          rebalanceInterval: { unit: 'DAY', value: 1 },
+  ] as const) {
+    it(`ROE ${direction} preview가 ${symbol}를 고르고 방향 진단을 반환한다`, async ({ ctx, cookie, preparedPreview }) => {
+      const res = await preparedPreview(ctx, {
+        method: 'POST',
+        url: '/api/v1/backtests/universe-preview',
+        cookies: { qp_session: cookie },
+        payload: {
+          universeRule: {
+            markets: ['KOSPI'],
+            stages: [{ criterion: 'ROE', direction, limit: 1 }],
+            rebalanceInterval: { unit: 'DAY', value: 1 },
+          },
+          period: { from: EFFECTIVE_DATE, to: EFFECTIVE_DATE },
+          strategyId: 'range-breakout',
+          parameters: {},
         },
-        period: { from: EFFECTIVE_DATE, to: EFFECTIVE_DATE },
-        strategyId: 'range-breakout',
-        parameters: {},
-      },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        schedule: [{ members: [{ symbol }] }],
+        diagnostics: [{ stages: [{ criterion: 'ROE', direction, eligibleCount: 2, selectedCount: 1 }] }],
+      });
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({
-      schedule: [{ members: [{ symbol }] }],
-      diagnostics: [{ stages: [{ criterion: 'ROE', direction, eligibleCount: 2, selectedCount: 1 }] }],
-    });
-  });
+  }
 });

@@ -1,7 +1,7 @@
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { readBacktestJobs } from '../helpers/backtest-jobs.js';
 import { and, desc, eq, gte, lte } from 'drizzle-orm';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { ENGINE_VERSION } from '../../src/runtime/modules/backtest/domain/engine.js';
 import { UnsafeBacktestSymbolIdentityError } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import { FACTS_SLICE } from '../../src/runtime/modules/market-data/application/symbol-service.js';
@@ -19,10 +19,14 @@ import {
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import {
   createTestAdmin,
-  createTestApp,
-  installPreparedSubmissionFixture,
   type TestApp,
 } from '../helpers/test-app.js';
+import { authenticatedTest as base, type TestAppFactory } from '../helpers/test-fixtures.js';
+import { prepareSubmission, type PreparedSubmission } from '../helpers/backtest-preparation.js';
+import {
+  installEmptyDartSyncStub,
+  withSparseQueuePreparation,
+} from '../helpers/backtest-preparation-stubs.js';
 import {
   registerSymbols,
   seedCorporateActionCoverage,
@@ -148,37 +152,43 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
 }
 
 describe('backtest job queue (스펙 §10, §14)', () => {
-  let ctx: TestApp;
-  let cookie: string;
-  let dailyCandles: Candle[];
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-    const { username, password } = await createTestAdmin(ctx.container);
-    const login = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/auth/login',
-      payload: { username, password },
-    });
-    cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
-    // 20년 월별 유니버스를 준비하는 취소 테스트도 포함한다. full suite의 병렬 부하에서
-    // 준비만 5초를 넘을 수 있으므로 이 파일의 fixture 준비 예산만 현실화한다.
-    installPreparedSubmissionFixture(ctx, { preparationTimeoutMs: 15_000 });
-
+  interface Scenario {
+    readonly ctx: TestApp;
+    readonly cookie: string;
+    readonly dailyCandles: Candle[];
+    readonly apps: TestAppFactory;
+    prepare(payload: BacktestRequest): Promise<PreparedSubmission>;
+  }
+  const it = base.extend<{ scenario: Scenario }>({
+    scenario: async ({ ctx, cookie, apps, signal }, use) => {
+      const restoreDart = installEmptyDartSyncStub(ctx);
     registerSymbols(ctx.container, 'KR', ['005930']);
-    dailyCandles = buildTrendingDailyCandles();
+      const dailyCandles = buildTrendingDailyCandles();
     seedDailyBars(ctx.container.database.db, dailyCandles);
     // 종목 마스터 — 유니버스 규칙(스펙 2026-08-05)이 여기서 종목을 골라낸다
     seedMaster(ctx.container, REBALANCE_DATES);
     // 자본변동 게이트(Task 6) — 수집을 마쳤다고 표시해야 제출이 통과한다
     await seedCorporateActionCoverage(ctx.container, ['005930'], ACTION_COVERAGE_YEARS);
+      try {
+        await use({
+          ctx,
+          cookie,
+          dailyCandles,
+          apps,
+          async prepare(payload) {
+            return withSparseQueuePreparation(ctx, payload, () =>
+              prepareSubmission(ctx, cookie, payload, { signal, timeoutMs: 15_000 }));
+          },
+        });
+      } finally {
+        await ctx.close();
+        restoreDart();
+      }
+    },
   });
 
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  it('상세 조회는 멤버 원문 대신 최초 구성과 편입·편출 요약을 반환한다', async () => {
+  it('상세 조회는 멤버 원문 대신 최초 구성과 편입·편출 요약을 반환한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const job = ctx.container.jobQueue.enqueue(buildRequest(), [
       {
         rebalanceDate: '2026-01-05',
@@ -220,7 +230,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(body.job).not.toHaveProperty('universeScheduleJson');
   });
 
-  it('저장된 멤버십 일정 JSON이 손상돼도 상세 조회와 나머지 결과는 유지한다', async () => {
+  it('저장된 멤버십 일정 JSON이 손상돼도 상세 조회와 나머지 결과는 유지한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const job = ctx.container.jobQueue.enqueue(buildRequest());
     ctx.container.database.db
       .update(backtestJobs)
@@ -238,16 +249,18 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(response.json().universeRebalancing).toEqual([]);
   });
 
-  it('runs a backtest end-to-end in a child process', { timeout: 90_000 }, async () => {
+  it('runs a backtest end-to-end in a child process', { timeout: 90_000 }, async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     // 성공 경로는 요청 종료일까지 가격 봉이 완전해야 한다. 이전 43봉 픽스처는
     // 3월 초에 끝나면서도 6월 말 결과를 정상 완료해 B-001을 재현하고 있었다.
-    dailyCandles = buildTrendingDailyCandles('005930', 127);
-    seedDailyBars(ctx.container.database.db, dailyCandles);
+    const completeCandles = buildTrendingDailyCandles('005930', 127);
+    seedDailyBars(ctx.container.database.db, completeCandles);
 
     // 제출 시점 pin 이 실제 재무 버전 상태를 반영하는지 검증하려면 버전이 하나는
     // 있어야 한다 — facts 동기화가 실제로 한 번 있었다고 가정한다.
     ctx.container.symbolService.bumpVersion('005930', FACTS_SLICE, 'fact-sync:seed', Date.now());
 
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -309,7 +322,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         total: expect.any(Number),
       },
       input: {
-        candleCount: dailyCandles.length,
+        candleCount: completeCandles.length,
         symbolCount: 1,
       },
       output: {
@@ -425,7 +438,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(seriesBody.equity.length).toBeLessThanOrEqual(1_000);
     // 완전한 성공 픽스처의 마지막 실제 봉이 요청 종료일이므로 terminal anchor는
     // 같은 점을 재사용한다. 데이터가 일찍 끊긴 상태로 +1점을 만드는 경로가 아니다.
-    expect(seriesBody.totalEquityPoints).toBe(dailyCandles.length);
+    expect(seriesBody.totalEquityPoints).toBe(completeCandles.length);
 
     // SSE: 종료 상태 작업은 스냅샷 1건 후 종료
     const events = await ctx.app.inject({
@@ -446,7 +459,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const exportedEquity = (exported.json() as {
       equityPoints: Array<{ tsMs: number }>;
     }).equityPoints;
-    expect(exportedEquity).toHaveLength(dailyCandles.length);
+    expect(exportedEquity).toHaveLength(completeCandles.length);
     expect(exportedEquity.at(-1)?.tsMs).toBe(Date.parse('2026-06-30T00:00:00Z'));
 
     // clone → 새 QUEUED 작업
@@ -461,7 +474,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('제출 뒤 SCD identity가 바뀐 QUEUED 작업은 child가 결과 생성 전에 실패시킨다', {
     timeout: 30_000,
-  }, async () => {
+  }, async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -497,10 +512,12 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.resultsService.getTotalReturnPct(jobId)).toBeNull();
   });
 
-  it('요청한 부분 유니버스 종목만 제출 시점 버전으로 pin 한다', async () => {
+  it('요청한 부분 유니버스 종목만 제출 시점 버전으로 pin 한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     // 000660 이 시총 2위라 topN=1(기본값) 이면 유니버스에서 자연히 빠진다 —
     // 유니버스 후보 중 일부만 실제 실행에 소비되는 상황을 만든다.
     ctx.container.symbolService.addSymbol('000660', 'KR', 'SK하이닉스');
+    await scenario.prepare(buildRequest());
 
     const created = await ctx.app.inject({
       method: 'POST',
@@ -516,20 +533,23 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect([...new Set(pinned.map(({ code }) => code))]).toEqual(['005930']);
   });
 
-  it('요청 interval의 DAY 일정으로 유니버스를 해소해 job에 고정한다', async () => {
+  it('요청 interval의 DAY 일정으로 유니버스를 해소해 job에 고정한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    const payload: BacktestRequest = {
+      ...buildRequest(),
+      period: { from: MAIN_DATE, to: '2026-01-07' },
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
+        rebalanceInterval: { value: 1, unit: 'DAY' },
+      },
+    };
+    await scenario.prepare(payload);
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: {
-        ...buildRequest(),
-        period: { from: MAIN_DATE, to: '2026-01-07' },
-        universeRule: {
-          markets: ['KOSPI'],
-          stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
-          rebalanceInterval: { value: 1, unit: 'DAY' },
-        },
-      },
+      payload,
     });
 
     expect(created.statusCode).toBe(201);
@@ -544,27 +564,30 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     ]);
   });
 
-  it('2봉 랭킹 전략은 연속 실제 거래 봉 리밸런스를 enqueue 전에 거부한다', async () => {
+  it('2봉 랭킹 전략은 연속 실제 거래 봉 리밸런스를 enqueue 전에 거부한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     await seedValueQualityFacts(ctx.container, ['005930']);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     const before = ctx.container.jobQueue.countByStatus([
       'QUEUED', 'STARTING', 'RUNNING', 'CANCELLING', 'COMPLETED', 'FAILED', 'CANCELLED',
     ]);
+    const payload: BacktestRequest = {
+      ...buildRequest(),
+      strategyId: 'value-quality-rank',
+      parameters: { topN: 1, staleQuarters: 2 },
+      period: { from: MAIN_DATE, to: '2026-01-07' },
+      universeRule: {
+        markets: ['KOSPI'],
+        stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
+        rebalanceInterval: { value: 1, unit: 'DAY' },
+      },
+    };
+    await scenario.prepare(payload);
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: {
-        ...buildRequest(),
-        strategyId: 'value-quality-rank',
-        parameters: { topN: 1, staleQuarters: 2 },
-        period: { from: MAIN_DATE, to: '2026-01-07' },
-        universeRule: {
-          markets: ['KOSPI'],
-          stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
-          rebalanceInterval: { value: 1, unit: 'DAY' },
-        },
-      },
+      payload,
     });
 
     expect(created.statusCode).toBe(422);
@@ -576,7 +599,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     ])).toBe(before);
   });
 
-  it('claims jobs atomically in FIFO order', () => {
+  it('claims jobs atomically in FIFO order', ({ scenario }) => {
+    const { ctx } = scenario;
     const queue = ctx.container.jobQueue;
     const first = queue.enqueue(buildRequest());
     const second = queue.enqueue(buildRequest());
@@ -594,16 +618,19 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   it(
     'cancels an active job through the child process (스펙 §10 취소 시퀀스)',
     { timeout: 60_000 },
-    async () => {
+    async ({ scenario }) => {
+      const { ctx, cookie } = scenario;
       // 기본 픽스처(43봉)는 CANCEL_YIELD_INTERVAL_BARS(200봉)에 못 미쳐 양보가
       // 한 번도 안 걸린다. 양보 창을 여러 번 확보하도록 훨씬 긴 봉을 따로 심는다.
       seedDailyBars(ctx.container.database.db, buildTrendingDailyCandles('005930', 5_000));
 
+      const payload = { ...buildRequest(), period: { from: '2026-01-05', to: '2046-01-05' } };
+      await scenario.prepare(payload);
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
         cookies: { qp_session: cookie },
-        payload: { ...buildRequest(), period: { from: '2026-01-05', to: '2046-01-05' } },
+        payload,
       });
       const jobId = (created.json().job as { id: string }).id;
 
@@ -654,7 +681,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     },
   );
 
-  it('cancels a QUEUED job immediately', async () => {
+  it('cancels a QUEUED job immediately', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -673,7 +702,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.jobQueue.getJob(jobId)!.status).toBe('CANCELLED');
   });
 
-  it('제출 경고를 job 에 저장한다 — 토스트 10초 뒤에도 남아야 한다', () => {
+  it('제출 경고를 job 에 저장한다 — 토스트 10초 뒤에도 남아야 한다', ({ scenario }) => {
+    const { ctx } = scenario;
     const job = ctx.container.jobQueue.enqueue(buildRequest(), [], undefined, null, [
       '005930 자본변동 이력에 gap 이 있습니다',
     ]);
@@ -684,7 +714,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     ]);
   });
 
-  it('never regresses a terminal status via late progress or status writes (C1)', () => {
+  it('never regresses a terminal status via late progress or status writes (C1)', ({ scenario }) => {
+    const { ctx } = scenario;
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
     queue.claimNextLease({ agentId: 'agent-1', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 }); // QUEUED → STARTING
@@ -702,7 +733,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(final.progressBars).not.toBe(999); // 종료 후 진행률도 동결
   });
 
-  it('does not let progress writes disturb CANCELLING (C1)', () => {
+  it('does not let progress writes disturb CANCELLING (C1)', ({ scenario }) => {
+    const { ctx } = scenario;
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
     queue.claimNextLease({ agentId: 'agent-1', leaseTokenHash: 'a'.repeat(64), leaseExpiresAtMs: Date.now() + 90_000, runnerVersion: 'test', maxAttempts: 3 });
@@ -716,7 +748,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(queue.getJob(job.id)!.progressBars).toBe(50);
   });
 
-  it('같은 백테스트 진행률의 heartbeat는 수신 시각만 갱신한다', () => {
+  it('같은 백테스트 진행률의 heartbeat는 수신 시각만 갱신한다', ({ scenario }) => {
+    const { ctx } = scenario;
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
     const tokenHash = 'a'.repeat(64);
@@ -740,7 +773,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
   });
 
-  it('결과 전송·검증 활동은 현재 attempt의 유효한 lease만 갱신한다', () => {
+  it('결과 전송·검증 활동은 현재 attempt의 유효한 lease만 갱신한다', ({ scenario }) => {
+    const { ctx } = scenario;
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
     const tokenHash = 'a'.repeat(64);
@@ -763,7 +797,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     })).toBe(false);
   });
 
-  it('recovers orphaned active jobs as INTERRUPTED on restart (스펙 §10)', () => {
+  it('recovers orphaned active jobs as INTERRUPTED on restart (스펙 §10)', ({ scenario }) => {
+    const { ctx } = scenario;
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
     queue.setStatus(job.id, 'RUNNING', { pid: 999_999_999 });
@@ -774,7 +809,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(queue.getJob(job.id)!.error).toContain('복제');
   });
 
-  it('서버 재시작은 유효한 에이전트 리스를 보존한다', () => {
+  it('서버 재시작은 유효한 에이전트 리스를 보존한다', ({ scenario }) => {
+    const { ctx } = scenario;
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
     queue.claimNextLease({
@@ -790,7 +826,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   });
 
-  it('refuses to delete non-terminal jobs', async () => {
+  it('refuses to delete non-terminal jobs', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const queue = ctx.container.jobQueue;
     const job = queue.enqueue(buildRequest());
 
@@ -810,7 +847,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(allowed.statusCode).toBe(204);
   });
 
-  it('rejects requests referencing unknown entities', async () => {
+  it('rejects requests referencing unknown entities', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const badStrategy = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -842,7 +880,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(badParams.statusCode).toBe(400);
   });
 
-  it('준비 완료 뒤 발견된 종목 identity 오류를 신규 제출과 복제에서 422로 반환한다', async () => {
+  it('준비 완료 뒤 발견된 종목 identity 오류를 신규 제출과 복제에서 422로 반환한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const source = ctx.container.jobQueue.enqueue(buildRequest());
     ctx.container.backtestPreparationOrchestrator.getReadyPreviewForWizard = () => {
       throw new UnsafeBacktestSymbolIdentityError('기존 등록 종목의 표준코드가 선택된 증권과 다릅니다.');
@@ -866,7 +905,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((cloned.json() as { error: string }).error).toContain('표준코드');
   });
 
-  it('준비 완료 뒤 등록 identity가 사라지면 모든 실행 생성 경로를 422로 차단한다', async () => {
+  it('준비 완료 뒤 등록 identity가 사라지면 모든 실행 생성 경로를 422로 차단한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -920,7 +961,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     }
   });
 
-  it('전체 SCD에서 단축코드 재사용이 발견되면 캐시·복제 실행 경로를 모두 차단한다', async () => {
+  it('전체 SCD에서 단축코드 재사용이 발견되면 캐시·복제 실행 경로를 모두 차단한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -997,7 +1040,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(draft.json().blockers[0]).toMatch(/단축코드 005930.*여러 표준코드/);
   });
 
-  it('reports schema violations in Korean, not raw Zod English (M9 마무리)', async () => {
+  it('reports schema violations in Korean, not raw Zod English (M9 마무리)', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const badBody = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -1010,7 +1054,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(message).not.toMatch(/Too small|Invalid|expected/i);
   });
 
-  it('기간에 봉이 전혀 없는 종목은 준비에서 제외하고 대체 후보가 없으면 완료하지 않는다', async () => {
+  it('기간에 봉이 전혀 없는 종목은 준비에서 제외하고 대체 후보가 없으면 완료하지 않는다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     // 종목 마스터는 이 날짜를 커버하지만(coverage 는 넓은 고정 구간) 가격 데이터는
     // 2026-01-05 부터다 — 그보다 훨씬 앞선 구간은 확실히 0봉이다
     const noData = await ctx.app.inject({
@@ -1023,23 +1068,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((noData.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
   });
 
-  it('리밸런스 적용에 필요한 최소 구간만 커버되면 기간 중 상장 상태를 모르므로 제출을 거부한다', async () => {
+  it('리밸런스 적용에 필요한 최소 구간만 커버되면 기간 중 상장 상태를 모르므로 제출을 거부한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const request = buildRequest();
-    const preparation = ctx.container.backtestPreparationOrchestrator.start({
-      universeRule: request.universeRule,
-      period: request.period,
-      strategyId: request.strategyId,
-      parameters: request.parameters,
-    });
-    await waitFor(() => {
-      const status = ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status;
-      return status === 'COMPLETED' || status === 'FAILED' || status === 'CANCELLED';
-    }, 5_000);
-    expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED');
+    const prepared = await scenario.prepare(request);
 
     // 준비 결과를 이미 읽은 뒤의 데이터 변경을 재현해 제출 자체의 방어선을 검증한다.
     vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'getReadyPreviewForWizard')
-      .mockReturnValue(ctx.container.backtestPreparationOrchestrator.getPreview(preparation.id));
+      .mockReturnValue(ctx.container.backtestPreparationOrchestrator.getPreview(prepared.preparationJobId));
 
     // 준비 뒤 전체 coverage를 리밸런스별 '적용 거래일~요청일' 섬으로 바꾼다.
     // 휴일 리밸런스는 직전 거래일까지 같은 커버 구간에 있어야 resolver가 일정을
@@ -1072,7 +1108,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((response.json() as { error: string }).error).toContain('기간 전체');
   });
 
-  it('제출 뒤 종목 마스터 기간 coverage가 사라져도 worker가 실행 전에 중단한다', async () => {
+  it('제출 뒤 종목 마스터 기간 coverage가 사라져도 worker가 실행 전에 중단한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -1104,7 +1142,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
   });
 
-  it('복제 준비도 봉 없는 종목을 제외한다 — 대체 후보까지 없으면 준비가 필요하다', async () => {
+  it('복제 준비도 봉 없는 종목을 제외한다 — 대체 후보까지 없으면 준비가 필요하다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(),
       period: { from: NO_CANDLE_DATE, to: '2020-12-31' },
@@ -1119,7 +1158,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((cloned.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
   });
 
-  it('복제 준비도 재무가 없는 종목을 제외한다 — 대체 후보까지 없으면 준비가 필요하다', async () => {
+  it('복제 준비도 재무가 없는 종목을 제외한다 — 대체 후보까지 없으면 준비가 필요하다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(),
       strategyId: 'value-quality-rank',
@@ -1135,12 +1175,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((cloned.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
   });
 
-  it.each([
+  for (const route of [
     'new',
     'clone',
     'clone-configured',
     'clone-random-seeds',
-  ] as const)('$case 경로는 준비 확인 직후 재무 coverage가 사라져도 생성하지 않는다', async (route) => {
+  ] as const) {
+    it(`${route} 경로는 준비 확인 직후 재무 coverage가 사라져도 생성하지 않는다`, async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const valueRequest: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
@@ -1149,6 +1191,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     };
     await seedValueQualityFacts(ctx.container, ['005930']);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    await scenario.prepare(valueRequest);
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: valueRequest,
     });
@@ -1175,8 +1218,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       ctx.container.backtestPreparationOrchestrator.getCachedPreview = () => cached;
     }
     if (route === 'new' || route === 'clone') {
-      // 공용 테스트 fixture가 409를 받으면 preparation을 자동 실행한다. 이 race에서는
-      // 결측을 다시 채우지 않아 최초 409 응답 자체와 job 불변을 관찰한다.
+      // 이 race에서는 결측을 다시 채우지 않아 최초 409와 job 불변을 관찰한다.
       ctx.container.factSyncService.sync = async () => ({
         savedFacts: 0,
         gapCount: 0,
@@ -1210,14 +1252,17 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((rejected.json() as { message: string }).message).toMatch(/coverage.*2025~2026년.*005930/);
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobs);
     expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
-  });
+    });
+  }
 
-  it.each([
+  for (const route of [
     'new',
     'clone',
     'clone-configured',
     'clone-random-seeds',
-  ] as const)('%s 경로는 검증 직후 실행 봉이 사라지면 500 대신 재준비 409를 반환한다', async (route) => {
+  ] as const) {
+    it(`${route} 경로는 검증 직후 실행 봉이 사라지면 500 대신 재준비 409를 반환한다`, async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const valueRequest: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
@@ -1226,6 +1271,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     };
     await seedValueQualityFacts(ctx.container, ['005930']);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    await scenario.prepare(valueRequest);
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: valueRequest,
     });
@@ -1241,7 +1287,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     expect(cached).not.toBeNull();
     if (route === 'new' || route === 'clone') {
-      // 자동 준비 fixture가 첫 409를 숨겨 두 번째 요청의 400으로 바꾸지 않게 하고,
       // 현재 preview 재계산보다 뒤인 validateSubmission 경계에서만 봉을 지운다.
       vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'getReadyPreviewForWizard')
         .mockReturnValue(cached);
@@ -1312,9 +1357,11 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((rejected.json() as { message: string }).message).toContain('005930');
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobs);
     expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
-  });
+    });
+  }
 
-  it('재설정 및 복제 초안은 유니버스 준비와 무관하게 저장 요청을 복원한다', async () => {
+  it('재설정 및 복제 초안은 유니버스 준비와 무관하게 저장 요청을 복원한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const request = buildRequest();
     const job = ctx.container.jobQueue.enqueue(request);
 
@@ -1339,7 +1386,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
   });
 
-  it('제출된 원본은 저장 일정과 일치하는 준비 미리보기를 초안에서 재사용한다', async () => {
+  it('제출된 원본은 저장 일정과 일치하는 준비 미리보기를 초안에서 재사용한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -1366,7 +1415,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(preview?.uncoveredDates).toEqual([]);
   });
 
-  it('복제 초안은 현재 PIT fact와 재무 coverage drift를 함께 반영한다', async () => {
+  it('복제 초안은 현재 PIT fact와 재무 coverage drift를 함께 반영한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const request: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
@@ -1375,6 +1425,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     };
     await seedValueQualityFacts(ctx.container, ['005930']);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    await scenario.prepare(request);
 
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
@@ -1412,7 +1463,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(stale.json().reusablePreview).toBeNull();
   });
 
-  it('복제 초안은 cached preview의 기간 coverage를 현재 상태로 다시 판정한다', async () => {
+  it('복제 초안은 cached preview의 기간 coverage를 현재 상태로 다시 판정한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -1445,7 +1498,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
   });
 
-  it('복제 초안은 cached preview의 일봉 보유 상태를 현재 상태로 다시 판정한다', async () => {
+  it('복제 초안은 cached preview의 일봉 보유 상태를 현재 상태로 다시 판정한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     registerSymbols(ctx.container, 'KR', ['000660']);
     const periodCandles = buildTrendingDailyCandles('000660');
     seedDailyBars(ctx.container.database.db, [
@@ -1464,6 +1518,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     ]);
     await seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
     const request = { ...buildRequest(), universeRule: universeRule(2) };
+    await scenario.prepare(request);
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -1508,7 +1563,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
   });
 
-  it('재설정 복제는 준비 비영향 설정만 바뀌면 원본 유니버스를 재사용한다', async () => {
+  it('재설정 복제는 준비 비영향 설정만 바뀌면 원본 유니버스를 재사용한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -1550,7 +1607,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(changedPeriod.json().error).toBe('PREVIEW_REQUIRED');
   });
 
-  it('원본 재현성 pin이 없거나 손상되면 미리보기와 새 난수 복제를 강제한다', async () => {
+  it('원본 재현성 pin이 없거나 손상되면 미리보기와 새 난수 복제를 강제한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const pinPatches: Array<Partial<typeof backtestJobs.$inferInsert>> = [
       { universeJson: null, universeHash: null },
       { provenancePinJson: '{손상된 JSON' },
@@ -1558,6 +1617,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     ];
 
     for (const patch of pinPatches) {
+      await scenario.prepare(buildRequest());
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
@@ -1594,7 +1654,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.seedCloneBatchService.list()).toEqual([]);
   });
 
-  it('새 난수 100개는 중복 없이 저장하고 기존 QUEUED 상한만큼 순차 투입한다', async () => {
+  it('새 난수 100개는 중복 없이 저장하고 기존 QUEUED 상한만큼 순차 투입한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -1674,7 +1736,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(completed.items.every(({ item }) => item.state === 'DISPATCHED')).toBe(true);
   });
 
-  it('난수 복제 대기 중 identity 이력이 바뀌면 다음 자식 승격 전에 묶음을 실패시킨다', async () => {
+  it('난수 복제 대기 중 identity 이력이 바뀌면 다음 자식 승격 전에 묶음을 실패시킨다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -1721,7 +1785,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
-  it('난수 복제 대기 중 기간 coverage가 사라지면 다음 자식 승격 전에 묶음을 실패시킨다', async () => {
+  it('난수 복제 대기 중 기간 coverage가 사라지면 다음 자식 승격 전에 묶음을 실패시킨다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -1765,7 +1831,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
-  it('재무 전략 난수 복제 대기 중 필수 연도 coverage가 사라지면 추가 승격을 막는다', async () => {
+  it('재무 전략 난수 복제 대기 중 필수 연도 coverage가 사라지면 추가 승격을 막는다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const request: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
@@ -1774,6 +1841,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     };
     await seedValueQualityFacts(ctx.container, ['005930']);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    await scenario.prepare(request);
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
     });
@@ -1808,7 +1876,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
-  it('난수 복제 대기 중 기간 일봉이 사라지면 다음 자식 승격 전에 묶음을 실패시킨다', async () => {
+  it('난수 복제 대기 중 기간 일봉이 사라지면 다음 자식 승격 전에 묶음을 실패시킨다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     registerSymbols(ctx.container, 'KR', ['000660']);
     const request = { ...buildRequest(), universeRule: universeRule(2) };
     seedDailyBars(ctx.container.database.db, [
@@ -1826,6 +1895,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       ...buildTrendingDailyCandles('000660'),
     ]);
     await seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
+    await scenario.prepare(request);
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -1868,8 +1938,10 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
-  it('재설정 복제는 검토에서 동기화한 벤치마크로 불완전한 원본 pin을 보완한다', async () => {
+  it('재설정 복제는 검토에서 동기화한 벤치마크로 불완전한 원본 pin을 보완한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const body = buildRequest();
+    await scenario.prepare(body);
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: body,
     });
@@ -1896,7 +1968,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     }
   });
 
-  it('난수 비의존 전략은 API로도 난수 복제 묶음을 만들 수 없다', async () => {
+  it('난수 비의존 전략은 API로도 난수 복제 묶음을 만들 수 없다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
     });
@@ -1921,7 +1995,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     }
   });
 
-  it('재무 전략 난수 복제 대기 중 마지막 PIT 재무 행이 사라지면 추가 승격을 막는다', async () => {
+  it('재무 전략 난수 복제 대기 중 마지막 PIT 재무 행이 사라지면 추가 승격을 막는다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const request: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
@@ -1930,6 +2005,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     };
     await seedValueQualityFacts(ctx.container, ['005930']);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    await scenario.prepare(request);
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
     });
@@ -1964,7 +2040,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
-  it('난수 시드 실험 취소는 새 승격을 막고 대기 중인 자식도 취소한다', async () => {
+  it('난수 시드 실험 취소는 새 승격을 막고 대기 중인 자식도 취소한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
     });
@@ -1993,7 +2071,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(0);
   });
 
-  it('난수 시드 실험 취소는 실행 중 자식이 끝날 때까지 CANCELLING을 유지한다', async () => {
+  it('난수 시드 실험 취소는 실행 중 자식이 끝날 때까지 CANCELLING을 유지한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
     });
@@ -2037,7 +2117,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(cancelled.batch.completedAtMs).not.toBeNull();
   });
 
-  it('실행 중인 난수 실험 삭제는 막고 취소 완료 뒤에는 원본을 남긴 채 단독 삭제한다', async () => {
+  it('실행 중인 난수 실험 삭제는 막고 취소 완료 뒤에는 원본을 남긴 채 단독 삭제한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
     });
@@ -2086,7 +2168,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(childIds.every((id) => ctx.container.jobQueue.getJob(id) === null)).toBe(true);
   });
 
-  it('원본 삭제는 종료된 난수 실험 묶음과 모든 자식 백테스트를 함께 삭제한다', async () => {
+  it('원본 삭제는 종료된 난수 실험 묶음과 모든 자식 백테스트를 함께 삭제한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
     });
@@ -2127,7 +2211,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(childIds.every((childId) => ctx.container.jobQueue.getJob(childId) === null)).toBe(true);
   });
 
-  it('seed 자식의 신규 중첩 실험은 막고 기존 중첩은 활성 후손까지 검사해 재귀 삭제한다', async () => {
+  it('seed 자식의 신규 중첩 실험은 막고 기존 중첩은 활성 후손까지 검사해 재귀 삭제한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
     });
@@ -2211,7 +2297,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.jobQueue.getJob(sourceId)).not.toBeNull();
   });
 
-  it('난수 실험 목록은 기본 50개 job 페이지 밖의 원본 요약도 함께 반환한다', async () => {
+  it('난수 실험 목록은 기본 50개 job 페이지 밖의 원본 요약도 함께 반환한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
     });
@@ -2248,7 +2336,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     ]);
   });
 
-  it('초안은 방향 없는 기존 가격 변동 단계를 과거 LOW 방향으로 복원한다', async () => {
+  it('초안은 방향 없는 기존 가격 변동 단계를 과거 LOW 방향으로 복원한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const current = buildRequest();
     const job = ctx.container.jobQueue.enqueue({
       ...current,
@@ -2272,7 +2361,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     ]);
   });
 
-  it('재무가 필요한 원본도 유니버스 단계 전에는 blockers 없이 연다', async () => {
+  it('재무가 필요한 원본도 유니버스 단계 전에는 blockers 없이 연다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const request: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
@@ -2291,7 +2381,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(body.blockers).toEqual([]);
   });
 
-  it('여러 단계(PER 우선) 규칙도 유니버스 검증 없이 초안으로 복원한다', async () => {
+  it('여러 단계(PER 우선) 규칙도 유니버스 검증 없이 초안으로 복원한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(),
       universeRule: {
@@ -2315,18 +2406,21 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(body.blockers).toEqual([]);
   });
 
-  it('일부 종목만 봉이 없으면 그 종목을 제외하고 나머지로 제출한다', async () => {
+  it('일부 종목만 봉이 없으면 그 종목을 제외하고 나머지로 제출한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     // 종목을 하나 더 등록하고 topN 을 2로 올려 유니버스에 넣되 봉은 넣지 않는다 —
     // 준비가 이 종목만 제외하고 005930의 순위와 실행은 유지해야 한다.
     ctx.container.symbolService.addSymbol('000660', 'KR', null, 'KR7000660001');
     // 000660 도 unionSymbols 에 들어오므로 자본변동 게이트도 통과해 둬야 한다
     await seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
+    const payload = { ...buildRequest(), universeRule: universeRule(2) };
+    await scenario.prepare(payload);
 
     const partial = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { qp_session: cookie },
-      payload: { ...buildRequest(), universeRule: universeRule(2) },
+      payload,
     });
     expect(partial.statusCode).toBe(201);
     expect((partial.json() as { warnings: string[] }).warnings.join(' ')).toMatch(
@@ -2334,7 +2428,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     );
   });
 
-  it('봉이 없는 원본도 초기 단계에서는 coverage 검증 없이 연다', async () => {
+  it('봉이 없는 원본도 초기 단계에서는 coverage 검증 없이 연다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     // 봉이 없는 기간은 준비 완료 대상이 아니지만 유니버스 단계 전의 초안 복원을 막지 않는다.
     const request: BacktestRequest = {
       ...buildRequest(),
@@ -2354,7 +2449,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(body.blockers).toEqual([]);
   });
 
-  it('없는 작업의 초안 조회는 404를 반환한다', async () => {
+  it('없는 작업의 초안 조회는 404를 반환한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const missing = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/backtests/job_nope/clone-draft',
@@ -2364,10 +2460,10 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   });
 
-  it('대기열 상한을 넘는 제출을 429 로 거부한다 (신규·복제 공통)', async () => {
-    const small = await createTestApp({ MAX_QUEUED_BACKTESTS: '3' });
-    try {
-      installPreparedSubmissionFixture(small);
+  it('대기열 상한을 넘는 제출을 429 로 거부한다 (신규·복제 공통)', async ({ scenario }) => {
+    const { apps } = scenario;
+    const small = await apps.create({ env: { MAX_QUEUED_BACKTESTS: '3' } });
+    {
       const { username, password } = await createTestAdmin(small.container);
       const login = await small.app.inject({
         method: 'POST',
@@ -2381,9 +2477,19 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       seedMaster(small.container, [MAIN_DATE]);
       await seedCorporateActionCoverage(small.container, ['005930'], ACTION_COVERAGE_YEARS);
       const payload = buildRequest();
+      const restoreDart = installEmptyDartSyncStub(small);
+      try {
+        await withSparseQueuePreparation(small, payload, async () => {
+          await prepareSubmission(small, smallCookie, payload, {
+            signal: new AbortController().signal,
+          });
+        });
 
       // 오케스트레이터를 tick 하지 않으므로 전부 QUEUED 로 남는다
       for (let i = 0; i < 3; i += 1) {
+        await prepareSubmission(small, smallCookie, payload, {
+          signal: new AbortController().signal,
+        });
         const accepted = await small.app.inject({
           method: 'POST',
           url: '/api/v1/backtests',
@@ -2393,6 +2499,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         expect(accepted.statusCode).toBe(201);
       }
 
+      await prepareSubmission(small, smallCookie, payload, {
+        signal: new AbortController().signal,
+      });
       const rejected = await small.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
@@ -2410,12 +2519,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         cookies: { qp_session: smallCookie },
       });
       expect(clonedOverLimit.statusCode).toBe(429);
-    } finally {
-      await small.close();
+      } finally {
+        restoreDart();
+      }
     }
   });
 
-  it('기간이 뒤집힌 제출은 데이터 부족이 아니라 기간 오류로 거부한다', async () => {
+  it('기간이 뒤집힌 제출은 데이터 부족이 아니라 기간 오류로 거부한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const inverted = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',

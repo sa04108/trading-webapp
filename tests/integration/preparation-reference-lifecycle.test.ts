@@ -1,5 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createTestAdmin, createTestApp, installPreparedSubmissionFixture, type TestApp } from '../helpers/test-app.js';
+import { describe, expect, vi } from 'vitest';
+import { createTestAdmin, type TestApp } from '../helpers/test-app.js';
+import { authenticatedTest as base } from '../helpers/test-fixtures.js';
+import { installEmptyDartSyncStub } from '../helpers/backtest-preparation-stubs.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 import { PreparationReferenceService } from '../../src/server/modules/backtest/application/preparation-reference-service.js';
@@ -51,71 +53,57 @@ async function waitForPreparation(ctx: TestApp, id: string): Promise<void> {
 }
 
 describe('preparation reference lifecycle', () => {
-  let ctx: TestApp;
-  let cookie: string;
-  let otherCookie: string;
-  let userId: string;
-  let rawInject: TestApp['app']['inject'];
-
-  beforeEach(async () => {
-    ctx = await createTestApp();
-    const admin = await createTestAdmin(ctx.container);
-    userId = (ctx.container.database.sqlite.prepare(
-      'SELECT id FROM users WHERE username = ?',
-    ).get(admin.username) as { id: string }).id;
-    cookie = await login(ctx, admin.username, admin.password);
-    const other = await createTestAdmin(ctx.container, {
-      username: 'other-reference-user',
-      password: 'different-correct-password',
-    });
-    otherCookie = await login(ctx, other.username, other.password);
-
-    rawInject = ctx.app.inject.bind(ctx.app);
-    installPreparedSubmissionFixture(ctx);
-    registerSymbols(ctx.container, 'KR', ['005930', '000660']);
-    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [{
-      standardCode: 'KR7005930003',
-      shortCode: '005930',
-      name: '삼성전자',
-      market: 'KOSPI',
-      marketCapKrw: '500000000000000',
-    }, {
-      standardCode: 'KR7000660001',
-      shortCode: '000660',
-      name: 'SK하이닉스',
-      market: 'KOSPI',
-      marketCapKrw: '100000000000000',
-    }]);
-    seedDailyBars(ctx.container.database.db, [{
-      symbol: '005930',
-      market: 'KR',
-      timeframe: '1d',
-      tsMs: Date.parse('2026-01-05T00:00:00Z'),
-      open: 100,
-      high: 110,
-      low: 90,
-      close: 105,
-      volume: 1_000,
-    }]);
-    seedDailyBars(ctx.container.database.db, [{
-      symbol: '000660',
-      market: 'KR',
-      timeframe: '1d',
-      tsMs: Date.parse('2026-01-05T00:00:00Z'),
-      open: 100,
-      high: 110,
-      low: 90,
-      close: 105,
-      volume: 1_000,
-    }]);
-    await seedCorporateActionCoverage(ctx.container, ['005930', '000660'], [2026]);
+  type Scenario = { ctx: TestApp; cookie: string; otherCookie: string; userId: string };
+  const it = base.extend<{ scenario: Scenario }>({
+    scenario: async ({ ctx, admin, cookie }, use) => {
+      const restoreDart = installEmptyDartSyncStub(ctx);
+      const userId = (ctx.container.database.sqlite.prepare(
+        'SELECT id FROM users WHERE username = ?',
+      ).get(admin.username) as { id: string }).id;
+      const other = await createTestAdmin(ctx.container, {
+        username: 'other-reference-user',
+        password: 'different-correct-password',
+      });
+      const otherCookie = await login(ctx, other.username, other.password);
+      registerSymbols(ctx.container, 'KR', ['005930', '000660']);
+      seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [{
+        standardCode: 'KR7005930003',
+        shortCode: '005930',
+        name: '삼성전자',
+        market: 'KOSPI',
+        marketCapKrw: '500000000000000',
+      }, {
+        standardCode: 'KR7000660001',
+        shortCode: '000660',
+        name: 'SK하이닉스',
+        market: 'KOSPI',
+        marketCapKrw: '100000000000000',
+      }]);
+      for (const symbol of ['005930', '000660']) {
+        seedDailyBars(ctx.container.database.db, [{
+          symbol,
+          market: 'KR',
+          timeframe: '1d',
+          tsMs: Date.parse('2026-01-05T00:00:00Z'),
+          open: 100,
+          high: 110,
+          low: 90,
+          close: 105,
+          volume: 1_000,
+        }]);
+      }
+      await seedCorporateActionCoverage(ctx.container, ['005930', '000660'], [2026]);
+      try {
+        await use({ ctx, cookie, otherCookie, userId });
+      } finally {
+        await ctx.close();
+        restoreDart();
+      }
+    },
   });
 
-  afterEach(async () => {
-    await ctx.close();
-  });
-
-  it('preview ID만 초안에 저장하고 제출·복제에서 같은 준비 결과를 공유한다', async () => {
+  it('preview ID만 초안에 저장하고 제출·복제에서 같은 준비 결과를 공유한다', async ({ scenario }) => {
+    const { ctx, cookie, otherCookie, userId } = scenario;
     const previewRequest = {
       universeRule: request.universeRule,
       period: request.period,
@@ -248,7 +236,8 @@ describe('preparation reference lifecycle', () => {
     ).get(preparationId)).toBeUndefined();
   });
 
-  it('같은 hash의 최신 준비가 있어도 원본 clone은 고정된 preparation을 재사용한다', async () => {
+  it('같은 hash의 최신 준비가 있어도 원본 clone은 고정된 preparation을 재사용한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
     const previewRequest = {
       universeRule: request.universeRule,
       period: request.period,
@@ -296,7 +285,7 @@ describe('preparation reference lifecycle', () => {
 
     const resolver = vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'getReadyPreviewForWizard')
       .mockImplementation(() => { throw new Error('clone이 resolver를 호출했습니다'); });
-    const cloned = await rawInject({
+    const cloned = await ctx.app.inject({
       method: 'POST', url: `/api/v1/backtests/${sourceId}/clone`, cookies: { qp_session: cookie },
     });
     expect(cloned.statusCode).toBe(201);
@@ -311,13 +300,14 @@ describe('preparation reference lifecycle', () => {
       method: 'DELETE', url: `/api/v1/backtests/${sourceId}`, cookies: { qp_session: cookie },
     });
     expect(deleted.statusCode).toBe(204);
-    const cloneAgain = await rawInject({
+    const cloneAgain = await ctx.app.inject({
       method: 'POST', url: `/api/v1/backtests/${cloneId}/clone`, cookies: { qp_session: cookie },
     });
     expect(cloneAgain.statusCode).toBe(201);
   });
 
-  it('미리보기 소유권이 없는 사용자의 제출을 자동 준비 fixture 없이 거부한다', async () => {
+  it('미리보기 소유권이 없는 사용자의 제출을 자동 준비 fixture 없이 거부한다', async ({ scenario }) => {
+    const { ctx, cookie, otherCookie } = scenario;
     const preview = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: cookie },
       payload: {
@@ -340,14 +330,15 @@ describe('preparation reference lifecycle', () => {
       },
     });
 
-    const rejected = await rawInject({
+    const rejected = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: otherCookie }, payload: request,
     });
     expect(rejected.statusCode).toBe(409);
     expect(rejected.json<{ error: string }>().error).toBe('PREPARATION_REQUIRED');
   });
 
-  it('enqueue 직전 원본 데이터가 바뀌면 준비 필요 응답과 소유권을 보존한다', async () => {
+  it('enqueue 직전 원본 데이터가 바뀌면 준비 필요 응답과 소유권을 보존한다', async ({ scenario }) => {
+    const { ctx, cookie, userId } = scenario;
     const previewRequest = {
       universeRule: request.universeRule,
       period: request.period,
@@ -373,7 +364,7 @@ describe('preparation reference lifecycle', () => {
       ).run();
       return originalEnqueue(...args);
     });
-    const rejected = await rawInject({
+    const rejected = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
     });
     expect(rejected.statusCode).toBe(409);
@@ -389,7 +380,8 @@ describe('preparation reference lifecycle', () => {
     ).get(preparationId)).toEqual({ id: preparationId });
   });
 
-  it('초안 교체와 삭제는 이전 terminal 준비를 수집하고 다른 사용자 참조는 보존한다', async () => {
+  it('초안 교체와 삭제는 이전 terminal 준비를 수집하고 다른 사용자 참조는 보존한다', async ({ scenario }) => {
+    const { ctx, cookie, otherCookie, userId } = scenario;
     const previewRequest = {
       universeRule: request.universeRule,
       period: request.period,
@@ -478,7 +470,8 @@ describe('preparation reference lifecycle', () => {
     ).all(preparationId, replacementId)).toEqual([]);
   });
 
-  it('enqueue 실패는 wizard 참조와 초안을 같은 트랜잭션으로 보존한다', async () => {
+  it('enqueue 실패는 wizard 참조와 초안을 같은 트랜잭션으로 보존한다', async ({ scenario }) => {
+    const { ctx, cookie, userId } = scenario;
     const previewRequest = {
       universeRule: request.universeRule,
       period: request.period,
