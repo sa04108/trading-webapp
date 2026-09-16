@@ -6,8 +6,9 @@ import path from 'node:path';
 import { BacktestResultArtifactRejectedError } from '../../src/runtime/modules/backtest/application/backtest-result-artifact.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import { describe, expect, vi } from 'vitest';
+import { test as base } from '../helpers/test-fixtures.js';
+import type { TestApp } from '../helpers/test-app.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import type { AgentLease, ServerAgentMessage } from '../../src/shared/agent-protocol.js';
 
@@ -26,31 +27,47 @@ class Peer extends EventEmitter {
   submit(value: unknown) { this.emit('message', Buffer.from(JSON.stringify(value)), false); }
   job(): AgentLease | undefined { const message = this.received.find((m) => m.type === 'JOB'); return message?.type === 'JOB' ? message.lease : undefined; }
 }
-let ctx: TestApp;
-let id: string;
-let token: string;
 const dataset = { version: 1, datasetId: randomUUID(), sourceRevision: 0, collectionVersion: readRuntimeVersions().collectionVersion, schemaVersion: 1, sha256: 'a'.repeat(64), bytes: 1 };
-beforeEach(async () => {
-  ctx = await createTestApp({}, undefined, true);
-  const credential = ctx.container.agentCoordinator.registry.issue('device');
-  id = credential.id; token = credential.token;
-  vi.spyOn(ctx.container.agentCoordinator.snapshots, 'ensureLatest').mockResolvedValue(dataset);
+const agentBase = base.extend({ appOptions: { agentPreparation: true } });
+const it = agentBase.extend<{
+  scenario: {
+    ctx: TestApp;
+    id: string;
+    token: string;
+    enqueue(): void;
+    connect(runnerVersion?: string): Promise<Peer>;
+  };
+}>({
+  scenario: async ({ ctx }, use) => {
+    const credential = ctx.container.agentCoordinator.registry.issue('device');
+    vi.spyOn(ctx.container.agentCoordinator.snapshots, 'ensureLatest').mockResolvedValue(dataset);
+    try {
+      await use({
+        ctx,
+        id: credential.id,
+        token: credential.token,
+        enqueue() {
+          ctx.container.database.sqlite.prepare("INSERT INTO backtest_jobs (id, status, request_json, strategy_id, universe_rule_json, universe_schedule_json, created_at_ms) VALUES ('job-one', 'QUEUED', '{}', 'test', '{}', '[]', 1)").run();
+        },
+        async connect(runnerVersion = ctx.container.agentCoordinator.runnerVersion) {
+          const peer = new Peer();
+          ctx.container.agentCoordinator.connect(credential.id, peer as unknown as WebSocket);
+          peer.submit({ type: 'HELLO', protocolVersion: 3, runnerVersion });
+          await vi.waitFor(() => expect(peer.received.length).toBeGreaterThan(0));
+          return peer;
+        },
+      });
+    } finally {
+      await ctx.close();
+      vi.restoreAllMocks();
+    }
+  },
 });
-afterEach(async () => { await ctx.close(); vi.restoreAllMocks(); });
-function enqueue() {
-  ctx.container.database.sqlite.prepare("INSERT INTO backtest_jobs (id, status, request_json, strategy_id, universe_rule_json, universe_schedule_json, created_at_ms) VALUES ('job-one', 'QUEUED', '{}', 'test', '{}', '[]', 1)").run();
-}
-async function connect(runnerVersion = ctx.container.agentCoordinator.runnerVersion): Promise<Peer> {
-  const peer = new Peer();
-  ctx.container.agentCoordinator.connect(id, peer as unknown as WebSocket);
-  peer.submit({ type: 'HELLO', protocolVersion: 3, runnerVersion });
-  await vi.waitFor(() => expect(peer.received.length).toBeGreaterThan(0));
-  return peer;
-}
 function capacity(peer: Peer, slots = 1) { peer.submit({ type: 'CAPACITY', slots, datasetVersion: 1, maxBars: 8_000_000 }); }
 
 describe('연결과 리스 수명 분리', () => {
-  it('종료 시 등록된 결과 작업을 abort하고 정리 완료까지 기다린다', async () => {
+  it('종료 시 등록된 결과 작업을 abort하고 정리 완료까지 기다린다', async ({ scenario }) => {
+    const { ctx } = scenario;
     const finished = deferred();
     let shutdownSignal: AbortSignal | null = null;
     const operation = ctx.container.agentCoordinator.runResultOperation(async (signal) => {
@@ -79,7 +96,8 @@ describe('연결과 리스 수명 분리', () => {
     expect(stopped).toBe(true);
   });
 
-  it('종료 전에 시작한 WebSocket 메시지 handler를 끝까지 기다린다', async () => {
+  it('종료 전에 시작한 WebSocket 메시지 handler를 끝까지 기다린다', async ({ scenario }) => {
+    const { ctx, id } = scenario;
     const snapshot = deferred<typeof dataset>();
     vi.mocked(ctx.container.agentCoordinator.snapshots.ensureLatest)
       .mockReturnValueOnce(snapshot.promise);
@@ -102,7 +120,8 @@ describe('연결과 리스 수명 분리', () => {
     expect(stopped).toBe(true);
   });
 
-  it('배정 전 데이터 동기화는 작업 lease 없이 장치명과 바이트 진행을 표시한다', async () => {
+  it('배정 전 데이터 동기화는 작업 lease 없이 장치명과 바이트 진행을 표시한다', async ({ scenario }) => {
+    const { ctx, connect } = scenario;
     ctx.container.database.sqlite.prepare(
       "INSERT INTO backtest_preparation_jobs (id, request_hash, request_json, status, phase, created_at_ms, updated_at_ms) VALUES ('prep-sync', 'hash-sync', '{}', 'QUEUED', 'MARKET_DATA', 1, 1)",
     ).run();
@@ -124,7 +143,8 @@ describe('연결과 리스 수명 분리', () => {
     });
   });
 
-  it('재접속과 중복 capacity 통지가 이미 배정한 작업을 중복 실행하지 않는다', async () => {
+  it('재접속과 중복 capacity 통지가 이미 배정한 작업을 중복 실행하지 않는다', async ({ scenario }) => {
+    const { ctx, enqueue, connect } = scenario;
     enqueue();
     const first = await connect(); capacity(first); capacity(first);
     await vi.waitFor(() => expect(first.job()).toBeDefined());
@@ -138,7 +158,8 @@ describe('연결과 리스 수명 분리', () => {
     expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(8_000_000);
   });
 
-  it('업데이트 전에 리스를 무효화하고 늦은 완료를 거부하며 계산 실패 횟수는 늘리지 않는다', async () => {
+  it('업데이트 전에 리스를 무효화하고 늦은 완료를 거부하며 계산 실패 횟수는 늘리지 않는다', async ({ scenario }) => {
+    const { ctx, enqueue, connect } = scenario;
     enqueue();
     const first = await connect(); capacity(first);
     await vi.waitFor(() => expect(first.job()).toBeDefined());
@@ -155,7 +176,8 @@ describe('연결과 리스 수명 분리', () => {
     expect(ctx.container.jobQueue.getJob('job-one')).toMatchObject({ status: 'STARTING', leaseFailures: 0 });
   });
 
-  it('미인증 데이터 요청과 과대 결과 업로드를 파일 처리 전에 거부한다', async () => {
+  it('미인증 데이터 요청과 과대 결과 업로드를 파일 처리 전에 거부한다', async ({ scenario }) => {
+    const { ctx, id, token, enqueue } = scenario;
     expect((await ctx.app.inject({ method: 'GET', url: '/api/agents/datasets/1' })).statusCode).toBe(401);
     enqueue();
     ctx.container.agentCoordinator.backtests.claim(id, readRuntimeVersions().executionVersion);
@@ -168,7 +190,8 @@ describe('연결과 리스 수명 분리', () => {
     expect(receive).not.toHaveBeenCalled();
   });
 
-  it('결과 검증 자식이 거부한 파일은 일시 장애 대신 422로 응답한다', async () => {
+  it('결과 검증 자식이 거부한 파일은 일시 장애 대신 422로 응답한다', async ({ scenario }) => {
+    const { ctx, id, token, enqueue } = scenario;
     enqueue();
     const claim = ctx.container.agentCoordinator.backtests.claim(id, readRuntimeVersions().executionVersion);
     if (claim.status !== 'CLAIMED') throw new Error('리스 배정 실패');
@@ -180,7 +203,8 @@ describe('연결과 리스 수명 분리', () => {
     expect(response.statusCode).toBe(422);
   });
 
-  it('서버 종료가 전송 중인 결과 업로드를 중단하고 503으로 응답한다', async () => {
+  it('서버 종료가 전송 중인 결과 업로드를 중단하고 503으로 응답한다', async ({ scenario }) => {
+    const { ctx, id, token, enqueue } = scenario;
     enqueue();
     const claim = ctx.container.agentCoordinator.backtests.claim(id, readRuntimeVersions().executionVersion);
     if (claim.status !== 'CLAIMED') throw new Error('리스 배정 실패');
@@ -214,7 +238,8 @@ describe('연결과 리스 수명 분리', () => {
     await stopping;
   });
 
-  it('준비된 연결도 실행 버전이 달라지면 유휴 실행기에서 즉시 제외한다', async () => {
+  it('준비된 연결도 실행 버전이 달라지면 유휴 실행기에서 즉시 제외한다', async ({ scenario }) => {
+    const { ctx, connect } = scenario;
     const peer = await connect(); capacity(peer);
     await vi.waitFor(() => expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(8_000_000));
     peer.submit({ type: 'HELLO', protocolVersion: 3, runnerVersion: 'b'.repeat(64) });
@@ -226,7 +251,8 @@ describe('연결과 리스 수명 분리', () => {
     expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(2_000_000);
   });
 
-  it('클라이언트 다운로드는 연결 이력 없이 유효한 토큰으로 허용하고 해제 후에는 거부한다', async () => {
+  it('클라이언트 다운로드는 연결 이력 없이 유효한 토큰으로 허용하고 해제 후에는 거부한다', async ({ scenario }) => {
+    const { ctx, id, token } = scenario;
     const exists = fs.existsSync;
     const files = new Set([
       path.resolve('dist/clients/manifest.json'),
@@ -248,7 +274,8 @@ describe('연결과 리스 수명 분리', () => {
     }
   });
 
-  it('배포 SHA가 바뀌어도 동일 내용 버전 클라이언트는 환영하고 실행 버전으로 배정한다', async () => {
+  it('배포 SHA가 바뀌어도 동일 내용 버전 클라이언트는 환영하고 실행 버전으로 배정한다', async ({ scenario }) => {
+    const { ctx, enqueue, connect } = scenario;
     vi.spyOn(buildInfo, 'readGitCommitSha').mockReturnValue('e'.repeat(40));
     const peer = await connect();
     expect(peer.received[0]).toMatchObject({ type: 'WELCOME' });
@@ -257,7 +284,8 @@ describe('연결과 리스 수명 분리', () => {
     expect(ctx.container.jobQueue.getJob('job-one')?.runnerVersion).toBe(readRuntimeVersions().executionVersion);
   });
 
-  it('최신 클라이언트 명세는 내용 버전과 게시된 아키텍처를 그대로 반환한다', async () => {
+  it('최신 클라이언트 명세는 내용 버전과 게시된 아키텍처를 그대로 반환한다', async ({ scenario }) => {
+    const { ctx, token } = scenario;
     const manifestPath = path.resolve('dist/clients/manifest.json');
     const manifest = { runnerVersion: ctx.container.agentCoordinator.runnerVersion, clients: [
       { arch: 'x64', file: 'quant-agent-linux-x64.tar.gz', sha256: 'a'.repeat(64), bytes: 1 },
@@ -272,7 +300,8 @@ describe('연결과 리스 수명 분리', () => {
     expect(response.json()).toEqual(manifest);
   });
 
-  it('장치 토큰은 해시만 저장하고 해제한 장치는 다시 인증할 수 없다', () => {
+  it('장치 토큰은 해시만 저장하고 해제한 장치는 다시 인증할 수 없다', ({ scenario }) => {
+    const { ctx } = scenario;
     const registry = ctx.container.agentCoordinator.registry;
     const credential = registry.issue('second');
     expect(registry.authenticate(credential.token)).toBe(credential.id);
@@ -293,7 +322,8 @@ const request: BacktestRequest = {
 };
 
 describe('이벤트로 대기 큐 재배정', () => {
-  it('유휴 에이전트가 이미 연결된 상태에서 새 작업을 등록하면 타이머 없이 배정한다', async () => {
+  it('유휴 에이전트가 이미 연결된 상태에서 새 작업을 등록하면 타이머 없이 배정한다', async ({ scenario }) => {
+    const { ctx, id, connect } = scenario;
     const peer = await connect(); capacity(peer);
     await vi.waitFor(() => expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(8_000_000));
     const job = ctx.container.jobQueue.enqueue(request);
@@ -301,7 +331,8 @@ describe('이벤트로 대기 큐 재배정', () => {
     expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({ attempt: 1, agentId: id });
   });
 
-  it('슬롯이 없어 대기하던 작업은 capacity가 생기면 주기 타이머 없이 배정한다', async () => {
+  it('슬롯이 없어 대기하던 작업은 capacity가 생기면 주기 타이머 없이 배정한다', async ({ scenario }) => {
+    const { ctx, connect } = scenario;
     const peer = await connect(); capacity(peer, 0);
     const job = ctx.container.jobQueue.enqueue(request);
     await new Promise((resolve) => setImmediate(resolve));
@@ -310,7 +341,8 @@ describe('이벤트로 대기 큐 재배정', () => {
     await vi.waitFor(() => expect(peer.job()?.jobId).toBe(job.id));
   });
 
-  it('작업 완료로 슬롯이 반환되면 다음 capacity 통지 전에도 대기 작업을 배정한다', async () => {
+  it('작업 완료로 슬롯이 반환되면 다음 capacity 통지 전에도 대기 작업을 배정한다', async ({ scenario }) => {
+    const { ctx, connect } = scenario;
     const peer = await connect(); capacity(peer);
     ctx.container.jobQueue.enqueue(request);
     const next = ctx.container.jobQueue.enqueue({ ...request, randomSeed: 2 });
