@@ -1,4 +1,4 @@
-import { fork, spawnSync, type ChildProcess } from 'node:child_process';
+import { fork, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { parseRuntimeVersions, readRuntimeVersions, type RuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import type { PreparationInput } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
-import { createTestApp, type TestApp } from '../helpers/test-app.js';
+import { test as base } from '../helpers/test-fixtures.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
@@ -47,33 +47,18 @@ let temporary: string;
 let packageRoot: string;
 let versions: RuntimeVersions;
 let files: string[];
-let ctx: TestApp | undefined;
-let child: ChildProcess | undefined;
-let childClosed: Promise<void> | undefined;
-let childExited = false;
-let output = '';
-let bundledExecutable: string | undefined;
 
-function packageFiles(directory: string): string[] {
+function packageFiles(directory: string, root: string): string[] {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const absolute = path.join(directory, entry.name);
-    const relative = path.relative(packageRoot, absolute).replaceAll(path.sep, '/');
+    const relative = path.relative(root, absolute).replaceAll(path.sep, '/');
     if (entry.isSymbolicLink()) {
-      expect(fs.realpathSync(absolute).startsWith(`${packageRoot}${path.sep}`),
+      expect(fs.realpathSync(absolute).startsWith(`${root}${path.sep}`),
         `패키지 외부를 참조하는 링크: ${relative}`).toBe(true);
       return [relative];
     }
-    return entry.isDirectory() ? packageFiles(absolute) : [relative];
+    return entry.isDirectory() ? packageFiles(absolute, root) : [relative];
   });
-}
-
-async function waitFor(read: () => boolean, label: string): Promise<void> {
-  const started = Date.now();
-  while (!read()) {
-    if (childExited) throw new Error(`${label} 중 에이전트가 종료되었습니다: ${output}`);
-    if (Date.now() - started > 50_000) throw new Error(`${label} 대기 시간 초과: ${output}`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
 }
 
 beforeAll(() => {
@@ -86,22 +71,11 @@ beforeAll(() => {
   const unpack = spawnSync('tar', ['-xzf', archive, '-C', packageRoot], { encoding: 'utf8' });
   expect(unpack.status, unpack.stderr).toBe(0);
   versions = parseRuntimeVersions(JSON.parse(fs.readFileSync(path.join(packageRoot, 'dist/runtime-versions.json'), 'utf8')));
-  files = packageFiles(packageRoot);
+  files = packageFiles(packageRoot, packageRoot);
 });
 
-afterAll(async () => {
-  try {
-    if (child && !childExited) {
-      const timeout = setTimeout(() => child?.kill('SIGKILL'), 10_000);
-      child.kill('SIGTERM');
-      try { await childClosed; } finally { clearTimeout(timeout); }
-    }
-  } finally {
-    try { await ctx?.close(); } finally {
-      if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
-      vi.restoreAllMocks();
-    }
-  }
+afterAll(() => {
+  if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
 });
 
 describe('다운로드용 Linux 에이전트 패키지', () => {
@@ -147,10 +121,28 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
     expect(installed.filter((name) => /^(?:@fastify\/|@fontsource|@tanstack\/|fastify$|argon2$|react(?:-dom|-router)?$|vite$|vitest$|tsx$|typescript$)/.test(name))).toEqual([]);
   });
 
-  it('동봉 Node와 compiled agent로 준비와 백테스트를 실행하고 결과를 서버에 저장한다', async () => {
+  const runtimeTest = base.extend({
+    appOptions: { agentPreparation: true },
+  });
+
+  runtimeTest('동봉 Node와 compiled agent로 준비와 백테스트를 실행하고 결과를 서버에 저장한다', async ({ ctx }) => {
     expect(versions, '현재 소스와 배포 산출물의 버전이 달라 다시 빌드해야 합니다').toEqual(readRuntimeVersions());
-    ctx = await createTestApp({}, undefined, true);
     const container = ctx.container;
+    const runtimeTemporary = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-packaged-agent-runtime-'));
+    let child: ReturnType<typeof fork> | undefined;
+    let childClosed: Promise<void> | undefined;
+    let childExited = false;
+    let output = '';
+    let bundledExecutable: string | undefined;
+    const waitFor = async (read: () => boolean, label: string): Promise<void> => {
+      const started = Date.now();
+      while (!read()) {
+        if (childExited) throw new Error(`${label} 중 에이전트가 종료되었습니다: ${output}`);
+        if (Date.now() - started > 50_000) throw new Error(`${label} 대기 시간 초과: ${output}`);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    };
+    try {
     seedSymbolMasterUniverse(container, ['2026-01-05'], [{
       standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '1000000000',
     }]);
@@ -165,10 +157,10 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
     const credential = container.agentCoordinator.registry.issue('packaged-integration-test');
     container.agentCoordinator.start({ local: false });
     const preparation = container.backtestPreparationOrchestrator.start(input);
-    const state = path.join(temporary, 'state');
+    const state = path.join(runtimeTemporary, 'state');
     fs.mkdirSync(state, { mode: 0o700 });
     fs.writeFileSync(path.join(state, 'settings.json'), JSON.stringify({ serverUrl: address, token: credential.token }), { mode: 0o600 });
-    const bootstrap = path.join(temporary, 'bootstrap.mjs');
+    const bootstrap = path.join(runtimeTemporary, 'bootstrap.mjs');
     fs.copyFileSync(new URL('../helpers/packaged-agent-bootstrap.mjs', import.meta.url), bootstrap);
     // PATH·환경·작업 폴더에서 저장소의 Node, loader, node_modules를 참조하지 않는다.
     child = fork(bootstrap, [packageRoot, state], {
@@ -222,5 +214,14 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
     expect(output).toContain(`PREPARATION 작업 시작: ${preparation.id}`);
     expect(output).toContain(`BACKTEST 작업 시작: ${backtest.id}`);
     expect(output).not.toMatch(/ERR_MODULE_NOT_FOUND|Cannot find (?:package|module)|버전이 다릅니다/);
+    } finally {
+      if (child !== undefined && !childExited) {
+        const timeout = setTimeout(() => child?.kill('SIGKILL'), 10_000);
+        child.kill('SIGTERM');
+        try { await childClosed; } finally { clearTimeout(timeout); }
+      }
+      fs.rmSync(runtimeTemporary, { recursive: true, force: true });
+      vi.restoreAllMocks();
+    }
   });
 });
