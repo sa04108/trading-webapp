@@ -39,7 +39,8 @@ interface FinancialYearManifest {
 
 interface FinancialCoverageProtocol {
   readonly version: number;
-  readonly collectionVersion: string;
+  /** 진단용 출처이며 재사용·재수집 권한과 무관하다. 없는 과거 기록도 허용한다. */
+  readonly collectionVersion?: string | null;
   readonly manifests: readonly FinancialYearManifest[];
 }
 
@@ -69,8 +70,8 @@ export interface FactCoverageStore {
     codes?: readonly string[],
   ): ReadonlyMap<string, readonly number[]>;
   /**
-   * protocol 검증과 무관하게 과거에 원천 수집을 완료한 연도. 오래된 watermark의
-   * freshness를 판정할 때만 쓴다. 실행 가능 여부에는 반드시 getCoveredYears를 쓴다.
+   * protocol 검증과 무관하게 과거에 원천 수집을 완료한 연도.
+   * 검증 실패를 최초 수집으로 오인하지 않도록 수집 이력과 실행 가능 상태를 구분한다.
    */
   getCollectedYears?(
     codes?: readonly string[],
@@ -115,7 +116,7 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
     private readonly db: AppDatabase,
     options?: { readonly collectionVersion: string },
   ) {
-    // 스냅샷 워커는 패키지 빌드 당시 값 대신 서버가 임대에 고정한 수집 버전을 사용한다.
+    // 실행 버전은 새 manifest의 진단용 출처로만 기록한다.
     this.collectionVersion =
       options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
   }
@@ -160,10 +161,7 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
     const protocols = new Map(
       rows.map((row) => [
         row.code,
-        parseFinancialCoverageProtocol(
-          row.financialCoverageProtocolJson,
-          this.collectionVersion,
-        ),
+        parseFinancialCoverageProtocol(row.financialCoverageProtocolJson),
       ]),
     );
     const actual = this.actualFactManifests(
@@ -191,9 +189,7 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
         year: number;
         examples: readonly string[];
       }> = [];
-      // 기존 컬럼도 운영·복구 도구가 coverage를 열 때 쓰는 공개 상태다. protocol만
-      // 신뢰해 둘이 갈라진 상태를 승인하면 coveredYearsJson에서 연도를 제거해도 제출이
-      // 통과한다. 두 기록의 교집합만 완료로 본다.
+      // 기존 컬럼과 protocol의 교집합만 완료로 인정한다. 내용·건수 검사도 유지한다.
       const legacyCovered = new Set(parseYears(row.coveredYearsJson));
       for (const manifest of protocol.manifests) {
         if (!legacyCovered.has(manifest.year)) continue;
@@ -268,7 +264,6 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
     // 한 행이 바인드 변수 5개를 쓰므로 100건씩 넣어 구형 SQLite의 상한도 넘지 않는다.
     for (let offset = 0; offset < unique.length; offset += 100) {
       const chunk = unique.slice(offset, offset + 100);
-      if (chunk.length === 0) continue;
       this.db
         .insert(dartFinancialFilingReceipts)
         .values(
@@ -299,8 +294,7 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
     gaps: readonly FactIngestionGap[],
     nowMs: number,
   ): void {
-    // 빈 목록은 기록하지 않는다 — 아무것도 수집하지 않은 종목에 행을 만들면
-    // "수집됨" 과 "수집할 게 없었음" 이 구분되지 않는다
+    // 빈 목록은 기록하지 않는다 — "수집됨"과 "수집할 게 없었음"은 다른 상태다.
     if (years.length === 0) return;
     if (years.some((year) => !validYear(year))) {
       throw new Error(
@@ -313,9 +307,7 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
         `재무 coverage gap의 종목코드가 요청 종목 ${symbol}과 다릅니다.`,
       );
     }
-    // better-sqlite3의 동기 연결에서 열린 transaction 안으로 같은 db 객체의 SELECT를
-    // 중첩시키지 않는다. 수집 서비스는 snapshot 교체를 await한 직후 이 메서드를
-    // 동기 호출하므로 여기서 읽은 내용이 바로 기록할 manifest다.
+    // 실제 fact snapshot을 읽은 직후 같은 동기 연결에서 manifest를 기록한다.
     const actual = this.actualFactManifests(
       new Map([[symbol, normalizedYears]]),
     );
@@ -327,7 +319,6 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
         .get();
       const existingProtocol = parseFinancialCoverageProtocol(
         existing?.financialCoverageProtocolJson ?? null,
-        this.collectionVersion,
       );
       const byYear = new Map(
         (existingProtocol?.manifests ?? []).map((manifest) => [
@@ -464,14 +455,13 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
 
 function parseFinancialCoverageProtocol(
   raw: string | null,
-  collectionVersion: string,
 ): FinancialCoverageProtocol | null {
   if (raw === null) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<FinancialCoverageProtocol>;
+    // 실행 해시와 달리 해석 protocol·manifest 형식은 실제 호환성 조건이다.
     if (
       parsed.version !== FINANCIAL_COVERAGE_PROTOCOL_VERSION ||
-      parsed.collectionVersion !== collectionVersion ||
       !Array.isArray(parsed.manifests)
     )
       return null;
@@ -484,7 +474,9 @@ function parseFinancialCoverageProtocol(
       return null;
     return {
       version: FINANCIAL_COVERAGE_PROTOCOL_VERSION,
-      collectionVersion,
+      ...(typeof parsed.collectionVersion === "string" || parsed.collectionVersion === null
+        ? { collectionVersion: parsed.collectionVersion }
+        : {}),
       manifests,
     };
   } catch {
@@ -577,11 +569,8 @@ function emptyFactManifest(): Pick<
 }
 
 /**
- * 깨진 JSON 을 빈 목록으로 읽는다 — 여기서 던지면 수집 전체가 시작조차 못 한다.
- * 빈 목록이면 그 종목을 전 구간 다시 받으므로(멱등) 결과는 옳고 비용만 든다.
- *
- * `null` 도 여기로 들어온다 — `null` 을 허용하는 컬럼(예: 자본변동 커버리지)이
- * 아직 값을 받지 못한 행을 가리킨다. `SqliteCorporateActionCoverageStore` 가 재사용한다.
+ * NULL 또는 읽을 수 없는 JSON을 빈 연도 목록으로 읽는다.
+ * 빈 목록 자체가 원천 HTTP 허가는 아니다. 호출자는 수집 이력·원문 상태도 구분해야 한다.
  */
 export function parseYears(json: string | null): readonly number[] {
   if (json === null) return [];

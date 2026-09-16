@@ -15,20 +15,17 @@ export interface CorporateActionGapDetail {
 
 interface ActionCoverageProtocol {
   readonly version: number;
-  readonly collectionVersion: string;
+  /** 실행 버전은 출처 정보이며 수집 이력의 유효 조건이 아니다. */
+  readonly collectionVersion?: string | null;
   readonly years: readonly number[];
 }
 
-function parseProtocolYears(
-  raw: string | null,
-  collectionVersion: string,
-): number[] {
+function parseProtocolYears(raw: string | null): number[] {
   if (raw === null) return [];
   try {
     const parsed = JSON.parse(raw) as Partial<ActionCoverageProtocol>;
     if (
       parsed.version !== CORPORATE_ACTION_COVERAGE_PROTOCOL_VERSION ||
-      parsed.collectionVersion !== collectionVersion ||
       !Array.isArray(parsed.years)
     )
       return [];
@@ -129,7 +126,7 @@ export interface CorporateActionCoverageStore {
   getCoveredYears(
     codes?: readonly string[],
   ): ReadonlyMap<string, readonly number[]>;
-  /** protocol 검증 전 legacy 수집 연도. freshness 판정 외에는 쓰지 않는다. */
+  /** 해석 protocol 검증 전의 원천 수집 이력. 실행 가능 연도와 구분한다. */
   getCollectedYears?(
     codes?: readonly string[],
   ): ReadonlyMap<string, readonly number[]>;
@@ -168,7 +165,7 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     private readonly db: AppDatabase,
     options?: { readonly collectionVersion: string },
   ) {
-    // 임대 스냅샷을 읽을 때는 서버가 요구한 수집 버전만 호환 기준으로 삼는다.
+    // 실행 버전은 새 기록의 진단용 출처로만 남긴다.
     this.collectionVersion =
       options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
   }
@@ -203,12 +200,8 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
         : query.where(inArray(symbolFactsState.code, batch)).all();
     });
     for (const row of rows) {
-      // 구버전은 periodKey='-' gap을 버리고도 legacy coverage를 닫았다. 현재 프로토콜로
-      // 실제 재수집한 연도만 신뢰해, 선택 유니버스의 필요한 연도만 on-demand로 연다.
-      result.set(
-        row.code,
-        parseProtocolYears(row.protocol, this.collectionVersion),
-      );
+      // 해석 protocol의 의미는 검증하되 NULL·이전 실행 해시는 재수집 사유가 아니다.
+      result.set(row.code, parseProtocolYears(row.protocol));
     }
     return result;
   }
@@ -362,17 +355,12 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     const verifiedYears = [
       ...new Set([
         ...(existing
-          ? parseProtocolYears(
-              existing.actionCoverageProtocolJson,
-              this.collectionVersion,
-            )
+          ? parseProtocolYears(existing.actionCoverageProtocolJson)
           : []),
         ...coveredYears,
       ]),
     ].sort((a, b) => a - b);
-    // 팩트 저장소가 같은 work-unit 연도의 자본변동 snapshot을 먼저 교체하므로, 이번에
-    // 완료한 연도의 옛 gap도 함께 제거한 뒤 최신 결과만 남길 수 있다. 다른 연도 gap은
-    // 그 연도를 다시 받기 전까지 보존한다.
+    // 이번에 완료한 연도의 gap만 교체한다. 실행 해시가 바뀌어도 다른 연도는 보존한다.
     const mergedGaps = [
       ...new Set([
         ...(existing ? parseYears(existing.actionGapYearsJson) : []).filter(

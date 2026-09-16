@@ -1,4 +1,3 @@
-import { readRuntimeVersions } from "../../../shared/runtime-versions.js";
 import { and, eq, inArray } from "drizzle-orm";
 import type { AppDatabase } from "../../../shared/db/database.js";
 import {
@@ -27,23 +26,18 @@ function fromRow(
   };
 }
 
-/** portable SQLite 999-bind limit below; date 조건까지 고려해 여유를 둔다. */
+/** 날짜 조건을 포함해 구형 SQLite의 999개 바인딩 한도 아래로 나눈다. */
 const READ_BATCH_SIZE = 500;
-// 날짜 PK 범위 한 번이 500-code IN 여러 번보다 싸지는 크기다. KOSDAQ 전체 후보처럼
-// 큰 입력은 그 날짜의 두 시장 metric을 한 번 읽고 요청 코드만 남긴다.
+// 큰 입력에서는 날짜 전체를 한 번 조회하고 요청한 코드만 남긴다.
 const FULL_DATE_READ_THRESHOLD = 1_500;
 
 /** KRX 선정 지표의 bigint/text 변환을 이 저장소 경계에 가둔다. */
 export class SelectionMetricRepository {
-  private readonly collectionVersion: string;
-
   constructor(
     private readonly db: AppDatabase,
-    options?: { readonly collectionVersion: string },
-  ) {
-    this.collectionVersion =
-      options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
-  }
+    // 기존 호출부와 호환하되 실행 버전을 수집 이력 판정에 사용하지 않는다.
+    _options?: { readonly collectionVersion: string },
+  ) {}
 
   getAt(
     date: string,
@@ -84,8 +78,8 @@ export class SelectionMetricRepository {
   }
 
   /**
-   * 선정 지표 API 조회 완료 표식이 없는 날짜만 돌려준다. 값 행으로 추론하면 모든
-   * 거래대금이 '-'인 응답과 아직 조회하지 않은 날짜를 구분할 수 없다.
+   * 값의 유무가 아니라 원천 요청 완료 이력을 확인한다.
+   * NULL·이전 실행 해시의 정상 무자료 기록도 수집 이력이다.
    */
   findMissingTradingValueDates(dates: readonly string[]): string[] {
     const requestedDates = [...new Set(dates)];
@@ -100,15 +94,9 @@ export class SelectionMetricRepository {
         .select({ date: dailySelectionMetricCoverage.date })
         .from(dailySelectionMetricCoverage)
         .where(
-          and(
-            eq(
-              dailySelectionMetricCoverage.collectionVersion,
-              this.collectionVersion,
-            ),
-            inArray(
-              dailySelectionMetricCoverage.date,
-              requestedDates.slice(index, index + READ_BATCH_SIZE),
-            ),
+          inArray(
+            dailySelectionMetricCoverage.date,
+            requestedDates.slice(index, index + READ_BATCH_SIZE),
           ),
         )
         .all();

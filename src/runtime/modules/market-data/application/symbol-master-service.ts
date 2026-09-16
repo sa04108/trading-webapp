@@ -38,6 +38,10 @@ import {
   UnknownKrxClassificationError,
 } from "../domain/krx-filter-policy.js";
 import { addCalendarDays, isWeekendDate } from "../domain/kst-date.js";
+import {
+  coverageContainsRange,
+  unionCoverageIntervals,
+} from "../domain/coverage-intervals.js";
 import { isNonTradingRow } from "../domain/non-trading-day.js";
 import { type KnownSymbolIdentityVersion } from "../domain/symbol-identity-lifetime.js";
 import type {
@@ -68,7 +72,6 @@ function storedTradingDateIsWeekday() {
 export interface SymbolMasterEventRow extends SymbolMasterEventDraft {
   readonly id: string;
 }
-type SymbolMasterCoverageRow = typeof symbolMasterCoverage.$inferSelect;
 type SymbolMasterVersionRow = typeof symbolMasterVersions.$inferSelect;
 type IdentityVersionWithId = KnownSymbolIdentityVersion & {
   readonly id: number;
@@ -205,6 +208,7 @@ export class SymbolMasterService {
     Promise<ReadonlyMap<string, string>>
   >();
 
+  /** 새 수집 이력의 출처만 기록하며 재사용·HTTP 허용 조건으로 쓰지 않는다. */
   private readonly collectionVersion: string;
 
   constructor(private readonly deps: SymbolMasterServiceDeps) {
@@ -271,32 +275,13 @@ export class SymbolMasterService {
   }
 
   /**
-   * date 를 포함하는 커버 구간 **안**에서만 가장 가까운 거래일을 찾는다. 공개
-   * effectiveTradingDate() 는 date 이하 **전역**에서 찾으므로, date 가 (예:
-   * ensureTradingDay 의 첫 ingestAndRecord(date) 가 남긴 휴장일 하루짜리 구간으로)
-   * 이미 커버된 상태에서 date 와 전혀 안 이어진 먼 과거의 거래일을 우연히 찾아내
-   * "직전 거래일을 안다"고 착각할 수 있다 — ensureTradingDay 의 소급 루프가 그 상태를
-   * "이미 찾았다"고 오판해 실제로는 한 번도 확인하지 않은 날짜를 건너뛰고, 몇 년 전
-   * 무관한 거래일을 조회 앵커로 굳혀 버린다. UniverseRuleResolver.resolve 도 이
-   * 버전을 써야 한다 — isCovered(date) 게이트만으로는 못 막는다: date 가 고립된
-   * 구간이라도 "어떤 구간엔 있다"는 사실 자체는 참이 되기 때문이다. (두 경로 모두
-   * 리밸런스 적용 거래일 표기 e2e(Task 4, 2026-08-06 스펙)에서 재현된 버그다.)
-   *
-   * 커버 구간은 mergeCoverage 가 하루씩 인접할 때만 이어 붙이는 연속 구간이므로,
-   * 그 안에서 가장 최근 거래일은 실제로 date 까지 하루도 빠짐없이 확인됐다는 뜻이다.
+   * 요청 날짜를 포함하는 연속 수집 이력 안에서만 거래일 앵커를 찾는다.
+   * NULL·이전 실행 해시로 분리된 구간도 합치되 실제 결손 너머의 앵커는 사용하지 않는다.
    */
   effectiveTradingDateWithinCoverage(date: string): string | undefined {
-    const covering = this.deps.db
-      .select({ startDate: symbolMasterCoverage.startDate })
-      .from(symbolMasterCoverage)
-      .where(
-        and(
-          eq(symbolMasterCoverage.collectionVersion, this.collectionVersion),
-          lte(symbolMasterCoverage.startDate, date),
-          gte(symbolMasterCoverage.endDate, date),
-        ),
-      )
-      .get();
+    const covering = this.coverageRanges().find(
+      (range) => range.startDate <= date && range.endDate >= date,
+    );
     if (covering === undefined) return undefined;
 
     const row = this.deps.db
@@ -618,7 +603,6 @@ export class SymbolMasterService {
         .from(symbolMasterCoverage)
         .where(
           and(
-            eq(symbolMasterCoverage.collectionVersion, this.collectionVersion),
             lte(symbolMasterCoverage.startDate, date),
             gte(symbolMasterCoverage.endDate, date),
           ),
@@ -920,8 +904,8 @@ export class SymbolMasterService {
   }
 
   /**
-   * 이미 symbol master coverage 가 있는 날짜에서 거래대금이 빈 경우만 KRX 일별
-   * 응답을 다시 받아 선정 지표를 보강한다. 기존 일봉·legacy 시총 캐시는 건드리지 않는다.
+   * 선정 지표 수집 이력이 없는 날짜만 보강한다. 코드 버전 차이는 결손이 아니다.
+   * 기존 일봉·legacy 시총 캐시는 건드리지 않는다.
    */
   async ensureSelectionMetrics(dates: readonly string[]): Promise<void> {
     const requestedDates = [...new Set(dates)];
@@ -1086,13 +1070,33 @@ export class SymbolMasterService {
   }
 
   /**
-   * date 캐시 행이 하나라도 있으면 히트로 본다. 휴장일 등으로 결과가 0건인 날은
-   * 매번 KRX 를 재조회하게 되지만, 그런 날짜는 애초에 커버 밖으로 걸러지는 경우가
-   * 대부분이라 수용한다.
+   * 선정 지표 완료 이력이 있으면 정상 0건도 재사용한다.
+   * 마스터 범위만으로 시총 필드 보유를 추측하지 않으며 legacy 시총 행도 보존한다.
    */
   private readCachedMarketCaps(
     date: string,
   ): ReadonlyMap<string, string> | undefined {
+    const metricCoverage = this.deps.db
+      .select({ date: dailySelectionMetricCoverage.date })
+      .from(dailySelectionMetricCoverage)
+      .where(eq(dailySelectionMetricCoverage.date, date))
+      .get();
+    if (metricCoverage !== undefined) {
+      const metrics = this.deps.db
+        .select({
+          standardCode: dailySelectionMetrics.standardCode,
+          marketCapKrw: dailySelectionMetrics.marketCapKrw,
+        })
+        .from(dailySelectionMetrics)
+        .where(eq(dailySelectionMetrics.date, date))
+        .all();
+      const result = new Map<string, string>();
+      for (const metric of metrics) {
+        if (metric.marketCapKrw !== null)
+          result.set(metric.standardCode, metric.marketCapKrw);
+      }
+      return result;
+    }
     const rows = this.deps.db
       .select({
         standardCode: symbolMasterMarketCaps.standardCode,
@@ -1126,24 +1130,25 @@ export class SymbolMasterService {
   }
 
   /**
-   * 수집 완료 구간 목록 — startDate 오름차순. syncedAtMs 는 coverage API 가
-   * lastSyncedAtMs(구간들의 최댓값)를 계산하는 데 쓴다.
+   * 과거 실행 버전별 수집 이력의 합집합. 읽기 이행이므로 원본 행과 수집 시각은 보존한다.
+   * syncedAtMs는 해당 연결 구간에서 실제 기록된 수집 시각의 최댓값이다.
    */
   coverageRanges(): {
     startDate: string;
     endDate: string;
     syncedAtMs: number;
   }[] {
-    return this.deps.db
-      .select({
-        startDate: symbolMasterCoverage.startDate,
-        endDate: symbolMasterCoverage.endDate,
-        syncedAtMs: symbolMasterCoverage.syncedAtMs,
-      })
-      .from(symbolMasterCoverage)
-      .where(eq(symbolMasterCoverage.collectionVersion, this.collectionVersion))
-      .orderBy(asc(symbolMasterCoverage.startDate))
-      .all();
+    return unionCoverageIntervals(
+      this.deps.db
+        .select({
+          startDate: symbolMasterCoverage.startDate,
+          endDate: symbolMasterCoverage.endDate,
+          syncedAtMs: symbolMasterCoverage.syncedAtMs,
+        })
+        .from(symbolMasterCoverage)
+        .orderBy(asc(symbolMasterCoverage.startDate))
+        .all(),
+    );
   }
 
   /**
@@ -1206,23 +1211,9 @@ export class SymbolMasterService {
   }
 
   /**
-   * 이미 받아 둔 kospiTrades·kosdaqTrades 로 그날의 일봉을 krxDailyBars 에 저장한다 —
-   * ingestDateUnguarded 가 KRX 를 다시 부르지 않고 넘겨주는 값을 그대로 쓴다. 호출자가
-   * SCD 버전·coverage·거래일 기록과 같은 트랜잭션 안에서 불러야 한다 — 따로 두면 중간에
-   * 죽었을 때 커버는 됐는데 봉만 빠진 상태가 남는다.
-   *
-   * KRX 는 거래정지·무거래 행을 `null` 이 아니라 시·고·저 "0", 종가는 직전가,
-   * 거래량 0 으로 준다 (실측 2026-08-08). 그 행은 `krx_non_trading_days` 에 따로
-   * 기록하고 봉으로는 넣지 않는다 — 시·고·저를 우리가 지어내지 않기 위해서다.
-   *
-   * 그래도 `null` 검사는 남긴다. 저장할 컬럼이 NOT NULL 이라 방어선이 필요하고,
-   * KRX 가 응답 모양을 바꾸면 여기서 건수로 드러난다.
-   *
-   * 위 둘 중 어디에도 안 걸리는데 `isValidCandle` 이 거부하는 행(high < low 등)은
-   * 진짜 파싱 버그다. `invalidCount` 로 따로 센다.
-   *
-   * 같은 수집 버전은 coverage 게이트에서 재조회를 생략한다. 새 수집 버전으로
-   * 다시 받은 유효 응답은 기존 행에 반영하되, 이번 응답에 없는 원문 기록은 보존한다.
+   * 이미 받은 두 시장의 일별매매 응답을 봉·거래불가일로 저장한다.
+   * SCD·coverage·거래일 기록과 같은 트랜잭션에서 호출한다.
+   * 실행 버전 차이는 재수집 사유가 아니며 기존 가격 품질 검사는 그대로 유지한다.
    */
   private writeDailyBars(
     tx: AppDatabase,
@@ -1415,20 +1406,9 @@ export class SymbolMasterService {
       .run();
   }
 
-  /** 주어진 날짜를 포함하는 수집 완료 구간이 있는지 */
+  /** 실행 버전과 무관하게 주어진 날짜의 수집 완료 이력을 확인한다. */
   isCovered(date: string): boolean {
-    const row = this.deps.db
-      .select({ id: symbolMasterCoverage.id })
-      .from(symbolMasterCoverage)
-      .where(
-        and(
-          eq(symbolMasterCoverage.collectionVersion, this.collectionVersion),
-          lte(symbolMasterCoverage.startDate, date),
-          gte(symbolMasterCoverage.endDate, date),
-        ),
-      )
-      .get();
-    return row !== undefined;
+    return this.isCoveredIn(this.deps.db, date);
   }
 
   /** 수집 완료된 실제 KRX 거래일. legacy 주말 coverage 행은 제외한다. */
@@ -1502,46 +1482,24 @@ export class SymbolMasterService {
     );
   }
 
-  /**
-   * 구간 전체를 덮는 커버 행이 하나라도 있는지.
-   *
-   * 행이 없는 날짜가 "거래불가 종목이 없었다" 인지 "아직 모른다" 인지를 이 메서드로만
-   * 가른다. 이 구분이 없으면 결과 경고가 백필 전에도 "반영한다" 고 거짓말한다.
-   *
-   * 조각을 읽는 쪽에서 이어 붙이지 않는다. 쓰는 쪽(mergeNonTradingCoverage)이 맞닿거나
-   * 겹치는 구간을 그때그때 합치므로, 저장된 구간들은 항상 서로 떨어진 최대 구간이다.
-   * 하루씩 들어오는 수집 경로는 읽기 쪽 이어붙이기만으로는 10년치에 행 수천 개를 쌓게
-   * 되는데, 쓰기 쪽에서 합치면 그 문제까지 함께 사라진다.
-   */
+  /** 서로 다른 실행 버전의 완료 구간도 합치되, 행이 없는 실제 결손은 유지한다. */
   isNonTradingRangeCovered(from: string, to: string): boolean {
-    const row = this.deps.db
-      .select({ id: krxNonTradingCoverage.id })
+    const ranges = this.deps.db
+      .select()
       .from(krxNonTradingCoverage)
       .where(
         and(
-          eq(krxNonTradingCoverage.collectionVersion, this.collectionVersion),
-          lte(krxNonTradingCoverage.startDate, from),
-          gte(krxNonTradingCoverage.endDate, to),
+          lte(krxNonTradingCoverage.startDate, to),
+          gte(krxNonTradingCoverage.endDate, from),
         ),
       )
-      .get();
-    return row !== undefined;
+      .all();
+    return coverageContainsRange(ranges, from, to);
   }
 
   /**
-   * 이미 수집한 구간의 거래불가일을 뒤늦게 채운다.
-   *
-   * `ingestDate` 를 다시 부르지 않는다. 그쪽은 이벤트·coverage·봉을 함께 쓰므로
-   * 재실행하면 이벤트가 다시 생길 위험이 있다. 여기서는 일별매매정보만 부르고
-   * `krx_non_trading_days` 만 쓴다 — 되돌릴 것이 그 테이블 하나뿐이다.
-   *
-   * 휴장일은 응답이 0행이라 저절로 건너뛰어진다. 날짜 달력을 따로 두지 않는다.
-   *
-   * 커버는 응답을 하나라도 받은 날짜까지만 넓힌다. 한 날짜도 응답이 없으면 커버를
-   * 아예 남기지 않는다 — 잘못 설정된 소스로 10년치를 돌린 실행이 아무것도 저장하지
-   * 않고 그 10년을 "다 봤다" 로 만들면, 실행 경고가 영영 사라진다. 반대로 응답을
-   * 받았는데 거래불가 종목만 0건인 날은 커버로 남긴다. "봤는데 없었다" 와 "안 봤다"
-   * 는 끝까지 갈라야 한다.
+   * 거래불가일 수집 이력이 없는 날짜만 보강한다. 명령 재실행은 재수집 승인이 아니다.
+   * 한 날짜도 유효 응답이 없는 전체 범위를 완료로 인증하지 않는 기존 방어선은 유지한다.
    */
   async backfillNonTradingDays(
     from: string,
@@ -1550,6 +1508,7 @@ export class SymbolMasterService {
     let dates = 0;
     let rows = 0;
     for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
+      if (this.isNonTradingRangeCovered(date, date)) continue;
       const byMarket: readonly [KrxMarket, readonly KrxDailyTradeRow[]][] = [
         ["KOSPI", await this.deps.source.fetchDailyTrades("KOSPI", date)],
         ["KOSDAQ", await this.deps.source.fetchDailyTrades("KOSDAQ", date)],
@@ -1570,8 +1529,6 @@ export class SymbolMasterService {
       dates += 1;
       // 행 저장과 커버를 같은 트랜잭션에 넣는다. 나누면 중간에 죽었을 때 행은 들어갔는데
       // 커버는 없는 날짜가 남고, 그 날짜는 다시 백필하지 않는 한 영영 "모른다" 로 읽힌다.
-      // 커버를 [from, date] 로 넓히는 이유는 그 사이 응답 0행인 날(휴장·주말)도 실제로
-      // 조회했기 때문이다 — 하루씩만 넣으면 주말에서 구간이 끊긴다.
       this.deps.db.transaction((tx) => {
         for (let i = 0; i < values.length; i += 500) {
           tx.insert(krxNonTradingDays)
@@ -1585,7 +1542,7 @@ export class SymbolMasterService {
     }
     // 한 날짜도 응답이 없으면 본 것이 없다 — 커버를 남기지 않는다
     if (dates === 0) return { dates, rows };
-    // 마지막 응답일 뒤의 날짜(구간 끝이 주말·휴장인 경우)까지 넓힌다. 그 날짜들도 조회는 했다.
+    // 마지막 응답일 뒤의 날짜도 기존 이력으로 확인했거나 이번에 실제 조회했다.
     this.deps.db.transaction((tx) =>
       this.mergeNonTradingCoverage(tx, from, to),
     );
@@ -1593,80 +1550,29 @@ export class SymbolMasterService {
   }
 
   /**
-   * [startDate, endDate] 를 거래불가 커버에 반영하며 맞닿거나 겹치는 구간과 합친다.
-   * `mergeCoverage` 와 같은 규칙을 구간 단위로 넓힌 것이다.
-   *
-   * 수집 경로는 하루씩, 백필은 한 번에 여러 날을 넣는다. 합치지 않으면 두 경로 모두
-   * 조각난 행을 쌓고, 구간 전체를 덮는 행이 없어 `isNonTradingRangeCovered` 가
-   * 실제로는 다 채운 기간을 "모른다" 로 판정한다.
-   *
-   * 수집 경로에서는 반드시 봉·거래일 기록과 같은 트랜잭션 안에서 불러야 한다 —
-   * 따로 두면 중간에 죽었을 때 거래불가일 행은 들어갔는데 커버는 안 남은 상태가 되고,
-   * 그 날짜는 재수집 게이트에 막혀 영영 커버로 바뀌지 않는다.
+   * 새 수집 이력만 추가한다. 과거 행의 실행 해시·수집 시각을 현재 값으로 덮지 않는다.
+   * 읽기 시 합집합을 사용하므로 기존 DB 및 복원한 DB에 별도 원문 수집이 필요하지 않다.
    */
   private mergeNonTradingCoverage(
     tx: AppDatabase,
     startDate: string,
     endDate: string,
   ): void {
-    // 하루 차이로 맞닿은 구간까지 합치려고 양쪽을 하루씩 넓혀 겹침을 본다
-    const touchStart = addCalendarDays(startDate, -1);
-    const touchEnd = addCalendarDays(endDate, 1);
-
-    let mergedStart = startDate;
-    let mergedEnd = endDate;
-    const ranges = tx
-      .select()
-      .from(krxNonTradingCoverage)
-      .where(
-        eq(krxNonTradingCoverage.collectionVersion, this.collectionVersion),
-      )
-      .all();
-    for (const range of ranges) {
-      if (range.endDate < touchStart || range.startDate > touchEnd) continue;
-      if (range.startDate < mergedStart) mergedStart = range.startDate;
-      if (range.endDate > mergedEnd) mergedEnd = range.endDate;
-      tx.delete(krxNonTradingCoverage)
-        .where(eq(krxNonTradingCoverage.id, range.id))
-        .run();
-    }
-
+    const ranges = tx.select().from(krxNonTradingCoverage).all();
+    if (coverageContainsRange(ranges, startDate, endDate)) return;
     tx.insert(krxNonTradingCoverage)
       .values({
-        startDate: mergedStart,
-        endDate: mergedEnd,
+        startDate,
+        endDate,
         collectionVersion: this.collectionVersion,
         syncedAtMs: this.deps.clock.now(),
       })
       .run();
   }
 
-  /**
-   * [from, to] 구간 전체가 빈틈없이 수집 완료 구간으로 덮였는지 본다. `isCovered`
-   * 는 날짜 하나만 보므로, 리밸런스 날짜만 개별 동기화되고(예: `POST
-   * /symbol-master/sync` 로 날짜 하나씩) 그 사이 평일이 비어 있는 부분 커버리지를
-   * 잡아내지 못한다 — 이 틈은 `UniverseRuleResolver.resolve` 의 `uncoveredDates`
-   * (리밸런스 날짜만 게이트)도 못 본다. 그래서 위저드가 "기간 전체 동기화" 버튼을
-   * 띄울지는 이 메서드로 따로 판정한다(운영에서 확인된 버그: 리밸런스 날짜는 다
-   * 커버됐는데 그 사이 날짜의 KRX 일봉이 비어 있어, 남은 유일한 해결책처럼 보이는
-   * 증권사 동기화가 상장폐지 종목에서 반드시 404 로 실패했다).
-   *
-   * `coverageRanges()`(startDate 오름차순)를 그대로 재사용해 커서를 하루씩
-   * 전진시킨다 — `mergeCoverage` 가 하루씩 인접할 때만 이어 붙이므로, 부분
-   * 백필·개별 동기화가 남긴 여러 구간은 서로 떨어져 있을 수 있다. 구간과 구간
-   * 사이에 커서가 못 닿는 틈이 있으면 그 자리에서 false 로 끊는다.
-   */
+  /** 요청 범위 전체가 실제 수집 이력의 합집합에 포함되는지 확인한다. */
   isRangeCovered(from: string, to: string): boolean {
-    const ranges = this.coverageRanges().filter(
-      (range) => range.endDate >= from && range.startDate <= to,
-    );
-    let cursor = from;
-    for (const range of ranges) {
-      if (range.startDate > cursor) return false; // 이 구간 앞에 빈 날짜가 있다
-      if (range.endDate >= cursor) cursor = addCalendarDays(range.endDate, 1);
-      if (cursor > to) return true;
-    }
-    return cursor > to;
+    return coverageContainsRange(this.coverageRanges(), from, to);
   }
 
   /**
@@ -2182,36 +2088,14 @@ export class SymbolMasterService {
     }
   }
 
-  /**
-   * date 하루를 coverage 에 반영하며 인접한 [a, date-1]·[date+1, b] 구간과 합친다.
-   * 인접 구간이 없으면 date 하루짜리 구간을 새로 만든다.
-   */
+  /** 새 완료일의 출처를 추가하고, 과거 완료 이력은 재라벨링하거나 삭제하지 않는다. */
   private mergeCoverage(tx: AppDatabase, date: string): void {
-    const before = addCalendarDays(date, -1);
-    const after = addCalendarDays(date, 1);
-    const ranges = tx
-      .select()
-      .from(symbolMasterCoverage)
-      .where(eq(symbolMasterCoverage.collectionVersion, this.collectionVersion))
-      .all();
-    const beforeRange = ranges.find((range) => range.endDate === before);
-    const afterRange = ranges.find((range) => range.startDate === after);
-
-    const toRemove: SymbolMasterCoverageRow[] = [
-      beforeRange,
-      afterRange,
-    ].filter((range): range is SymbolMasterCoverageRow => range !== undefined);
-    for (const range of toRemove) {
-      tx.delete(symbolMasterCoverage)
-        .where(eq(symbolMasterCoverage.id, range.id))
-        .run();
-    }
-
+    if (this.isCoveredIn(tx, date)) return;
     tx.insert(symbolMasterCoverage)
       .values({
         collectionVersion: this.collectionVersion,
-        startDate: beforeRange?.startDate ?? date,
-        endDate: afterRange?.endDate ?? date,
+        startDate: date,
+        endDate: date,
         syncedAtMs: this.deps.clock.now(),
       })
       .run();
