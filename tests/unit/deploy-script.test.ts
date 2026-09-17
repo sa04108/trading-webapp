@@ -5,9 +5,9 @@ import { describe, expect, it } from 'vitest';
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
 
 describe('deploy script failure workflow', () => {
-  it('restores app release and DB, then cleans transaction artifacts after rollback readiness', () => {
+  it('restores release and DB, then cleans transaction artifacts after rollback readiness', () => {
     const shell = String.raw`
-      source scripts/deploy-app.sh
+      source scripts/deploy.sh
       mock_current_target='/opt/quant-platform/releases/new-release'
       curl() { return 0; }
       sleep() { :; }
@@ -28,7 +28,7 @@ describe('deploy script failure workflow', () => {
       }
 
       status=0
-      rollback_app_transaction new-release || status=$?
+      rollback_transaction new-release || status=$?
       printf 'status=%s\n' "$status"
       [ "$status" -eq 0 ]
     `;
@@ -51,13 +51,13 @@ describe('deploy script failure workflow', () => {
       'sudo:rm -rf -- /opt/quant-platform/releases/new-release',
     );
     expect(output).toContain('sudo:rm -f -- /var/lib/quant-platform/deploy-transactions/new-release.state');
-    expect(output).toContain('app rollback completed for new-release');
+    expect(output).toContain('rollback completed for new-release');
     expect(output).toContain('status=0');
   });
 
   it('preserves recovery artifacts when rollback readiness fails', () => {
     const shell = String.raw`
-      source scripts/deploy-app.sh
+      source scripts/deploy.sh
       mock_current_target='/opt/quant-platform/releases/new-release'
       curl() { return 1; }
       sleep() { :; }
@@ -78,7 +78,7 @@ describe('deploy script failure workflow', () => {
       }
 
       status=0
-      rollback_app_transaction new-release || status=$?
+      rollback_transaction new-release || status=$?
       printf 'status=%s\n' "$status"
       [ "$status" -eq 1 ]
     `;
@@ -90,7 +90,7 @@ describe('deploy script failure workflow', () => {
     const output = `${result.stdout}${result.stderr}`;
 
     expect(result.status).toBe(0);
-    expect(output).toContain('app rollback failed for new-release');
+    expect(output).toContain('rollback failed for new-release');
     expect(output).toContain(
       'sudo:touch /opt/quant-platform/releases/new-release/.deploy-failed',
     );
@@ -111,7 +111,7 @@ describe('deploy script failure workflow', () => {
 
   it('refuses to delete a release that is still the current target', () => {
     const shell = String.raw`
-      source scripts/deploy-app.sh
+      source scripts/deploy.sh
       readlink() { echo '/opt/quant-platform/releases/new-release'; }
       sudo() { printf 'sudo:%s\n' "$*" >&2; }
       status=0
@@ -135,7 +135,7 @@ describe('deploy script failure workflow', () => {
 
   it('fails closed when the current release symlink cannot be resolved', () => {
     const shell = String.raw`
-      source scripts/deploy-app.sh
+      source scripts/deploy.sh
       link_root="$(mktemp -d)"
       ln -s "$link_root/missing/release" "$link_root/current"
       status=0
@@ -158,7 +158,7 @@ describe('deploy script failure workflow', () => {
 
   it('does not report cleanup success or delete the release when snapshot deletion fails', () => {
     const shell = String.raw`
-      source scripts/deploy-app.sh
+      source scripts/deploy.sh
       readlink() { echo '/opt/quant-platform/releases/old-release'; }
       sudo() {
         printf 'sudo:%s\n' "$*" >&2
@@ -186,12 +186,12 @@ describe('deploy script failure workflow', () => {
 
   it('refuses successful cleanup when current no longer points to the committed release', () => {
     const shell = String.raw`
-      source scripts/deploy-app.sh
+      source scripts/deploy.sh
       readlink() { echo '/opt/quant-platform/releases/other-release'; }
       sudo() { printf 'sudo:%s\n' "$*" >&2; return 0; }
       KEEP_SUCCESSFUL_DEPLOYS=0
       status=0
-      cleanup_successful_app_artifacts \
+      cleanup_successful_artifacts \
         '/opt/quant-platform/releases/new-release' || status=$?
       printf 'status=%s\n' "$status"
       [ "$status" -eq 1 ]
@@ -212,7 +212,7 @@ describe('deploy script failure workflow', () => {
 
   it('cleans attempt-owned staging and incomplete snapshot files before service switch', () => {
     const shell = String.raw`
-      source scripts/deploy-app.sh
+      source scripts/deploy.sh
       readlink() { echo '/opt/quant-platform/releases/old-release'; }
       sudo() { printf 'sudo:%s\n' "$*" >&2; return 0; }
 
@@ -255,7 +255,7 @@ describe('deploy script failure workflow', () => {
 
   it('treats a missing transaction DB snapshot as rollback failure', () => {
     const shell = String.raw`
-      source scripts/deploy-app.sh
+      source scripts/deploy.sh
       curl() { return 0; }
       mock_current_target='/opt/quant-platform/releases/new-release'
       readlink() { echo "$mock_current_target"; }
@@ -273,7 +273,7 @@ describe('deploy script failure workflow', () => {
       }
 
       status=0
-      rollback_app_transaction new-release || status=$?
+      rollback_transaction new-release || status=$?
       printf 'status=%s\n' "$status"
       [ "$status" -eq 1 ]
     `;
@@ -286,13 +286,13 @@ describe('deploy script failure workflow', () => {
 
     expect(result.status).toBe(0);
     expect(output).not.toContain('sudo:ln -sfn');
-    expect(output).toContain('app rollback failed for new-release');
+    expect(output).toContain('rollback failed for new-release');
     expect(output).toContain('status=1');
   });
 
   it('holds a non-blocking kernel lock for the whole remote deployment shell', () => {
     const shell = String.raw`
-      source scripts/deploy-app.sh
+      source scripts/deploy.sh
       sudo() { "$@"; }
       lock_root="$(mktemp -d)"
       lock_file="$lock_root/deploy.lock"
@@ -331,13 +331,15 @@ describe('deploy script failure workflow', () => {
     const output = `${result.stdout}${result.stderr}`;
 
     expect(result.status, output).toBe(0);
-    expect(output).toContain('다른 app 배포가 진행 중입니다');
+    expect(output).toContain('다른 배포가 진행 중입니다');
     expect(output).toContain('blocked=75 recovered=0');
   });
 
   it('publishes a fully installed staging release only after checksum verification', () => {
-    const deploy = readFileSync('scripts/deploy-app.sh', 'utf8');
-    const orchestrator = readFileSync('scripts/deploy.mjs', 'utf8');
+    const script = readFileSync('scripts/deploy.sh', 'utf8');
+    const local = script.split("<<'DEPLOY_LOCAL_NODE'\n")[1].split('\nDEPLOY_LOCAL_NODE')[0];
+    const deploy = script.replace(local, '');
+    const orchestrator = local.replaceAll('"', "'");
 
     expect(deploy.indexOf('release archive checksum 불일치')).toBeLessThan(
       deploy.indexOf('sudo mkdir "${RELEASE_STAGING}"'),
@@ -353,25 +355,25 @@ describe('deploy script failure workflow', () => {
     expect(deploy).toContain('[ "${SWITCHED_RELEASE}" = "${RELEASE_DIR}" ]');
     expect(deploy).toContain('PREVIOUS_RELEASE="$(resolve_current_release)"');
     expect(deploy).not.toContain('ssh ');
-    expect(orchestrator).toContain("'/tmp/quant-app-deploy.XXXXXX'");
-    expect(orchestrator).toContain("path.join(SCRIPT_DIR, 'deploy-app.sh')");
+    expect(orchestrator).toContain("'/tmp/quant-deploy.XXXXXX'");
+    expect(orchestrator).toContain('SCRIPT_PATH,');
     expect(deploy).toContain('write_transaction_state');
-    expect(deploy).toContain('verify_prepared_app');
+    expect(deploy).toContain('verify_prepared_release');
     expect(deploy).toContain('--property=Type=oneshot');
-    expect(deploy).toContain('rollback_app_transaction');
-    expect(deploy).toMatch(/finalize\)\s+read_transaction_state[\s\S]*verify_current_app_release/);
-    expect(orchestrator).toContain('stageAppDeployment(');
-    expect(orchestrator).toContain("runAppPhase(deployment, 'prepare')");
+    expect(deploy).toContain('rollback_transaction');
+    expect(deploy).toMatch(/finalize\)\s+read_transaction_state[\s\S]*verify_current_release/);
+    expect(orchestrator).toContain('stageDeployment(');
+    expect(orchestrator).toContain("runPhase(deployment, 'prepare')");
     expect(orchestrator).toContain('ServerAliveInterval=15');
     expect(orchestrator).toContain('ServerAliveCountMax=3');
-    expect(orchestrator).toContain("runAppPhase(deployment, 'verify')");
-    expect(orchestrator).toContain("runAppPhase(deployment, 'commit')");
-    expect(orchestrator).toContain("runAppPhase(deployment, 'finalize')");
-    expect(orchestrator).toContain("runAppPhase(deployment, 'rollback')");
+    expect(orchestrator).toContain("runPhase(deployment, 'verify')");
+    expect(orchestrator).toContain("runPhase(deployment, 'commit')");
+    expect(orchestrator).toContain("runPhase(deployment, 'finalize')");
+    expect(orchestrator).toContain("runPhase(deployment, 'rollback')");
   });
 
   it('is a syntactically valid node-local transaction script', () => {
-    const result = spawnSync(bash, ['-n', 'scripts/deploy-app.sh'], {
+    const result = spawnSync(bash, ['-n', 'scripts/deploy.sh'], {
       cwd: process.cwd(),
       encoding: 'utf8',
     });
@@ -379,13 +381,13 @@ describe('deploy script failure workflow', () => {
   });
 
   it('uses one shared successful release and DB snapshot retention count', () => {
-    const deploy = readFileSync('scripts/deploy-app.sh', 'utf8');
+    const deploy = readFileSync('scripts/deploy.sh', 'utf8');
     expect(deploy).toContain('KEEP_SUCCESSFUL_DEPLOYS=0');
     expect(deploy.match(/awk -v keep="\$\{KEEP_SUCCESSFUL_DEPLOYS\}" 'NR > keep'/g)).toHaveLength(2);
   });
 
   it('selects unmarked artifacts by age and excludes exceptional states', () => {
-    const deploy = readFileSync('scripts/deploy-app.sh', 'utf8');
+    const deploy = readFileSync('scripts/deploy.sh', 'utf8');
 
     expect(deploy).toContain("-name 'pre-deploy-*.sqlite' -printf '%T@ %p\\n'");
     expect(deploy).toContain("! -name '.incomplete-*' -printf '%T@ %p\\n'");

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# deploy.mjs가 app 노드에서 실행하는 release transaction.
-#
-# deploy.mjs가 prepare/verify/commit/finalize/rollback 단계를 호출한다.
-# 이 스크립트는 잠금, app·DB 전환, readiness, rollback과 산출물 정리를 담당한다.
+# 단일 배포 진입점: 로컬 검증·전송과 원격 release transaction을 같은 파일에서 실행한다.
+# 인자 없는 실행은 로컬 배포이며 --remote는 SSH로 호출하는 내부 단계다.
+# 이 스크립트는 잠금, 서버·DB 전환, readiness, rollback과 산출물 정리를 담당한다.
 # source하면 테스트 가능한 함수만 정의한다.
 set -euo pipefail
 
@@ -165,7 +164,7 @@ acquire_deploy_lock() {
   local lock_owner
 
   command -v flock >/dev/null 2>&1 || {
-    echo 'flock 명령이 없어 app 배포 잠금을 잡을 수 없습니다' >&2
+    echo 'flock 명령이 없어 배포 잠금을 잡을 수 없습니다' >&2
     return 1
   }
   lock_owner="$(id -u):$(id -g)"
@@ -174,7 +173,7 @@ acquire_deploy_lock() {
   sudo chmod 0600 "${lock_file}"
   exec {DEPLOY_LOCK_FD}>"${lock_file}"
   if ! flock -n "${DEPLOY_LOCK_FD}"; then
-    echo '다른 app 배포가 진행 중입니다 — 완료 후 다시 시도하세요' >&2
+    echo '다른 배포가 진행 중입니다 — 완료 후 다시 시도하세요' >&2
     return 75
   fi
 }
@@ -267,7 +266,7 @@ validate_transaction_state_file() {
   local state_file="$1"
   case "${state_file}" in
     /var/lib/quant-platform/deploy-transactions/*.state) ;;
-    *) echo "app 배포 transaction 경로가 올바르지 않습니다: ${state_file}" >&2; return 1 ;;
+    *) echo "배포 transaction 경로가 올바르지 않습니다: ${state_file}" >&2; return 1 ;;
   esac
 }
 
@@ -298,7 +297,7 @@ write_transaction_state() {
   sudo mkdir -p /var/lib/quant-platform/deploy-transactions
   if sudo find /var/lib/quant-platform/deploy-transactions \
     -mindepth 1 -maxdepth 1 -type f -name '*.state' -print -quit | grep -q .; then
-    echo '완료되지 않은 app 배포 transaction이 있습니다' >&2
+    echo '완료되지 않은 배포 transaction이 있습니다' >&2
     return 75
   fi
   state_tmp="$(mktemp)"
@@ -321,7 +320,7 @@ read_transaction_state() {
   sudo test -f "${state_file}" || return 1
   mapfile -t state_lines < <(sudo cat "${state_file}")
   [ "${#state_lines[@]}" -eq 3 ] || {
-    echo "app 배포 transaction 상태가 손상됐습니다: ${state_file}" >&2
+    echo "배포 transaction 상태가 손상됐습니다: ${state_file}" >&2
     return 1
   }
   TRANSACTION_PREVIOUS_RELEASE="${state_lines[0]}"
@@ -332,13 +331,13 @@ read_transaction_state() {
   [ -z "${TRANSACTION_DB_SNAPSHOT}" ] || \
     validate_deploy_snapshot "${TRANSACTION_DB_SNAPSHOT}" || return 1
   [ "${TRANSACTION_DB_EXISTED}" = 0 ] || [ "${TRANSACTION_DB_EXISTED}" = 1 ] || {
-    echo "app 배포 transaction의 DB 상태가 올바르지 않습니다: ${state_file}" >&2
+    echo "배포 transaction의 DB 상태가 올바르지 않습니다: ${state_file}" >&2
     return 1
   }
   TRANSACTION_STATE_FILE="${state_file}"
 }
 
-rollback_app_transaction() {
+rollback_transaction() {
   local release="$1"
   local release_dir="/opt/quant-platform/releases/${release}"
   local current_release=""
@@ -349,10 +348,10 @@ rollback_app_transaction() {
   if ! sudo test -f "${state_file}"; then
     current_release="$(resolve_current_release)" || return 1
     if [ "${current_release}" = "${release_dir}" ]; then
-      echo "현재 app이 신규 release지만 rollback 상태가 없습니다: ${release}" >&2
+      echo "현재 서버가 신규 release지만 rollback 상태가 없습니다: ${release}" >&2
       return 1
     fi
-    echo "app rollback 대상이 없습니다: ${release}" >&2
+    echo "rollback 대상이 없습니다: ${release}" >&2
     return 0
   fi
   read_transaction_state "${release}" || return 1
@@ -363,11 +362,11 @@ rollback_app_transaction() {
       sudo rm -f -- "${TRANSACTION_STATE_FILE}" "${TRANSACTION_STATE_FILE}.committed"
       return 0
     fi
-    echo "현재 app release가 transaction과 다릅니다: ${current_release}" >&2
+    echo "현재 release가 transaction과 다릅니다: ${current_release}" >&2
     return 1
   fi
 
-  echo '통합 배포 실패로 app과 DB를 이전 상태로 롤백합니다' >&2
+  echo '통합 배포 실패로 서버와 DB를 이전 상태로 롤백합니다' >&2
   sudo systemctl stop quant-platform || rollback_ok=0
   if [ "${rollback_ok}" -eq 1 ]; then
     if [ "${TRANSACTION_DB_EXISTED}" = 1 ]; then
@@ -406,7 +405,7 @@ rollback_app_transaction() {
     fi
   fi
   if [ "${rollback_ok}" -ne 1 ]; then
-    echo "app rollback failed for ${release}" >&2
+    echo "rollback failed for ${release}" >&2
     print_service_diagnostics 'integrated rollback failed' "${rollback_started_at}"
     mark_deploy_failed "${release_dir}" "${TRANSACTION_DB_SNAPSHOT}" || true
     return 1
@@ -414,31 +413,31 @@ rollback_app_transaction() {
 
   cleanup_failed_deploy_artifacts "${release_dir}" "${TRANSACTION_DB_SNAPSHOT}" || return 1
   sudo rm -f -- "${TRANSACTION_STATE_FILE}" "${TRANSACTION_STATE_FILE}.committed"
-  echo "app rollback completed for ${release}" >&2
+  echo "rollback completed for ${release}" >&2
 }
 
-verify_current_app_release() {
+verify_current_release() {
   local release="$1"
   local release_dir="/opt/quant-platform/releases/${release}"
   local current_release
   current_release="$(resolve_current_release)" || return 1
   [ "${current_release}" = "${release_dir}" ] || {
-    echo "현재 app release가 준비된 release와 다릅니다: ${current_release}" >&2
+    echo "현재 release가 준비된 release와 다릅니다: ${current_release}" >&2
     return 1
   }
 }
 
-verify_prepared_app() {
+verify_prepared_release() {
   local release="$1"
   read_transaction_state "${release}" || {
-    echo "app 배포 transaction이 없습니다: ${release}" >&2
+    echo "배포 transaction이 없습니다: ${release}" >&2
     return 1
   }
-  verify_current_app_release "${release}" || return 1
+  verify_current_release "${release}" || return 1
   wait_for_ready
 }
 
-cleanup_successful_app_artifacts() {
+cleanup_successful_artifacts() {
   local release_dir="$1"
   local current_target=""
   local snapshot_cleanup_ok=1
@@ -500,13 +499,498 @@ if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
   return 0
 fi
 
+# 설정 파싱과 SSH 인용 규칙을 바꾸지 않도록 로컬 조정 코드는 Node로 실행한다.
+# 원격 단계에서는 이 블록을 건너뛰며 같은 파일의 아래 transaction만 실행한다.
+if [[ "${1:-}" != "--remote" ]]; then
+  node --input-type=module --eval "$(cat <<'DEPLOY_LOCAL_NODE'
+// 수동 배포 진입점: build는 로컬에서, 전송은 SSH/SCP로, 전환은 노드 로컬 transaction으로 수행한다.
+
+import { spawnSync } from "node:child_process";
+import { error as logError, log } from "node:console";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import path from "node:path";
+import process from "node:process";
+import { parseEnv } from "node:util";
+
+const SCRIPT_PATH = path.resolve(process.argv[1]);
+const SCRIPT_DIR = path.dirname(SCRIPT_PATH);
+const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
+const DEPLOY_ENV_FILE = path.join(REPO_ROOT, "deploy.env");
+const PREFLIGHT = [
+  "set -eu",
+  "for command_name in bash flock sqlite3 corepack systemctl systemd-run curl; do",
+  '  command -v "${command_name}" >/dev/null',
+  "done",
+  "sudo -n true",
+  "sudo -n test -f /etc/quant-platform/app.env",
+  "sudo -n test -f /etc/systemd/system/quant-platform.service",
+].join("\n");
+
+class DeployError extends Error {
+  constructor(message, exitCode = 1) {
+    super(message);
+    this.exitCode = exitCode;
+  }
+}
+
+function readDeploySettings() {
+  if (!existsSync(DEPLOY_ENV_FILE)) {
+    throw new DeployError(
+      `배포 환경 파일이 없습니다: ${DEPLOY_ENV_FILE}\n` +
+        "프로젝트 루트에서 cp deploy.env.example deploy.env 후 값을 채우세요.",
+    );
+  }
+  try {
+    return parseEnv(readFileSync(DEPLOY_ENV_FILE, "utf8"));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DeployError(`deploy.env를 읽을 수 없습니다: ${message}`);
+  }
+}
+
+function setting(settings, name) {
+  return settings[name]?.trim() ?? "";
+}
+
+function expandHome(value) {
+  return value.startsWith("~/") ? path.join(homedir(), value.slice(2)) : value;
+}
+
+function splitSshOptions(value, variableName) {
+  const options = [];
+  let option = "";
+  let quote = null;
+  let escaped = false;
+  let started = false;
+
+  for (const character of value) {
+    if (escaped) {
+      option += character;
+      escaped = false;
+      started = true;
+      continue;
+    }
+    if (quote === "'") {
+      if (character === "'") quote = null;
+      else option += character;
+      started = true;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '"') quote = null;
+      else if (character === "\\") escaped = true;
+      else option += character;
+      started = true;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      started = true;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      started = true;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      if (started) {
+        options.push(option);
+        option = "";
+        started = false;
+      }
+      continue;
+    }
+    option += character;
+    started = true;
+  }
+
+  if (escaped || quote !== null) {
+    throw new DeployError(
+      `${variableName}의 따옴표 또는 escape가 닫히지 않았습니다`,
+    );
+  }
+  if (started) options.push(option);
+  return options;
+}
+
+function readConnection(settings) {
+  const rawHost = setting(settings, `HOST`);
+  if (!rawHost) {
+    throw new DeployError(`deploy.env의 HOST가 필요합니다`);
+  }
+  if (rawHost.startsWith("-") || /\s/.test(rawHost)) {
+    throw new DeployError(
+      `HOST 형식이 올바르지 않습니다: ${rawHost}`,
+    );
+  }
+
+  const at = rawHost.lastIndexOf("@");
+  const embeddedUser = at > 0 ? rawHost.slice(0, at) : "";
+  const host = at > 0 ? rawHost.slice(at + 1) : rawHost;
+  const configuredUser = setting(settings, `SSH_USER`);
+  if (!host || host.startsWith("-") || /\s/.test(host)) {
+    throw new DeployError(
+      `HOST 형식이 올바르지 않습니다: ${rawHost}`,
+    );
+  }
+  if (
+    configuredUser &&
+    (configuredUser.startsWith("-") || /[@\s]/.test(configuredUser))
+  ) {
+    throw new DeployError(
+      `SSH_USER 형식이 올바르지 않습니다: ${configuredUser}`,
+    );
+  }
+  if (embeddedUser && configuredUser && embeddedUser !== configuredUser) {
+    throw new DeployError(
+      `HOST 사용자와 SSH_USER가 다릅니다`,
+    );
+  }
+  const remoteTarget =
+    embeddedUser || !configuredUser ? rawHost : `${configuredUser}@${rawHost}`;
+
+  const extraOptions = setting(settings, `SSH_OPTS`);
+  const sshOptions = extraOptions
+    ? splitSshOptions(extraOptions, `SSH_OPTS`)
+    : [];
+  const key = setting(settings, `SSH_KEY`);
+  if (key) {
+    const expandedKey = expandHome(key);
+    if (!existsSync(expandedKey)) {
+      throw new DeployError(
+        `SSH_KEY 파일이 없습니다: ${expandedKey}`,
+      );
+    }
+    sshOptions.push("-i", expandedKey, "-o", "IdentitiesOnly=yes");
+  }
+
+  const port = setting(settings, `SSH_PORT`);
+  if (port) {
+    if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65_535) {
+      throw new DeployError(`SSH_PORT가 올바르지 않습니다: ${port}`);
+    }
+    sshOptions.push("-o", `Port=${port}`);
+  }
+
+  const jump = setting(settings, `SSH_JUMP`);
+  if (jump) {
+    if (jump.startsWith("-") || /\s/.test(jump)) {
+      throw new DeployError(
+        `SSH_JUMP 형식이 올바르지 않습니다: ${jump}`,
+      );
+    }
+    sshOptions.push("-o", `ProxyJump=${jump}`);
+  }
+
+  const hostKey = setting(settings, `SSH_HOST_KEY`) || "accept-new";
+  if (!["accept-new", "yes", "no"].includes(hostKey)) {
+    throw new DeployError(
+      `SSH_HOST_KEY는 accept-new | yes | no 중 하나여야 합니다`,
+    );
+  }
+  sshOptions.push("-o", `StrictHostKeyChecking=${hostKey}`);
+  sshOptions.push(
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=3",
+  );
+
+  return { remoteTarget, sshOptions };
+}
+
+function commandFailure(command, result) {
+  const suffix = result.signal ? ` (${result.signal})` : "";
+  const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
+  return (
+    `${command}가 종료 코드 ${result.status ?? 1}${suffix}로 실패했습니다` +
+    (stderr ? `\n${stderr}` : "")
+  );
+}
+
+function run(command, args, options = {}) {
+  const result = spawnSync(command, args, {
+    cwd: REPO_ROOT,
+    env: process.env,
+    stdio: options.quiet ? ["ignore", "ignore", "inherit"] : "inherit",
+  });
+  if (result.error)
+    throw new DeployError(`${command} 실행 실패: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new DeployError(commandFailure(command, result), result.status ?? 1);
+  }
+}
+
+function capture(command, args) {
+  const result = spawnSync(command, args, {
+    cwd: REPO_ROOT,
+    env: process.env,
+    encoding: "utf8",
+  });
+  if (result.error)
+    throw new DeployError(`${command} 실행 실패: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new DeployError(commandFailure(command, result), result.status ?? 1);
+  }
+  return result.stdout.trim();
+}
+
+function sshArguments(connection, options = {}) {
+  return [
+    ...connection.sshOptions,
+    ...(options.batch
+      ? ["-o", "ConnectTimeout=15", "-o", "BatchMode=yes"]
+      : []),
+    connection.remoteTarget,
+  ];
+}
+
+function shellQuote(value) {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
+}
+
+function runRemoteBash(connection, script, args = [], options = {}) {
+  const remoteCommand = [
+    "/bin/bash",
+    "-c",
+    shellQuote(script),
+    "deploy-remote",
+    ...args.map(shellQuote),
+  ].join(" ");
+  run("ssh", [...sshArguments(connection, options), remoteCommand], options);
+}
+
+function preflight(connection) {
+  runRemoteBash(connection, PREFLIGHT, [], { batch: true, quiet: true });
+}
+
+function validateRemoteDirectory(remoteDirectory) {
+  const pattern = /^\/tmp\/quant-deploy\.[a-zA-Z0-9]+$/;
+  if (!pattern.test(remoteDirectory)) {
+    throw new DeployError(
+      `원격 임시 경로가 올바르지 않습니다: ${remoteDirectory}`,
+    );
+  }
+}
+
+function createRemoteDirectory(connection) {
+  const template = "/tmp/quant-deploy.XXXXXX";
+  const remoteDirectory = capture("ssh", [
+    ...sshArguments(connection),
+    `mktemp -d ${template}`,
+  ]);
+  validateRemoteDirectory(remoteDirectory);
+  return remoteDirectory;
+}
+
+function removeRemoteDirectory(connection, remoteDirectory) {
+  validateRemoteDirectory(remoteDirectory);
+  run(
+    "ssh",
+    [
+      ...sshArguments(connection),
+      `/bin/rm -rf -- ${shellQuote(remoteDirectory)}`,
+    ],
+    { quiet: true },
+  );
+}
+
+function upload(connection, files, remoteDirectory) {
+  run("scp", [
+    ...connection.sshOptions,
+    ...files,
+    `${connection.remoteTarget}:${remoteDirectory}/`,
+  ]);
+}
+
+function stageFiles(connection, files) {
+  const remoteDirectory = createRemoteDirectory(connection);
+  try {
+    upload(connection, files, remoteDirectory);
+  } catch (error) {
+    try {
+      removeRemoteDirectory(connection, remoteDirectory);
+    } catch (cleanupError) {
+      const message =
+        cleanupError instanceof Error
+          ? cleanupError.message
+          : String(cleanupError);
+      logError(
+        `업로드 실패 후 임시 디렉터리 정리도 실패했습니다: ${message}`,
+      );
+    }
+    throw error;
+  }
+  return remoteDirectory;
+}
+
+function stageDeployment(
+  connection,
+  releaseArchive,
+  releaseChecksum,
+  releaseName,
+) {
+  const remoteDirectory = stageFiles(connection, [
+    releaseArchive,
+    releaseChecksum,
+    SCRIPT_PATH,
+  ]);
+  return {
+    connection,
+    releaseName,
+    remoteDirectory,
+    remoteArchive: path.posix.join(
+      remoteDirectory,
+      path.basename(releaseArchive),
+    ),
+    remoteChecksum: path.posix.join(
+      remoteDirectory,
+      path.basename(releaseChecksum),
+    ),
+    remoteScript: path.posix.join(remoteDirectory, "deploy.sh"),
+  };
+}
+
+function runPhase(deployment, phase) {
+  const args =
+    phase === "prepare"
+      ? [
+          phase,
+          deployment.remoteArchive,
+          deployment.remoteChecksum,
+          deployment.releaseName,
+        ]
+      : [phase, deployment.releaseName];
+  const command = [
+    "/bin/bash",
+    shellQuote(deployment.remoteScript),
+    "--remote",
+    ...args.map(shellQuote),
+  ].join(" ");
+  run("ssh", [...sshArguments(deployment.connection), command]);
+}
+
+function readReleaseMetadata(metadataFile, artifactDirectory) {
+  let metadata;
+  try {
+    metadata = JSON.parse(readFileSync(metadataFile, "utf8"));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new DeployError(`release metadata를 읽을 수 없습니다: ${message}`);
+  }
+  if (
+    metadata === null ||
+    typeof metadata !== "object" ||
+    Array.isArray(metadata)
+  ) {
+    throw new DeployError("release metadata 형식이 올바르지 않습니다");
+  }
+  const { releaseName, gitSha } = metadata;
+  if (
+    typeof releaseName !== "string" ||
+    !/^\d{8}-\d{6}-[a-f0-9]{7}$/.test(releaseName)
+  ) {
+    throw new DeployError("release metadata의 releaseName이 올바르지 않습니다");
+  }
+  if (
+    typeof gitSha !== "string" ||
+    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(gitSha)
+  ) {
+    throw new DeployError("release metadata의 gitSha가 올바르지 않습니다");
+  }
+  const releaseArchive = path.join(
+    artifactDirectory,
+    `quant-platform-${releaseName}.tar.gz`,
+  );
+  const releaseChecksum = `${releaseArchive}.sha256`;
+  if (!existsSync(releaseArchive) || !existsSync(releaseChecksum)) {
+    throw new DeployError(
+      "release metadata가 가리키는 archive 또는 checksum이 없습니다",
+    );
+  }
+  return { releaseArchive, releaseChecksum, releaseName, gitSha };
+}
+
+function main() {
+  if (process.platform !== "linux")
+    throw new DeployError("배포는 Linux에서 실행하세요");
+  const settings = readDeploySettings();
+  const connection = readConnection(settings);
+  const artifactDirectory = mkdtempSync(path.join(tmpdir(), "quant-deploy-"));
+  let deployment = null;
+  let attempted = false;
+  let committed = false;
+  try {
+    preflight(connection);
+    const metadataFile = path.join(artifactDirectory, "release-metadata.json");
+    log("==> 운영 서버와 Linux 클라이언트 검증·패키징");
+    run("bash", [
+      path.join(SCRIPT_DIR, "build-release.sh"),
+      artifactDirectory,
+      metadataFile,
+    ]);
+    const release = readReleaseMetadata(metadataFile, artifactDirectory);
+    deployment = stageDeployment(
+      connection,
+      release.releaseArchive,
+      release.releaseChecksum,
+      release.releaseName,
+    );
+    attempted = true;
+    runPhase(deployment, "prepare");
+    runPhase(deployment, "verify");
+    runPhase(deployment, "commit");
+    committed = true;
+    runPhase(deployment, "finalize");
+    log(`==> 서버와 다운로드 클라이언트 게시 완료: ${release.releaseName}`);
+  } catch (error) {
+    if (attempted && !committed && deployment) {
+      try {
+        runPhase(deployment, "rollback");
+      } catch (rollbackError) {
+        throw new DeployError(
+          `${error.message}\n서버·DB 복원 실패: ${rollbackError.message}`,
+        );
+      }
+    }
+    throw error;
+  } finally {
+    if (deployment) {
+      try {
+        removeRemoteDirectory(connection, deployment.remoteDirectory);
+      } catch (error) {
+        logError(`배포 임시 파일 정리 실패: ${error.message}`);
+      }
+    }
+    rmSync(artifactDirectory, { recursive: true, force: true });
+  }
+}
+
+try {
+  main();
+} catch (error) {
+  const deployError =
+    error instanceof DeployError
+      ? error
+      : new DeployError(error instanceof Error ? error.message : String(error));
+  logError(deployError.message);
+  process.exitCode = deployError.exitCode;
+}
+DEPLOY_LOCAL_NODE
+)" "${BASH_SOURCE[0]}" "$@"
+  exit "$?"
+fi
+shift
+
 KEEP_SUCCESSFUL_DEPLOYS=0
 PHASE="${1:-}"
 
 case "${PHASE}" in
   prepare)
     [ "$#" -eq 4 ] || {
-      echo '사용법: deploy-app.sh prepare <release-archive> <checksum-file> <release-name>' >&2
+      echo '사용법: deploy.sh --remote prepare <release-archive> <checksum-file> <release-name>' >&2
       exit 64
     }
     REMOTE_ARCHIVE_PATH="$2"
@@ -519,11 +1003,11 @@ case "${PHASE}" in
         ;;
     esac
     case "${REMOTE_ARCHIVE_PATH}" in
-      /tmp/quant-app-deploy.*/*) ;;
+      /tmp/quant-deploy.*/*) ;;
       *) echo "release archive 경로가 허용된 위치가 아닙니다: ${REMOTE_ARCHIVE_PATH}" >&2; exit 64 ;;
     esac
     case "${REMOTE_CHECKSUM_PATH}" in
-      /tmp/quant-app-deploy.*/*) ;;
+      /tmp/quant-deploy.*/*) ;;
       *) echo "checksum 경로가 허용된 위치가 아닙니다: ${REMOTE_CHECKSUM_PATH}" >&2; exit 64 ;;
     esac
     [ "$(basename "${REMOTE_ARCHIVE_PATH}")" = "quant-platform-${RELEASE}.tar.gz" ] || {
@@ -620,8 +1104,8 @@ case "${PHASE}" in
       DEPLOY_PHASE=switched
     else
       echo "current release 전환을 검증하지 못했습니다: ${RELEASE_DIR}" >&2
-      rollback_app_transaction "${RELEASE}" || \
-        echo 'app 전환 실패 후 rollback에도 실패했습니다' >&2
+      rollback_transaction "${RELEASE}" || \
+        echo '서버 전환 실패 후 rollback에도 실패했습니다' >&2
       exit 1
     fi
 
@@ -646,19 +1130,19 @@ case "${PHASE}" in
       wait_for_ready || DEPLOY_FAILED=1
     fi
     if [ "${DEPLOY_FAILED}" -ne 0 ]; then
-      echo 'app 기동 또는 readiness 실패 — 진단 후 통합 rollback을 실행합니다' >&2
+      echo '서버 기동 또는 readiness 실패 — 진단 후 통합 rollback을 실행합니다' >&2
       print_service_diagnostics 'new release failed' "${DEPLOY_ATTEMPT_STARTED_AT}"
-      if ! rollback_app_transaction "${RELEASE}"; then
-        echo 'app 자동 rollback에 실패해 release와 DB snapshot을 보존합니다' >&2
+      if ! rollback_transaction "${RELEASE}"; then
+        echo '자동 rollback에 실패해 release와 DB snapshot을 보존합니다' >&2
       fi
       exit 1
     fi
     DEPLOY_PHASE=prepared
-    echo "app release ${RELEASE} prepared"
+    echo "release ${RELEASE} prepared"
     ;;
   verify|commit|rollback|finalize)
     [ "$#" -eq 2 ] || {
-      echo "사용법: deploy-app.sh ${PHASE} <release-name>" >&2
+      echo "사용법: deploy.sh --remote ${PHASE} <release-name>" >&2
       exit 64
     }
     RELEASE="$2"
@@ -673,36 +1157,36 @@ case "${PHASE}" in
     acquire_deploy_lock
     case "${PHASE}" in
       verify)
-        verify_prepared_app "${RELEASE}"
-        echo "app release ${RELEASE} verified"
+        verify_prepared_release "${RELEASE}"
+        echo "release ${RELEASE} verified"
         ;;
       commit)
-        verify_prepared_app "${RELEASE}"
+        verify_prepared_release "${RELEASE}"
         RELEASE_DIR="/opt/quant-platform/releases/${RELEASE}"
         mark_deploy_succeeded "${RELEASE_DIR}" "${TRANSACTION_DB_SNAPSHOT}"
         sudo touch "${TRANSACTION_STATE_FILE}.committed"
-        echo "app release ${RELEASE} committed"
+        echo "release ${RELEASE} committed"
         ;;
       rollback)
-        rollback_app_transaction "${RELEASE}"
+        rollback_transaction "${RELEASE}"
         ;;
       finalize)
         read_transaction_state "${RELEASE}"
         sudo test -f "${TRANSACTION_STATE_FILE}.committed" || {
-          echo "app 배포가 commit되지 않았습니다: ${RELEASE}" >&2
+          echo "배포가 commit되지 않았습니다: ${RELEASE}" >&2
           exit 1
         }
-        verify_current_app_release "${RELEASE}"
+        verify_current_release "${RELEASE}"
         RELEASE_DIR="/opt/quant-platform/releases/${RELEASE}"
-        cleanup_successful_app_artifacts "${RELEASE_DIR}"
+        cleanup_successful_artifacts "${RELEASE_DIR}"
         validate_transaction_state_file "${TRANSACTION_STATE_FILE}"
         sudo rm -f -- "${TRANSACTION_STATE_FILE}" "${TRANSACTION_STATE_FILE}.committed"
-        echo "app release ${RELEASE} live"
+        echo "release ${RELEASE} live"
         ;;
     esac
     ;;
   *)
-    echo 'deploy-app.sh는 deploy.mjs 내부 transaction에서만 호출합니다' >&2
+    echo 'deploy.sh --remote에는 prepare/verify/commit/finalize/rollback 단계가 필요합니다' >&2
     exit 64
     ;;
 esac
