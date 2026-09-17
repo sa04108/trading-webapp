@@ -19,7 +19,7 @@ const SERVER_PREFLIGHT = [
   '  command -v "${command_name}" >/dev/null',
   "done",
   "sudo -n true",
-  "sudo -n test -f /etc/quant-platform/server.env || sudo -n test -f /etc/quant-platform/app.env",
+  "sudo -n test -f /etc/quant-platform/app.env",
   "sudo -n test -f /etc/systemd/system/quant-platform.service",
 ].join("\n");
 
