@@ -20,32 +20,32 @@ describe('단일 서버 운영 진입점', () => {
   it('배포 대상 이름과 다중 컴포넌트 분기가 남지 않는다', () => {
     const deploy = readFileSync('scripts/deploy.sh', 'utf8');
     expect(deploy).not.toMatch(/componentPrefix|connection\.component|stageAppDeployment|runAppPhase|APP_HOST|APP_SSH_/);
-    expect(deploy).toContain('function readConnection(settings)');
+    expect(deploy).toContain('local_deploy()');
     expect(deploy).toContain('HOST');
     expect(deploy).toContain('SSH_PORT');
     expect(deploy).toContain('/etc/quant-platform/app.env');
     expect(deploy).toContain('/var/lib/quant-platform/app.sqlite');
   });
 
-  it('통합한 로컬 코드도 Node 문법 검사를 통과한다', () => {
-    const script = readFileSync('scripts/deploy.sh', 'utf8');
-    const local = script.split("<<'DEPLOY_LOCAL_NODE'\n")[1].split('\nDEPLOY_LOCAL_NODE')[0];
-    const result = spawnSync(process.execPath, ['--check', '--input-type=module'], { input: local, encoding: 'utf8' });
-    expect(result.status, result.stderr).toBe(0);
+  it('Node 조정 블록이나 별도 배포 진입점 없이 Bash로 배포한다', () => {
+    const deploy = readFileSync('scripts/deploy.sh', 'utf8');
+    expect(deploy).not.toMatch(/DEPLOY_LOCAL_NODE|--input-type|--eval|spawnSync|parseEnv/);
+    expect(deploy).toContain('remote_deploy()');
+    expect(deploy).toContain('tee "$LOG"');
   });
 
   it('source는 함수만 정의하고 로컬 배포를 시작하지 않는다', () => {
-    const result = spawnSync(bash, ['-c', 'source scripts/deploy.sh; declare -F rollback_transaction; declare -F verify_prepared_release'], { encoding: 'utf8' });
+    const result = spawnSync(bash, ['-c', 'source scripts/deploy.sh; declare -F rollback_release; declare -F remote_deploy'], { encoding: 'utf8' });
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('rollback_transaction');
-    expect(result.stdout).toContain('verify_prepared_release');
+    expect(result.stdout).toContain('rollback_release');
+    expect(result.stdout).toContain('remote_deploy');
     expect(result.stderr).not.toContain('배포 환경 파일');
   });
 
-  it('잘못된 내부 단계는 로컬 배포로 돌아가지 않고 거부한다', () => {
+  it('잘못된 내부 호출은 로컬 배포로 돌아가지 않고 거부한다', () => {
     const result = spawnSync(bash, ['scripts/deploy.sh', '--remote', 'unknown'], { encoding: 'utf8' });
     expect(result.status).toBe(64);
-    expect(result.stderr).toContain('prepare/verify/commit/finalize/rollback');
+    expect(result.stderr).toContain('내부 호출: --remote');
     expect(result.stderr).not.toContain('배포 환경 파일');
   });
 

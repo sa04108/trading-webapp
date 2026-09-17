@@ -1,1192 +1,351 @@
 #!/usr/bin/env bash
-# 단일 배포 진입점: 로컬 검증·전송과 원격 release transaction을 같은 파일에서 실행한다.
-# 인자 없는 실행은 로컬 배포이며 --remote는 SSH로 호출하는 내부 단계다.
-# 이 스크립트는 잠금, 서버·DB 전환, readiness, rollback과 산출물 정리를 담당한다.
-# source하면 테스트 가능한 함수만 정의한다.
+# 개발 PC에서 검증·빌드·업로드하고, 같은 파일을 서버에서 한 번 실행해 배포한다.
+# 사용법: ./scripts/deploy.sh (저장소 루트의 deploy.env 사용)
+# --remote는 내부 호출용이다. 배포 조정에 Node나 별도 진입점은 사용하지 않는다.
 set -euo pipefail
 
-# 기본 창은 60회 × 2초 = 2분이다. 옛 값(10회 = 18초)은 부팅이 마이그레이션까지
-# 떠안던 시절에도 빠듯했고, 2026-08-09 배포가 그 창을 2초 차이로 넘겨 롤백됐다.
-# 지금은 마이그레이션이 기동 전으로 빠져 부팅이 다시 짧지만, 창을 넓게 두는 값은
-# 여전히 필요하다 — EC2 t계열은 CPU 크레딧 상태에 따라 기동 시간이 흔들린다.
-# 넓혀도 정상 배포는 첫 시도에 통과하므로 배포 시간이 늘지 않는다.
-wait_for_ready() {
-  local max_attempts="${1:-60}"
-  local delay_seconds="${2:-2}"
-  local attempt
-  for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
-    if curl -fsS http://127.0.0.1:3000/api/v1/health/ready >/dev/null 2>&1; then
-      return 0
+error() { printf '%s\n' "$*" >&2; }
+
+# deploy.env는 데이터다. source/eval하지 않으며 한 줄 값과 바깥 따옴표만 읽는다.
+read_settings() {
+  local file="$1" line name value quote tail
+  HOST= SSH_USER= SSH_KEY= SSH_PORT= SSH_JUMP= SSH_HOST_KEY= SSH_OPTS=
+  [ -f "$file" ] || { error "배포 환경 파일이 없습니다: $file"; return 1; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    line="${line#export }"
+    [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$ ]] || {
+      error 'deploy.env는 KEY=value 형식이어야 합니다'; return 1;
+    }
+    name="${BASH_REMATCH[1]}" value="${BASH_REMATCH[2]}"
+    case "$name" in HOST|SSH_USER|SSH_KEY|SSH_PORT|SSH_JUMP|SSH_HOST_KEY|SSH_OPTS) ;; *) continue ;; esac
+    value="${value#"${value%%[![:space:]]*}"}"
+    quote="${value:0:1}"
+    if [[ "$quote" == "'" || "$quote" == '"' ]]; then
+      value="${value:1}"
+      [[ "$value" == *"$quote"* ]] || { error "$name: 닫히지 않은 따옴표"; return 1; }
+      tail="${value#*"$quote"}"
+      value="${value%%"$quote"*}"
+      [[ "$tail" =~ ^[[:space:]]*(#.*)?$ ]] || { error "$name: 따옴표 뒤에 잘못된 값"; return 1; }
+    else
+      value="${value%%#*}"
     fi
-    if ((attempt < max_attempts)); then sleep "${delay_seconds}"; fi
+    value="${value%"${value##*[![:space:]]}"}"
+    printf -v "$name" '%s' "$value"
+  done < "$file"
+}
+
+# SSH_OPTS의 인용된 공백을 보존하되 셸 확장이나 명령 실행은 하지 않는다.
+split_ssh_options() {
+  local text="$1" char word='' quote='' escaped=0 started=0 i
+  SSH_ARGS=()
+  for ((i=0; i<${#text}; i++)); do
+    char="${text:i:1}"
+    if ((escaped)); then word+="$char"; escaped=0; started=1
+    elif [[ "$quote" == "'" ]]; then
+      if [[ "$char" == "'" ]]; then quote=''; else word+="$char"; fi
+    elif [[ "$char" == '\' ]]; then escaped=1; started=1
+    elif [[ -n "$quote" ]]; then
+      if [[ "$char" == "$quote" ]]; then quote=''; else word+="$char"; fi
+    elif [[ "$char" == "'" || "$char" == '"' ]]; then quote="$char"; started=1
+    elif [[ "$char" == [[:space:]] ]]; then
+      if ((started)); then SSH_ARGS+=("$word"); word=''; started=0; fi
+    else word+="$char"; started=1
+    fi
+  done
+  [[ -z "$quote" && "$escaped" == 0 ]] || { error 'SSH_OPTS의 따옴표 또는 escape가 닫히지 않았습니다'; return 1; }
+  if ((started)); then SSH_ARGS+=("$word"); fi
+}
+
+configure_ssh() {
+  local host embedded_user=''
+  [[ -n "$HOST" && "$HOST" != -* && "$HOST" != *[[:space:]]* ]] || { error 'HOST가 필요하거나 형식이 올바르지 않습니다'; return 1; }
+  host="$HOST"
+  if [[ "$HOST" == *@* ]]; then embedded_user="${HOST%@*}"; host="${HOST##*@}"; fi
+  [[ -n "$host" && "$host" != -* && "$embedded_user" != -* && "$embedded_user" != *@* ]] || { error 'HOST 형식이 올바르지 않습니다'; return 1; }
+  [[ "$SSH_USER" != -* && "$SSH_USER" != *[@[:space:]]* ]] || { error 'SSH_USER 형식이 올바르지 않습니다'; return 1; }
+  [[ -z "$embedded_user" || -z "$SSH_USER" || "$embedded_user" == "$SSH_USER" ]] || { error 'HOST 사용자와 SSH_USER가 다릅니다'; return 1; }
+  TARGET="$HOST"
+  if [[ "$HOST" != *@* && -n "$SSH_USER" ]]; then TARGET="$SSH_USER@$HOST"; fi
+  split_ssh_options "$SSH_OPTS"
+  if [[ -n "$SSH_KEY" ]]; then
+    SSH_KEY="${SSH_KEY/#\~\//$HOME/}"
+    [ -f "$SSH_KEY" ] || { error "SSH_KEY 파일이 없습니다: $SSH_KEY"; return 1; }
+    SSH_ARGS+=(-i "$SSH_KEY" -o IdentitiesOnly=yes)
+  fi
+  if [[ -n "$SSH_PORT" ]]; then
+    [[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]] && ((10#$SSH_PORT >= 1 && 10#$SSH_PORT <= 65535)) || { error 'SSH_PORT가 올바르지 않습니다'; return 1; }
+    SSH_ARGS+=(-o "Port=$SSH_PORT")
+  fi
+  if [[ -n "$SSH_JUMP" ]]; then
+    [[ "$SSH_JUMP" != -* && "$SSH_JUMP" != *[[:space:]]* ]] || { error 'SSH_JUMP 형식이 올바르지 않습니다'; return 1; }
+    SSH_ARGS+=(-o "ProxyJump=$SSH_JUMP")
+  fi
+  case "${SSH_HOST_KEY:=accept-new}" in accept-new|yes|no) ;; *) error 'SSH_HOST_KEY는 accept-new | yes | no 중 하나입니다'; return 1 ;; esac
+  SSH_ARGS+=(-o "StrictHostKeyChecking=$SSH_HOST_KEY" -o ServerAliveInterval=15 -o ServerAliveCountMax=3)
+}
+
+local_exit() {
+  local status=$?
+  trap - EXIT
+  if [[ -n "${REMOTE_DIR:-}" ]]; then
+    ssh "${SSH_ARGS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "$TARGET" \
+      "rm -rf -- '$REMOTE_DIR'" || echo '경고: 원격 업로드 임시파일 정리에 실패했습니다' >&2
+  fi
+  if [[ -n "${ARTIFACT_DIR:-}" ]]; then rm -rf -- "$ARTIFACT_DIR" || echo '경고: 로컬 임시파일 정리에 실패했습니다' >&2; fi
+  if ((status)); then echo "실패 (exit $status). 로그: $LOG"; fi
+  exec 1>&- 2>&-
+  wait "$TEE_PID" 2>/dev/null || true
+  exit "$status"
+}
+
+local_deploy() {
+  local repo_root archive checksum release remote_dir
+  local -a archives
+  [[ "$(uname -s)" == Linux ]] || { error '배포는 Linux에서 실행하세요'; return 1; }
+  repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+  cd "$repo_root"
+  LOG="${LOG:-$repo_root/.logs/deploy-$(date -u +%Y%m%d-%H%M%S).log}"
+  mkdir -p "$(dirname "$LOG")"
+  exec > >(tee "$LOG") 2>&1
+  TEE_PID=$!
+  ARTIFACT_DIR='' REMOTE_DIR=''
+  trap local_exit EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  echo "로그: $LOG"
+  read_settings "$repo_root/deploy.env"
+  configure_ssh
+  echo "==> SSH 접속 확인: $TARGET"
+  ssh "${SSH_ARGS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "$TARGET" '
+    set -eu
+    for cmd in bash flock sha256sum tar corepack sqlite3 systemctl systemd-run curl; do command -v "$cmd" >/dev/null; done
+    sudo -n true
+    sudo -n test -f /etc/quant-platform/app.env
+    sudo -n test -f /etc/systemd/system/quant-platform.service
+  '
+  ARTIFACT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/quant-build.XXXXXX")"
+  echo '==> 운영 서버와 Linux 클라이언트 검증·패키징'
+  bash "$repo_root/scripts/build-release.sh" "$ARTIFACT_DIR"
+  archives=("$ARTIFACT_DIR"/quant-platform-*.tar.gz)
+  [[ ${#archives[@]} == 1 && -f "${archives[0]}" ]] || { error 'release archive가 없거나 여러 개입니다'; return 1; }
+  archive="${archives[0]}"; checksum="$archive.sha256"
+  release="${archive##*/quant-platform-}"; release="${release%.tar.gz}"
+  [[ "$release" =~ ^[0-9]{8}-[0-9]{6}-[a-f0-9]{7}$ && -f "$checksum" ]] || { error 'release 이름 또는 checksum 파일이 올바르지 않습니다'; return 1; }
+  remote_dir="$(ssh "${SSH_ARGS[@]}" "$TARGET" 'mktemp -d /tmp/quant-deploy.XXXXXX')"
+  [[ "$remote_dir" =~ ^/tmp/quant-deploy\.[a-zA-Z0-9]+$ ]] || { error '원격 임시 경로가 올바르지 않습니다'; return 1; }
+  REMOTE_DIR="$remote_dir"
+  echo '==> 업로드 및 릴리스 전환'
+  scp "${SSH_ARGS[@]}" "$archive" "$checksum" "$repo_root/scripts/deploy.sh" "$TARGET:$REMOTE_DIR/"
+  # 모든 경로 조각은 위의 고정 형식 검사로 제한했다. 표준 입력은 원격 프로세스에 남긴다.
+  ssh "${SSH_ARGS[@]}" "$TARGET" \
+    "bash '$REMOTE_DIR/deploy.sh' --remote '$REMOTE_DIR/${archive##*/}' '$REMOTE_DIR/${checksum##*/}' '$release'"
+  echo "==> 완료: $release"
+}
+
+wait_for_ready() {
+  local attempt
+  for ((attempt=1; attempt<=60; attempt++)); do
+    if curl -fsS http://127.0.0.1:3000/api/v1/health/ready >/dev/null 2>&1; then return 0; fi
+    if ((attempt<60)); then sleep 2; fi
   done
   return 1
 }
 
 print_service_diagnostics() {
-  local phase="$1"
-  local since="$2"
-  echo "==> service diagnostics: ${phase} (since ${since})" >&2
-  echo '-- current release --' >&2
+  echo '==> service diagnostics' >&2
   readlink -f /opt/quant-platform/current >&2 || true
-  if [ -f /opt/quant-platform/current/dist/build-info.json ]; then
-    sudo cat /opt/quant-platform/current/dist/build-info.json >&2 || true
-  fi
-  echo '-- systemd properties --' >&2
   sudo systemctl show quant-platform --no-pager \
     --property=ActiveState,SubState,Result,ExecMainCode,ExecMainStatus,NRestarts >&2 || true
-  echo '-- systemd status --' >&2
   sudo systemctl status quant-platform --no-pager -l >&2 || true
-  echo '-- service journal --' >&2
-  sudo journalctl -u quant-platform --since "${since}" --no-pager -o short-iso >&2 || true
+  sudo journalctl -u quant-platform --since "$DEPLOY_STARTED_AT" --no-pager -o short-iso >&2 || true
 }
 
 validate_release_directory() {
-  local release_directory="$1"
-  local release_name
-
-  case "${release_directory}" in
-    /opt/quant-platform/releases/*) ;;
-    *)
-      echo "정리할 release 경로가 허용된 위치가 아닙니다: ${release_directory}" >&2
-      return 1
-      ;;
-  esac
-  release_name="${release_directory#/opt/quant-platform/releases/}"
-  case "${release_name}" in
-    ''|.|..|*/*|*[!a-zA-Z0-9._-]*)
-      echo "정리할 release 이름이 올바르지 않습니다: ${release_name}" >&2
-      return 1
-      ;;
-  esac
+  [[ "$1" =~ ^/opt/quant-platform/releases/[a-zA-Z0-9._-]+$ && "${1##*/}" != . && "${1##*/}" != .. ]] || {
+    error "release 경로가 올바르지 않습니다: $1"; return 1;
+  }
 }
 
 resolve_current_release() {
-  local current_link="${1:-/opt/quant-platform/current}"
-  local current_release=""
-
-  if current_release="$(readlink -e "${current_link}" 2>/dev/null)" &&
-    [ -n "${current_release}" ]; then
-    validate_release_directory "${current_release}" || return 1
-    printf '%s\n' "${current_release}"
-    return 0
-  fi
-  if [ -e "${current_link}" ] || [ -L "${current_link}" ]; then
-    echo "current release 경로를 안전하게 해석할 수 없습니다: ${current_link}" >&2
-    return 1
+  local link="${1:-/opt/quant-platform/current}" resolved
+  if resolved="$(readlink -e "$link")" && [[ -n "$resolved" ]]; then
+    validate_release_directory "$resolved" || return 1
+    printf '%s\n' "$resolved"
+  elif [[ -e "$link" || -L "$link" ]]; then
+    error 'current release 경로를 안전하게 해석할 수 없습니다'; return 1
   fi
 }
 
-is_normal_deploy_artifact() {
-  local in_progress_marker="$1"
-  local failed_marker="$2"
-
-  # 두 검사가 모두 성공해 마커가 없다고 확인된 경우에만 정상 회전 대상으로 본다.
-  # sudo 자체가 실패하면 복구 산출물을 정상으로 오인해 삭제하지 않도록 false가 된다.
-  sudo test ! -e "${in_progress_marker}" && sudo test ! -e "${failed_marker}"
-}
-
-validate_deploy_snapshot() {
+remove_snapshot() {
   local snapshot="$1"
-  local release_name
-
-  case "${snapshot}" in
-    /var/lib/quant-platform/backups/pre-deploy-*.sqlite) ;;
-    *)
-      echo "정리할 DB snapshot 경로가 허용된 위치가 아닙니다: ${snapshot}" >&2
-      return 1
-      ;;
-  esac
-  release_name="${snapshot#/var/lib/quant-platform/backups/pre-deploy-}"
-  release_name="${release_name%.sqlite}"
-  case "${release_name}" in
-    ''|*/*|*[!a-zA-Z0-9._-]*)
-      echo "정리할 DB snapshot 이름이 올바르지 않습니다: ${release_name}" >&2
-      return 1
-      ;;
-  esac
+  [[ "$snapshot" =~ ^/var/lib/quant-platform/backups/\.?pre-deploy-[a-zA-Z0-9._-]+\.sqlite(\.incomplete)?$ ]] || { error 'DB snapshot 경로가 올바르지 않습니다'; return 1; }
+  sudo rm -f -- "$snapshot" "$snapshot.data" "$snapshot.json" "$snapshot-journal" "$snapshot-wal" "$snapshot-shm" \
+    "$snapshot.deploy-in-progress" "$snapshot.deploy-failed" "$snapshot.deploy-succeeded"
 }
 
-cleanup_incomplete_snapshot() {
-  local snapshot="$1"
-  local release_name
-  local final_snapshot
-
-  case "${snapshot}" in
-    /var/lib/quant-platform/backups/.pre-deploy-*.sqlite.incomplete) ;;
-    *)
-      echo "정리할 incomplete snapshot 경로가 허용된 위치가 아닙니다: ${snapshot}" >&2
-      return 1
-      ;;
-  esac
-  release_name="${snapshot#/var/lib/quant-platform/backups/.pre-deploy-}"
-  release_name="${release_name%.sqlite.incomplete}"
-  case "${release_name}" in
-    ''|*/*|*[!a-zA-Z0-9._-]*)
-      echo "정리할 incomplete snapshot 이름이 올바르지 않습니다: ${release_name}" >&2
-      return 1
-      ;;
-  esac
-  final_snapshot="/var/lib/quant-platform/backups/pre-deploy-${release_name}.sqlite"
-  sudo rm -f -- "${snapshot}" "${snapshot}-journal" "${snapshot}-wal" "${snapshot}-shm" "${snapshot}.data" "${snapshot}.json" \
-    "${final_snapshot}.deploy-in-progress" "${final_snapshot}.deploy-failed"
+remove_failed_release() {
+  local directory="$1" current
+  validate_release_directory "$directory" || return 1
+  current="$(resolve_current_release)" || return 1
+  [[ "$current" != "$directory" ]] || { error '현재 release는 실패 산출물로 삭제하지 않습니다'; return 1; }
+  sudo rm -rf -- "$directory"
 }
 
-cleanup_failed_deploy_artifacts() {
-  local failed_release="$1"
-  local db_snapshot="$2"
-  local current_release=""
-
-  if [ -n "${failed_release}" ]; then
-    validate_release_directory "${failed_release}" || return 1
-    current_release="$(resolve_current_release)" || return 1
-    if [ "${failed_release}" = "${current_release}" ]; then
-      echo "현재 release는 실패 산출물로 삭제하지 않습니다: ${failed_release}" >&2
-      return 1
-    fi
-  fi
-  if [ -n "${db_snapshot}" ]; then
-    validate_deploy_snapshot "${db_snapshot}" || return 1
-  fi
-
-  if [ -n "${db_snapshot}" ]; then
-    sudo rm -f -- "${db_snapshot}" "${db_snapshot}-journal" "${db_snapshot}-wal" \
-      "${db_snapshot}-shm" "${db_snapshot}.data" "${db_snapshot}.json" "${db_snapshot}.deploy-in-progress" \
-      "${db_snapshot}.deploy-failed" "${db_snapshot}.deploy-succeeded" || return 1
-  fi
-  if [ -n "${failed_release}" ]; then
-    sudo rm -rf -- "${failed_release}" || return 1
-  fi
-}
-
-acquire_deploy_lock() {
-  local lock_file="${1:-/run/lock/quant-platform-deploy.lock}"
-  local lock_owner
-
-  command -v flock >/dev/null 2>&1 || {
-    echo 'flock 명령이 없어 배포 잠금을 잡을 수 없습니다' >&2
-    return 1
-  }
-  lock_owner="$(id -u):$(id -g)"
-  sudo touch "${lock_file}"
-  sudo chown "${lock_owner}" "${lock_file}"
-  sudo chmod 0600 "${lock_file}"
-  exec {DEPLOY_LOCK_FD}>"${lock_file}"
-  if ! flock -n "${DEPLOY_LOCK_FD}"; then
-    echo '다른 배포가 진행 중입니다 — 완료 후 다시 시도하세요' >&2
-    return 75
-  fi
-}
-
-mark_deploy_succeeded() {
-  local release_directory="$1"
-  local db_snapshot="$2"
-
-  validate_release_directory "${release_directory}" || return 1
-  if [ -n "${db_snapshot}" ]; then
-    validate_deploy_snapshot "${db_snapshot}" || return 1
-  fi
-  if [ -n "${db_snapshot}" ]; then
-    sudo rm -f -- "${db_snapshot}.deploy-in-progress" \
-      "${db_snapshot}.deploy-failed" || return 1
-  fi
-  if ! sudo rm -f -- "${release_directory}/.deploy-in-progress" \
-    "${release_directory}/.deploy-failed"; then
-    if [ -n "${db_snapshot}" ]; then
-      sudo touch "${db_snapshot}.deploy-in-progress" || true
-    fi
-    return 1
-  fi
-}
-
-mark_deploy_failed() {
-  local release_directory="$1"
-  local db_snapshot="$2"
-  local mark_status=0
-
-  validate_release_directory "${release_directory}" || return 1
-  if [ -n "${db_snapshot}" ]; then
-    validate_deploy_snapshot "${db_snapshot}" || return 1
-  fi
-  if sudo touch "${release_directory}/.deploy-failed"; then
-    sudo rm -f -- "${release_directory}/.deploy-in-progress" || mark_status=1
+rollback_release() {
+  echo '배포 실패로 코드와 DB를 이전 상태로 롤백합니다' >&2
+  sudo systemctl stop quant-platform || return 1
+  if ((DB_EXISTED)); then
+    sudo test -f "$DB_SNAPSHOT" && sudo test -f "$DB_SNAPSHOT.data" && sudo test -f "$DB_SNAPSHOT.json" || return 1
+    sudo env DATABASE_PATH="$DB_PATH" /usr/local/bin/node "$RELEASE_DIR/dist/server/cli.js" db:restore "$DB_SNAPSHOT" || return 1
+    sudo chown quant:quant "$DB_PATH" /var/lib/quant-platform/app.data.sqlite || return 1
   else
-    mark_status=1
+    sudo rm -f -- "$DB_PATH" "$DB_PATH-journal" "$DB_PATH-wal" "$DB_PATH-shm" \
+      /var/lib/quant-platform/app.data.sqlite /var/lib/quant-platform/app.data.sqlite-wal /var/lib/quant-platform/app.data.sqlite-shm || return 1
   fi
-  if [ -n "${db_snapshot}" ]; then
-    if sudo touch "${db_snapshot}.deploy-failed"; then
-      sudo rm -f -- "${db_snapshot}.deploy-in-progress" || mark_status=1
-    else
-      mark_status=1
-    fi
+  if [[ -n "$PREVIOUS_RELEASE" ]]; then
+    sudo ln -sfn "$PREVIOUS_RELEASE" /opt/quant-platform/current || return 1
+    [[ "$(resolve_current_release)" == "$PREVIOUS_RELEASE" ]] || return 1
+    sudo systemctl start quant-platform && wait_for_ready || return 1
+  else
+    sudo rm -f -- /opt/quant-platform/current || return 1
   fi
-  return "${mark_status}"
+  echo '코드·DB 롤백 검증 완료' >&2
 }
 
-cleanup_remote_deploy() {
-  local status="$?"
-  local failed_release=""
-  local failed_snapshot=""
-
+remote_exit() {
+  local status=$? recovered=1
   trap - EXIT
-  rm -f -- "${REMOTE_ARCHIVE_PATH:-}" "${REMOTE_CHECKSUM_PATH:-}" || true
-
-  if [ "${RELEASE_STAGING_CREATED:-0}" -eq 1 ]; then
-    cleanup_failed_deploy_artifacts "${RELEASE_STAGING:-}" "" || true
-  fi
-  if [ "${SNAPSHOT_INCOMPLETE_OWNED:-0}" -eq 1 ]; then
-    cleanup_incomplete_snapshot "${DB_SNAPSHOT_INCOMPLETE:-}" || true
-  fi
-
-  # 서비스 전환 전 실패는 운영 상태를 건드리지 않았으므로 이 시도가 만든 것만 지운다.
-  # 전환 이후의 실패는 통합 rollback readiness가 성공한 경우에만 정리한다.
-  if [ "${status}" -ne 0 ] && [ "${DEPLOY_PHASE:-pre-switch}" = pre-switch ]; then
-    if [ "${RELEASE_PUBLISHED:-0}" -eq 1 ]; then
-      failed_release="${RELEASE_DIR:-}"
+  if ((status && !COMMITTED)); then
+    print_service_diagnostics
+    if ((SWITCH_ATTEMPTED)); then
+      rollback_release || recovered=0
+    elif ((SERVICE_STOPPED)); then
+      sudo systemctl start quant-platform && wait_for_ready || recovered=0
     fi
-    if [ "${SNAPSHOT_CREATED:-0}" -eq 1 ]; then
-      failed_snapshot="${DB_SNAPSHOT:-}"
+    if ((recovered)); then
+      # 백업 정리가 실패하면 코드도 보존해 복구 자료의 짝을 깨뜨리지 않는다.
+      if ((SNAPSHOT_OWNED)); then remove_snapshot "$DB_SNAPSHOT" || recovered=0; fi
+      if ((recovered && RELEASE_OWNED)); then remove_failed_release "$RELEASE_DIR" || recovered=0; fi
     fi
-    if [ "${SERVICE_STOPPED_BEFORE_SWITCH:-0}" -eq 1 ]; then
-      sudo systemctl start quant-platform && wait_for_ready || echo '이전 서비스 재시작 실패' >&2
-    fi
-    if [ -n "${failed_release}" ] || [ -n "${failed_snapshot}" ]; then
-      cleanup_failed_deploy_artifacts "${failed_release}" "${failed_snapshot}" || true
-    fi
-    if [ "${TRANSACTION_STATE_CREATED:-0}" -eq 1 ]; then
-      validate_transaction_state_file "${TRANSACTION_STATE_FILE:-}" && \
-        sudo rm -f -- "${TRANSACTION_STATE_FILE}" || true
+    if ((!recovered)); then
+      if ((RELEASE_OWNED)); then sudo touch "$RELEASE_DIR/.deploy-failed" || true; fi
+      if ((SNAPSHOT_OWNED)); then sudo touch "$DB_SNAPSHOT.deploy-failed" || true; fi
+      echo '복원 또는 정리 실패 — release와 DB snapshot을 보존합니다' >&2
     fi
   fi
-
-  exit "${status}"
-}
-
-validate_transaction_state_file() {
-  local state_file="$1"
-  case "${state_file}" in
-    /var/lib/quant-platform/deploy-transactions/*.state) ;;
-    *) echo "배포 transaction 경로가 올바르지 않습니다: ${state_file}" >&2; return 1 ;;
-  esac
-}
-
-transaction_state_file() {
-  local release="$1"
-  case "${release}" in
-    ''|.|..|*/*|*[!a-zA-Z0-9._-]*)
-      echo "release 이름이 올바르지 않습니다: ${release}" >&2
-      return 1
-      ;;
-  esac
-  printf '/var/lib/quant-platform/deploy-transactions/%s.state\n' "${release}"
-}
-
-write_transaction_state() {
-  local release="$1"
-  local previous_release="$2"
-  local db_snapshot="$3"
-  local db_existed="$4"
-  local state_file
-  local state_tmp
-  state_file="$(transaction_state_file "${release}")" || return 1
-  validate_transaction_state_file "${state_file}" || return 1
-  [ -z "${previous_release}" ] || validate_release_directory "${previous_release}" || return 1
-  [ -z "${db_snapshot}" ] || validate_deploy_snapshot "${db_snapshot}" || return 1
-  [ "${db_existed}" = 0 ] || [ "${db_existed}" = 1 ] || return 1
-
-  sudo mkdir -p /var/lib/quant-platform/deploy-transactions
-  if sudo find /var/lib/quant-platform/deploy-transactions \
-    -mindepth 1 -maxdepth 1 -type f -name '*.state' -print -quit | grep -q .; then
-    echo '완료되지 않은 배포 transaction이 있습니다' >&2
-    return 75
-  fi
-  state_tmp="$(mktemp)"
-  printf '%s\n%s\n%s\n' "${previous_release}" "${db_snapshot}" "${db_existed}" > "${state_tmp}"
-  if ! sudo install -m 0600 -o root -g root "${state_tmp}" "${state_file}"; then
-    rm -f -- "${state_tmp}"
-    return 1
-  fi
-  rm -f -- "${state_tmp}"
-  TRANSACTION_STATE_FILE="${state_file}"
-  TRANSACTION_STATE_CREATED=1
-}
-
-read_transaction_state() {
-  local release="$1"
-  local state_file
-  local -a state_lines=()
-  state_file="$(transaction_state_file "${release}")" || return 1
-  validate_transaction_state_file "${state_file}" || return 1
-  sudo test -f "${state_file}" || return 1
-  mapfile -t state_lines < <(sudo cat "${state_file}")
-  [ "${#state_lines[@]}" -eq 3 ] || {
-    echo "배포 transaction 상태가 손상됐습니다: ${state_file}" >&2
-    return 1
-  }
-  TRANSACTION_PREVIOUS_RELEASE="${state_lines[0]}"
-  TRANSACTION_DB_SNAPSHOT="${state_lines[1]}"
-  TRANSACTION_DB_EXISTED="${state_lines[2]}"
-  [ -z "${TRANSACTION_PREVIOUS_RELEASE}" ] || \
-    validate_release_directory "${TRANSACTION_PREVIOUS_RELEASE}" || return 1
-  [ -z "${TRANSACTION_DB_SNAPSHOT}" ] || \
-    validate_deploy_snapshot "${TRANSACTION_DB_SNAPSHOT}" || return 1
-  [ "${TRANSACTION_DB_EXISTED}" = 0 ] || [ "${TRANSACTION_DB_EXISTED}" = 1 ] || {
-    echo "배포 transaction의 DB 상태가 올바르지 않습니다: ${state_file}" >&2
-    return 1
-  }
-  TRANSACTION_STATE_FILE="${state_file}"
-}
-
-rollback_transaction() {
-  local release="$1"
-  local release_dir="/opt/quant-platform/releases/${release}"
-  local current_release=""
-  local rollback_ok=1
-  local rollback_started_at
-  local state_file
-  state_file="$(transaction_state_file "${release}")" || return 1
-  if ! sudo test -f "${state_file}"; then
-    current_release="$(resolve_current_release)" || return 1
-    if [ "${current_release}" = "${release_dir}" ]; then
-      echo "현재 서버가 신규 release지만 rollback 상태가 없습니다: ${release}" >&2
-      return 1
-    fi
-    echo "rollback 대상이 없습니다: ${release}" >&2
-    return 0
-  fi
-  read_transaction_state "${release}" || return 1
-  current_release="$(resolve_current_release)" || return 1
-  if [ "${current_release}" != "${release_dir}" ]; then
-    if [ "${current_release}" = "${TRANSACTION_PREVIOUS_RELEASE}" ]; then
-      cleanup_failed_deploy_artifacts "${release_dir}" "${TRANSACTION_DB_SNAPSHOT}" || return 1
-      sudo rm -f -- "${TRANSACTION_STATE_FILE}" "${TRANSACTION_STATE_FILE}.committed"
-      return 0
-    fi
-    echo "현재 release가 transaction과 다릅니다: ${current_release}" >&2
-    return 1
-  fi
-
-  echo '통합 배포 실패로 서버와 DB를 이전 상태로 롤백합니다' >&2
-  sudo systemctl stop quant-platform || rollback_ok=0
-  if [ "${rollback_ok}" -eq 1 ]; then
-    if [ "${TRANSACTION_DB_EXISTED}" = 1 ]; then
-      if [ -n "${TRANSACTION_DB_SNAPSHOT}" ] && sudo test -f "${TRANSACTION_DB_SNAPSHOT}" &&
-        sudo env DATABASE_PATH=/var/lib/quant-platform/app.sqlite /usr/local/bin/node "${release_dir}/dist/server/cli.js" db:restore "${TRANSACTION_DB_SNAPSHOT}" &&
-        sudo chown quant:quant /var/lib/quant-platform/app.sqlite &&
-        { ! sudo test -f /var/lib/quant-platform/app.data.sqlite || sudo chown quant:quant /var/lib/quant-platform/app.data.sqlite; }; then
-        echo 'DB를 배포 전 스냅샷으로 복원했습니다' >&2
-      else
-        rollback_ok=0
-      fi
-    else
-      sudo rm -f /var/lib/quant-platform/app.sqlite \
-        /var/lib/quant-platform/app.sqlite-journal \
-        /var/lib/quant-platform/app.sqlite-wal \
-        /var/lib/quant-platform/app.sqlite-shm \
-        /var/lib/quant-platform/app.data.sqlite \
-        /var/lib/quant-platform/app.data.sqlite-wal \
-        /var/lib/quant-platform/app.data.sqlite-shm || rollback_ok=0
-    fi
-  fi
-  if [ "${rollback_ok}" -eq 1 ]; then
-    if [ -n "${TRANSACTION_PREVIOUS_RELEASE}" ]; then
-      sudo ln -sfn "${TRANSACTION_PREVIOUS_RELEASE}" /opt/quant-platform/current || rollback_ok=0
-    else
-      sudo rm -f -- /opt/quant-platform/current || rollback_ok=0
-    fi
-  fi
-
-  rollback_started_at="$(date --iso-8601=seconds)"
-  if [ "${rollback_ok}" -eq 1 ]; then
-    if [ -n "${TRANSACTION_PREVIOUS_RELEASE}" ]; then
-      sudo systemctl restart quant-platform && wait_for_ready || rollback_ok=0
-    elif sudo systemctl is-active --quiet quant-platform; then
-      rollback_ok=0
-    fi
-  fi
-  if [ "${rollback_ok}" -ne 1 ]; then
-    echo "rollback failed for ${release}" >&2
-    print_service_diagnostics 'integrated rollback failed' "${rollback_started_at}"
-    mark_deploy_failed "${release_dir}" "${TRANSACTION_DB_SNAPSHOT}" || true
-    return 1
-  fi
-
-  cleanup_failed_deploy_artifacts "${release_dir}" "${TRANSACTION_DB_SNAPSHOT}" || return 1
-  sudo rm -f -- "${TRANSACTION_STATE_FILE}" "${TRANSACTION_STATE_FILE}.committed"
-  echo "rollback completed for ${release}" >&2
-}
-
-verify_current_release() {
-  local release="$1"
-  local release_dir="/opt/quant-platform/releases/${release}"
-  local current_release
-  current_release="$(resolve_current_release)" || return 1
-  [ "${current_release}" = "${release_dir}" ] || {
-    echo "현재 release가 준비된 release와 다릅니다: ${current_release}" >&2
-    return 1
-  }
-}
-
-verify_prepared_release() {
-  local release="$1"
-  read_transaction_state "${release}" || {
-    echo "배포 transaction이 없습니다: ${release}" >&2
-    return 1
-  }
-  verify_current_release "${release}" || return 1
-  wait_for_ready
+  if ((STAGING_OWNED)); then remove_failed_release "$RELEASE_STAGING" || true; fi
+  if ((SNAPSHOT_OWNED)); then remove_snapshot "$DB_SNAPSHOT_INCOMPLETE" || true; fi
+  rm -f -- "$REMOTE_ARCHIVE" "$REMOTE_CHECKSUM" || true
+  exit "$status"
 }
 
 cleanup_successful_artifacts() {
-  local release_dir="$1"
-  local current_target=""
-  local snapshot_cleanup_ok=1
-  current_target="$(resolve_current_release)" || return 1
-  if [ "${current_target}" != "${release_dir}" ]; then
-    echo "current release가 commit된 release와 다릅니다: ${current_target}" >&2
-    return 1
-  fi
-
-  if ! sudo find /var/lib/quant-platform/backups -mindepth 1 -maxdepth 1 -type f \
-    -name 'pre-deploy-*.sqlite' -printf '%T@ %p\n' 2>/dev/null \
-    | sort -nr \
-    | while read -r _ snapshot; do
-        if validate_deploy_snapshot "${snapshot}" && \
-          is_normal_deploy_artifact \
-            "${snapshot}.deploy-in-progress" "${snapshot}.deploy-failed"; then
-          printf '%s\n' "${snapshot}"
-        fi
-      done \
-    | awk -v keep="${KEEP_SUCCESSFUL_DEPLOYS}" 'NR > keep' \
-    | while IFS= read -r snapshot; do
-        if validate_deploy_snapshot "${snapshot}"; then
-          sudo rm -f -- "${snapshot}" "${snapshot}-journal" "${snapshot}-wal" \
-            "${snapshot}-shm" "${snapshot}.data" "${snapshot}.json" "${snapshot}.deploy-succeeded" || exit 1
-        fi
-      done; then
-    snapshot_cleanup_ok=0
-    echo '경고: 정상 DB snapshot 정리를 완료하지 못했습니다' >&2
-  fi
-
-  if [ "${snapshot_cleanup_ok}" -eq 1 ]; then
-    if ! sudo find /opt/quant-platform/releases -mindepth 1 -maxdepth 1 -type d \
-      ! -name '.incomplete-*' -printf '%T@ %p\n' 2>/dev/null \
-      | sort -nr \
-      | while read -r _ old_release_dir; do
-          if [ "${old_release_dir}" != "${current_target}" ] && \
-            validate_release_directory "${old_release_dir}" && \
-            is_normal_deploy_artifact \
-              "${old_release_dir}/.deploy-in-progress" \
-              "${old_release_dir}/.deploy-failed"; then
-            printf '%s\n' "${old_release_dir}"
-          fi
-        done \
-      | awk -v keep="${KEEP_SUCCESSFUL_DEPLOYS}" 'NR > keep' \
-      | while IFS= read -r old_release_dir; do
-          if [ "${old_release_dir}" != "${current_target}" ] && \
-            validate_release_directory "${old_release_dir}"; then
-            sudo rm -rf -- "${old_release_dir}" || exit 1
-          fi
-        done; then
-      echo '경고: 과거 정상 release 정리를 완료하지 못했습니다' >&2
-    fi
-  else
-    echo '경고: DB snapshot 정리 실패로 과거 release 정리도 건너뜁니다' >&2
-  fi
+  local snapshots releases file current
+  current="$(resolve_current_release)" || return 1
+  [[ "$current" == "$RELEASE_DIR" ]] || { error 'current release가 배포된 release와 다릅니다'; return 1; }
+  # 기존 보존 개수는 0이다. current와 복구 마커가 있는 파일은 절대 지우지 않는다.
+  snapshots="$(sudo find /var/lib/quant-platform/backups -maxdepth 1 -type f -name 'pre-deploy-*.sqlite')" || return 1
+  while IFS= read -r file; do
+    [[ -n "$file" ]] || continue
+    if sudo test ! -e "$file.deploy-in-progress" && sudo test ! -e "$file.deploy-failed"; then remove_snapshot "$file" || return 1; fi
+  done <<< "$snapshots"
+  releases="$(sudo find /opt/quant-platform/releases -mindepth 1 -maxdepth 1 -type d ! -name '.incomplete-*')" || return 1
+  while IFS= read -r file; do
+    [[ -n "$file" && "$file" != "$current" ]] || continue
+    if sudo test ! -e "$file/.deploy-in-progress" && sudo test ! -e "$file/.deploy-failed"; then remove_failed_release "$file" || return 1; fi
+  done <<< "$releases"
 }
 
-if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
-  return 0
+remote_deploy() {
+  [[ $# == 3 ]] || { error '내부 호출: --remote <archive> <checksum> <release>'; return 64; }
+  local release="$3" expected actual unfinished existing
+  REMOTE_ARCHIVE="$1" REMOTE_CHECKSUM="$2"
+  [[ "$release" =~ ^[0-9]{8}-[0-9]{6}-[a-f0-9]{7}$ && "${1%/*}" =~ ^/tmp/quant-deploy\.[a-zA-Z0-9]+$ && "$2" == "$1.sha256" && "${1##*/}" == "quant-platform-$release.tar.gz" ]] || { error '원격 배포 경로 또는 release 이름이 올바르지 않습니다'; return 64; }
+  [[ -f "$REMOTE_ARCHIVE" && -f "$REMOTE_CHECKSUM" ]] || { error 'release archive 또는 checksum 파일이 없습니다'; return 66; }
+  sudo -n true
+  # 전체 원격 실행 동안 같은 잠금을 잡는다. 단계별 SSH 조정과 transaction 상태 파일은 필요 없다.
+  sudo touch /run/lock/quant-platform-deploy.lock
+  sudo chown "$(id -u):$(id -g)" /run/lock/quant-platform-deploy.lock
+  sudo chmod 0600 /run/lock/quant-platform-deploy.lock
+  exec {DEPLOY_LOCK_FD}>/run/lock/quant-platform-deploy.lock
+  flock -n "$DEPLOY_LOCK_FD" || { error '다른 배포가 진행 중입니다'; return 75; }
+  RELEASE_DIR="/opt/quant-platform/releases/$release"
+  RELEASE_STAGING="/opt/quant-platform/releases/.incomplete-$release"
+  DB_PATH=/var/lib/quant-platform/app.sqlite
+  DB_SNAPSHOT="/var/lib/quant-platform/backups/pre-deploy-$release.sqlite"
+  DB_SNAPSHOT_INCOMPLETE="/var/lib/quant-platform/backups/.pre-deploy-$release.sqlite.incomplete"
+  PREVIOUS_RELEASE='' DB_EXISTED=0 SERVICE_STOPPED=0 SWITCH_ATTEMPTED=0 COMMITTED=0
+  STAGING_OWNED=0 RELEASE_OWNED=0 SNAPSHOT_OWNED=0
+  DEPLOY_STARTED_AT="$(date --iso-8601=seconds)"
+  trap remote_exit EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+  # 이전 방식의 미완료 배포를 새 실행으로 덮지 않는다.
+  if sudo test -d /var/lib/quant-platform/deploy-transactions; then
+    unfinished="$(sudo find /var/lib/quant-platform/deploy-transactions -maxdepth 1 -name '*.state' -print -quit)"
+    [[ -z "$unfinished" ]] || { error '이전 배포 transaction을 먼저 복구하세요'; return 75; }
+  fi
+  PREVIOUS_RELEASE="$(resolve_current_release)"
+  if [[ -n "$PREVIOUS_RELEASE" ]]; then
+    sudo test ! -e "$PREVIOUS_RELEASE/.deploy-in-progress" && sudo test ! -e "$PREVIOUS_RELEASE/.deploy-failed" || { error '현재 release의 미완료 배포를 먼저 복구하세요'; return 75; }
+  fi
+  expected="$(awk 'NR == 1 { print $1 }' "$REMOTE_CHECKSUM")"
+  [[ "$expected" =~ ^[a-fA-F0-9]{64}$ ]] || { error 'release checksum 형식 오류'; return 1; }
+  actual="$(sha256sum "$REMOTE_ARCHIVE")"; actual="${actual%% *}"
+  [[ "${expected,,}" == "$actual" ]] || { error 'release archive checksum 불일치'; return 1; }
+  sudo mkdir -p /opt/quant-platform/releases /var/lib/quant-platform/backups
+  for existing in "$RELEASE_DIR" "$RELEASE_STAGING" "$DB_SNAPSHOT"{,.data,.json,.deploy-in-progress,.deploy-failed} "$DB_SNAPSHOT_INCOMPLETE"{,.data,.json}; do
+    sudo test ! -e "$existing" && sudo test ! -L "$existing" || { error "배포 경로가 이미 존재합니다: $existing"; return 1; }
+  done
+  sudo mkdir "$RELEASE_STAGING"; STAGING_OWNED=1
+  sudo touch "$RELEASE_STAGING/.deploy-in-progress"
+  sudo tar -xzf "$REMOTE_ARCHIVE" -C "$RELEASE_STAGING"
+  (cd "$RELEASE_STAGING"; sudo corepack pnpm install --prod --frozen-lockfile)
+  echo "이전 릴리스: ${PREVIOUS_RELEASE:-없음}"
+  if sudo test ! -f "$DB_PATH" && sudo test -f /var/lib/quant-platform/app.data.sqlite; then
+    error '운영 DB 없이 계산 DB만 있습니다 — DB 세트를 먼저 복구하세요'; return 1
+  fi
+  SERVICE_STOPPED=1
+  sudo systemctl stop quant-platform
+  if sudo test -f "$DB_PATH"; then
+    DB_EXISTED=1
+    sudo touch "$DB_SNAPSHOT.deploy-in-progress"; SNAPSHOT_OWNED=1
+    echo "DB 백업: $DB_SNAPSHOT"
+    sudo env DATABASE_PATH="$DB_PATH" /usr/local/bin/node "$RELEASE_STAGING/dist/server/cli.js" db:backup "$DB_SNAPSHOT_INCOMPLETE"
+    sudo mv "$DB_SNAPSHOT_INCOMPLETE.data" "$DB_SNAPSHOT.data"
+    sudo mv "$DB_SNAPSHOT_INCOMPLETE.json" "$DB_SNAPSHOT.json"
+    sudo mv "$DB_SNAPSHOT_INCOMPLETE" "$DB_SNAPSHOT"
+  fi
+  sudo mv "$RELEASE_STAGING" "$RELEASE_DIR"; STAGING_OWNED=0; RELEASE_OWNED=1
+  SWITCH_ATTEMPTED=1
+  sudo ln -sfn "$RELEASE_DIR" /opt/quant-platform/current
+  [[ "$(resolve_current_release)" == "$RELEASE_DIR" ]] || { error 'current release 전환을 검증하지 못했습니다'; return 1; }
+  sudo systemd-run --quiet --pipe --wait --collect \
+    --unit=quant-platform-db-prepare --property=Type=oneshot \
+    --property=User=quant --property=Group=quant \
+    --property=EnvironmentFile=/etc/quant-platform/app.env \
+    --property=WorkingDirectory=/opt/quant-platform/current \
+    /usr/local/bin/node /opt/quant-platform/current/dist/server/cli.js db:prepare
+  sudo systemctl start quant-platform
+  wait_for_ready
+  sudo rm -f -- "$RELEASE_DIR/.deploy-in-progress"
+  if ((SNAPSHOT_OWNED)); then sudo rm -f -- "$DB_SNAPSHOT.deploy-in-progress"; fi
+  COMMITTED=1
+  # 서비스가 검증된 이후 보존 이력 정리 실패만으로 정상 배포를 되돌리지 않는다.
+  cleanup_successful_artifacts || echo '경고: 정상 snapshot/release 정리를 완료하지 못했습니다' >&2
+  echo "release $release live"
+}
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then return 0; fi
+if [[ "${1:-}" == --remote ]]; then
+  shift
+  remote_deploy "$@"
+else
+  [[ $# == 0 ]] || { echo '사용법: ./scripts/deploy.sh' >&2; exit 64; }
+  local_deploy
 fi
-
-# 설정 파싱과 SSH 인용 규칙을 바꾸지 않도록 로컬 조정 코드는 Node로 실행한다.
-# 원격 단계에서는 이 블록을 건너뛰며 같은 파일의 아래 transaction만 실행한다.
-if [[ "${1:-}" != "--remote" ]]; then
-  node --input-type=module --eval "$(cat <<'DEPLOY_LOCAL_NODE'
-// 수동 배포 진입점: build는 로컬에서, 전송은 SSH/SCP로, 전환은 노드 로컬 transaction으로 수행한다.
-
-import { spawnSync } from "node:child_process";
-import { error as logError, log } from "node:console";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import path from "node:path";
-import process from "node:process";
-import { parseEnv } from "node:util";
-
-const SCRIPT_PATH = path.resolve(process.argv[1]);
-const SCRIPT_DIR = path.dirname(SCRIPT_PATH);
-const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
-const DEPLOY_ENV_FILE = path.join(REPO_ROOT, "deploy.env");
-const PREFLIGHT = [
-  "set -eu",
-  "for command_name in bash flock sqlite3 corepack systemctl systemd-run curl; do",
-  '  command -v "${command_name}" >/dev/null',
-  "done",
-  "sudo -n true",
-  "sudo -n test -f /etc/quant-platform/app.env",
-  "sudo -n test -f /etc/systemd/system/quant-platform.service",
-].join("\n");
-
-class DeployError extends Error {
-  constructor(message, exitCode = 1) {
-    super(message);
-    this.exitCode = exitCode;
-  }
-}
-
-function readDeploySettings() {
-  if (!existsSync(DEPLOY_ENV_FILE)) {
-    throw new DeployError(
-      `배포 환경 파일이 없습니다: ${DEPLOY_ENV_FILE}\n` +
-        "프로젝트 루트에서 cp deploy.env.example deploy.env 후 값을 채우세요.",
-    );
-  }
-  try {
-    return parseEnv(readFileSync(DEPLOY_ENV_FILE, "utf8"));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new DeployError(`deploy.env를 읽을 수 없습니다: ${message}`);
-  }
-}
-
-function setting(settings, name) {
-  return settings[name]?.trim() ?? "";
-}
-
-function expandHome(value) {
-  return value.startsWith("~/") ? path.join(homedir(), value.slice(2)) : value;
-}
-
-function splitSshOptions(value, variableName) {
-  const options = [];
-  let option = "";
-  let quote = null;
-  let escaped = false;
-  let started = false;
-
-  for (const character of value) {
-    if (escaped) {
-      option += character;
-      escaped = false;
-      started = true;
-      continue;
-    }
-    if (quote === "'") {
-      if (character === "'") quote = null;
-      else option += character;
-      started = true;
-      continue;
-    }
-    if (quote === '"') {
-      if (character === '"') quote = null;
-      else if (character === "\\") escaped = true;
-      else option += character;
-      started = true;
-      continue;
-    }
-    if (character === "'" || character === '"') {
-      quote = character;
-      started = true;
-      continue;
-    }
-    if (character === "\\") {
-      escaped = true;
-      started = true;
-      continue;
-    }
-    if (/\s/.test(character)) {
-      if (started) {
-        options.push(option);
-        option = "";
-        started = false;
-      }
-      continue;
-    }
-    option += character;
-    started = true;
-  }
-
-  if (escaped || quote !== null) {
-    throw new DeployError(
-      `${variableName}의 따옴표 또는 escape가 닫히지 않았습니다`,
-    );
-  }
-  if (started) options.push(option);
-  return options;
-}
-
-function readConnection(settings) {
-  const rawHost = setting(settings, `HOST`);
-  if (!rawHost) {
-    throw new DeployError(`deploy.env의 HOST가 필요합니다`);
-  }
-  if (rawHost.startsWith("-") || /\s/.test(rawHost)) {
-    throw new DeployError(
-      `HOST 형식이 올바르지 않습니다: ${rawHost}`,
-    );
-  }
-
-  const at = rawHost.lastIndexOf("@");
-  const embeddedUser = at > 0 ? rawHost.slice(0, at) : "";
-  const host = at > 0 ? rawHost.slice(at + 1) : rawHost;
-  const configuredUser = setting(settings, `SSH_USER`);
-  if (!host || host.startsWith("-") || /\s/.test(host)) {
-    throw new DeployError(
-      `HOST 형식이 올바르지 않습니다: ${rawHost}`,
-    );
-  }
-  if (
-    configuredUser &&
-    (configuredUser.startsWith("-") || /[@\s]/.test(configuredUser))
-  ) {
-    throw new DeployError(
-      `SSH_USER 형식이 올바르지 않습니다: ${configuredUser}`,
-    );
-  }
-  if (embeddedUser && configuredUser && embeddedUser !== configuredUser) {
-    throw new DeployError(
-      `HOST 사용자와 SSH_USER가 다릅니다`,
-    );
-  }
-  const remoteTarget =
-    embeddedUser || !configuredUser ? rawHost : `${configuredUser}@${rawHost}`;
-
-  const extraOptions = setting(settings, `SSH_OPTS`);
-  const sshOptions = extraOptions
-    ? splitSshOptions(extraOptions, `SSH_OPTS`)
-    : [];
-  const key = setting(settings, `SSH_KEY`);
-  if (key) {
-    const expandedKey = expandHome(key);
-    if (!existsSync(expandedKey)) {
-      throw new DeployError(
-        `SSH_KEY 파일이 없습니다: ${expandedKey}`,
-      );
-    }
-    sshOptions.push("-i", expandedKey, "-o", "IdentitiesOnly=yes");
-  }
-
-  const port = setting(settings, `SSH_PORT`);
-  if (port) {
-    if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65_535) {
-      throw new DeployError(`SSH_PORT가 올바르지 않습니다: ${port}`);
-    }
-    sshOptions.push("-o", `Port=${port}`);
-  }
-
-  const jump = setting(settings, `SSH_JUMP`);
-  if (jump) {
-    if (jump.startsWith("-") || /\s/.test(jump)) {
-      throw new DeployError(
-        `SSH_JUMP 형식이 올바르지 않습니다: ${jump}`,
-      );
-    }
-    sshOptions.push("-o", `ProxyJump=${jump}`);
-  }
-
-  const hostKey = setting(settings, `SSH_HOST_KEY`) || "accept-new";
-  if (!["accept-new", "yes", "no"].includes(hostKey)) {
-    throw new DeployError(
-      `SSH_HOST_KEY는 accept-new | yes | no 중 하나여야 합니다`,
-    );
-  }
-  sshOptions.push("-o", `StrictHostKeyChecking=${hostKey}`);
-  sshOptions.push(
-    "-o",
-    "ServerAliveInterval=15",
-    "-o",
-    "ServerAliveCountMax=3",
-  );
-
-  return { remoteTarget, sshOptions };
-}
-
-function commandFailure(command, result) {
-  const suffix = result.signal ? ` (${result.signal})` : "";
-  const stderr = typeof result.stderr === "string" ? result.stderr.trim() : "";
-  return (
-    `${command}가 종료 코드 ${result.status ?? 1}${suffix}로 실패했습니다` +
-    (stderr ? `\n${stderr}` : "")
-  );
-}
-
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    cwd: REPO_ROOT,
-    env: process.env,
-    stdio: options.quiet ? ["ignore", "ignore", "inherit"] : "inherit",
-  });
-  if (result.error)
-    throw new DeployError(`${command} 실행 실패: ${result.error.message}`);
-  if (result.status !== 0) {
-    throw new DeployError(commandFailure(command, result), result.status ?? 1);
-  }
-}
-
-function capture(command, args) {
-  const result = spawnSync(command, args, {
-    cwd: REPO_ROOT,
-    env: process.env,
-    encoding: "utf8",
-  });
-  if (result.error)
-    throw new DeployError(`${command} 실행 실패: ${result.error.message}`);
-  if (result.status !== 0) {
-    throw new DeployError(commandFailure(command, result), result.status ?? 1);
-  }
-  return result.stdout.trim();
-}
-
-function sshArguments(connection, options = {}) {
-  return [
-    ...connection.sshOptions,
-    ...(options.batch
-      ? ["-o", "ConnectTimeout=15", "-o", "BatchMode=yes"]
-      : []),
-    connection.remoteTarget,
-  ];
-}
-
-function shellQuote(value) {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-function runRemoteBash(connection, script, args = [], options = {}) {
-  const remoteCommand = [
-    "/bin/bash",
-    "-c",
-    shellQuote(script),
-    "deploy-remote",
-    ...args.map(shellQuote),
-  ].join(" ");
-  run("ssh", [...sshArguments(connection, options), remoteCommand], options);
-}
-
-function preflight(connection) {
-  runRemoteBash(connection, PREFLIGHT, [], { batch: true, quiet: true });
-}
-
-function validateRemoteDirectory(remoteDirectory) {
-  const pattern = /^\/tmp\/quant-deploy\.[a-zA-Z0-9]+$/;
-  if (!pattern.test(remoteDirectory)) {
-    throw new DeployError(
-      `원격 임시 경로가 올바르지 않습니다: ${remoteDirectory}`,
-    );
-  }
-}
-
-function createRemoteDirectory(connection) {
-  const template = "/tmp/quant-deploy.XXXXXX";
-  const remoteDirectory = capture("ssh", [
-    ...sshArguments(connection),
-    `mktemp -d ${template}`,
-  ]);
-  validateRemoteDirectory(remoteDirectory);
-  return remoteDirectory;
-}
-
-function removeRemoteDirectory(connection, remoteDirectory) {
-  validateRemoteDirectory(remoteDirectory);
-  run(
-    "ssh",
-    [
-      ...sshArguments(connection),
-      `/bin/rm -rf -- ${shellQuote(remoteDirectory)}`,
-    ],
-    { quiet: true },
-  );
-}
-
-function upload(connection, files, remoteDirectory) {
-  run("scp", [
-    ...connection.sshOptions,
-    ...files,
-    `${connection.remoteTarget}:${remoteDirectory}/`,
-  ]);
-}
-
-function stageFiles(connection, files) {
-  const remoteDirectory = createRemoteDirectory(connection);
-  try {
-    upload(connection, files, remoteDirectory);
-  } catch (error) {
-    try {
-      removeRemoteDirectory(connection, remoteDirectory);
-    } catch (cleanupError) {
-      const message =
-        cleanupError instanceof Error
-          ? cleanupError.message
-          : String(cleanupError);
-      logError(
-        `업로드 실패 후 임시 디렉터리 정리도 실패했습니다: ${message}`,
-      );
-    }
-    throw error;
-  }
-  return remoteDirectory;
-}
-
-function stageDeployment(
-  connection,
-  releaseArchive,
-  releaseChecksum,
-  releaseName,
-) {
-  const remoteDirectory = stageFiles(connection, [
-    releaseArchive,
-    releaseChecksum,
-    SCRIPT_PATH,
-  ]);
-  return {
-    connection,
-    releaseName,
-    remoteDirectory,
-    remoteArchive: path.posix.join(
-      remoteDirectory,
-      path.basename(releaseArchive),
-    ),
-    remoteChecksum: path.posix.join(
-      remoteDirectory,
-      path.basename(releaseChecksum),
-    ),
-    remoteScript: path.posix.join(remoteDirectory, "deploy.sh"),
-  };
-}
-
-function runPhase(deployment, phase) {
-  const args =
-    phase === "prepare"
-      ? [
-          phase,
-          deployment.remoteArchive,
-          deployment.remoteChecksum,
-          deployment.releaseName,
-        ]
-      : [phase, deployment.releaseName];
-  const command = [
-    "/bin/bash",
-    shellQuote(deployment.remoteScript),
-    "--remote",
-    ...args.map(shellQuote),
-  ].join(" ");
-  run("ssh", [...sshArguments(deployment.connection), command]);
-}
-
-function readReleaseMetadata(metadataFile, artifactDirectory) {
-  let metadata;
-  try {
-    metadata = JSON.parse(readFileSync(metadataFile, "utf8"));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new DeployError(`release metadata를 읽을 수 없습니다: ${message}`);
-  }
-  if (
-    metadata === null ||
-    typeof metadata !== "object" ||
-    Array.isArray(metadata)
-  ) {
-    throw new DeployError("release metadata 형식이 올바르지 않습니다");
-  }
-  const { releaseName, gitSha } = metadata;
-  if (
-    typeof releaseName !== "string" ||
-    !/^\d{8}-\d{6}-[a-f0-9]{7}$/.test(releaseName)
-  ) {
-    throw new DeployError("release metadata의 releaseName이 올바르지 않습니다");
-  }
-  if (
-    typeof gitSha !== "string" ||
-    !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(gitSha)
-  ) {
-    throw new DeployError("release metadata의 gitSha가 올바르지 않습니다");
-  }
-  const releaseArchive = path.join(
-    artifactDirectory,
-    `quant-platform-${releaseName}.tar.gz`,
-  );
-  const releaseChecksum = `${releaseArchive}.sha256`;
-  if (!existsSync(releaseArchive) || !existsSync(releaseChecksum)) {
-    throw new DeployError(
-      "release metadata가 가리키는 archive 또는 checksum이 없습니다",
-    );
-  }
-  return { releaseArchive, releaseChecksum, releaseName, gitSha };
-}
-
-function main() {
-  if (process.platform !== "linux")
-    throw new DeployError("배포는 Linux에서 실행하세요");
-  const settings = readDeploySettings();
-  const connection = readConnection(settings);
-  const artifactDirectory = mkdtempSync(path.join(tmpdir(), "quant-deploy-"));
-  let deployment = null;
-  let attempted = false;
-  let committed = false;
-  try {
-    preflight(connection);
-    const metadataFile = path.join(artifactDirectory, "release-metadata.json");
-    log("==> 운영 서버와 Linux 클라이언트 검증·패키징");
-    run("bash", [
-      path.join(SCRIPT_DIR, "build-release.sh"),
-      artifactDirectory,
-      metadataFile,
-    ]);
-    const release = readReleaseMetadata(metadataFile, artifactDirectory);
-    deployment = stageDeployment(
-      connection,
-      release.releaseArchive,
-      release.releaseChecksum,
-      release.releaseName,
-    );
-    attempted = true;
-    runPhase(deployment, "prepare");
-    runPhase(deployment, "verify");
-    runPhase(deployment, "commit");
-    committed = true;
-    runPhase(deployment, "finalize");
-    log(`==> 서버와 다운로드 클라이언트 게시 완료: ${release.releaseName}`);
-  } catch (error) {
-    if (attempted && !committed && deployment) {
-      try {
-        runPhase(deployment, "rollback");
-      } catch (rollbackError) {
-        throw new DeployError(
-          `${error.message}\n서버·DB 복원 실패: ${rollbackError.message}`,
-        );
-      }
-    }
-    throw error;
-  } finally {
-    if (deployment) {
-      try {
-        removeRemoteDirectory(connection, deployment.remoteDirectory);
-      } catch (error) {
-        logError(`배포 임시 파일 정리 실패: ${error.message}`);
-      }
-    }
-    rmSync(artifactDirectory, { recursive: true, force: true });
-  }
-}
-
-try {
-  main();
-} catch (error) {
-  const deployError =
-    error instanceof DeployError
-      ? error
-      : new DeployError(error instanceof Error ? error.message : String(error));
-  logError(deployError.message);
-  process.exitCode = deployError.exitCode;
-}
-DEPLOY_LOCAL_NODE
-)" "${BASH_SOURCE[0]}" "$@"
-  exit "$?"
-fi
-shift
-
-KEEP_SUCCESSFUL_DEPLOYS=0
-PHASE="${1:-}"
-
-case "${PHASE}" in
-  prepare)
-    [ "$#" -eq 4 ] || {
-      echo '사용법: deploy.sh --remote prepare <release-archive> <checksum-file> <release-name>' >&2
-      exit 64
-    }
-    REMOTE_ARCHIVE_PATH="$2"
-    REMOTE_CHECKSUM_PATH="$3"
-    RELEASE="$4"
-    case "${RELEASE}" in
-      ''|.|..|*/*|*[!a-zA-Z0-9._-]*)
-        echo "release 이름이 올바르지 않습니다: ${RELEASE}" >&2
-        exit 64
-        ;;
-    esac
-    case "${REMOTE_ARCHIVE_PATH}" in
-      /tmp/quant-deploy.*/*) ;;
-      *) echo "release archive 경로가 허용된 위치가 아닙니다: ${REMOTE_ARCHIVE_PATH}" >&2; exit 64 ;;
-    esac
-    case "${REMOTE_CHECKSUM_PATH}" in
-      /tmp/quant-deploy.*/*) ;;
-      *) echo "checksum 경로가 허용된 위치가 아닙니다: ${REMOTE_CHECKSUM_PATH}" >&2; exit 64 ;;
-    esac
-    [ "$(basename "${REMOTE_ARCHIVE_PATH}")" = "quant-platform-${RELEASE}.tar.gz" ] || {
-      echo "release archive 이름이 release와 일치하지 않습니다: ${REMOTE_ARCHIVE_PATH}" >&2
-      exit 64
-    }
-    [ "$(basename "${REMOTE_CHECKSUM_PATH}")" = "quant-platform-${RELEASE}.tar.gz.sha256" ] || {
-      echo "checksum 이름이 release와 일치하지 않습니다: ${REMOTE_CHECKSUM_PATH}" >&2
-      exit 64
-    }
-    [ -f "${REMOTE_ARCHIVE_PATH}" ] && [ -f "${REMOTE_CHECKSUM_PATH}" ] || {
-      echo 'release archive 또는 checksum 파일이 없습니다' >&2
-      exit 66
-    }
-
-    for required_command in flock sha256sum tar corepack sqlite3 systemctl systemd-run curl; do
-      command -v "${required_command}" >/dev/null 2>&1 || {
-        echo "필수 명령이 없습니다: ${required_command}" >&2
-        exit 69
-      }
-    done
-    sudo -n true >/dev/null 2>&1 || { echo '비대화형 sudo 권한이 필요합니다' >&2; exit 77; }
-
-    RELEASE_DIR="/opt/quant-platform/releases/${RELEASE}"
-    RELEASE_STAGING="/opt/quant-platform/releases/.incomplete-${RELEASE}"
-    DB_PATH="/var/lib/quant-platform/app.sqlite"
-    DB_SNAPSHOT="/var/lib/quant-platform/backups/pre-deploy-${RELEASE}.sqlite"
-    DB_SNAPSHOT_INCOMPLETE="/var/lib/quant-platform/backups/.pre-deploy-${RELEASE}.sqlite.incomplete"
-    SERVICE_STOPPED_BEFORE_SWITCH=0
-    DEPLOY_DB_SNAPSHOT=""
-    DEPLOY_PHASE=pre-switch
-    RELEASE_STAGING_CREATED=0
-    RELEASE_PUBLISHED=0
-    SNAPSHOT_INCOMPLETE_OWNED=0
-    SNAPSHOT_CREATED=0
-    TRANSACTION_STATE_CREATED=0
-    TRANSACTION_STATE_FILE=""
-
-    trap cleanup_remote_deploy EXIT
-    acquire_deploy_lock
-
-    EXPECTED_SHA="$(awk 'NR == 1 { print $1 }' "${REMOTE_CHECKSUM_PATH}")"
-    case "${EXPECTED_SHA}" in ''|*[!a-f0-9]*) echo 'release checksum 형식 오류' >&2; exit 1 ;; esac
-    [ "${#EXPECTED_SHA}" -eq 64 ] || { echo 'release checksum 길이 오류' >&2; exit 1; }
-    ACTUAL_SHA="$(sha256sum "${REMOTE_ARCHIVE_PATH}" | awk '{ print $1 }')"
-    [ "${ACTUAL_SHA}" = "${EXPECTED_SHA}" ] || { echo 'release archive checksum 불일치' >&2; exit 1; }
-
-    sudo mkdir -p /opt/quant-platform/releases /var/lib/quant-platform/backups
-    if sudo test -e "${RELEASE_DIR}" || sudo test -e "${RELEASE_STAGING}"; then
-      echo "release 또는 staging 경로가 이미 존재합니다: ${RELEASE_DIR}" >&2
-      exit 1
-    fi
-    sudo mkdir "${RELEASE_STAGING}"
-    RELEASE_STAGING_CREATED=1
-    sudo touch "${RELEASE_STAGING}/.deploy-in-progress"
-    sudo tar -xzf "${REMOTE_ARCHIVE_PATH}" -C "${RELEASE_STAGING}"
-    rm -f -- "${REMOTE_ARCHIVE_PATH}" "${REMOTE_CHECKSUM_PATH}"
-    cd "${RELEASE_STAGING}"
-    sudo corepack pnpm install --prod --frozen-lockfile
-
-    PREVIOUS_RELEASE="$(resolve_current_release)"
-    DB_EXISTED=0
-    sudo systemctl stop quant-platform
-    SERVICE_STOPPED_BEFORE_SWITCH=1
-    if sudo test -f "${DB_PATH}"; then
-      DB_EXISTED=1
-      if sudo test -e "${DB_SNAPSHOT}" || sudo test -e "${DB_SNAPSHOT_INCOMPLETE}"; then
-        echo "DB snapshot 경로가 이미 존재합니다: ${DB_SNAPSHOT}" >&2
-        exit 1
-      fi
-      sudo touch "${DB_SNAPSHOT}.deploy-in-progress"
-      SNAPSHOT_CREATED=1
-      SNAPSHOT_INCOMPLETE_OWNED=1
-      sudo env DATABASE_PATH="${DB_PATH}" /usr/local/bin/node "${RELEASE_STAGING}/dist/server/cli.js" db:backup "${DB_SNAPSHOT_INCOMPLETE}"
-      if sudo test -f "${DB_SNAPSHOT_INCOMPLETE}.data"; then
-        sudo mv "${DB_SNAPSHOT_INCOMPLETE}.data" "${DB_SNAPSHOT}.data"
-      fi
-      sudo mv "${DB_SNAPSHOT_INCOMPLETE}.json" "${DB_SNAPSHOT}.json"
-      sudo mv "${DB_SNAPSHOT_INCOMPLETE}" "${DB_SNAPSHOT}"
-      SNAPSHOT_INCOMPLETE_OWNED=0
-      DEPLOY_DB_SNAPSHOT="${DB_SNAPSHOT}"
-    fi
-
-    RELEASE_PUBLISHED=1
-    sudo mv "${RELEASE_STAGING}" "${RELEASE_DIR}"
-    RELEASE_STAGING_CREATED=0
-    write_transaction_state \
-      "${RELEASE}" "${PREVIOUS_RELEASE}" "${DEPLOY_DB_SNAPSHOT}" "${DB_EXISTED}"
-    cd "${RELEASE_DIR}"
-    DEPLOY_PHASE=switching
-    if sudo ln -sfn "${RELEASE_DIR}" /opt/quant-platform/current &&
-      SWITCHED_RELEASE="$(resolve_current_release)" &&
-      [ "${SWITCHED_RELEASE}" = "${RELEASE_DIR}" ]; then
-      DEPLOY_PHASE=switched
-    else
-      echo "current release 전환을 검증하지 못했습니다: ${RELEASE_DIR}" >&2
-      rollback_transaction "${RELEASE}" || \
-        echo '서버 전환 실패 후 rollback에도 실패했습니다' >&2
-      exit 1
-    fi
-
-    DEPLOY_FAILED=0
-    DEPLOY_ATTEMPT_STARTED_AT="$(date --iso-8601=seconds)"
-    sudo systemctl stop quant-platform || DEPLOY_FAILED=1
-    if [ "${DEPLOY_FAILED}" -eq 0 ]; then
-      sudo systemd-run --quiet --pipe --wait --collect \
-        --unit=quant-platform-db-prepare \
-        --property=Type=oneshot \
-        --property=User=quant \
-        --property=Group=quant \
-        --property=EnvironmentFile=/etc/quant-platform/app.env \
-        --property=WorkingDirectory=/opt/quant-platform/current \
-        /usr/local/bin/node /opt/quant-platform/current/dist/server/cli.js db:prepare \
-        || DEPLOY_FAILED=1
-    fi
-    if [ "${DEPLOY_FAILED}" -eq 0 ]; then
-      sudo systemctl start quant-platform || DEPLOY_FAILED=1
-    fi
-    if [ "${DEPLOY_FAILED}" -eq 0 ]; then
-      wait_for_ready || DEPLOY_FAILED=1
-    fi
-    if [ "${DEPLOY_FAILED}" -ne 0 ]; then
-      echo '서버 기동 또는 readiness 실패 — 진단 후 통합 rollback을 실행합니다' >&2
-      print_service_diagnostics 'new release failed' "${DEPLOY_ATTEMPT_STARTED_AT}"
-      if ! rollback_transaction "${RELEASE}"; then
-        echo '자동 rollback에 실패해 release와 DB snapshot을 보존합니다' >&2
-      fi
-      exit 1
-    fi
-    DEPLOY_PHASE=prepared
-    echo "release ${RELEASE} prepared"
-    ;;
-  verify|commit|rollback|finalize)
-    [ "$#" -eq 2 ] || {
-      echo "사용법: deploy.sh --remote ${PHASE} <release-name>" >&2
-      exit 64
-    }
-    RELEASE="$2"
-    transaction_state_file "${RELEASE}" >/dev/null || exit 64
-    for required_command in flock systemctl curl; do
-      command -v "${required_command}" >/dev/null 2>&1 || {
-        echo "필수 명령이 없습니다: ${required_command}" >&2
-        exit 69
-      }
-    done
-    sudo -n true >/dev/null 2>&1 || { echo '비대화형 sudo 권한이 필요합니다' >&2; exit 77; }
-    acquire_deploy_lock
-    case "${PHASE}" in
-      verify)
-        verify_prepared_release "${RELEASE}"
-        echo "release ${RELEASE} verified"
-        ;;
-      commit)
-        verify_prepared_release "${RELEASE}"
-        RELEASE_DIR="/opt/quant-platform/releases/${RELEASE}"
-        mark_deploy_succeeded "${RELEASE_DIR}" "${TRANSACTION_DB_SNAPSHOT}"
-        sudo touch "${TRANSACTION_STATE_FILE}.committed"
-        echo "release ${RELEASE} committed"
-        ;;
-      rollback)
-        rollback_transaction "${RELEASE}"
-        ;;
-      finalize)
-        read_transaction_state "${RELEASE}"
-        sudo test -f "${TRANSACTION_STATE_FILE}.committed" || {
-          echo "배포가 commit되지 않았습니다: ${RELEASE}" >&2
-          exit 1
-        }
-        verify_current_release "${RELEASE}"
-        RELEASE_DIR="/opt/quant-platform/releases/${RELEASE}"
-        cleanup_successful_artifacts "${RELEASE_DIR}"
-        validate_transaction_state_file "${TRANSACTION_STATE_FILE}"
-        sudo rm -f -- "${TRANSACTION_STATE_FILE}" "${TRANSACTION_STATE_FILE}.committed"
-        echo "release ${RELEASE} live"
-        ;;
-    esac
-    ;;
-  *)
-    echo 'deploy.sh --remote에는 prepare/verify/commit/finalize/rollback 단계가 필요합니다' >&2
-    exit 64
-    ;;
-esac

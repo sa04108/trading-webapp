@@ -187,13 +187,13 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 
 초기 구성은 `scripts/bootstrap.sh`, 이후 배포는 **Linux에서 `pnpm run deploy`**다. 깨끗한 작업 트리의 동일 스냅샷을 검증해 서버·웹·에이전트와 체크섬을 게시한다. 에이전트는 전용 코드·의존성·Node만 포함하고 서버·웹·인증 패키지는 제외한다.
 
-배포 진입점은 `scripts/deploy.sh` 하나다. 로컬 검증·전송과 원격 전환은 같은 파일에서 구분하며 `--remote`는 내부 호출용이다. 배포 대상별 컴포넌트 선택이나 호환 래퍼는 두지 않는다. 설정 파일 파싱과 SSH 인용 동작을 유지하기 위해 로컬 조정 코드는 파일 내부에서 Node로 실행하며, `deploy.env`를 셸 코드로 평가하지 않는다.
+배포 진입점은 독립 Bash 스크립트인 `scripts/deploy.sh` 하나다. 로컬 검증·전송 후 한 번의 원격 실행이 잠금을 잡고 배포를 끝낸다. `--remote`는 내부 호출용이며, 대상별 조정 계층·Node 조정 블록·호환 래퍼는 두지 않는다. `deploy.env`는 셸 코드로 평가하지 않는다. stdout·stderr를 화면과 `.logs/deploy-*.log`에 함께 기록하며 `LOG`로 위치를 지정할 수 있다.
 
-배포는 SSH 전송 후 **prepare → verify → commit → finalize**로 진행한다. 서비스 중지·두 DB 백업·`db:prepare`·기동 검증을 거치며 commit 전 실패 시 코드와 DB 세트 복원을 시도한다. 코드만 롤백하고 DB 호환성을 방치하지 않는다.
+배포는 SSH 전송 후 **체크섬 검증·staging 설치 → 서비스 중지·두 DB 백업 → 코드 전환·`db:prepare` → 기동 검증 → 성공 확정·정리**로 진행한다. 성공 확정 전 실패 시 코드와 DB 세트 복원을 시도한다. 코드만 롤백하고 DB 호환성을 방치하지 않으며, 성공 후 이력 정리 실패만으로 정상 배포를 되돌리지 않는다.
 
 백업·복원은 `db:backup`·`db:restore`를 사용하며 **두 DB와 백업 명세를 한 세트로 관리**한다. 유지보수 중 쓰기를 중지하고 여러 WAL DB 파일의 장애 원자성을 가정하지 않는다. 파일 누락·식별자 불일치·미완료 복원은 기동을 차단한다.
 
-실행 순서의 기준은 [build-release.sh](../scripts/build-release.sh)·[deploy.sh](../scripts/deploy.sh), 복구 상세는 [AGENT_OPERATIONS.md](AGENT_OPERATIONS.md)다.
+실행 순서의 기준은 [build-release.sh](../scripts/build-release.sh)·[deploy.sh](../scripts/deploy.sh)다. 로그·실패 처리와 참고 이력은 [단일 서버 배포](deployment.md), DB 복구 상세는 [AGENT_OPERATIONS.md](AGENT_OPERATIONS.md)를 따른다.
 
 ## 12. 테스트
 
