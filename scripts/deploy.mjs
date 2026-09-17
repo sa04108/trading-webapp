@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 수동 배포 진입점: build는 로컬에서, 전송은 SSH/SCP로, 전환은 노드 로컬 transaction으로 수행한다.
+// 수동 배포 진입점: build는 로컬에서, 전송은 SSH/SCP로, 전환은 운영 서버 로컬 transaction으로 수행한다.
 
 import { spawnSync } from "node:child_process";
 import { error as logError, log } from "node:console";
@@ -13,13 +13,13 @@ import { fileURLToPath } from "node:url";
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const DEPLOY_ENV_FILE = path.join(REPO_ROOT, "deploy.env");
-const APP_PREFLIGHT = [
+const SERVER_PREFLIGHT = [
   "set -eu",
   "for command_name in bash flock sqlite3 corepack systemctl systemd-run curl; do",
   '  command -v "${command_name}" >/dev/null',
   "done",
   "sudo -n true",
-  "sudo -n test -f /etc/quant-platform/app.env",
+  "sudo -n test -f /etc/quant-platform/server.env || sudo -n test -f /etc/quant-platform/app.env",
   "sudo -n test -f /etc/systemd/system/quant-platform.service",
 ].join("\n");
 
@@ -49,8 +49,13 @@ function setting(settings, name) {
   return settings[name]?.trim() ?? "";
 }
 
-function componentPrefix() {
-  return "APP";
+function connectionPrefix(settings) {
+  if (setting(settings, "SERVER_HOST")) return "SERVER";
+  if (setting(settings, "APP_HOST")) {
+    logError("경고: deploy.env의 APP_* 설정은 deprecated입니다. SERVER_*로 변경하세요.");
+    return "APP";
+  }
+  return "SERVER";
 }
 
 function expandHome(value) {
@@ -115,11 +120,11 @@ function splitSshOptions(value, variableName) {
   return options;
 }
 
-function readConnection(component, settings) {
-  const prefix = componentPrefix(component);
+function readConnection(settings) {
+  const prefix = connectionPrefix(settings);
   const rawHost = setting(settings, `${prefix}_HOST`);
   if (!rawHost) {
-    throw new DeployError(`deploy.env의 ${prefix}_HOST가 필요합니다`);
+    throw new DeployError("deploy.env의 SERVER_HOST가 필요합니다 (legacy APP_HOST도 임시 지원)");
   }
   if (rawHost.startsWith("-") || /\s/.test(rawHost)) {
     throw new DeployError(
@@ -199,7 +204,7 @@ function readConnection(component, settings) {
     "ServerAliveCountMax=3",
   );
 
-  return { component, remoteTarget, sshOptions };
+  return { component: "server", remoteTarget, sshOptions };
 }
 
 function commandFailure(command, result) {
@@ -264,7 +269,7 @@ function runRemoteBash(connection, script, args = [], options = {}) {
 }
 
 function preflight(connection) {
-  runRemoteBash(connection, APP_PREFLIGHT, [], { batch: true, quiet: true });
+  runRemoteBash(connection, SERVER_PREFLIGHT, [], { batch: true, quiet: true });
 }
 
 function validateRemoteDirectory(remoteDirectory, component) {
@@ -327,7 +332,7 @@ function stageFiles(connection, files) {
   return remoteDirectory;
 }
 
-function stageAppDeployment(
+function stageServerDeployment(
   connection,
   releaseArchive,
   releaseChecksum,
@@ -354,7 +359,7 @@ function stageAppDeployment(
   };
 }
 
-function runAppPhase(deployment, phase) {
+function runServerPhase(deployment, phase) {
   const args =
     phase === "prepare"
       ? [
@@ -417,7 +422,7 @@ function main() {
   if (process.platform !== "linux")
     throw new DeployError("배포는 Linux에서 실행하세요");
   const settings = readDeploySettings();
-  const connection = readConnection("app", settings);
+  const connection = readConnection(settings);
   const artifactDirectory = mkdtempSync(path.join(tmpdir(), "quant-deploy-"));
   let deployment = null;
   let attempted = false;
@@ -425,33 +430,33 @@ function main() {
   try {
     preflight(connection);
     const metadataFile = path.join(artifactDirectory, "release-metadata.json");
-    log("==> 운영 앱과 Linux 클라이언트 검증·패키징");
+    log("==> 운영 서버와 Linux 클라이언트 검증·패키징");
     run("bash", [
       path.join(SCRIPT_DIR, "build-release.sh"),
       artifactDirectory,
       metadataFile,
     ]);
     const release = readReleaseMetadata(metadataFile, artifactDirectory);
-    deployment = stageAppDeployment(
+    deployment = stageServerDeployment(
       connection,
       release.releaseArchive,
       release.releaseChecksum,
       release.releaseName,
     );
     attempted = true;
-    runAppPhase(deployment, "prepare");
-    runAppPhase(deployment, "verify");
-    runAppPhase(deployment, "commit");
+    runServerPhase(deployment, "prepare");
+    runServerPhase(deployment, "verify");
+    runServerPhase(deployment, "commit");
     committed = true;
-    runAppPhase(deployment, "finalize");
-    log(`==> 앱과 다운로드 클라이언트 게시 완료: ${release.releaseName}`);
+    runServerPhase(deployment, "finalize");
+    log(`==> 운영 서버와 다운로드 클라이언트 게시 완료: ${release.releaseName}`);
   } catch (error) {
     if (attempted && !committed && deployment) {
       try {
-        runAppPhase(deployment, "rollback");
+        runServerPhase(deployment, "rollback");
       } catch (rollbackError) {
         throw new DeployError(
-          `${error.message}\n앱·DB 복원 실패: ${rollbackError.message}`,
+          `${error.message}\n서버·DB 복원 실패: ${rollbackError.message}`,
         );
       }
     }
