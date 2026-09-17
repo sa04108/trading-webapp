@@ -25,7 +25,7 @@ export async function prepareSubmission(
   const request = () => ctx.app.inject({
     method: 'POST',
     url: '/api/v1/backtests/universe-preview',
-    cookies: { qp_session: cookie },
+    cookies: { session: cookie },
     payload: input,
   });
   let response = await request();

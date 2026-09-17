@@ -86,7 +86,7 @@ export const authenticatedTest = test.extend<AuthenticatedFixtures>({
       url: '/api/v1/auth/login',
       payload: { username: admin.username, password: admin.password },
     });
-    const cookie = login.cookies.find((item) => item.name === 'qp_session')?.value;
+    const cookie = login.cookies.find((item) => item.name === 'session')?.value;
     if (login.statusCode !== 200 || cookie === undefined)
       throw new Error(`테스트 관리자 로그인 실패: ${login.statusCode} ${login.body}`);
     await use(cookie);

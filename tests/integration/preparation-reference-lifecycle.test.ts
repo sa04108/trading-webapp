@@ -39,7 +39,7 @@ async function login(ctx: TestApp, username: string, password: string): Promise<
     payload: { username, password },
   });
   expect(response.statusCode).toBe(200);
-  return response.cookies.find((item) => item.name === 'qp_session')!.value;
+  return response.cookies.find((item) => item.name === 'session')!.value;
 }
 
 async function waitForPreparation(ctx: TestApp, id: string): Promise<void> {
@@ -113,7 +113,7 @@ describe('preparation reference lifecycle', () => {
     const started = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: previewRequest,
     });
     expect(started.statusCode).toBe(202);
@@ -123,7 +123,7 @@ describe('preparation reference lifecycle', () => {
     const ready = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: previewRequest,
     });
     expect(ready.statusCode).toBe(200);
@@ -132,7 +132,7 @@ describe('preparation reference lifecycle', () => {
     const saved = await ctx.app.inject({
       method: 'PUT',
       url: '/api/v1/backtests/wizard-draft/universe',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { universeRule: request.universeRule, lastPreview: { preparationJobId: preparationId } },
     });
     expect(saved.statusCode).toBe(200);
@@ -144,7 +144,7 @@ describe('preparation reference lifecycle', () => {
     const loaded = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/backtests/wizard-draft/universe',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(loaded.statusCode).toBe(200);
     expect(loaded.json().draft.payload.lastPreview.result.preparationJobId).toBe(preparationId);
@@ -152,7 +152,7 @@ describe('preparation reference lifecycle', () => {
     const otherSaved = await ctx.app.inject({
       method: 'PUT',
       url: '/api/v1/backtests/wizard-draft/universe',
-      cookies: { qp_session: otherCookie },
+      cookies: { session: otherCookie },
       payload: { universeRule: request.universeRule, lastPreview: { preparationJobId: preparationId } },
     });
     expect(otherSaved.statusCode).toBe(200);
@@ -161,7 +161,7 @@ describe('preparation reference lifecycle', () => {
     const submitted = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: request,
     });
     expect(submitted.statusCode).toBe(201);
@@ -177,7 +177,7 @@ describe('preparation reference lifecycle', () => {
     const clone = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${jobId}/clone`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(clone.statusCode).toBe(201);
     const cloneId = clone.json<{ job: { id: string } }>().job.id;
@@ -186,7 +186,7 @@ describe('preparation reference lifecycle', () => {
     const sourceStrategyDraft = await ctx.app.inject({
       method: 'PUT',
       url: `/api/v1/backtests/wizard-draft/strategy?sourceJobId=${jobId}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         strategyId: request.strategyId,
         parameters: Object.fromEntries(Object.entries(request.parameters).map(([key, value]) => [key, String(value)])),
@@ -198,7 +198,7 @@ describe('preparation reference lifecycle', () => {
     const secondClone = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${jobId}/clone-configured`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: request,
     });
     expect(secondClone.statusCode).toBe(201);
@@ -212,7 +212,7 @@ describe('preparation reference lifecycle', () => {
       expect(ctx.container.jobQueue.setStatus(id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
     }
     const deleteSource = await ctx.app.inject({
-      method: 'DELETE', url: `/api/v1/backtests/${jobId}`, cookies: { qp_session: cookie },
+      method: 'DELETE', url: `/api/v1/backtests/${jobId}`, cookies: { session: cookie },
     });
     expect(deleteSource.statusCode).toBe(204);
     expect(ctx.container.database.sqlite.prepare(
@@ -220,7 +220,7 @@ describe('preparation reference lifecycle', () => {
     ).get(preparationId)).toEqual({ id: preparationId });
 
     const deleteClone = await ctx.app.inject({
-      method: 'DELETE', url: `/api/v1/backtests/${cloneId}`, cookies: { qp_session: cookie },
+      method: 'DELETE', url: `/api/v1/backtests/${cloneId}`, cookies: { session: cookie },
     });
     expect(deleteClone.statusCode).toBe(204);
     expect(ctx.container.database.sqlite.prepare(
@@ -228,7 +228,7 @@ describe('preparation reference lifecycle', () => {
     ).get(preparationId)).toEqual({ id: preparationId });
 
     const deleteLast = await ctx.app.inject({
-      method: 'DELETE', url: `/api/v1/backtests/${secondCloneId}`, cookies: { qp_session: cookie },
+      method: 'DELETE', url: `/api/v1/backtests/${secondCloneId}`, cookies: { session: cookie },
     });
     expect(deleteLast.statusCode).toBe(204);
     expect(ctx.container.database.sqlite.prepare(
@@ -245,17 +245,17 @@ describe('preparation reference lifecycle', () => {
       parameters: request.parameters,
     };
     const started = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: cookie },
+      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: cookie },
       payload: previewRequest,
     });
     const preparationId = started.json<{ job: { id: string } }>().job.id;
     await waitForPreparation(ctx, preparationId);
     await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: cookie },
+      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: cookie },
       payload: previewRequest,
     });
     const submitted = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: request,
     });
     expect(submitted.statusCode).toBe(201);
     const sourceId = submitted.json<{ job: { id: string } }>().job.id;
@@ -286,7 +286,7 @@ describe('preparation reference lifecycle', () => {
     const resolver = vi.spyOn(ctx.container.backtestPreparationOrchestrator, 'getReadyPreviewForWizard')
       .mockImplementation(() => { throw new Error('clone이 resolver를 호출했습니다'); });
     const cloned = await ctx.app.inject({
-      method: 'POST', url: `/api/v1/backtests/${sourceId}/clone`, cookies: { qp_session: cookie },
+      method: 'POST', url: `/api/v1/backtests/${sourceId}/clone`, cookies: { session: cookie },
     });
     expect(cloned.statusCode).toBe(201);
     const cloneId = cloned.json<{ job: { id: string } }>().job.id;
@@ -297,11 +297,11 @@ describe('preparation reference lifecycle', () => {
 
     expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
     const deleted = await ctx.app.inject({
-      method: 'DELETE', url: `/api/v1/backtests/${sourceId}`, cookies: { qp_session: cookie },
+      method: 'DELETE', url: `/api/v1/backtests/${sourceId}`, cookies: { session: cookie },
     });
     expect(deleted.statusCode).toBe(204);
     const cloneAgain = await ctx.app.inject({
-      method: 'POST', url: `/api/v1/backtests/${cloneId}/clone`, cookies: { qp_session: cookie },
+      method: 'POST', url: `/api/v1/backtests/${cloneId}/clone`, cookies: { session: cookie },
     });
     expect(cloneAgain.statusCode).toBe(201);
   });
@@ -309,7 +309,7 @@ describe('preparation reference lifecycle', () => {
   it('미리보기 소유권이 없는 사용자의 제출을 자동 준비 fixture 없이 거부한다', async ({ scenario }) => {
     const { ctx, cookie, otherCookie } = scenario;
     const preview = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: cookie },
+      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: cookie },
       payload: {
         universeRule: request.universeRule,
         period: request.period,
@@ -321,7 +321,7 @@ describe('preparation reference lifecycle', () => {
     const preparationId = preview.json<{ job: { id: string } }>().job.id;
     await waitForPreparation(ctx, preparationId);
     await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: cookie },
+      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: cookie },
       payload: {
         universeRule: request.universeRule,
         period: request.period,
@@ -331,7 +331,7 @@ describe('preparation reference lifecycle', () => {
     });
 
     const rejected = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: otherCookie }, payload: request,
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: otherCookie }, payload: request,
     });
     expect(rejected.statusCode).toBe(409);
     expect(rejected.json<{ error: string }>().error).toBe('PREPARATION_REQUIRED');
@@ -346,13 +346,13 @@ describe('preparation reference lifecycle', () => {
       parameters: request.parameters,
     };
     const started = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: cookie },
+      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: cookie },
       payload: previewRequest,
     });
     const preparationId = started.json<{ job: { id: string } }>().job.id;
     await waitForPreparation(ctx, preparationId);
     await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: cookie },
+      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: cookie },
       payload: previewRequest,
     });
 
@@ -365,7 +365,7 @@ describe('preparation reference lifecycle', () => {
       return originalEnqueue(...args);
     });
     const rejected = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: request,
     });
     expect(rejected.statusCode).toBe(409);
     expect(rejected.json<{ error: string }>().error).toBe('PREPARATION_REQUIRED');
@@ -389,22 +389,22 @@ describe('preparation reference lifecycle', () => {
       parameters: request.parameters,
     };
     const started = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: cookie },
+      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: cookie },
       payload: previewRequest,
     });
     const preparationId = started.json<{ job: { id: string } }>().job.id;
     await waitForPreparation(ctx, preparationId);
     await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: cookie },
+      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: cookie },
       payload: previewRequest,
     });
     await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: otherCookie },
+      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: otherCookie },
       payload: previewRequest,
     });
 
     const fake = await ctx.app.inject({
-      method: 'PUT', url: '/api/v1/backtests/wizard-draft/universe', cookies: { qp_session: cookie },
+      method: 'PUT', url: '/api/v1/backtests/wizard-draft/universe', cookies: { session: cookie },
       payload: { universeRule: request.universeRule, lastPreview: { preparationJobId: 'prep_fake' } },
     });
     expect(fake.statusCode).toBe(200);
@@ -418,14 +418,14 @@ describe('preparation reference lifecycle', () => {
       },
     };
     const replacementStarted = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: cookie },
+      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: cookie },
       payload: replacementRequest,
     });
     expect(replacementStarted.statusCode).toBe(202);
     const replacementId = replacementStarted.json<{ job: { id: string } }>().job.id;
     await waitForPreparation(ctx, replacementId);
     const replacementReady = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: cookie },
+      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: cookie },
       payload: replacementRequest,
     });
     expect(replacementReady.statusCode).toBe(200);
@@ -448,7 +448,7 @@ describe('preparation reference lifecycle', () => {
     ).get(preparationId, replacementId)).toEqual({ count: 2 });
 
     const otherCleared = await ctx.app.inject({
-      method: 'DELETE', url: '/api/v1/backtests/wizard-draft?all=true', cookies: { qp_session: otherCookie },
+      method: 'DELETE', url: '/api/v1/backtests/wizard-draft?all=true', cookies: { session: otherCookie },
     });
     expect(otherCleared.statusCode).toBe(204);
     expect(ctx.container.database.sqlite.prepare(
@@ -459,7 +459,7 @@ describe('preparation reference lifecycle', () => {
     ).get(replacementId)).toEqual({ id: replacementId });
 
     const finalCleared = await ctx.app.inject({
-      method: 'DELETE', url: '/api/v1/backtests/wizard-draft', cookies: { qp_session: cookie },
+      method: 'DELETE', url: '/api/v1/backtests/wizard-draft', cookies: { session: cookie },
     });
     expect(finalCleared.statusCode).toBe(204);
     expect(ctx.container.database.sqlite.prepare(
@@ -479,17 +479,17 @@ describe('preparation reference lifecycle', () => {
       parameters: request.parameters,
     };
     const started = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: cookie },
+      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: cookie },
       payload: previewRequest,
     });
     const preparationId = started.json<{ job: { id: string } }>().job.id;
     await waitForPreparation(ctx, preparationId);
     await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { qp_session: cookie },
+      method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: cookie },
       payload: previewRequest,
     });
     await ctx.app.inject({
-      method: 'PUT', url: '/api/v1/backtests/wizard-draft/universe', cookies: { qp_session: cookie },
+      method: 'PUT', url: '/api/v1/backtests/wizard-draft/universe', cookies: { session: cookie },
       payload: { universeRule: request.universeRule, lastPreview: { preparationJobId: preparationId } },
     });
     ctx.container.database.sqlite.exec(`
@@ -499,7 +499,7 @@ describe('preparation reference lifecycle', () => {
     `);
 
     const failed = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: request,
     });
     expect(failed.statusCode).toBe(500);
     expect(ctx.container.database.sqlite.prepare(

@@ -5,7 +5,7 @@ import { test as it } from '../helpers/test-fixtures.js';
 import { newId } from '../../src/runtime/shared/ids.js';
 
 function sessionCookie(response: { cookies: Array<{ name: string; value: string }> }): string {
-  const cookie = response.cookies.find((c) => c.name === 'qp_session');
+  const cookie = response.cookies.find((c) => c.name === 'session');
   if (!cookie) throw new Error('session cookie not set');
   return cookie.value;
 }
@@ -42,7 +42,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     const me = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/auth/me',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(me.statusCode).toBe(200);
     expect(me.json().username).toBe(username);
@@ -50,14 +50,14 @@ describe('auth flow (스펙 §14, §16)', () => {
     const logout = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/auth/logout',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(logout.statusCode).toBe(200);
 
     const meAfter = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/auth/me',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(meAfter.statusCode).toBe(401);
   });
@@ -96,7 +96,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     const mePending = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/auth/me',
-      cookies: { qp_session: pendingCookie },
+      cookies: { session: pendingCookie },
     });
     expect(mePending.statusCode).toBe(401);
 
@@ -104,7 +104,7 @@ describe('auth flow (스펙 §14, §16)', () => {
       method: 'POST',
       url: '/api/v1/auth/totp/verify',
       payload: { token: '000000' },
-      cookies: { qp_session: pendingCookie },
+      cookies: { session: pendingCookie },
     });
     expect(wrong.statusCode).toBe(401);
 
@@ -112,7 +112,7 @@ describe('auth flow (스펙 §14, §16)', () => {
       method: 'POST',
       url: '/api/v1/auth/totp/verify',
       payload: { token: totpToken(totpSecret ?? '') },
-      cookies: { qp_session: pendingCookie },
+      cookies: { session: pendingCookie },
     });
     expect(verify.statusCode).toBe(200);
     const fullCookie = sessionCookie(verify);
@@ -121,7 +121,7 @@ describe('auth flow (스펙 §14, §16)', () => {
     const me = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/auth/me',
-      cookies: { qp_session: fullCookie },
+      cookies: { session: fullCookie },
     });
     expect(me.statusCode).toBe(200);
   });
@@ -155,14 +155,14 @@ describe('auth flow (스펙 §14, §16)', () => {
       method: 'POST',
       url: '/api/v1/auth/totp/verify',
       payload: { token: '000000' },
-      cookies: { qp_session: pendingCookie },
+      cookies: { session: pendingCookie },
     });
     expect(verify.statusCode).toBe(401);
 
     const me = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/auth/me',
-      cookies: { qp_session: pendingCookie },
+      cookies: { session: pendingCookie },
     });
     expect(me.statusCode).toBe(401);
   });
@@ -184,7 +184,7 @@ describe('auth flow (스펙 §14, §16)', () => {
         method: 'POST',
         url: '/api/v1/auth/totp/verify',
         payload: { token: '000000' },
-        cookies: { qp_session: pendingCookie },
+        cookies: { session: pendingCookie },
       });
       expect(wrong.statusCode).toBe(401);
     }
@@ -196,7 +196,7 @@ describe('auth flow (스펙 §14, §16)', () => {
       method: 'POST',
       url: '/api/v1/auth/totp/verify',
       payload: { token: totpToken(totpSecret ?? '') },
-      cookies: { qp_session: pendingCookie },
+      cookies: { session: pendingCookie },
     });
     expect(correctAfterLock.statusCode).toBe(429);
 
@@ -227,7 +227,7 @@ describe('auth flow (스펙 §14, §16)', () => {
       method: 'POST',
       url: '/api/v1/auth/totp/verify',
       payload: { token: recoveryCodes[0] },
-      cookies: { qp_session: pendingCookie },
+      cookies: { session: pendingCookie },
     });
     expect(verify.statusCode).toBe(200);
 
@@ -242,7 +242,7 @@ describe('auth flow (스펙 §14, §16)', () => {
       method: 'POST',
       url: '/api/v1/auth/totp/verify',
       payload: { token: recoveryCodes[0] },
-      cookies: { qp_session: secondPending },
+      cookies: { session: secondPending },
     });
     expect(reuse.statusCode).toBe(401);
   });
@@ -262,7 +262,7 @@ describe('auth flow (스펙 §14, §16)', () => {
       method: 'POST',
       url: '/api/v1/auth/totp/verify',
       payload: { token },
-      cookies: { qp_session: sessionCookie(firstLogin) },
+      cookies: { session: sessionCookie(firstLogin) },
     });
     expect(firstVerify.statusCode).toBe(200);
 
@@ -278,14 +278,14 @@ describe('auth flow (스펙 §14, §16)', () => {
       method: 'POST',
       url: '/api/v1/auth/totp/verify',
       payload: { token },
-      cookies: { qp_session: replayCookie },
+      cookies: { session: replayCookie },
     });
     expect(replay.statusCode).toBe(401);
 
     const me = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/auth/me',
-      cookies: { qp_session: replayCookie },
+      cookies: { session: replayCookie },
     });
     expect(me.statusCode).toBe(401);
 

@@ -9,7 +9,7 @@ async function login(ctx: TestApp, username: string, password: string): Promise<
     payload: { username, password },
   });
   expect(response.statusCode).toBe(200);
-  return response.cookies.find((cookie) => cookie.name === 'qp_session')!.value;
+  return response.cookies.find((cookie) => cookie.name === 'session')!.value;
 }
 
 describe('backtest wizard draft routes', () => {
@@ -60,7 +60,7 @@ describe('backtest wizard draft routes', () => {
       const saved = await ctx.app.inject({
         method: 'PUT',
         url: `/api/v1/backtests/wizard-draft/${step}`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload,
       });
       expect(saved.statusCode, step).toBe(200);
@@ -69,7 +69,7 @@ describe('backtest wizard draft routes', () => {
       const loaded = await ctx.app.inject({
         method: 'GET',
         url: `/api/v1/backtests/wizard-draft/${step}`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
       });
       expect(loaded.statusCode, step).toBe(200);
       expect(loaded.json().draft).toMatchObject({ step, payload });
@@ -87,7 +87,7 @@ describe('backtest wizard draft routes', () => {
       const response = await ctx.app.inject({
         method: 'PUT',
         url: `/api/v1/backtests/wizard-draft/strategy${query}`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload,
       });
       expect(response.statusCode).toBe(200);
@@ -96,20 +96,20 @@ describe('backtest wizard draft routes', () => {
     const removed = await ctx.app.inject({
       method: 'DELETE',
       url: '/api/v1/backtests/wizard-draft',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(removed.statusCode).toBe(204);
 
     const fresh = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/backtests/wizard-draft/strategy',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(fresh.json()).toEqual({ draft: null });
     const clone = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/backtests/wizard-draft/strategy?sourceJobId=bt_source',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(clone.json().draft.payload).toEqual(clonePayload);
   });
@@ -118,21 +118,21 @@ describe('backtest wizard draft routes', () => {
     await ctx.app.inject({
       method: 'PUT',
       url: '/api/v1/backtests/wizard-draft/strategy',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { strategyId: 'range-breakout', parameters: {}, currentStep: 'period' },
     });
     await new Promise((resolve) => setTimeout(resolve, 2));
     await ctx.app.inject({
       method: 'PUT',
       url: '/api/v1/backtests/wizard-draft/strategy?sourceJobId=bt_source',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { strategyId: 'range-breakout', parameters: {}, currentStep: 'review' },
     });
 
     const candidate = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/backtests/wizard-draft',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(candidate.statusCode).toBe(200);
     expect(candidate.json().candidate).toMatchObject({
@@ -144,21 +144,21 @@ describe('backtest wizard draft routes', () => {
     const removed = await ctx.app.inject({
       method: 'DELETE',
       url: '/api/v1/backtests/wizard-draft?all=true',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(removed.statusCode).toBe(204);
 
     const emptyCandidate = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/backtests/wizard-draft',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(emptyCandidate.json()).toEqual({ candidate: null });
     for (const query of ['', '?sourceJobId=bt_source']) {
       const response = await ctx.app.inject({
         method: 'GET',
         url: `/api/v1/backtests/wizard-draft/strategy${query}`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
       });
       expect(response.json()).toEqual({ draft: null });
     }
@@ -168,7 +168,7 @@ describe('backtest wizard draft routes', () => {
     await ctx.app.inject({
       method: 'PUT',
       url: '/api/v1/backtests/wizard-draft/strategy',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { strategyId: 'range-breakout', parameters: {} },
     });
     const other = await createTestAdmin(ctx.container, {
@@ -179,13 +179,13 @@ describe('backtest wizard draft routes', () => {
     const response = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/backtests/wizard-draft/strategy',
-      cookies: { qp_session: otherCookie },
+      cookies: { session: otherCookie },
     });
     expect(response.json()).toEqual({ draft: null });
     const candidate = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/backtests/wizard-draft',
-      cookies: { qp_session: otherCookie },
+      cookies: { session: otherCookie },
     });
     expect(candidate.json()).toEqual({ candidate: null });
   });
@@ -194,14 +194,14 @@ describe('backtest wizard draft routes', () => {
     const unknown = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/backtests/wizard-draft/review',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(unknown.statusCode).toBe(400);
 
     const malformed = await ctx.app.inject({
       method: 'PUT',
       url: '/api/v1/backtests/wizard-draft/capital',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { initialCash: 1000 },
     });
     expect(malformed.statusCode).toBe(400);

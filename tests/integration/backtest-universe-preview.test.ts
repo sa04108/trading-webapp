@@ -59,7 +59,7 @@ async function injectPreparedPreview(
   options: {
     method: 'POST';
     url: '/api/v1/backtests/universe-preview';
-    cookies: { qp_session: string };
+    cookies: { session: string };
     payload: Record<string, unknown>;
   },
 ): Promise<LightMyRequestResponse> {
@@ -115,7 +115,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: {
           markets: ['KOSPI'],
@@ -175,7 +175,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: {
           markets: ['KOSPI'],
@@ -246,7 +246,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
@@ -317,7 +317,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
@@ -350,7 +350,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
@@ -390,7 +390,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-06' },
@@ -456,7 +456,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(['KOSPI'], { unit: 'DAY', value: 1 }),
         period: { from: '2026-01-05', to: '2026-01-10' },
@@ -492,7 +492,7 @@ describe('POST /backtests/universe-preview', () => {
     const prepared = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload,
     });
     expect(prepared.statusCode).toBe(200);
@@ -525,7 +525,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
@@ -587,7 +587,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         // 이 test는 3개의 월간 리밸런스 날짜가 실제로 필요하다 — 기본값(DAY)이 아니라
         // 명시적으로 MONTH 를 쓴다.
@@ -643,7 +643,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(['KOSPI'], { unit: 'NONE', value: 1 }),
         period: { from: '2026-01-05', to: '2026-01-31' },
@@ -676,7 +676,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
@@ -692,7 +692,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(['KOSPI', 'KOSDAQ']),
         period: { from: '2026-01-05', to: '2026-01-05' },
@@ -708,7 +708,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
@@ -723,7 +723,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-01-10', to: '2026-01-05' },
@@ -736,7 +736,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: {
           markets: ['KOSPI'],
@@ -756,7 +756,7 @@ describe('POST /backtests/universe-preview', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-13-45', to: '2026-12-31' },
@@ -804,7 +804,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
@@ -835,7 +835,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: {
           markets: ['KOSPI'],
@@ -874,7 +874,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
@@ -915,7 +915,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
@@ -960,7 +960,7 @@ describe('POST /backtests/universe-preview — 유니버스 종목 자동 등록
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: '2026-01-05', to: '2026-01-05' },
@@ -993,7 +993,7 @@ describe('POST /backtests/universe-preview — 준비 결과 재사용', () => {
         url: '/api/v1/auth/login',
         payload: { username: admin.username, password: admin.password },
       });
-      const cookie = login.cookies.find((item) => item.name === 'qp_session')!.value;
+      const cookie = login.cookies.find((item) => item.name === 'session')!.value;
       const restore = installPreviewShapeStubs(ctx);
       try {
         await use({ ctx, fake, cookie, preparedPreview: injectPreparedPreview });
@@ -1041,7 +1041,7 @@ describe('POST /backtests/universe-preview — 준비 결과 재사용', () => {
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: date, to: date },
@@ -1082,7 +1082,7 @@ describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매�
       });
       await use({
         ctx,
-        cookie: login.cookies.find((item) => item.name === 'qp_session')!.value,
+        cookie: login.cookies.find((item) => item.name === 'session')!.value,
       });
     },
   });
@@ -1099,7 +1099,7 @@ describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매�
     const res = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: marketCapRule(),
         period: { from: date, to: date },
@@ -1180,7 +1180,7 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
     const res = await preparedPreview(ctx, {
       method: 'POST',
       url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         universeRule: {
           markets: ['KOSPI'],
@@ -1237,7 +1237,7 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
       const res = await preparedPreview(ctx, {
         method: 'POST',
         url: '/api/v1/backtests/universe-preview',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: {
           universeRule: {
             markets: ['KOSPI'],

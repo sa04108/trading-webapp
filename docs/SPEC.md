@@ -177,9 +177,9 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 | 인증 | `SESSION_SECRET`는 production에서 필수. 세션 유휴·절대 만료는 `SESSION_*_TIMEOUT_SECONDS`로 설정한다. |
 | 데이터 공급자 | `KRX_API_KEY`·`KRX_APPROVAL_EXPIRY`, `DART_API_KEY`, `FRED_API_KEY`, `TOSS_CLIENT_ID`·`TOSS_CLIENT_SECRET` 및 공급자별 base URL |
 | 자원·운영 | `MAX_QUEUED_BACKTESTS`, `SYNC_MIN_FREE_DISK_MB`, `KRX_DAILY_CALL_BUDGET`, 로그 수준·보존 기간 |
-| 로컬 배포 접속 | 저장소 밖으로 유출하지 않는 로컬 `deploy.env`의 `QP_APP_*` SSH 설정. 앱 API 키와 구분한다. |
+| 로컬 배포 접속 | 저장소 밖으로 유출하지 않는 로컬 `deploy.env`의 `APP_*` SSH 설정. 앱 API 키와 구분한다. |
 
-허용값·기본값·조합 검증은 [config.ts](../src/server/bootstrap/config.ts), 예시는 [app.env.example](../infra/app.env.example)·[deploy.env.example](../deploy.env.example)를 따른다. 선택적 비밀값은 미사용 시 생략하며 빈 문자열로 대체하지 않는다. 도메인 `QP_DOMAIN`은 앱이 아닌 프로비저닝 입력이다.
+허용값·기본값·조합 검증은 [config.ts](../src/server/bootstrap/config.ts), 예시는 [app.env.example](../infra/app.env.example)·[deploy.env.example](../deploy.env.example)를 따른다. 선택적 비밀값은 미사용 시 생략하며 빈 문자열로 대체하지 않는다. 도메인 `DOMAIN`은 앱이 아닌 프로비저닝 입력이다.
 
 ## 11. 빌드·배포·복구
 

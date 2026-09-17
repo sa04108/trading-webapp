@@ -29,7 +29,7 @@ describe('notification routes', () => {
     const list = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/notifications',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(list.statusCode).toBe(200);
     const body = list.json() as { notifications: Array<{ id: string; read: boolean }> };
@@ -38,7 +38,7 @@ describe('notification routes', () => {
     const countRes = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/notifications/unread-count',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(countRes.json()).toEqual({ count: 1 });
   });
@@ -47,7 +47,7 @@ describe('notification routes', () => {
     const address = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
     const controller = new AbortController();
     const response = await fetch(`${address}/api/v1/notifications/events`, {
-      headers: { cookie: `qp_session=${cookie}` },
+      headers: { cookie: `session=${cookie}` },
       signal: controller.signal,
     });
 
@@ -68,7 +68,7 @@ describe('notification routes', () => {
     const res = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/notifications/read-all',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(res.statusCode).toBe(204);
     expect(ctx.container.notificationService.unreadCount()).toBe(0);
@@ -82,7 +82,7 @@ describe('notification routes', () => {
     const byIds = await ctx.app.inject({
       method: 'DELETE',
       url: '/api/v1/notifications',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { ids: [a.id] },
     });
     expect(byIds.statusCode).toBe(204);
@@ -91,7 +91,7 @@ describe('notification routes', () => {
     const empty = await ctx.app.inject({
       method: 'DELETE',
       url: '/api/v1/notifications',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {},
     });
     expect(empty.statusCode).toBe(400);
@@ -99,7 +99,7 @@ describe('notification routes', () => {
     const all = await ctx.app.inject({
       method: 'DELETE',
       url: '/api/v1/notifications',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { all: true },
     });
     expect(all.statusCode).toBe(204);

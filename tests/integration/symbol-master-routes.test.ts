@@ -49,7 +49,7 @@ async function setup(krxApps: KrxTestFactory, env: Record<string, string> = {}):
     url: '/api/v1/auth/login',
     payload: { username, password },
   });
-  const cookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+  const cookie = login.cookies.find((c) => c.name === 'session')!.value;
   return { app, fake, cookie };
 }
 
@@ -61,7 +61,7 @@ describe('symbol-master routes', () => {
     const sync = await app.app.inject({
       method: 'POST',
       url: '/api/v1/symbol-master/sync',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { date: '2025-01-06' },
     });
     expect(sync.statusCode).toBe(200);
@@ -74,7 +74,7 @@ describe('symbol-master routes', () => {
     const universe = await app.app.inject({
       method: 'GET',
       url: '/api/v1/symbol-master/universe?date=2025-01-06',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(universe.statusCode).toBe(200);
     const body = universe.json();
@@ -94,7 +94,7 @@ describe('symbol-master routes', () => {
     const sync = await app.app.inject({
       method: 'POST',
       url: '/api/v1/symbol-master/sync',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { date: '2025-01-08' },
     });
 
@@ -109,7 +109,7 @@ describe('symbol-master routes', () => {
     const universe = await app.app.inject({
       method: 'GET',
       url: '/api/v1/symbol-master/universe?date=2025-01-08',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(universe.statusCode).toBe(200);
     expect(universe.json().covered).toBe(true);
@@ -121,7 +121,7 @@ describe('symbol-master routes', () => {
     const res = await app.app.inject({
       method: 'GET',
       url: '/api/v1/symbol-master/universe?date=2025-01-06',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ date: '2025-01-06', covered: false, symbols: [] });
@@ -133,14 +133,14 @@ describe('symbol-master routes', () => {
     await app.app.inject({
       method: 'POST',
       url: '/api/v1/symbol-master/sync',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { date: '2025-01-06' },
     });
 
     const res = await app.app.inject({
       method: 'GET',
       url: '/api/v1/symbol-master/coverage',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -166,7 +166,7 @@ describe('symbol-master routes', () => {
     const backfill = await app.app.inject({
       method: 'POST',
       url: '/api/v1/symbol-master/backfill',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { fromDate: '2025-01-06', toDate: '2025-01-07' },
     });
     expect(backfill.statusCode).toBe(202);
@@ -175,7 +175,7 @@ describe('symbol-master routes', () => {
       const res = await app.app.inject({
         method: 'GET',
         url: '/api/v1/symbol-master/coverage',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
       });
       return res.json();
     };
@@ -212,7 +212,7 @@ describe('symbol-master routes', () => {
     const backfill = await app.app.inject({
       method: 'POST',
       url: '/api/v1/symbol-master/backfill',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { fromDate: '2025-01-06', toDate: '2025-01-10' },
     });
     expect(backfill.statusCode).toBe(202);
@@ -222,7 +222,7 @@ describe('symbol-master routes', () => {
     const res = await app.app.inject({
       method: 'GET',
       url: '/api/v1/symbol-master/coverage',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -239,7 +239,7 @@ describe('symbol-master routes', () => {
         const coverage = await app.app.inject({
           method: 'GET',
           url: '/api/v1/symbol-master/coverage',
-          cookies: { qp_session: cookie },
+          cookies: { session: cookie },
         });
         const backfillState = coverage.json().backfill;
         expect(
@@ -257,7 +257,7 @@ describe('symbol-master routes', () => {
     const res = await app.app.inject({
       method: 'GET',
       url: '/api/v1/symbol-master/coverage',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
@@ -271,7 +271,7 @@ describe('symbol-master routes', () => {
     await app.app.inject({
       method: 'POST',
       url: '/api/v1/symbol-master/sync',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { date: '2025-01-06' },
     });
 
@@ -280,7 +280,7 @@ describe('symbol-master routes', () => {
     const sync2 = await app.app.inject({
       method: 'POST',
       url: '/api/v1/symbol-master/sync',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { date: '2025-01-07' },
     });
     expect(sync2.json()).toMatchObject({
@@ -291,7 +291,7 @@ describe('symbol-master routes', () => {
     const res = await app.app.inject({
       method: 'GET',
       url: '/api/v1/symbol-master/events?from=2025-01-01&to=2025-01-31',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(res.statusCode).toBe(200);
     const { events } = res.json();

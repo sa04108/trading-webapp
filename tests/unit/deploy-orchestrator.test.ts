@@ -32,13 +32,13 @@ function prepareHarness(configured = true) {
   const settings: string[] = [];
   if (configured) {
     settings.push(
-      'QP_APP_HOST=app.example.com',
-      'QP_APP_SSH_USER=app-user',
-      `QP_APP_SSH_KEY=${appKey}`,
-      'QP_APP_SSH_PORT=2222',
-      'QP_APP_SSH_HOST_KEY=yes',
-      'QP_APP_SSH_JUMP=app-jump.example.com',
-      'QP_APP_SSH_OPTS="-o ServerAliveInterval=30 -o \'SetEnv=QP_TEST=value with spaces\'"',
+      'APP_HOST=app.example.com',
+      'APP_SSH_USER=app-user',
+      `APP_SSH_KEY=${appKey}`,
+      'APP_SSH_PORT=2222',
+      'APP_SSH_HOST_KEY=yes',
+      'APP_SSH_JUMP=app-jump.example.com',
+      'APP_SSH_OPTS="-o ServerAliveInterval=30 -o \'SetEnv=TEST=value with spaces\'"',
     );
   }
   fs.writeFileSync(path.join(root, 'deploy.env'), `${settings.join('\n')}\n`);
@@ -67,7 +67,7 @@ const command = args.slice(index + 1).join(' ');
 if (!target.includes('app.example.com')) process.exit(90);
 const component = 'app';
 const required = [process.env.APP_KEY, 'Port=2222', 'ProxyJump=app-jump.example.com',
-    'StrictHostKeyChecking=yes', 'ServerAliveInterval=30', 'SetEnv=QP_TEST=value with spaces'];
+    'StrictHostKeyChecking=yes', 'ServerAliveInterval=30', 'SetEnv=TEST=value with spaces'];
 for (const value of required) {
   if (!options.includes(value)) {
     process.stderr.write('missing SSH option: ' + value + '\\n');
@@ -117,7 +117,7 @@ const destination = operands.at(-1);
 if (!destination.includes('app.example.com')) process.exit(90);
 const component = 'app';
 const required = [process.env.APP_KEY, 'Port=2222', 'ProxyJump=app-jump.example.com',
-    'StrictHostKeyChecking=yes', 'ServerAliveInterval=30', 'SetEnv=QP_TEST=value with spaces'];
+    'StrictHostKeyChecking=yes', 'ServerAliveInterval=30', 'SetEnv=TEST=value with spaces'];
 for (const value of required) {
   if (!options.includes(value)) process.exit(96);
 }
@@ -193,7 +193,7 @@ describe('앱과 다운로드 파일 배포', () => {
     const harness = prepareHarness(false);
     const result = execute(harness);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('QP_APP_HOST');
+    expect(result.stderr).toContain('APP_HOST');
     expect(readCommands(harness)).toEqual([]);
   });
 

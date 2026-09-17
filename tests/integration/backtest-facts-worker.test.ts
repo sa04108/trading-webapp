@@ -179,7 +179,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload,
       });
       expect(created.statusCode).toBe(201);
@@ -237,7 +237,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       };
       await scenario.prepare(payload);
       const created = await ctx.app.inject({
-        method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload,
+        method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload,
       });
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;
@@ -281,7 +281,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       };
       await scenario.prepare(payload);
       const created = await ctx.app.inject({
-        method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload,
+        method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload,
       });
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;
@@ -433,7 +433,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload,
       });
       expect(created.statusCode).toBe(201);
@@ -627,7 +627,7 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload,
       });
       expect(created.statusCode).toBe(201);
@@ -806,7 +806,7 @@ describe('이익 가속·가격 확인 순위 워커 배선 — PIT 공시 경�
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload,
     });
     expect(created.statusCode).toBe(201);
@@ -925,7 +925,7 @@ describe('저PER·고ROE 순위 워커 배선 — PIT 공시 경계 (Task 12)', 
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload,
     });
     expect(created.statusCode).toBe(201);

@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AuthService } from "../application/auth-service.js";
 
-export const SESSION_COOKIE = "qp_session";
+export const SESSION_COOKIE = "session";
 
 const loginBodySchema = z.object({
   username: z.string().min(1).max(64),

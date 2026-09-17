@@ -5,10 +5,10 @@ remote_host_configure() {
   local raw_target="$1"
   REMOTE_TARGET="${raw_target}"
   [ -n "${REMOTE_TARGET}" ] || { echo "원격 호스트 주소가 필요합니다" >&2; return 1; }
-  if [ -n "${QP_SSH_USER:-}" ]; then
+  if [ -n "${SSH_USER:-}" ]; then
     case "${REMOTE_TARGET}" in
-      *@*) echo "QP_SSH_USER는 무시합니다 — 주소에 이미 사용자명이 있습니다: ${REMOTE_TARGET}" >&2 ;;
-      *) REMOTE_TARGET="${QP_SSH_USER}@${REMOTE_TARGET}" ;;
+      *@*) echo "SSH_USER는 무시합니다 — 주소에 이미 사용자명이 있습니다: ${REMOTE_TARGET}" >&2 ;;
+      *) REMOTE_TARGET="${SSH_USER}@${REMOTE_TARGET}" ;;
     esac
   fi
   case "${REMOTE_TARGET}" in
@@ -17,9 +17,9 @@ remote_host_configure() {
 
   REMOTE_SSH_OPTS=()
   REMOTE_ENV_HINT=""
-  if [ -n "${QP_SSH_OPTS:-}" ]; then
-    read -ra REMOTE_SSH_OPTS <<< "${QP_SSH_OPTS}"
-    REMOTE_ENV_HINT="${REMOTE_ENV_HINT}QP_SSH_OPTS='${QP_SSH_OPTS}' "
+  if [ -n "${SSH_OPTS:-}" ]; then
+    read -ra REMOTE_SSH_OPTS <<< "${SSH_OPTS}"
+    REMOTE_ENV_HINT="${REMOTE_ENV_HINT}SSH_OPTS='${SSH_OPTS}' "
   fi
   if [ -n "${SSH_KEY:-}" ]; then
     case "${SSH_KEY}" in '~/'*) SSH_KEY="${HOME}/${SSH_KEY#'~/'}" ;; esac
@@ -27,21 +27,21 @@ remote_host_configure() {
     REMOTE_SSH_OPTS+=(-i "${SSH_KEY}" -o IdentitiesOnly=yes)
     REMOTE_ENV_HINT="${REMOTE_ENV_HINT}SSH_KEY=${SSH_KEY} "
   fi
-  if [ -n "${QP_SSH_PORT:-}" ]; then
-    case "${QP_SSH_PORT}" in *[!0-9]*|'') echo "QP_SSH_PORT는 숫자여야 합니다: ${QP_SSH_PORT}" >&2; return 1 ;; esac
-    REMOTE_SSH_OPTS+=(-o "Port=${QP_SSH_PORT}")
-    REMOTE_ENV_HINT="${REMOTE_ENV_HINT}QP_SSH_PORT=${QP_SSH_PORT} "
+  if [ -n "${SSH_PORT:-}" ]; then
+    case "${SSH_PORT}" in *[!0-9]*|'') echo "SSH_PORT는 숫자여야 합니다: ${SSH_PORT}" >&2; return 1 ;; esac
+    REMOTE_SSH_OPTS+=(-o "Port=${SSH_PORT}")
+    REMOTE_ENV_HINT="${REMOTE_ENV_HINT}SSH_PORT=${SSH_PORT} "
   fi
-  if [ -n "${QP_SSH_JUMP:-}" ]; then
-    REMOTE_SSH_OPTS+=(-o "ProxyJump=${QP_SSH_JUMP}")
-    REMOTE_ENV_HINT="${REMOTE_ENV_HINT}QP_SSH_JUMP=${QP_SSH_JUMP} "
+  if [ -n "${SSH_JUMP:-}" ]; then
+    REMOTE_SSH_OPTS+=(-o "ProxyJump=${SSH_JUMP}")
+    REMOTE_ENV_HINT="${REMOTE_ENV_HINT}SSH_JUMP=${SSH_JUMP} "
   fi
-  case "${QP_SSH_HOST_KEY:=accept-new}" in
-    accept-new|yes|no) REMOTE_SSH_OPTS+=(-o "StrictHostKeyChecking=${QP_SSH_HOST_KEY}") ;;
-    *) echo "QP_SSH_HOST_KEY는 accept-new | yes | no 중 하나입니다: ${QP_SSH_HOST_KEY}" >&2; return 1 ;;
+  case "${SSH_HOST_KEY:=accept-new}" in
+    accept-new|yes|no) REMOTE_SSH_OPTS+=(-o "StrictHostKeyChecking=${SSH_HOST_KEY}") ;;
+    *) echo "SSH_HOST_KEY는 accept-new | yes | no 중 하나입니다: ${SSH_HOST_KEY}" >&2; return 1 ;;
   esac
-  if [ "${QP_SSH_HOST_KEY}" != accept-new ]; then
-    REMOTE_ENV_HINT="${REMOTE_ENV_HINT}QP_SSH_HOST_KEY=${QP_SSH_HOST_KEY} "
+  if [ "${SSH_HOST_KEY}" != accept-new ]; then
+    REMOTE_ENV_HINT="${REMOTE_ENV_HINT}SSH_HOST_KEY=${SSH_HOST_KEY} "
   fi
 }
 

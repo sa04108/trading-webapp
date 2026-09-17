@@ -5,18 +5,18 @@
 #         app 노드 주소와 도메인을 순서대로 물어본다. 비대화형으로 돌리려면
 #         환경변수를 미리 설정한다 — ssh config 는 필요하지 않다:
 #
-#         SSH_KEY=~/.ssh/your-key QP_SSH_USER=ubuntu QP_APP_HOST=203.0.113.10 \
-#           QP_DOMAIN=quant.example.com ./scripts/bootstrap-app.sh
+#         SSH_KEY=~/.ssh/your-key SSH_USER=ubuntu APP_HOST=203.0.113.10 \
+#           DOMAIN=quant.example.com ./scripts/bootstrap-app.sh
 #
-#   QP_DOMAIN        서비스 도메인 (예: quant.example.com). A 레코드가 app 노드의 고정 공인
+#   DOMAIN        서비스 도메인 (예: quant.example.com). A 레코드가 app 노드의 고정 공인
 #                    IP 를 가리키고 있어야 한다 — Caddy 가 이 이름으로 인증서를 받는다.
-#   QP_APP_HOST      app 노드 주소, `[user@]host` 형식
-#   QP_SSH_USER      로그인 사용자명. QP_APP_HOST 에 `user@` 가 없을 때만 쓴다
-#   QP_SSH_PORT      SSH 포트 (미지정이면 22)
+#   APP_HOST      app 노드 주소, `[user@]host` 형식
+#   SSH_USER      로그인 사용자명. APP_HOST 에 `user@` 가 없을 때만 쓴다
+#   SSH_PORT      SSH 포트 (미지정이면 22)
 #   SSH_KEY          개인키 경로. `~/` 로 시작하면 아래에서 $HOME 으로 펼친다
-#   QP_SSH_JUMP      점프 호스트, `[user@]host[:port]` (ssh 의 ProxyJump)
-#   QP_SSH_HOST_KEY  호스트키 확인: accept-new(기본) | yes | no
-#   QP_SSH_OPTS      그 밖의 ssh 옵션을 그대로 (예: "-o ServerAliveInterval=30")
+#   SSH_JUMP      점프 호스트, `[user@]host[:port]` (ssh 의 ProxyJump)
+#   SSH_HOST_KEY  호스트키 확인: accept-new(기본) | yes | no
+#   SSH_OPTS      그 밖의 ssh 옵션을 그대로 (예: "-o ServerAliveInterval=30")
 #
 # ssh config 에 Host 항목을 만들어도 되지만, 만들지 않아도 되는 것이 요점이다 —
 # 한 번 쓰고 버리는 인스턴스마다 로컬 설정 파일을 고치게 만들지 않는다.
@@ -42,20 +42,20 @@ REMOTE_DIR=/tmp/quant-app-provision
 # read 뒤의 `|| true`: 비대화형 실행(stdin 이 /dev/null·닫힘)에서 read 는 EOF 로
 # 비영점 종료한다. 그러면 set -e 가 여기서 스크립트를 죽여, 바로 아래의 사람이 읽을
 # 안내가 실행되지 못하고 설명 없는 exit 1 만 남는다. 값의 유무 판단은 다음 줄에 맡긴다.
-TARGET="${QP_APP_HOST:-}"
+TARGET="${APP_HOST:-}"
 if [ -z "${TARGET}" ]; then
   read -rp "app 노드 주소 입력(user@host): " TARGET || true
 fi
 [ -n "${TARGET}" ] || {
-  echo "app 노드 주소가 필요합니다 — 비대화형이면 QP_APP_HOST 로 지정하세요" >&2
+  echo "app 노드 주소가 필요합니다 — 비대화형이면 APP_HOST 로 지정하세요" >&2
   exit 1
 }
 # 사용자명은 주소에 붙여도 되고 따로 줘도 된다 — 주소가 IP 뿐인 CI·스크립트에서
-# QP_APP_HOST 를 조립하지 않아도 되게 한다. 둘 다 있으면 주소에 붙은 쪽이 이긴다.
-if [ -n "${QP_SSH_USER:-}" ]; then
+# APP_HOST 를 조립하지 않아도 되게 한다. 둘 다 있으면 주소에 붙은 쪽이 이긴다.
+if [ -n "${SSH_USER:-}" ]; then
   case "${TARGET}" in
-    *@*) echo "QP_SSH_USER 는 무시합니다 — 주소에 이미 사용자명이 있습니다: ${TARGET}" >&2 ;;
-    *) TARGET="${QP_SSH_USER}@${TARGET}" ;;
+    *@*) echo "SSH_USER 는 무시합니다 — 주소에 이미 사용자명이 있습니다: ${TARGET}" >&2 ;;
+    *) TARGET="${SSH_USER}@${TARGET}" ;;
   esac
 fi
 # ssh 는 `--` 를 받지 않으므로 `-` 로 시작하는 주소는 옵션으로 먹힌다 — 여기서 끊는다.
@@ -66,12 +66,12 @@ case "${TARGET}" in
     ;;
 esac
 
-DOMAIN="${QP_DOMAIN:-}"
+DOMAIN="${DOMAIN:-}"
 if [ -z "${DOMAIN}" ]; then
   read -rp "서비스 도메인 입력(예: quant.example.com): " DOMAIN || true
 fi
 [ -n "${DOMAIN}" ] || {
-  echo "도메인이 필요합니다 — 비대화형이면 QP_DOMAIN 으로 지정하세요" >&2
+  echo "도메인이 필요합니다 — 비대화형이면 DOMAIN 으로 지정하세요" >&2
   exit 1
 }
 # 이 값은 아래에서 원격 root 셸의 명령줄에 들어가고, provision-app.sh 안에서는 Caddyfile
@@ -93,8 +93,8 @@ esac
 # ── 여기서부터 모든 출력을 로그 파일에도 남긴다 ───────────────────────────────
 # 화면에 의존하지 않는 것이 요점이다 — 터미널 종류·스크롤백 한도·창 크기와 무관하게
 # 실행 기록이 남아야 한다.
-# 파일명은 *.log 로 .gitignore 에 이미 걸려 있다. QP_LOG 로 경로를 바꿀 수 있다.
-LOG="${QP_LOG:-${REPO_ROOT}/.logs/bootstrap-app-$(date -u +%Y%m%d-%H%M%S).log}"
+# 파일명은 *.log 로 .gitignore 에 이미 걸려 있다. LOG 로 경로를 바꿀 수 있다.
+LOG="${LOG:-${REPO_ROOT}/.logs/bootstrap-app-$(date -u +%Y%m%d-%H%M%S).log}"
 mkdir -p "$(dirname "${LOG}")"
 exec > >(tee "${LOG}") 2>&1
 TEE_PID=$!
@@ -124,11 +124,11 @@ SSH_OPTS=()
 ENV_HINT=""
 SSH_FLAGS=""
 
-# QP_SSH_OPTS 를 맨 앞에 둔다 — ssh 는 같은 옵션이 여러 번 오면 "먼저 나온 값"을 쓰므로,
+# SSH_OPTS 를 맨 앞에 둔다 — ssh 는 같은 옵션이 여러 번 오면 "먼저 나온 값"을 쓰므로,
 # 앞에 둬야 사용자가 아래 기본값(예: StrictHostKeyChecking)을 덮을 수 있다.
-if [ -n "${QP_SSH_OPTS:-}" ]; then
-  read -ra SSH_OPTS <<< "${QP_SSH_OPTS}"
-  ENV_HINT="${ENV_HINT}QP_SSH_OPTS='${QP_SSH_OPTS}' "
+if [ -n "${SSH_OPTS:-}" ]; then
+  read -ra SSH_OPTS <<< "${SSH_OPTS}"
+  ENV_HINT="${ENV_HINT}SSH_OPTS='${SSH_OPTS}' "
 fi
 
 if [ -n "${SSH_KEY:-}" ]; then
@@ -144,19 +144,19 @@ if [ -n "${SSH_KEY:-}" ]; then
   SSH_FLAGS="${SSH_FLAGS}-i ${SSH_KEY} "
 fi
 
-if [ -n "${QP_SSH_PORT:-}" ]; then
-  case "${QP_SSH_PORT}" in
-    '' | *[!0-9]*) echo "QP_SSH_PORT 는 숫자여야 합니다: ${QP_SSH_PORT}" >&2; exit 1 ;;
+if [ -n "${SSH_PORT:-}" ]; then
+  case "${SSH_PORT}" in
+    '' | *[!0-9]*) echo "SSH_PORT 는 숫자여야 합니다: ${SSH_PORT}" >&2; exit 1 ;;
   esac
-  SSH_OPTS+=(-o "Port=${QP_SSH_PORT}")
-  ENV_HINT="${ENV_HINT}QP_SSH_PORT=${QP_SSH_PORT} "
-  SSH_FLAGS="${SSH_FLAGS}-p ${QP_SSH_PORT} "
+  SSH_OPTS+=(-o "Port=${SSH_PORT}")
+  ENV_HINT="${ENV_HINT}SSH_PORT=${SSH_PORT} "
+  SSH_FLAGS="${SSH_FLAGS}-p ${SSH_PORT} "
 fi
 
-if [ -n "${QP_SSH_JUMP:-}" ]; then
-  SSH_OPTS+=(-o "ProxyJump=${QP_SSH_JUMP}")
-  ENV_HINT="${ENV_HINT}QP_SSH_JUMP=${QP_SSH_JUMP} "
-  SSH_FLAGS="${SSH_FLAGS}-J ${QP_SSH_JUMP} "
+if [ -n "${SSH_JUMP:-}" ]; then
+  SSH_OPTS+=(-o "ProxyJump=${SSH_JUMP}")
+  ENV_HINT="${ENV_HINT}SSH_JUMP=${SSH_JUMP} "
+  SSH_FLAGS="${SSH_FLAGS}-J ${SSH_JUMP} "
 fi
 
 # 호스트키 기본값을 accept-new 로 두는 이유: 접속 확인이 BatchMode 로 도는데, 처음 보는
@@ -164,12 +164,12 @@ fi
 # 주면 한 번에" 가 성립하지 않고, 사람이 먼저 수동 ssh 로 지문을 수락하거나 ssh config 를
 # 만들어야 한다. accept-new 는 그 수락(TOFU)을 그대로 하는 것이고, **바뀐** 호스트키는
 # 여전히 거부한다 — 첫 접속 이후의 중간자는 잡힌다. 지문을 미리 아는 환경이라면 yes 로 조인다.
-case "${QP_SSH_HOST_KEY:=accept-new}" in
-  accept-new | yes | no) SSH_OPTS+=(-o "StrictHostKeyChecking=${QP_SSH_HOST_KEY}") ;;
-  *) echo "QP_SSH_HOST_KEY 는 accept-new | yes | no 중 하나입니다: ${QP_SSH_HOST_KEY}" >&2; exit 1 ;;
+case "${SSH_HOST_KEY:=accept-new}" in
+  accept-new | yes | no) SSH_OPTS+=(-o "StrictHostKeyChecking=${SSH_HOST_KEY}") ;;
+  *) echo "SSH_HOST_KEY 는 accept-new | yes | no 중 하나입니다: ${SSH_HOST_KEY}" >&2; exit 1 ;;
 esac
-if [ "${QP_SSH_HOST_KEY}" != "accept-new" ]; then
-  ENV_HINT="${ENV_HINT}QP_SSH_HOST_KEY=${QP_SSH_HOST_KEY} "
+if [ "${SSH_HOST_KEY}" != "accept-new" ]; then
+  ENV_HINT="${ENV_HINT}SSH_HOST_KEY=${SSH_HOST_KEY} "
 fi
 
 echo "==> SSH 접속 확인: ${TARGET}"
@@ -189,7 +189,7 @@ if ! SSH_ERR="$(ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TA
       *'denied'* | *'authentication'*)
         if [[ "${TARGET}" != *@* ]]; then
           echo "주소에 사용자명이 없다. ssh 가 로컬 사용자명으로 붙는다 — 의도한 계정이 아니면"
-          echo "user@host 형식으로 주거나 QP_SSH_USER 로 지정하라."
+          echo "user@host 형식으로 주거나 SSH_USER 로 지정하라."
           echo "(클라우드 이미지의 관례는 제각각이다: ubuntu / admin / ec2-user 등)"
           echo
         fi
@@ -207,7 +207,7 @@ if ! SSH_ERR="$(ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TA
             echo
             echo "찾은 키 후보 — 하나를 골라 다시 실행하면 된다:"
             while IFS= read -r k; do
-              [ -n "${k}" ] && echo "  SSH_KEY=${k} QP_APP_HOST=${TARGET} ./scripts/bootstrap-app.sh"
+              [ -n "${k}" ] && echo "  SSH_KEY=${k} APP_HOST=${TARGET} ./scripts/bootstrap-app.sh"
             done <<< "${CANDIDATES}"
           else
             echo
@@ -219,14 +219,14 @@ if ! SSH_ERR="$(ssh "${SSH_OPTS[@]}" -o ConnectTimeout=15 -o BatchMode=yes "${TA
         ;;
     esac
     echo "ssh config 없이 환경변수로 지정할 수 있는 것들:"
-    echo "  QP_SSH_USER=ubuntu  QP_SSH_PORT=2222  SSH_KEY=~/.ssh/your-key"
-    echo "  QP_SSH_JUMP=user@bastion  QP_SSH_HOST_KEY=yes  QP_SSH_OPTS='-o ...'"
+    echo "  SSH_USER=ubuntu  SSH_PORT=2222  SSH_KEY=~/.ssh/your-key"
+    echo "  SSH_JUMP=user@bastion  SSH_HOST_KEY=yes  SSH_OPTS='-o ...'"
     echo
     echo "원인 가르기: ssh -v ${SSH_FLAGS}${TARGET} true"
     echo "  Permission denied (publickey)  → 키가 없거나 틀렸다 (또는 사용자명이 다르다)"
-    echo "  Host key verification failed   → 지문 확인 (QP_SSH_HOST_KEY, ssh-keyscan)"
-    echo "  Connection timed out           → 방화벽에서 TCP ${QP_SSH_PORT:-22} 가 닫혀 있다"
-    echo "  Connection refused             → sshd 가 그 포트에서 듣지 않는다 (QP_SSH_PORT)"
+    echo "  Host key verification failed   → 지문 확인 (SSH_HOST_KEY, ssh-keyscan)"
+    echo "  Connection timed out           → 방화벽에서 TCP ${SSH_PORT:-22} 가 닫혀 있다"
+    echo "  Connection refused             → sshd 가 그 포트에서 듣지 않는다 (SSH_PORT)"
     echo "  Unprotected private key file   → 키 파일 권한 (Windows: icacls /inheritance:r /grant:r)"
   } >&2
   exit 1

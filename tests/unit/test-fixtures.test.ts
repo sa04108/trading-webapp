@@ -24,7 +24,7 @@ describe('test-scoped app fixture', () => {
     const response = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/auth/me',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
 
     expect(response.statusCode).toBe(200);

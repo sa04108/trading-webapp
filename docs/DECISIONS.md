@@ -1396,7 +1396,7 @@
 ## D-062: 배포는 Linux 단일 진입점에서 app과 worker를 같은 release로 조정한다
 
 - **공식 진입점:** 프로젝트 루트의 고정 `deploy.env`를 읽는, 인자 없는 `pnpm run deploy`만
-  일반 배포 경로로 둔다. `QP_APP_HOST`와 `QP_WORKER_HOST`는 모두 필수이며 app, worker를
+  일반 배포 경로로 둔다. `APP_HOST`와 `WORKER_HOST`는 모두 필수이며 app, worker를
   항상 같은 release로 순차 배포한다.
   `deploy-app.sh`와 `deploy-worker.sh`는 `deploy.mjs`가 노드에서 호출하는 내부 transaction이다.
 - **대상 이름:** 운영 서비스는 `app`, 계산 서비스는 `worker`로 고정한다. 프로젝트 CLI에는

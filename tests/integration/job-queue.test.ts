@@ -207,7 +207,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const response = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${job.id}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(response.statusCode).toBe(200);
     const body = response.json();
@@ -242,7 +242,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const response = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${job.id}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(response.statusCode).toBe(200);
     expect(response.json().job.id).toBe(job.id);
@@ -264,7 +264,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
@@ -337,7 +337,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const detail = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${jobId}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     const body = detail.json() as {
       run: Record<string, unknown>;
@@ -374,7 +374,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const trades = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${jobId}/trades`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect((trades.json().trades as unknown[]).length).toBeGreaterThan(0);
     // 페이지네이션 UI 가 {현재}/{전체} 페이지를 계산하려면 필터 기준 총 건수가 필요하다
@@ -390,7 +390,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       const response = await ctx.app.inject({
         method: 'GET',
         url: `/api/v1/backtests/${jobId}/trades?${query}`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
       });
       return response;
     };
@@ -427,7 +427,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const series = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${jobId}/series`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     const seriesBody = series.json() as {
       equity: unknown[];
@@ -444,7 +444,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const events = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${jobId}/events`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(events.headers['content-type']).toContain('text/event-stream');
     expect(events.payload).toContain('"status":"COMPLETED"');
@@ -453,7 +453,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const exported = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${jobId}/export`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(exported.headers['content-disposition']).toContain('attachment');
     const exportedEquity = (exported.json() as {
@@ -466,7 +466,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const cloned = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${jobId}/clone`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(cloned.statusCode).toBe(201);
     expect(cloned.json().job.status).toBe('QUEUED');
@@ -480,7 +480,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
@@ -522,7 +522,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
 
@@ -548,7 +548,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload,
     });
 
@@ -586,7 +586,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload,
     });
 
@@ -629,7 +629,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload,
       });
       const jobId = (created.json().job as { id: string }).id;
@@ -644,7 +644,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       const cancelled = await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${jobId}/cancel`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
       });
       expect(cancelled.json().status).toBe('CANCELLING');
       expect(ctx.container.jobQueue.getJob(jobId)!.status).toBe('CANCELLING');
@@ -687,7 +687,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
@@ -696,7 +696,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const cancelled = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${jobId}/cancel`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(cancelled.json().status).toBe('CANCELLED');
     expect(ctx.container.jobQueue.getJob(jobId)!.status).toBe('CANCELLED');
@@ -834,7 +834,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const denied = await ctx.app.inject({
       method: 'DELETE',
       url: `/api/v1/backtests/${job.id}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(denied.statusCode).toBe(409);
 
@@ -842,7 +842,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const allowed = await ctx.app.inject({
       method: 'DELETE',
       url: `/api/v1/backtests/${job.id}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(allowed.statusCode).toBe(204);
   });
@@ -852,7 +852,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const badStrategy = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { ...buildRequest(), strategyId: 'nope' },
     });
     expect(badStrategy.statusCode).toBe(400);
@@ -862,7 +862,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const badUniverseDate = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { ...buildRequest(), period: { from: '1999-01-01', to: '1999-06-30' } },
     });
     expect(badUniverseDate.statusCode).toBe(409);
@@ -871,7 +871,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const badParams = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         ...buildRequest(),
         parameters: { lookbackBars: 9_999 },
@@ -890,7 +890,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const submitted = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
     expect(submitted.statusCode).toBe(422);
@@ -899,7 +899,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const cloned = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${source.id}/clone`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(cloned.statusCode).toBe(422);
     expect((cloned.json() as { error: string }).error).toContain('표준코드');
@@ -911,7 +911,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
@@ -933,24 +933,24 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: buildRequest(),
       }),
       await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${sourceId}/clone`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
       }),
       await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${sourceId}/clone-configured`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: buildRequest(),
       }),
       await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: { count: 2 },
       }),
     ];
@@ -967,7 +967,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
@@ -1000,24 +1000,24 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: buildRequest(),
       }),
       await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${sourceId}/clone`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
       }),
       await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${sourceId}/clone-configured`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: buildRequest(),
       }),
       await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: { count: 2 },
       }),
     ];
@@ -1033,7 +1033,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const draft = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${sourceId}/clone-draft`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(draft.statusCode).toBe(200);
     expect(draft.json().reusablePreview).toBeNull();
@@ -1045,7 +1045,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const badBody = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { ...buildRequest(), capital: { initialCash: -1, currency: 'KRW' } },
     });
     expect(badBody.statusCode).toBe(400);
@@ -1061,7 +1061,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const noData = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { ...buildRequest(), period: { from: NO_CANDLE_DATE, to: '2020-12-31' } },
     });
     expect(noData.statusCode).toBe(409);
@@ -1100,7 +1100,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const response = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: request,
     });
 
@@ -1114,7 +1114,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
@@ -1152,7 +1152,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const cloned = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${job.id}/clone`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(cloned.statusCode).toBe(409);
     expect((cloned.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
@@ -1169,7 +1169,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const cloned = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${job.id}/clone`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(cloned.statusCode).toBe(409);
     expect((cloned.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
@@ -1193,7 +1193,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     await scenario.prepare(valueRequest);
     const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: valueRequest,
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: valueRequest,
     });
     expect(created.statusCode).toBe(201);
     const sourceId = created.json().job.id as string;
@@ -1243,7 +1243,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const rejected = await ctx.app.inject({
       method: 'POST',
       url,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       ...(payload === undefined ? {} : { payload }),
     });
 
@@ -1273,7 +1273,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     await scenario.prepare(valueRequest);
     const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: valueRequest,
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: valueRequest,
     });
     expect(created.statusCode).toBe(201);
     const sourceId = created.json().job.id as string;
@@ -1347,7 +1347,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const rejected = await ctx.app.inject({
       method: 'POST',
       url,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       ...(payload === undefined ? {} : { payload }),
     });
 
@@ -1374,7 +1374,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const draft = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${job.id}/clone-draft`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
 
     expect(draft.statusCode).toBe(200);
@@ -1392,7 +1392,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
@@ -1401,7 +1401,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const draft = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${sourceId}/clone-draft`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(draft.statusCode).toBe(200);
     const preview = draft.json().reusablePreview as {
@@ -1428,13 +1428,13 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     await scenario.prepare(request);
 
     const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: request,
     });
     expect(created.statusCode).toBe(201);
     const sourceId = created.json().job.id as string;
 
     const before = await ctx.app.inject({
-      method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { qp_session: cookie },
+      method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { session: cookie },
     });
     expect(before.json().reusablePreview.fundamentalSymbols).toEqual(['005930']);
 
@@ -1447,7 +1447,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     }]);
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     const after = await ctx.app.inject({
-      method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { qp_session: cookie },
+      method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { session: cookie },
     });
     expect(after.statusCode).toBe(200);
     expect(after.json().reusablePreview).toBeNull();
@@ -1457,7 +1457,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       .where(eq(symbolFactsState.code, '005930'))
       .run();
     const stale = await ctx.app.inject({
-      method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { qp_session: cookie },
+      method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { session: cookie },
     });
     expect(stale.statusCode).toBe(200);
     expect(stale.json().reusablePreview).toBeNull();
@@ -1469,7 +1469,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
@@ -1488,7 +1488,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const draft = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${sourceId}/clone-draft`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
 
     expect(draft.statusCode).toBe(200);
@@ -1522,7 +1522,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: request,
     });
     expect(created.statusCode).toBe(201);
@@ -1540,7 +1540,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const draft = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${sourceId}/clone-draft`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
 
     expect(draft.statusCode).toBe(200);
@@ -1554,7 +1554,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const restoredDraft = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${sourceId}/clone-draft`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(restoredDraft.statusCode).toBe(200);
     expect(restoredDraft.json().reusablePreview).toMatchObject({
@@ -1569,7 +1569,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
     const sourceId = created.json().job.id as string;
@@ -1584,7 +1584,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const cloned = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-configured`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: request,
     });
     expect(cloned.statusCode).toBe(201);
@@ -1600,7 +1600,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const changedPeriod = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-configured`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { ...request, period: { ...request.period, to: '2026-05-31' } },
     });
     expect(changedPeriod.statusCode).toBe(409);
@@ -1621,7 +1621,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: buildRequest(),
       });
       expect(created.statusCode).toBe(201);
@@ -1636,7 +1636,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       const draft = await ctx.app.inject({
         method: 'GET',
         url: `/api/v1/backtests/${sourceId}/clone-draft`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
       });
       expect(draft.statusCode).toBe(200);
       expect(draft.json().reusablePreview).toBeNull();
@@ -1644,7 +1644,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       const randomSeeds = await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: { count: 2 },
       });
       expect(randomSeeds.statusCode).toBe(409);
@@ -1660,7 +1660,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
@@ -1670,7 +1670,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const response = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { count: 100 },
     });
     expect(response.statusCode).toBe(201);
@@ -1685,7 +1685,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const topLevel = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/backtests?limit=200',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(topLevel.statusCode).toBe(200);
     expect(topLevel.json().jobs).toHaveLength(1);
@@ -1694,7 +1694,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const detail = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtest-clone-batches/${batchId}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(detail.statusCode).toBe(200);
     const items = detail.json().batch.items as Array<{
@@ -1742,7 +1742,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
@@ -1752,7 +1752,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const response = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { count: 100 },
     });
     expect(response.statusCode).toBe(201);
@@ -1791,7 +1791,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
@@ -1801,7 +1801,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const response = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { count: 100 },
     });
     expect(response.statusCode).toBe(201);
@@ -1843,7 +1843,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     await scenario.prepare(request);
     const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: request,
     });
     expect(created.statusCode).toBe(201);
     const sourceId = created.json().job.id as string;
@@ -1852,7 +1852,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const response = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { count: 100 },
     });
     expect(response.statusCode).toBe(201);
@@ -1899,7 +1899,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: request,
     });
     expect(created.statusCode).toBe(201);
@@ -1909,7 +1909,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const response = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { count: 100 },
     });
     expect(response.statusCode).toBe(201);
@@ -1943,7 +1943,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const body = buildRequest();
     await scenario.prepare(body);
     const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: body,
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: body,
     });
     expect(created.statusCode).toBe(201);
     const sourceId = created.json().job.id as string;
@@ -1956,7 +1956,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     try {
       const response = await ctx.app.inject({
         method: 'POST', url: `/api/v1/backtests/${sourceId}/clone-configured`,
-        cookies: { qp_session: cookie }, payload: body,
+        cookies: { session: cookie }, payload: body,
       });
       expect(response.statusCode).toBe(201);
       const cloned = ctx.container.jobQueue.getJob(response.json().job.id)!;
@@ -1972,7 +1972,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
     });
     expect(created.statusCode).toBe(201);
     const sourceId = created.json().job.id as string;
@@ -1985,7 +1985,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     try {
       const response = await ctx.app.inject({
         method: 'POST', url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-        cookies: { qp_session: cookie }, payload: { count: 10 },
+        cookies: { session: cookie }, payload: { count: 10 },
       });
       expect(response.statusCode).toBe(400);
       expect(response.json().error).toContain('난수 시드의 영향을 받지 않아');
@@ -2007,7 +2007,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
     await scenario.prepare(request);
     const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: request,
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: request,
     });
     expect(created.statusCode).toBe(201);
     const sourceId = created.json().job.id as string;
@@ -2015,7 +2015,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const response = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { count: 100 },
     });
     expect(response.statusCode).toBe(201);
@@ -2044,14 +2044,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
     });
     const sourceId = created.json().job.id as string;
     ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
     const batchResponse = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { count: 100 },
     });
     const batchId = batchResponse.json().batch.id as string;
@@ -2059,7 +2059,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const cancelled = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtest-clone-batches/${batchId}/cancel`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.json().batch).toMatchObject({
@@ -2075,14 +2075,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
     });
     const sourceId = created.json().job.id as string;
     ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
     const batchResponse = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { count: 3 },
     });
     const batchId = batchResponse.json().batch.id as string;
@@ -2095,7 +2095,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const cancelling = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtest-clone-batches/${batchId}/cancel`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(cancelling.statusCode).toBe(200);
     expect(cancelling.json().batch).toMatchObject({
@@ -2121,14 +2121,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
     });
     const sourceId = created.json().job.id as string;
     ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
     const batchResponse = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { count: 2 },
     });
     const batchId = batchResponse.json().batch.id as string;
@@ -2138,21 +2138,21 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const activeBatchDelete = await ctx.app.inject({
       method: 'DELETE',
       url: `/api/v1/backtest-clone-batches/${batchId}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(activeBatchDelete.statusCode).toBe(409);
 
     const activeSourceDelete = await ctx.app.inject({
       method: 'DELETE',
       url: `/api/v1/backtests/${sourceId}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(activeSourceDelete.statusCode).toBe(409);
 
     const cancelled = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtest-clone-batches/${batchId}/cancel`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.json().batch.status).toBe('CANCELLED');
@@ -2160,7 +2160,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const deleted = await ctx.app.inject({
       method: 'DELETE',
       url: `/api/v1/backtest-clone-batches/${batchId}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(deleted.statusCode).toBe(204);
     expect(ctx.container.seedCloneBatchService.get(batchId)).toBeNull();
@@ -2172,7 +2172,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
     });
     const sourceId = created.json().job.id as string;
     ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
@@ -2182,7 +2182,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       const response = await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: { count },
       });
       expect(response.statusCode).toBe(201);
@@ -2203,7 +2203,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const deleted = await ctx.app.inject({
       method: 'DELETE',
       url: `/api/v1/backtests/${sourceId}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(deleted.statusCode).toBe(204);
     expect(ctx.container.jobQueue.getJob(sourceId)).toBeNull();
@@ -2215,14 +2215,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
     });
     const sourceId = created.json().job.id as string;
     ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
     const parentResponse = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { count: 1 },
     });
     const parentBatchId = parentResponse.json().batch.id as string;
@@ -2233,7 +2233,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const rejectedNested = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${parentChildId}/clone-random-seeds`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { count: 1 },
     });
     expect(rejectedNested.statusCode).toBe(409);
@@ -2248,7 +2248,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const legacyNested = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${parentChildId}/clone-random-seeds`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { count: 1 },
     });
     expect(legacyNested.statusCode).toBe(201);
@@ -2262,7 +2262,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const blocked = await ctx.app.inject({
       method: 'DELETE',
       url: `/api/v1/backtest-clone-batches/${parentBatchId}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(blocked.statusCode).toBe(409);
     expect(ctx.container.seedCloneBatchService.get(parentBatchId)).not.toBeNull();
@@ -2271,7 +2271,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const blockedSource = await ctx.app.inject({
       method: 'DELETE',
       url: `/api/v1/backtests/${sourceId}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(blockedSource.statusCode).toBe(409);
     expect(ctx.container.jobQueue.getJob(sourceId)).not.toBeNull();
@@ -2279,7 +2279,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const cancelled = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtest-clone-batches/${nestedBatchId}/cancel`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.json().batch.status).toBe('CANCELLED');
@@ -2287,7 +2287,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const deleted = await ctx.app.inject({
       method: 'DELETE',
       url: `/api/v1/backtest-clone-batches/${parentBatchId}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(deleted.statusCode).toBe(204);
     expect(ctx.container.seedCloneBatchService.get(parentBatchId)).toBeNull();
@@ -2301,14 +2301,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload: buildRequest(),
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
     });
     const sourceId = created.json().job.id as string;
     ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
     const batchResponse = await ctx.app.inject({
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { count: 1 },
     });
     expect(batchResponse.statusCode).toBe(201);
@@ -2321,14 +2321,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     }
 
     const jobsResponse = await ctx.app.inject({
-      method: 'GET', url: '/api/v1/backtests', cookies: { qp_session: cookie },
+      method: 'GET', url: '/api/v1/backtests', cookies: { session: cookie },
     });
     expect(jobsResponse.statusCode).toBe(200);
     expect(jobsResponse.json().jobs).toHaveLength(50);
     expect(jobsResponse.json().jobs.some((job: { id: string }) => job.id === sourceId)).toBe(false);
 
     const batchesResponse = await ctx.app.inject({
-      method: 'GET', url: '/api/v1/backtest-clone-batches', cookies: { qp_session: cookie },
+      method: 'GET', url: '/api/v1/backtest-clone-batches', cookies: { session: cookie },
     });
     expect(batchesResponse.statusCode).toBe(200);
     expect(batchesResponse.json().sourceJobs).toEqual([
@@ -2351,7 +2351,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const draft = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${job.id}/clone-draft`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
 
     expect(draft.statusCode).toBe(200);
@@ -2373,7 +2373,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const draft = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${job.id}/clone-draft`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(draft.statusCode).toBe(200);
     const body = draft.json() as { request: BacktestRequest; blockers: string[] };
@@ -2398,7 +2398,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const draft = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${job.id}/clone-draft`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(draft.statusCode).toBe(200);
     const body = draft.json() as { request: BacktestRequest; blockers: string[] };
@@ -2419,7 +2419,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const partial = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload,
     });
     expect(partial.statusCode).toBe(201);
@@ -2440,7 +2440,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const draft = await ctx.app.inject({
       method: 'GET',
       url: `/api/v1/backtests/${job.id}/clone-draft`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(draft.statusCode).toBe(200);
     const body = draft.json() as { request: BacktestRequest; blockers: string[] };
@@ -2454,7 +2454,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const missing = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/backtests/job_nope/clone-draft',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(missing.statusCode).toBe(404);
 
@@ -2470,7 +2470,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         url: '/api/v1/auth/login',
         payload: { username, password },
       });
-      const smallCookie = login.cookies.find((c) => c.name === 'qp_session')!.value;
+      const smallCookie = login.cookies.find((c) => c.name === 'session')!.value;
 
       registerSymbols(small.container, 'KR', ['005930']);
       seedDailyBars(small.container.database.db, buildTrendingDailyCandles());
@@ -2493,7 +2493,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         const accepted = await small.app.inject({
           method: 'POST',
           url: '/api/v1/backtests',
-          cookies: { qp_session: smallCookie },
+          cookies: { session: smallCookie },
           payload,
         });
         expect(accepted.statusCode).toBe(201);
@@ -2505,7 +2505,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       const rejected = await small.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: smallCookie },
+        cookies: { session: smallCookie },
         payload,
       });
       expect(rejected.statusCode).toBe(429);
@@ -2516,7 +2516,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       const clonedOverLimit = await small.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${queued.id}/clone`,
-        cookies: { qp_session: smallCookie },
+        cookies: { session: smallCookie },
       });
       expect(clonedOverLimit.statusCode).toBe(429);
       } finally {
@@ -2530,7 +2530,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const inverted = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { ...buildRequest(), period: { from: '2026-03-31', to: '2026-01-05' } },
     });
     expect(inverted.statusCode).toBe(400);

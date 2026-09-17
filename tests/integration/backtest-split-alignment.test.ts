@@ -209,7 +209,7 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload,
     });
     expect(created.statusCode).toBe(201);

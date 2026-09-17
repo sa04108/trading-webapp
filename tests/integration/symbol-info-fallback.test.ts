@@ -75,7 +75,7 @@ describe('GET /symbols/info — 로컬 종목 마스터 폴백', () => {
       url: '/api/v1/auth/login',
       payload: { username, password },
     });
-    return login.cookies.find((c) => c.name === 'qp_session')!.value;
+    return login.cookies.find((c) => c.name === 'session')!.value;
   }
 
   it(
@@ -103,7 +103,7 @@ describe('GET /symbols/info — 로컬 종목 마스터 폴백', () => {
       const res = await ctx.app.inject({
         method: 'GET',
         url: '/api/v1/symbols/info?symbols=005930,000660,999999',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
       });
 
       expect(res.statusCode).toBe(200);
@@ -129,7 +129,7 @@ describe('GET /symbols/info — 로컬 종목 마스터 폴백', () => {
     const res = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/symbols/info?symbols=005930',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
 
     expect(res.statusCode).toBe(200);
@@ -152,7 +152,7 @@ describe('GET /symbols/info — 로컬 종목 마스터 폴백', () => {
     const res = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/symbols/info?symbols=005930',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
 
     expect(res.statusCode).toBe(200);

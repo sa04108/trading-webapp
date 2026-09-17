@@ -9,7 +9,7 @@ describe('current HTTP route surface', () => {
     const response = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/system/info',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
 
     expect(response.statusCode).toBe(200);
@@ -27,7 +27,7 @@ describe('current HTTP route surface', () => {
       const response = await ctx.app.inject({
         method,
         url,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         ...(payload === undefined ? {} : { payload }),
       });
       expect(response.statusCode, `${method} ${url}`).toBe(404);

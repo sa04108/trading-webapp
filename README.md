@@ -150,8 +150,8 @@ ssh -i "$HOME/.ssh/quant.pem" -o IdentitiesOnly=yes \
 
 ```bash
 SSH_KEY="$HOME/.ssh/quant.pem" \
-QP_APP_HOST=ubuntu@203.0.113.10 \
-QP_DOMAIN=quant.example.com \
+APP_HOST=ubuntu@203.0.113.10 \
+DOMAIN=quant.example.com \
 ./scripts/bootstrap-app.sh
 ```
 
@@ -189,13 +189,13 @@ nano deploy.env
 `deploy.env`에는 SSH 접속 정보만 넣는다. API 키는 넣지 않는다.
 
 ```dotenv
-QP_APP_HOST=ubuntu@203.0.113.10
-QP_APP_SSH_KEY=~/.ssh/quant.pem
-QP_APP_SSH_PORT=22
-QP_APP_SSH_HOST_KEY=accept-new
+APP_HOST=ubuntu@203.0.113.10
+APP_SSH_KEY=~/.ssh/quant.pem
+APP_SSH_PORT=22
+APP_SSH_HOST_KEY=accept-new
 ```
 
-**bootstrap의 `SSH_KEY`·`QP_SSH_*`와 배포의 `QP_APP_SSH_*`는 이름이 다르다.** bootstrap에 넘긴 값이 `deploy.env`에 자동 저장되지는 않는다. 추가 접속 옵션은 [deploy.env.example](deploy.env.example)을 따른다.
+**bootstrap의 `SSH_KEY`·`SSH_*`와 배포의 `APP_SSH_*`는 이름이 다르다.** bootstrap에 넘긴 값이 `deploy.env`에 자동 저장되지는 않는다. 추가 접속 옵션은 [deploy.env.example](deploy.env.example)을 따른다.
 
 ```bash
 git status --short --branch

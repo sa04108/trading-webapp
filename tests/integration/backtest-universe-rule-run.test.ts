@@ -179,7 +179,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: request,
     });
     expect(created.statusCode).toBe(201);
@@ -263,7 +263,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: request,
     });
     expect(created.statusCode).toBe(201);
@@ -303,7 +303,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: request,
     });
     expect(created.statusCode).toBe(201);
@@ -327,7 +327,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: request,
     });
     expect(created.statusCode).toBe(201);
@@ -367,7 +367,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: request,
     });
     expect(created.statusCode).toBe(201);
@@ -401,7 +401,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     const response = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         strategyId: 'value-quality-rank',
         parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
@@ -447,7 +447,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     };
     await scenario.prepare(payload);
     const first = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { qp_session: cookie }, payload,
+      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload,
     });
     expect(first.statusCode).toBe(201);
     const prepared = ctx.container.backtestPreparationOrchestrator.getCachedPreview({
@@ -476,7 +476,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     const rejected = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { ...payload, randomSeed: 42 },
     });
 
@@ -521,7 +521,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     const response = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: momentumPayload(20, 10),
     });
 
@@ -537,7 +537,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     const response = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload,
     });
     expect(response.statusCode).toBe(201);
@@ -570,7 +570,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     const response = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload,
     });
 
@@ -640,7 +640,7 @@ describe('KRX 전용 일봉으로 백테스트 실행 (워커의 부모-자식 �
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: request,
       });
       expect(created.statusCode).toBe(201);
@@ -777,7 +777,7 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
       const cloned = await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${job.id}/clone`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
       });
 
       // 복제도 새 제출과 같은 durable preparation을 먼저 요구한다. 완료 전에는 resolver
@@ -791,7 +791,7 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
       const started = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests/universe-preview',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: {
           universeRule: request.universeRule,
           period: request.period,
@@ -820,7 +820,7 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
       const ready = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests/universe-preview',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: {
           universeRule: request.universeRule,
           period: request.period,
@@ -835,7 +835,7 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
       const afterPreparation = await ctx.app.inject({
         method: 'POST',
         url: `/api/v1/backtests/${job.id}/clone`,
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
       });
       expect(afterPreparation.statusCode).toBe(201);
       const clonedId = (afterPreparation.json() as { job: { id: string } }).job.id;
@@ -883,7 +883,7 @@ describe('POST /backtests — 미등록 유니버스 검증', () => {
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: singleDayRequest(1, date),
     });
 
@@ -938,7 +938,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: request,
       });
       expect(created.statusCode).toBe(201);
@@ -1000,7 +1000,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: request,
       });
       expect(created.statusCode).toBe(201);
@@ -1098,7 +1098,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: request,
       });
       expect(created.statusCode).toBe(201);
@@ -1171,7 +1171,7 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: request,
       });
       expect(created.statusCode).toBe(201);
@@ -1426,7 +1426,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
       const started = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests/universe-preview',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: step12PreviewInput(),
       });
       expect(started.statusCode).toBe(202);
@@ -1446,7 +1446,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
       const ready = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests/universe-preview',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: step12PreviewInput(),
       });
       expect(ready.statusCode).toBe(200);
@@ -1517,7 +1517,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
       const created = await ctx.app.inject({
         method: 'POST',
         url: '/api/v1/backtests',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: submitPayload,
       });
       expect(created.statusCode).toBe(201);

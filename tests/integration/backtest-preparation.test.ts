@@ -76,7 +76,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const started = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie }, payload: previewInput(),
+      cookies: { session: cookie }, payload: previewInput(),
     });
 
     expect(started.statusCode).toBe(202);
@@ -88,7 +88,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const ready = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie }, payload: previewInput(),
+      cookies: { session: cookie }, payload: previewInput(),
     });
     expect(ready.statusCode).toBe(200);
     expect(ready.json()).toMatchObject({
@@ -103,7 +103,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const started = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie }, payload: previewInput(),
+      cookies: { session: cookie }, payload: previewInput(),
     });
     expect(started.statusCode).toBe(202);
     const id = started.json<{ job: { id: string } }>().job.id;
@@ -114,7 +114,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const ready = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie }, payload: previewInput(),
+      cookies: { session: cookie }, payload: previewInput(),
     });
     expect(ready.statusCode).toBe(200);
 
@@ -130,7 +130,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const invalidated = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie }, payload: previewInput(),
+      cookies: { session: cookie }, payload: previewInput(),
     });
     expect(invalidated.statusCode).toBe(503);
     expect(invalidated.json<{ error: string }>().error).toMatch(/DART/);
@@ -143,7 +143,7 @@ describe('backtest preparation HTTP/SSE', () => {
     ]);
     const first = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie }, payload: previewInput(),
+      cookies: { session: cookie }, payload: previewInput(),
     });
     const firstId = first.json<{ job: { id: string } }>().job.id;
     await waitFor(
@@ -158,7 +158,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const changed = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie }, payload: previewInput(),
+      cookies: { session: cookie }, payload: previewInput(),
     });
     expect(changed.statusCode).toBe(202);
     expect(changed.json<{ job: { id: string } }>().job.id).not.toBe(firstId);
@@ -188,14 +188,14 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const blocked = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests',
-      cookies: { qp_session: cookie }, payload: request,
+      cookies: { session: cookie }, payload: request,
     });
     expect(blocked.statusCode).toBe(409);
     expect(blocked.json<{ error: string }>().error).toBe('PREPARATION_REQUIRED');
 
     const started = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie }, payload: preparation,
+      cookies: { session: cookie }, payload: preparation,
     });
     const preparationId = started.json<{ job: { id: string } }>().job.id;
     await waitFor(
@@ -212,12 +212,12 @@ describe('backtest preparation HTTP/SSE', () => {
     // 준비 이후 원본을 다시 쓰면 영수증이 무효화되어 새 검증을 거쳐야 한다.
     const stale = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests',
-      cookies: { qp_session: cookie }, payload: request,
+      cookies: { session: cookie }, payload: request,
     });
     expect(stale.statusCode).toBe(409);
     const refreshed = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie }, payload: preparation,
+      cookies: { session: cookie }, payload: preparation,
     });
     expect(refreshed.statusCode).toBe(202);
     const refreshedId = refreshed.json<{ job: { id: string } }>().job.id;
@@ -229,7 +229,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const created = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests',
-      cookies: { qp_session: cookie }, payload: request,
+      cookies: { session: cookie }, payload: request,
     });
     expect(created.statusCode).toBe(201);
     const jobId = created.json<{ job: { id: string } }>().job.id;
@@ -261,7 +261,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const response = await ctx.app.inject({
       method: 'GET', url: `/api/v1/backtests/preparation-jobs/${id}`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
 
     expect(response.statusCode).toBe(200);
@@ -287,7 +287,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const response = await ctx.app.inject({
       method: 'GET', url: `/api/v1/backtests/preparation-jobs/${id}/events`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
 
     expect(response.statusCode).toBe(200);
@@ -315,7 +315,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const response = await ctx.app.inject({
       method: 'GET', url: `/api/v1/backtests/preparation-jobs/${id}/events`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
 
     expect(response.statusCode).toBe(200);
@@ -334,7 +334,7 @@ describe('backtest preparation HTTP/SSE', () => {
     });
     const credentials = await createTestAdmin(ctx.container);
     const login = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: credentials });
-    const cookie = login.cookies.find((item) => item.name === 'qp_session')!.value;
+    const cookie = login.cookies.find((item) => item.name === 'session')!.value;
     await seedReadyUniverse(ctx);
     let releaseResolver!: () => void;
     const resolverGate = new Promise<void>((resolve) => { releaseResolver = resolve; });
@@ -362,7 +362,7 @@ describe('backtest preparation HTTP/SSE', () => {
     const address = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
     const responsePromise = new Promise<IncomingMessage>((resolve, reject) => {
       const request = httpGet(`${address}/api/v1/backtests/preparation-jobs/${id}/events`, {
-        headers: { cookie: `qp_session=${cookie}` },
+        headers: { cookie: `session=${cookie}` },
       }, resolve);
       request.once('error', reject);
     });
@@ -409,11 +409,11 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const first = await ctx.app.inject({
       method: 'POST', url: `/api/v1/backtests/preparation-jobs/${id}/cancel`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     const second = await ctx.app.inject({
       method: 'POST', url: `/api/v1/backtests/preparation-jobs/${id}/cancel`,
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
     });
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
@@ -429,7 +429,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const response = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie }, payload: previewInput('PER'),
+      cookies: { session: cookie }, payload: previewInput('PER'),
     });
 
     expect(response.statusCode).toBe(503);
@@ -442,7 +442,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
       const response = await ctx.app.inject({
         method: 'POST', url: '/api/v1/backtests/universe-preview',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: { ...previewInput(), strategyId },
       });
 
@@ -476,7 +476,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const response = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: {
         ...input,
         strategyId: 'value-quality-rank',
@@ -513,7 +513,7 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(await ctx.container.backtestPreparationOrchestrator.needsDart(preparation)).toBe(true);
     const response = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie }, payload: preparation,
+      cookies: { session: cookie }, payload: preparation,
     });
 
     expect(response.statusCode).toBe(503);
@@ -543,7 +543,7 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(await ctx.container.backtestPreparationOrchestrator.needsDart(preparation)).toBe(false);
     const response = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie }, payload: preparation,
+      cookies: { session: cookie }, payload: preparation,
     });
 
     expect(response.statusCode).toBe(202);
@@ -557,7 +557,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
     const response = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie },
+      cookies: { session: cookie },
       payload: { ...previewInput(), strategyId: 'value-quality-rank' },
     });
 
@@ -573,7 +573,7 @@ describe('backtest preparation HTTP/SSE', () => {
 
       const response = await ctx.app.inject({
         method: 'POST', url: '/api/v1/backtests/universe-preview',
-        cookies: { qp_session: cookie },
+        cookies: { session: cookie },
         payload: { ...previewInput(), strategyId },
       });
 
@@ -585,7 +585,7 @@ describe('backtest preparation HTTP/SSE', () => {
     await seedReadyUniverse(ctx, []);
     const response = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
-      cookies: { qp_session: cookie }, payload: previewInput(),
+      cookies: { session: cookie }, payload: previewInput(),
     });
     expect(response.statusCode).toBe(202);
     const id = response.json<{ job: { id: string } }>().job.id;
