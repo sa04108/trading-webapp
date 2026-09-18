@@ -251,10 +251,10 @@ PENDING 상태의 종목 이력이 있으면 삭제하지 않고 중단한다. �
 ```bash
 pnpm build:agent       # 현재 Linux 아키텍처의 독립 실행 패키지
 pnpm test:agent-package # 압축 파일로 준비·백테스트 실제 실행
-pnpm run deploy        # 앱 SSH 배포 + 같은 Git 버전 클라이언트 파일 게시
+pnpm run deploy        # 서버 SSH 배포 + 같은 Git 버전 클라이언트 파일 게시
 ```
 
-`deploy.env`에는 `APP_*` 접속 설정만 있다. 공급자 API 키와 서비스 설정은 서버의
+`deploy.env`에는 `HOST`·`SSH_*` 접속 설정만 있다. 공급자 API 키와 서비스 설정은 서버의
 `app.env`에 남는다. 옛 worker 환경변수, Docker image·Compose, worker bootstrap·deploy 경로는
 제거했다. 장치에 SSH하거나 장치별 runtime env를 배포하지 않는다. 클라이언트 파일은 앱
 릴리스와 함께 교체되며 실패 시 코드와 DB 백업 세트를 함께 복원한다.

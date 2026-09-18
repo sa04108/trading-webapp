@@ -164,7 +164,7 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 
 클라우드 방화벽·DNS는 별도 운영 설정이다. UFW 설정이 클라우드 방화벽을 대신하지 않는다. 출발 IP 등록이 필요한 외부 API는 실제 아웃바운드 IP와 등록값을 확인한다.
 
-구성 기준: [provision-app.sh](../infra/provision-app.sh), [quant-platform.service](../infra/systemd/quant-platform.service). 실제 도메인·인스턴스 식별값은 운영 설정에서 관리하며 추정값을 소스에 고정하지 않는다.
+구성 기준: [provision.sh](../infra/provision.sh), [quant-platform.service](../infra/systemd/quant-platform.service). 실제 도메인·인스턴스 식별값은 운영 설정에서 관리하며 추정값을 소스에 고정하지 않는다.
 
 ## 10. 환경변수와 설정
 
@@ -177,7 +177,7 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 | 인증 | `SESSION_SECRET`는 production에서 필수. 세션 유휴·절대 만료는 `SESSION_*_TIMEOUT_SECONDS`로 설정한다. |
 | 데이터 공급자 | `KRX_API_KEY`·`KRX_APPROVAL_EXPIRY`, `DART_API_KEY`, `FRED_API_KEY`, `TOSS_CLIENT_ID`·`TOSS_CLIENT_SECRET` 및 공급자별 base URL |
 | 자원·운영 | `MAX_QUEUED_BACKTESTS`, `SYNC_MIN_FREE_DISK_MB`, `KRX_DAILY_CALL_BUDGET`, 로그 수준·보존 기간 |
-| 로컬 배포 접속 | 저장소 밖으로 유출하지 않는 로컬 `deploy.env`의 `APP_*` SSH 설정. 앱 API 키와 구분한다. |
+| 로컬 배포 접속 | 저장소 밖으로 유출하지 않는 로컬 `deploy.env`의 `HOST`·`SSH_*` 설정. 앱 API 키와 구분한다. |
 
 허용값·기본값·조합 검증은 [config.ts](../src/server/bootstrap/config.ts), 예시는 [app.env.example](../infra/app.env.example)·[deploy.env.example](../deploy.env.example)를 따른다. 선택적 비밀값은 미사용 시 생략하며 빈 문자열로 대체하지 않는다. 도메인 `DOMAIN`은 앱이 아닌 프로비저닝 입력이다.
 
@@ -185,13 +185,15 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 
 저장소가 지정한 Node·pnpm으로 `pnpm install --frozen-lockfile`을 실행한다. 개발은 `pnpm dev`·`pnpm dev:web`, 서버·웹 빌드는 `pnpm build`다.
 
-초기 구성은 `scripts/bootstrap-app.sh`, 이후 배포는 **Linux에서 `pnpm run deploy`**다. 깨끗한 작업 트리의 동일 스냅샷을 검증해 서버·웹·에이전트와 체크섬을 게시한다. 에이전트는 전용 코드·의존성·Node만 포함하고 서버·웹·인증 패키지는 제외한다.
+초기 구성은 `scripts/bootstrap.sh`, 이후 배포는 **Linux에서 `pnpm run deploy`**다. 깨끗한 작업 트리의 동일 스냅샷을 검증해 서버·웹·에이전트와 체크섬을 게시한다. 에이전트는 전용 코드·의존성·Node만 포함하고 서버·웹·인증 패키지는 제외한다.
 
-배포는 SSH 전송 후 **prepare → verify → commit → finalize**로 진행한다. 서비스 중지·두 DB 백업·`db:prepare`·기동 검증을 거치며 commit 전 실패 시 코드와 DB 세트 복원을 시도한다. 코드만 롤백하고 DB 호환성을 방치하지 않는다.
+배포 진입점은 독립 Bash 스크립트인 `scripts/deploy.sh` 하나다. 로컬 검증·전송 후 한 번의 원격 실행이 잠금을 잡고 배포를 끝낸다. `--remote`는 내부 호출용이며, 대상별 조정 계층·Node 조정 블록·호환 래퍼는 두지 않는다. `deploy.env`는 셸 코드로 평가하지 않는다. stdout·stderr를 화면과 `.logs/deploy-*.log`에 함께 기록하며 `LOG`로 위치를 지정할 수 있다.
+
+배포는 SSH 전송 후 **체크섬 검증·staging 설치 → 서비스 중지·두 DB 백업 → 코드 전환·`db:prepare` → 기동 검증 → 성공 확정·정리**로 진행한다. 성공 확정 전 실패 시 코드와 DB 세트 복원을 시도한다. 코드만 롤백하고 DB 호환성을 방치하지 않으며, 성공 후 이력 정리 실패만으로 정상 배포를 되돌리지 않는다.
 
 백업·복원은 `db:backup`·`db:restore`를 사용하며 **두 DB와 백업 명세를 한 세트로 관리**한다. 유지보수 중 쓰기를 중지하고 여러 WAL DB 파일의 장애 원자성을 가정하지 않는다. 파일 누락·식별자 불일치·미완료 복원은 기동을 차단한다.
 
-실행 순서의 기준은 [build-release.sh](../scripts/build-release.sh)·[deploy.mjs](../scripts/deploy.mjs)·[deploy-app.sh](../scripts/deploy-app.sh), 복구 상세는 [AGENT_OPERATIONS.md](AGENT_OPERATIONS.md)다.
+실행 순서의 기준은 [build-release.sh](../scripts/build-release.sh)·[deploy.sh](../scripts/deploy.sh)다.
 
 ## 12. 테스트
 

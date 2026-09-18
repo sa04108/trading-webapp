@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "tsx watch src/server/bootstrap/main.ts",
     "dev:web": "vite",
-    "deploy": "node scripts/deploy.mjs",
+    "deploy": "bash scripts/deploy.sh",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit",
     "test": "vitest run",

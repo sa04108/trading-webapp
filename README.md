@@ -150,9 +150,9 @@ ssh -i "$HOME/.ssh/quant.pem" -o IdentitiesOnly=yes \
 
 ```bash
 SSH_KEY="$HOME/.ssh/quant.pem" \
-APP_HOST=ubuntu@203.0.113.10 \
+HOST=ubuntu@203.0.113.10 \
 DOMAIN=quant.example.com \
-./scripts/bootstrap-app.sh
+./scripts/bootstrap.sh
 ```
 
 이 단계는 호스트의 패키지·SSH·방화벽·Caddy·systemd를 구성하므로 전용 서버에서 수행한다. 앱 배포 전 HTTPS 확인에 `502`가 나오는 것은 앱이 아직 실행되지 않았기 때문일 수 있다. **배포 후의 502는 정상 완료가 아니다.** 부트스트랩 로그는 로컬 `.logs/`에 남는다.
@@ -189,13 +189,13 @@ nano deploy.env
 `deploy.env`에는 SSH 접속 정보만 넣는다. API 키는 넣지 않는다.
 
 ```dotenv
-APP_HOST=ubuntu@203.0.113.10
-APP_SSH_KEY=~/.ssh/quant.pem
-APP_SSH_PORT=22
-APP_SSH_HOST_KEY=accept-new
+HOST=ubuntu@203.0.113.10
+SSH_KEY=~/.ssh/quant.pem
+SSH_PORT=22
+SSH_HOST_KEY=accept-new
 ```
 
-**bootstrap의 `SSH_KEY`·`SSH_*`와 배포의 `APP_SSH_*`는 이름이 다르다.** bootstrap에 넘긴 값이 `deploy.env`에 자동 저장되지는 않는다. 추가 접속 옵션은 [deploy.env.example](deploy.env.example)을 따른다.
+**bootstrap과 배포는 `HOST`·`SSH_*` 이름을 사용하지만 입력 위치는 다르다.** bootstrap은 실행 환경변수, 배포는 저장소 루트의 `deploy.env`를 읽는다. bootstrap에 넘긴 값이 `deploy.env`에 자동 저장되지는 않는다. 추가 접속 옵션은 [deploy.env.example](deploy.env.example)을 따른다.
 
 ```bash
 git status --short --branch
@@ -474,7 +474,7 @@ pnpm run deploy
 
 명령 내부에서 **의존성 설치 → lint → typecheck → 전체 Vitest → 서버·웹 빌드 → 에이전트 패키징·검증 → SSH 배포**를 수행한다. E2E는 자동 포함되지 않는다. 완료 후 [정상 동작 확인](#36-정상-동작-확인과-첫-실행)을 반복하며, 기존 관리자를 다시 생성하지 않는다.
 
-실패 시 오류 출력을 먼저 확인한다. commit 단계 전 실패하면 코드·DB 복원을 시도하지만, **복원 실패나 finalize 실패까지 모두 이전 상태로 되돌아갔다고 가정하지 않는다.** 서비스·로그·실제 배포 버전을 확인한 뒤 후속 작업을 결정한다. 명령의 기준은 [build-release.sh](scripts/build-release.sh)와 [deploy.mjs](scripts/deploy.mjs)다.
+실패 시 오류 출력을 먼저 확인한다. commit 단계 전 실패하면 코드·DB 복원을 시도하지만, **복원 실패나 finalize 실패까지 모두 이전 상태로 되돌아갔다고 가정하지 않는다.** 서비스·로그·실제 배포 버전을 확인한 뒤 후속 작업을 결정한다. 명령의 기준은 [build-release.sh](scripts/build-release.sh)와 [deploy.sh](scripts/deploy.sh)다.
 
 ---
 
@@ -654,4 +654,4 @@ sudo systemd-run --pipe --wait --collect \
 
 설계 원칙은 [SPEC](docs/SPEC.md), 에이전트의 상세 진단·복구는 [AGENT_OPERATIONS](docs/AGENT_OPERATIONS.md), 계산 코드·버전 계약은 [AGENT_RUNTIME_BOUNDARY](docs/AGENT_RUNTIME_BOUNDARY.md), 설계 변경 배경은 [DECISIONS](docs/DECISIONS.md)를 참고한다. 개발 작업 규칙은 [AGENTS.md](AGENTS.md)를 따른다.
 
-명령의 구현 기준은 [package.json](package.json), [서버 CLI](src/server/cli.ts), [bootstrap](scripts/bootstrap-app.sh), [배포 스크립트](scripts/deploy.mjs), [에이전트 CLI](src/agent/cli.ts)다. `systemd-run` 옵션은 [Ubuntu 매뉴얼](https://manpages.ubuntu.com/manpages/noble/man1/systemd-run.1.html)을 참고한다.
+명령의 구현 기준은 [package.json](package.json), [서버 CLI](src/server/cli.ts), [bootstrap](scripts/bootstrap.sh), [배포 스크립트](scripts/deploy.sh), [에이전트 CLI](src/agent/cli.ts)다. `systemd-run` 옵션은 [Ubuntu 매뉴얼](https://manpages.ubuntu.com/manpages/noble/man1/systemd-run.1.html)을 참고한다.
