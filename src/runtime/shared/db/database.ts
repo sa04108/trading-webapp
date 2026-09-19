@@ -34,16 +34,46 @@ export function openDatabase(
   options: DatabaseOpenOptions = {},
 ): DatabaseHandle {
   const dataPath = options.dataPath ?? dataDatabasePath(databasePath);
-  if (options.dataReadonly && !fs.statSync(dataPath).isFile())
-    throw new Error("계산 스냅샷 파일이 없습니다");
+  const isMemoryDatabase =
+    databasePath === ":memory:" || dataPath === ":memory:";
 
-  fs.mkdirSync(path.dirname(path.resolve(databasePath)), { recursive: true });
+  if (options.dataReadonly && !isMemoryDatabase) {
+    if (!fs.statSync(dataPath).isFile())
+      throw new Error("계산 스냅샷 파일이 없습니다");
+  }
+  if (!isMemoryDatabase) {
+    fs.mkdirSync(path.dirname(path.resolve(databasePath)), { recursive: true });
+    if (fs.existsSync(`${databasePath}.restore.json`))
+      throw new Error(
+        "DB 복원이 완료되지 않았습니다. db:restore를 다시 실행하세요.",
+      );
+  }
+  if (
+    !isMemoryDatabase &&
+    !options.dataReadonly &&
+    !fs.existsSync(databasePath) &&
+    fs.existsSync(dataPath)
+  ) {
+    throw new Error("계산 DB만 존재합니다. 운영 DB를 백업에서 복원하세요.");
+  }
 
   const sqlite = new Database(databasePath);
   try {
     sqlite.pragma("busy_timeout = 5000");
 
-    const existing = tableExists(sqlite, "operational_database_state");
+    const existing =
+      !isMemoryDatabase && tableExists(sqlite, "operational_database_state");
+    if (
+      !existing &&
+      !options.dataReadonly &&
+      !isMemoryDatabase &&
+      fs.existsSync(dataPath)
+    ) {
+      throw new Error(
+        "운영 DB 식별자가 없습니다. 두 DB를 백업에서 함께 복원하세요.",
+      );
+    }
+
     const expected = existing
       ? (
           sqlite
@@ -53,6 +83,9 @@ export function openDatabase(
             .get() as { id: string } | undefined
         )?.id
       : undefined;
+    if (expected && !isMemoryDatabase && !fs.existsSync(dataPath)) {
+      throw new Error(`운영 DB에 연결된 계산 DB가 없습니다: ${dataPath}`);
+    }
 
     sqlite.pragma("journal_mode = WAL");
     sqlite.pragma("foreign_keys = ON");
@@ -61,11 +94,9 @@ export function openDatabase(
       options.dataReadonly ? "agent" : "operations",
       "main",
     );
-
-    if (!options.dataReadonly)
+    if (!isMemoryDatabase && !options.dataReadonly)
       fs.mkdirSync(path.dirname(path.resolve(dataPath)), { recursive: true });
-
-    if (options.dataReadonly) {
+    if (options.dataReadonly && !isMemoryDatabase) {
       // 바인딩이 SQLite URI를 지원하지 않으므로 파일 권한으로 읽기 전용을 보장한다.
       // root처럼 권한을 우회할 수 있는 실행 환경도 스냅샷 쓰기 가능 여부로 거부한다.
       let writable = true;

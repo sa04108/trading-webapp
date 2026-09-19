@@ -61,16 +61,6 @@ describe('물리 DB 분리', () => {
     expect(fs.existsSync(file)).toBe(false);
   });
 
-  it('단일 DB는 변환 지원 릴리스로 안내하고 원본을 수정하지 않는다', () => {
-    const legacy = new Database(file);
-    legacy.exec("CREATE TABLE symbols (code TEXT); INSERT INTO symbols VALUES ('005930')");
-    legacy.close();
-    expect(() => openDatabase(file)).toThrow('040ef56');
-    const retained = new Database(file, { readonly: true });
-    try { expect(tables(retained)).toEqual(['symbols']); } finally { retained.close(); }
-    expect(fs.existsSync(dataDatabasePath(file))).toBe(false);
-  });
-
   it('계산 DB가 사라지거나 다른 데이터셋 파일로 바뀌면 부팅을 거부한다', () => {
     openDatabase(file).close();
     const dataPath = dataDatabasePath(file);

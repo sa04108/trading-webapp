@@ -12,6 +12,7 @@ export const MIGRATIONS_DIRECTORY = fileURLToPath(
 );
 
 export function dataDatabasePath(operationsPath: string): string {
+  if (operationsPath === ":memory:") return ":memory:";
   const extension = path.extname(operationsPath);
   return extension
     ? `${operationsPath.slice(0, -extension.length)}.data${extension}`
