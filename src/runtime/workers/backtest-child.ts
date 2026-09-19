@@ -79,6 +79,7 @@ import {
 } from "../../shared/schemas/backtest-request.js";
 import type { ProvenancePin } from "../../shared/schemas/provenance-pin.js";
 import { installCancellationHandlers } from "./cancellation.js";
+import { disconnectWorker, reportWorkerError, reportWorkerPhase, sendWorkerMessage } from "./worker-reporting.js";
 import {
   financialCoverageGapMessage,
   findFinancialCoverageGap,
@@ -87,9 +88,10 @@ import { financialFactCutoffsFromCandles } from "../modules/backtest/application
 import { findIncompleteFundamentalCheckpoints } from "../modules/backtest/application/backtest-financial-data-readiness.js";
 
 const cancellation = installCancellationHandlers();
+reportWorkerPhase("BOOTSTRAP_READY");
 
 function send(message: unknown): void {
-  process.send?.(message);
+  sendWorkerMessage(message);
 }
 
 function parseSubmitWarnings(raw: string | null): string[] {
@@ -107,6 +109,7 @@ function parseSubmitWarnings(raw: string | null): string[] {
 }
 
 async function main(input: { lease: AgentLease }): Promise<void> {
+  reportWorkerPhase("JOB_RECEIVED");
   const lease = agentLeaseSchema.parse(input.lease);
   const collectionVersion = lease.dataset.collectionVersion;
   const workerStartedAtMs = Date.now();
@@ -143,8 +146,10 @@ async function main(input: { lease: AgentLease }): Promise<void> {
   if (lease.kind !== "BACKTEST" || lease.jobId !== jobId)
     throw new Error("백테스트 임대와 작업 실행 인자가 다릅니다");
 
+  reportWorkerPhase("JOB_DB_OPENING");
   const handle = openDatabase(databasePath, { dataPath, dataReadonly: true });
   const db = handle.db;
+  reportWorkerPhase("JOB_DB_OPENED");
 
   const finish = (
     requestedStatus: "COMPLETED" | "FAILED" | "CANCELLED",
@@ -918,6 +923,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     finish("COMPLETED");
     activeStage = null;
   } catch (error) {
+    reportWorkerError(error, activeStage ?? "FINALIZING");
     const reason = error instanceof Error ? error.message : String(error);
     const cancellationRequested = cancellation.isRequested();
     const finalStatus = finish(
@@ -931,9 +937,6 @@ async function main(input: { lease: AgentLease }): Promise<void> {
         : cancelled
           ? "CANCELLED"
           : "FAILED";
-    // 원격 supervisor는 input.sqlite의 FAILED 행을 볼 수 없고 stderr를 중앙 finish
-    // 사유로 전달한다. 자체 메시지만 쓰고 수신 측이 2KB로 자른다.
-    if (outcome === "FAILED") process.stderr.write(`${reason}\n`);
     process.exitCode = outcome === "FAILED" ? 1 : 0;
   } finally {
     const finishedAtMs = Date.now();
@@ -972,11 +975,10 @@ async function main(input: { lease: AgentLease }): Promise<void> {
 }
 
 process.once("message", (input: { lease: AgentLease }) => {
-  void main(input).then(
-    () => setTimeout(() => process.exit(process.exitCode ?? 0), 50),
-    (error) => {
-      console.error(error);
-      process.exit(1);
-    },
-  );
+  void main(input)
+    .catch((error: unknown) => {
+      reportWorkerError(error);
+      process.exitCode = 1;
+    })
+    .finally(() => disconnectWorker());
 });

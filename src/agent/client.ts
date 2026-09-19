@@ -29,6 +29,12 @@ import {
 } from "./resources.js";
 import { AgentDatasetCache, durableJson } from "./dataset-cache.js";
 import type { AgentSettings } from "./config.js";
+import { parseWorkerDiagnostics, type WorkerDiagnostics } from "../shared/agent-diagnostics.js";
+import {
+  classifyWorker, diagnosticError, diagnosticSummary, emptyDiagnostics,
+  inspectArtifact, inspectJobDatabase, observeWorker, redactDiagnostics,
+  retainDiagnostic, pruneDiagnostics, type WorkerObservation,
+} from "./worker-diagnostics.js";
 
 type FinishMessage = Extract<AgentMessage, { type: "FINISH" | "NEEDS_DATA" }>;
 export interface AgentResultUpload {
@@ -54,6 +60,7 @@ export interface AgentRuntimeAdapter {
 
 interface Outbox {
   lease: AgentLease;
+  diagnostics?: WorkerDiagnostics;
   message?: FinishMessage;
   artifactPath?: string;
   sha256?: string;
@@ -72,6 +79,8 @@ interface Running {
   peakRss: number;
   budgetBytes: number;
   resourceError?: string;
+  observation: WorkerObservation;
+  cancellationReason?: string;
   cancellation: boolean;
   cancelPath?: "IPC" | "SIGTERM" | "SIGKILL";
   telemetry?: BacktestExecutionTelemetry;
@@ -90,6 +99,7 @@ export class AgentClient {
   private sampleTimer: NodeJS.Timeout | null = null;
   private readonly running = new Map<string, Running>();
   private readonly outbox = new Map<string, Outbox>();
+  private readonly unpersisted = new Set<string>();
   private readonly uploads = new Map<string, Promise<void>>();
   private readonly uploadAborts = new Map<string, AbortController>();
   private readonly finishing = new Set<Promise<void>>();
@@ -100,6 +110,8 @@ export class AgentClient {
   private admission: AgentResources = availableResources(0, 0, false);
   private lockOwned = false;
   private updating = false;
+  private runnerVersion: string | null = null;
+  private lastDiagnosticsPruneAt = 0;
 
   constructor(
     readonly settings: AgentSettings,
@@ -123,6 +135,8 @@ export class AgentClient {
 
   start(): void {
     this.lock();
+    pruneDiagnostics(this.directory, this.log);
+    this.lastDiagnosticsPruneAt = Date.now();
     this.restoreOutbox();
     this.connect();
     this.heartbeatTimer = setInterval(
@@ -160,54 +174,36 @@ export class AgentClient {
       if (fs.existsSync(file)) {
         const value = JSON.parse(fs.readFileSync(file, "utf8")) as Outbox;
         value.lease = agentLeaseSchema.parse(value.lease);
+        if (value.diagnostics) value.diagnostics = parseWorkerDiagnostics(value.diagnostics);
         // 결과 경로는 기록의 외부 경로를 신뢰하지 않고 소유 작업 폴더에서 재구성한다.
         if (value.artifactPath)
           value.artifactPath = path.join(directory, "result.sqlite");
         this.outbox.set(this.key(value.lease), value);
-      } else fs.rmSync(directory, { recursive: true, force: true });
+      } else {
+        // 이전 실행의 리스 토큰은 전송하지 않고, 중단 흔적만 별도로 보존한다.
+        let diagnostics = emptyDiagnostics();
+        try {
+          const record = JSON.parse(fs.readFileSync(path.join(directory, "execution.json"), "utf8")) as { diagnostics?: unknown };
+          diagnostics = parseWorkerDiagnostics(record.diagnostics) ?? diagnostics;
+        } catch { /* 시작 기록이 없어도 중단 사실은 남긴다. */ }
+        diagnostics.code = "AGENT_INTERRUPTED";
+        diagnostics.finishedAtMs = Date.now();
+        const record = { event: "agent.worker.interrupted", key: name, diagnostics };
+        this.log(JSON.stringify(record));
+        retainDiagnostic(this.directory, name, record, durableJson, this.log);
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
     }
   }
 
   private connect(): void {
     if (this.stopping) return;
     if (this.runtime) {
+      this.runnerVersion = this.runtime.runnerVersion;
       this.runtime.connect((message) => {
         if (this.stopping) return;
-        try {
-          this.message(message);
-        } catch (error) {
-          const reason = this.error(error);
-          this.log(`로컬 계산 메시지 처리 오류: ${reason}`);
-          if (message.type !== "JOB") return;
-          const running = this.running.get(this.key(message.lease));
-          if (running) {
-            running.resourceError = reason;
-            this.cancel(running);
-            return;
-          }
-          const finish: FinishMessage = {
-            type: "FINISH",
-            ...this.identity(message.lease),
-            outcome: "FAILED",
-            error: reason.slice(0, 2000),
-          };
-          const entry: Outbox = { lease: message.lease, message: finish };
-          this.outbox.set(this.key(message.lease), entry);
-          try {
-            durableJson(
-              path.join(
-                this.directory,
-                "jobs",
-                this.key(message.lease),
-                "outbox.json",
-              ),
-              entry,
-            );
-          } catch {
-            /* 저장소 장애라도 살아 있는 서버에는 실패 결과를 전달한다. */
-          }
-          this.send(finish);
-        }
+        try { this.message(message); }
+        catch (error) { this.log(`로컬 계산 메시지 처리 오류: ${this.error(error)}`); }
       });
       this.send({
         type: "HELLO",
@@ -226,10 +222,11 @@ export class AgentClient {
     this.socket = socket;
     socket.once("open", () => {
       this.lastServerContact = Date.now();
+      this.runnerVersion = readRuntimeVersions().agentVersion;
       this.send({
         type: "HELLO",
         protocolVersion: AGENT_PROTOCOL_VERSION,
-        runnerVersion: readRuntimeVersions().agentVersion,
+        runnerVersion: this.runnerVersion,
       });
     });
     socket.on("pong", () => {
@@ -306,20 +303,29 @@ export class AgentClient {
       const lease = agentLeaseSchema.parse(message.lease);
       if (this.running.has(this.key(lease)) || this.outbox.has(this.key(lease)))
         return;
-      if (
-        this.cache.current?.version !== lease.dataset.version ||
-        this.cache.current.sha256 !== lease.dataset.sha256 ||
-        this.cache.current.collectionVersion !== lease.dataset.collectionVersion
-      )
-        throw new Error("준비하지 않은 데이터 버전의 작업입니다");
-      this.spawn(lease);
+      // 로컬·원격 모두 작업 준비 실패를 동일한 outbox 경로로 보고한다.
+      try {
+        if (
+          this.cache.current?.version !== lease.dataset.version ||
+          this.cache.current.sha256 !== lease.dataset.sha256 ||
+          this.cache.current.collectionVersion !== lease.dataset.collectionVersion
+        ) throw new Error("준비하지 않은 데이터 버전의 작업입니다");
+        this.spawn(lease);
+      } catch (error) {
+        const running = this.running.get(this.key(lease));
+        if (running) {
+          running.observation.recordError(error);
+          this.cancel(running, "PROCESS_CONTROL_ERROR");
+        } else this.failSetup(lease, error);
+      }
     } else if (message.type === "LEASE") {
       const key = `${message.jobId}-${message.attempt}`;
       const running = this.running.get(key);
       if (running) {
         if (message.leaseExpiresAtMs)
           running.lease.leaseExpiresAtMs = message.leaseExpiresAtMs;
-        if (!message.accepted || message.cancelRequested) this.cancel(running);
+        if (!message.accepted || message.cancelRequested)
+          this.cancel(running, message.accepted ? "SERVER_CANCEL_REQUEST" : "LEASE_REJECTED");
       }
       if (!message.accepted && this.outbox.has(key)) this.acknowledge(key);
     } else if (message.type === "ACK") {
@@ -360,13 +366,15 @@ export class AgentClient {
         preparationProgress: running.preparationProgress,
       });
     for (const [key, entry] of this.outbox) {
+      if (this.unpersisted.has(key)) this.persistOutbox(entry);
       if (entry.message) this.send(entry.message);
       else if (entry.artifactPath) {
         this.send({ type: "HEARTBEAT", ...this.identity(entry.lease) });
         if (!this.uploads.has(key)) {
           const uploading = this.upload(entry)
             .catch((error: unknown) =>
-              this.log(`결과 전송 재시도 예정: ${this.error(error)}`),
+              this.log(JSON.stringify({ event: "agent.result-upload-retry", key,
+                error: diagnosticError(error) })),
             )
             .finally(() => this.uploads.delete(key));
           this.uploads.set(key, uploading);
@@ -377,12 +385,17 @@ export class AgentClient {
   }
 
   private sample(): void {
+    if (Date.now() - this.lastDiagnosticsPruneAt >= 60 * 60_000) {
+      pruneDiagnostics(this.directory, this.log);
+      this.lastDiagnosticsPruneAt = Date.now();
+    }
     if (
       this.socket?.readyState === WebSocket.OPEN &&
       Date.now() - this.lastServerContact > 45_000
     )
       this.socket.terminate();
     for (const running of this.running.values()) {
+      if (running.observation.exited) continue;
       running.peakRss = Math.max(
         running.peakRss,
         running.child.pid ? processRss(running.child.pid) : 0,
@@ -390,9 +403,9 @@ export class AgentClient {
       if (running.peakRss > running.budgetBytes && !running.cancellation) {
         running.resourceError =
           "계산 프로세스가 자동 산정된 가용 메모리 예산을 초과했습니다";
-        this.cancel(running);
+        this.cancel(running, "MEMORY_BUDGET_EXCEEDED");
       }
-      if (Date.now() > running.lease.leaseExpiresAtMs) this.cancel(running);
+      if (Date.now() > running.lease.leaseExpiresAtMs) this.cancel(running, "LEASE_EXPIRED");
     }
     this.capacity();
   }
@@ -426,20 +439,31 @@ export class AgentClient {
       lease.kind === "PREPARATION"
         ? `../runtime/workers/preparation-child.${ts ? "ts" : "js"}`
         : `../runtime/workers/backtest-child.${ts ? "ts" : "js"}`;
-    const child = fork(fileURLToPath(new URL(target, import.meta.url)), [], {
-      execArgv: [
-        `--max-old-space-size=${this.admission.heapMb}`,
-        ...(ts ? ["--import", "tsx"] : []),
-      ],
-      env: {
-        NODE_ENV: "production",
-        DATABASE_PATH: jobPath,
-        BACKTEST_JOB_ID: lease.jobId,
-        DATA_SNAPSHOT_PATH: dataPath,
-        WORKER_MAX_BARS: String(this.admission.maxBars),
-        BACKTEST_RESULT_PATH: path.join(directory, "result.sqlite"),
-      },
-      stdio: ["ignore", "ignore", "pipe", "ipc"],
+    let child: ChildProcess;
+    try {
+      child = fork(fileURLToPath(new URL(target, import.meta.url)), [], {
+        execArgv: [
+          `--max-old-space-size=${this.admission.heapMb}`,
+          ...(ts ? ["--import", "tsx"] : []),
+        ],
+        env: {
+          NODE_ENV: "production",
+          DATABASE_PATH: jobPath,
+          BACKTEST_JOB_ID: lease.jobId,
+          DATA_SNAPSHOT_PATH: dataPath,
+          WORKER_MAX_BARS: String(this.admission.maxBars),
+          BACKTEST_RESULT_PATH: path.join(directory, "result.sqlite"),
+        },
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+      });
+    } catch (error) {
+      this.failSetup(lease, error, "WORKER_SPAWN_FAILED");
+      return;
+    }
+    // spawn/error는 다음 tick에 발생하므로 송신보다 먼저 모든 관측기를 설치한다.
+    const timers: NodeJS.Timeout[] = [];
+    const observation = observeWorker(child, () => {
+      for (const timer of timers) clearTimeout(timer);
     });
     if (child.pid) {
       try {
@@ -456,19 +480,21 @@ export class AgentClient {
       peakRss: 0,
       budgetBytes: this.admission.budgetBytes,
       cancellation: false,
-      timers: [],
+      observation,
+      timers,
     };
     this.running.set(key, running);
     this.requestedBars = 0;
     let pending: FinishMessage | undefined;
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => {
-      if (stderr.length < 4000) stderr += chunk.toString();
-    });
+    this.recordExecution(running, { ...observation.snapshot(),
+      memoryBudgetBytes: Math.max(0, Math.floor(running.budgetBytes)),
+      peakRssBytes: running.peakRss }, false);
     child.on(
       "message",
       (message: {
         type: string;
+        diagnosticError?: unknown;
+        phase?: string;
         telemetry?: unknown;
         request?: Extract<AgentMessage, { type: "NEEDS_DATA" }>["request"];
         outcome?: string;
@@ -483,132 +509,221 @@ export class AgentClient {
           { type: "HEARTBEAT" }
         >["preparationProgress"];
       }) => {
-        if (message.type === "telemetry") {
-          const parsed = backtestExecutionTelemetrySchema.safeParse(
-            message.telemetry,
-          );
-          if (parsed.success) running.telemetry = parsed.data;
-        } else if (
-          message.type === "progress" &&
-          message.processedBars !== undefined &&
-          message.totalBars !== undefined
-        ) {
-          const activityChanged =
-            message.activity !== undefined &&
-            message.activity !== running.progress?.activity;
-          running.progress = {
-            processedBars: message.processedBars,
-            totalBars: message.totalBars,
-            progressLabel: message.progressLabel ?? null,
-            ...(message.activity ? { activity: message.activity } : {}),
-          };
-          if (activityChanged) this.heartbeat();
-        } else if (message.type === "PROGRESS" && message.progress) {
-          const phaseChanged =
-            message.progress.phase !== running.preparationProgress?.phase;
-          running.preparationProgress = message.progress;
-          if (phaseChanged) this.heartbeat();
-        } else if (message.type === "NEEDS_DATA" && message.request)
-          pending = {
-            type: "NEEDS_DATA",
-            ...this.identity(lease),
-            request: message.request,
-          };
-        else if (message.type === "FINISH")
-          pending = {
-            type: "FINISH",
-            ...this.identity(lease),
-            outcome:
-              message.outcome === "COMPLETED"
-                ? "COMPLETED"
-                : message.outcome === "CANCELLED"
-                  ? "CANCELLED"
-                  : "FAILED",
-            result: message.result,
-            ...(message.error ? { error: message.error.slice(0, 2000) } : {}),
-          };
+        try {
+          if (!message || typeof message !== "object") return;
+          if (message.type === "WORKER_DIAGNOSTIC")
+            observation.workerError(message.diagnosticError);
+          const phase = message.activity ?? message.progress?.phase ?? message.phase;
+          if (typeof phase === "string" && phase !== observation.snapshot().lastPhase) {
+            observation.phase(phase);
+            this.recordExecution(running, { ...observation.snapshot(),
+              memoryBudgetBytes: Math.max(0, Math.floor(running.budgetBytes)),
+              peakRssBytes: running.peakRss }, false);
+          }
+          if (message.type === "telemetry") {
+            const parsed = backtestExecutionTelemetrySchema.safeParse(
+              message.telemetry,
+            );
+            if (parsed.success) running.telemetry = parsed.data;
+          } else if (
+            message.type === "progress" &&
+            message.processedBars !== undefined &&
+            message.totalBars !== undefined
+          ) {
+            const activityChanged =
+              message.activity !== undefined &&
+              message.activity !== running.progress?.activity;
+            running.progress = {
+              processedBars: message.processedBars,
+              totalBars: message.totalBars,
+              progressLabel: message.progressLabel ?? null,
+              ...(message.activity ? { activity: message.activity } : {}),
+            };
+            if (activityChanged) this.heartbeat();
+          } else if (message.type === "PROGRESS" && message.progress) {
+            const phaseChanged =
+              message.progress.phase !== running.preparationProgress?.phase;
+            running.preparationProgress = message.progress;
+            if (phaseChanged) this.heartbeat();
+          } else if (message.type === "NEEDS_DATA" && message.request)
+            pending = {
+              type: "NEEDS_DATA",
+              ...this.identity(lease),
+              request: message.request,
+            };
+          else if (message.type === "FINISH")
+            pending = {
+              type: "FINISH",
+              ...this.identity(lease),
+              outcome:
+                message.outcome === "COMPLETED"
+                  ? "COMPLETED"
+                  : message.outcome === "CANCELLED"
+                    ? "CANCELLED"
+                    : "FAILED",
+              result: message.result,
+              ...(message.error ? { error: message.error.slice(0, 2000) } : {}),
+            };
+        } catch (error) {
+          observation.recordError(error);
+          this.cancel(running, "PROCESS_CONTROL_ERROR");
+        }
       },
     );
-    child.once("error", (error) => {
-      stderr = error.message;
+    const completion = observation.closed
+      .then(() => this.finished(running, pending))
+      .catch((error: unknown) => {
+        const diagnostics = this.inspectExecution(running);
+        diagnostics.code = "FINALIZATION_FAILED";
+        diagnostics.processErrors = [...diagnostics.processErrors, diagnosticError(error)].slice(0, 4);
+        const safe = this.recordExecution(running, diagnostics, true);
+        if (!this.stopping && !this.updating)
+          this.queueOutbox({ lease, message: {
+            type: "FINISH", ...this.identity(lease), outcome: "FAILED",
+            error: diagnosticSummary(safe), result: { diagnostics: safe },
+          } });
+      });
+    this.finishing.add(completion);
+    void completion.finally(() => this.finishing.delete(completion));
+    child.send({ lease, jobPath, dataPath }, (error) => {
+      if (error) {
+        observation.recordError(error);
+        this.cancel(running, "PROCESS_CONTROL_ERROR");
+      }
     });
-    child.once("exit", () => {
-      const completion = this.finished(running, pending, stderr).catch(
-        (error: unknown) =>
-          this.log(`작업 종료 처리 실패: ${this.error(error)}`),
-      );
-      this.finishing.add(completion);
-      void completion.finally(() => this.finishing.delete(completion));
-    });
-    child.send({ lease, jobPath, dataPath });
     this.log(`${lease.kind} 작업 시작: ${lease.jobId}`);
+  }
+
+  private inspectExecution(running: Running): WorkerDiagnostics {
+    const diagnostics = running.observation.snapshot();
+    diagnostics.jobDb = inspectJobDatabase(running.jobPath, running.lease.kind,
+      running.lease.jobId, (file) => new Database(file, { readonly: true, fileMustExist: true }));
+    diagnostics.artifact = inspectArtifact(path.join(running.directory, "result.sqlite"));
+    diagnostics.peakRssBytes = running.peakRss;
+    diagnostics.memoryBudgetBytes = Math.max(0, Math.floor(running.budgetBytes));
+    diagnostics.cancellationReason = running.cancellationReason ?? null;
+    diagnostics.cancelPath = running.cancelPath ?? null;
+    return diagnostics;
+  }
+
+  private recordExecution(
+    running: Pick<Running, "lease" | "directory">,
+    diagnostics: WorkerDiagnostics,
+    terminal: boolean,
+  ): WorkerDiagnostics {
+    const safe = redactDiagnostics(diagnostics, [this.settings.token, running.lease.leaseToken]);
+    const record = {
+      event: terminal ? "agent.worker.finished" : "agent.worker.stage",
+      kind: running.lease.kind, jobId: running.lease.jobId,
+      attempt: running.lease.attempt, datasetVersion: running.lease.dataset.version,
+      executionMode: this.runtime ? "local" : "remote",
+      runnerVersion: this.runnerVersion, nodeVersion: process.version,
+      platform: process.platform, arch: process.arch, diagnostics: safe,
+    };
+    // 일반 단계 로그에는 출력 원문 대신 단계와 시각만 남긴다.
+    if (terminal) this.log(JSON.stringify(record));
+    else this.log(JSON.stringify({ ...record, diagnostics: {
+      pid: safe.pid, lastPhase: safe.lastPhase, lastMessageAtMs: safe.lastMessageAtMs,
+    } }));
+    if (terminal) retainDiagnostic(this.directory, this.key(running.lease), record, durableJson, this.log);
+    try {
+      fs.mkdirSync(running.directory, { recursive: true, mode: 0o700 });
+      durableJson(path.join(running.directory, "execution.json"), record);
+    }
+    catch (error) { this.log(`작업 진단 저장 실패: ${this.error(error)}`); }
+    return safe;
+  }
+
+  private failSetup(
+    lease: AgentLease, error: unknown,
+    code: "JOB_SETUP_FAILED" | "WORKER_SPAWN_FAILED" = "JOB_SETUP_FAILED",
+  ): void {
+    const directory = path.join(this.directory, "jobs", this.key(lease));
+    const diagnostics = emptyDiagnostics();
+    diagnostics.code = code;
+    diagnostics.processErrors.push(diagnosticError(error));
+    diagnostics.jobDb = inspectJobDatabase(path.join(directory, "job.sqlite"), lease.kind,
+      lease.jobId, (file) => new Database(file, { readonly: true, fileMustExist: true }));
+    diagnostics.artifact = inspectArtifact(path.join(directory, "result.sqlite"));
+    const safe = this.recordExecution({ lease, directory }, diagnostics, true);
+    this.queueOutbox({ lease, message: {
+      type: "FINISH", ...this.identity(lease), outcome: "FAILED",
+      error: diagnosticSummary(safe), result: { diagnostics: safe },
+    } });
+  }
+
+  /** 디스크 실패 시에도 메모리 재전송은 유지한다. 다음 heartbeat에서 영속화를 재시도한다. */
+  private persistOutbox(entry: Outbox): void {
+    const key = this.key(entry.lease);
+    try {
+      const directory = path.join(this.directory, "jobs", key);
+      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+      durableJson(path.join(directory, "outbox.json"), entry);
+      this.unpersisted.delete(key);
+    } catch (error) {
+      if (!this.unpersisted.has(key))
+        this.log(JSON.stringify({ event: "agent.outbox-storage-failed", key, error: diagnosticError(error) }));
+      this.unpersisted.add(key);
+    }
+  }
+
+  private queueOutbox(entry: Outbox): void {
+    this.outbox.set(this.key(entry.lease), entry);
+    this.persistOutbox(entry);
+    this.heartbeat();
   }
 
   private async finished(
     running: Running,
     pending: FinishMessage | undefined,
-    stderr: string,
   ): Promise<void> {
     const key = this.key(running.lease);
     for (const timer of running.timers) clearTimeout(timer);
     this.running.delete(key);
     this.observedRss = Math.max(this.observedRss, running.peakRss);
     this.profiled = true;
-    if (this.stopping || this.updating) return;
-    let entry: Outbox = { lease: running.lease, telemetry: running.telemetry };
-    if (running.resourceError)
-      entry.message = {
-        type: "FINISH",
-        ...this.identity(running.lease),
-        outcome: "FAILED",
-        error: running.resourceError,
-      };
-    else if (pending) entry.message = pending;
-    else {
-      let status = "FAILED";
-      let error = stderr;
-      if (fs.existsSync(running.jobPath)) {
-        const database = new Database(running.jobPath, { readonly: true });
-        try {
-          const row = database
-            .prepare("SELECT status, error FROM backtest_jobs WHERE id = ?")
-            .get(running.lease.jobId) as
-            { status: string; error: string | null } | undefined;
-          if (row) {
-            status = row.status;
-            error = row.error ?? error;
-          }
-        } finally {
-          database.close();
-        }
-      }
-      const artifactPath = path.join(running.directory, "result.sqlite");
-      if (status === "COMPLETED" && fs.existsSync(artifactPath)) {
-        const hash = createHash("sha256");
-        for await (const chunk of fs.createReadStream(artifactPath))
-          hash.update(chunk);
-        entry = { ...entry, artifactPath, sha256: hash.digest("hex") };
-      } else
-        entry.message = {
-          type: "FINISH",
-          ...this.identity(running.lease),
-          outcome:
-            running.cancellation || status === "CANCELLED"
-              ? "CANCELLED"
-              : "FAILED",
-          error: (error || "계산 프로세스가 결과 없이 종료되었습니다").slice(
-            0,
-            2000,
-          ),
-          result: {
-            telemetry: running.telemetry,
-            cancelPath: running.cancelPath,
-          },
-        };
+    const diagnostics = this.inspectExecution(running);
+    diagnostics.code = classifyWorker({
+      kind: running.lease.kind, diagnostics, pendingType: pending?.type,
+      pendingOutcome: pending?.type === "FINISH" ? pending.outcome : undefined,
+      resourceError: running.resourceError,
+      // 제어 오류 때문에 중단한 프로세스는 사용자의 취소로 오인하지 않는다.
+      cancellation: running.cancellation && running.cancellationReason !== "PROCESS_CONTROL_ERROR",
+    });
+    if (this.stopping || this.updating) {
+      diagnostics.code = "AGENT_INTERRUPTED";
+      this.recordExecution(running, diagnostics, true);
+      return;
     }
-    durableJson(path.join(running.directory, "outbox.json"), entry);
-    this.outbox.set(key, entry);
-    this.heartbeat();
+    let entry: Outbox = { lease: running.lease, telemetry: running.telemetry };
+    if (diagnostics.code === "COMPLETED" && running.lease.kind === "BACKTEST") {
+      const artifactPath = path.join(running.directory, "result.sqlite");
+      try {
+        const hash = createHash("sha256");
+        for await (const chunk of fs.createReadStream(artifactPath)) hash.update(chunk);
+        entry = { ...entry, artifactPath, sha256: hash.digest("hex") };
+      } catch (error) {
+        diagnostics.code = "RESULT_ARTIFACT_READ_FAILED";
+        diagnostics.artifact = { ...diagnostics.artifact, state: "READ_FAILED", error: diagnosticError(error) };
+      }
+    }
+    const safe = this.recordExecution(running, diagnostics, true);
+    entry.diagnostics = safe;
+    if (safe.code === "NEEDS_DATA" && pending?.type === "NEEDS_DATA") entry.message = pending;
+    else if (safe.code === "COMPLETED" && running.lease.kind === "PREPARATION" && pending?.type === "FINISH")
+      entry.message = { ...pending, result: { ...pending.result, diagnostics: safe } };
+    else if (!entry.artifactPath) {
+      const reported = running.resourceError ?? (pending?.type === "FINISH" ? pending.error : undefined);
+      const summary = diagnosticSummary(safe, reported);
+      entry.message = {
+        type: "FINISH", ...this.identity(running.lease),
+        outcome: safe.code === "CANCELLED" ? "CANCELLED" : "FAILED",
+        error: redactDiagnostics({ ...safe, stderr: { ...safe.stderr, text: summary } },
+          [this.settings.token, running.lease.leaseToken]).stderr.text.slice(0, 2000),
+        result: { telemetry: running.telemetry, cancelPath: running.cancelPath, diagnostics: safe },
+      };
+    }
+    this.queueOutbox(entry);
   }
 
   private async upload(entry: Outbox): Promise<void> {
@@ -630,16 +745,20 @@ export class AgentClient {
       if ((status >= 200 && status < 300) || status === 409)
         this.acknowledge(this.key(entry.lease));
       else if ([400, 413, 415, 422].includes(status)) {
+        const diagnostics = entry.diagnostics ?? emptyDiagnostics();
+        diagnostics.code = "RESULT_UPLOAD_REJECTED";
+        diagnostics.deliveryError = diagnosticError(new Error(`서버가 결과 파일을 거부했습니다 (HTTP ${status})`));
+        const safe = this.recordExecution({ lease: entry.lease,
+          directory: path.join(this.directory, "jobs", key) }, diagnostics, true);
+        entry.diagnostics = safe;
         entry.message = {
           type: "FINISH",
           ...this.identity(entry.lease),
           outcome: "FAILED",
-          error: `서버가 결과 파일을 거부했습니다 (HTTP ${status})`,
+          error: diagnosticSummary(safe),
+          result: { diagnostics: safe, telemetry: entry.telemetry },
         };
-        durableJson(
-          path.join(this.directory, "jobs", key, "outbox.json"),
-          entry,
-        );
+        this.persistOutbox(entry);
         this.send(entry.message);
       } else throw new Error(`HTTP ${status}`);
     } finally {
@@ -681,6 +800,7 @@ export class AgentClient {
 
   private acknowledge(key: string): void {
     if (!this.outbox.delete(key)) return;
+    this.unpersisted.delete(key);
     fs.rmSync(path.join(this.directory, "jobs", key), {
       recursive: true,
       force: true,
@@ -713,11 +833,18 @@ export class AgentClient {
   private error(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
   }
-  private cancel(running: Running): void {
-    if (running.cancellation) return;
+  private cancel(running: Running, reason = "AGENT_SHUTDOWN"): void {
+    if (running.cancellation || running.observation.exited) return;
     running.cancellation = true;
+    running.cancellationReason = reason;
     running.cancelPath = "IPC";
-    if (running.child.connected) running.child.send({ type: "cancel" });
+    if (running.child.connected) {
+      try {
+        running.child.send({ type: "cancel" }, (error) => {
+          if (error) running.observation.recordError(error);
+        });
+      } catch (error) { running.observation.recordError(error); }
+    }
     running.timers.push(
       setTimeout(() => {
         running.cancelPath = "SIGTERM";
@@ -731,22 +858,9 @@ export class AgentClient {
   }
 
   private async cancelChildren(): Promise<void> {
-    await Promise.all(
-      [...this.running.values()].map(
-        (running) =>
-          new Promise<void>((resolve) => {
-            if (
-              running.child.exitCode !== null ||
-              running.child.signalCode !== null
-            ) {
-              resolve();
-              return;
-            }
-            running.child.once("exit", () => resolve());
-            this.cancel(running);
-          }),
-      ),
-    );
+    for (const running of this.running.values())
+      this.cancel(running, this.updating ? "AGENT_UPDATE" : "AGENT_SHUTDOWN");
+    // spawn 실패로 exit가 없어도 close에 연결된 completion은 반드시 정리된다.
     await Promise.all([...this.finishing]);
   }
 

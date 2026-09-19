@@ -26,6 +26,9 @@ import type { AgentPreparationQueue } from "./agent-preparation-queue.js";
 import type { AgentDataQueue } from "./agent-data-queue.js";
 import type { BacktestPreparationJobDto } from "../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js";
 import type { ExecutionProgress } from "../../../../shared/execution-progress.js";
+import { createAuditLogService } from "../../../../runtime/modules/audit/audit-service.js";
+import { systemClock } from "../../../../runtime/shared/clock.js";
+import { recordWorkerDiagnostics } from "./agent-diagnostic-recorder.js";
 
 interface Connection {
   socket: {
@@ -294,6 +297,14 @@ export class AgentCoordinator {
             ? { cancelPath: cancelPath as "IPC" | "SIGTERM" | "SIGKILL" }
             : {}),
         }) === "ACCEPTED";
+    }
+    if (message.type === "FINISH") {
+      recordWorkerDiagnostics({
+        accepted, clientId, kind: message.kind, jobId: message.jobId,
+        attempt: message.attempt, outcome: message.outcome,
+        executionMode: clientId === LOCAL_AGENT_ID ? "local" : "remote",
+        runnerVersion: this.runnerVersion, diagnostics: message.result?.diagnostics,
+      }, createAuditLogService(this.database.db, systemClock, this.logger), this.logger);
     }
     this.send(connection, {
       type: "ACK",
