@@ -395,7 +395,7 @@ export class AgentCoordinator {
         "SELECT created_at_ms, updated_at_ms FROM backtest_preparation_jobs WHERE id = ?",
       )
       .get(job.id) as { created_at_ms: number; updated_at_ms: number } | undefined;
-    const activityAt = times?.updated_at_ms ?? times?.created_atMs ?? Date.now();
+    const activityAt = times?.updated_at_ms ?? times?.created_at_ms ?? Date.now();
     if (job.status === "WAITING_DAILY_QUOTA")
       return {
         activity: "WAITING_RETRY", detail: job.error, actorKind: "SERVER",
