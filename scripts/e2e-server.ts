@@ -10,6 +10,7 @@ import { loadConfig } from '../src/server/bootstrap/config.js';
 import { createContainer, type Container } from '../src/server/bootstrap/container.js';
 import { buildServer } from '../src/server/bootstrap/server.js';
 import { newId } from '../src/runtime/shared/ids.js';
+import { SqliteDartRawSnapshotStore } from '../src/server/modules/facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
 
 export const E2E_USERNAME = 'e2e-operator';
 export const E2E_PASSWORD = 'correct-horse-battery-staple';
@@ -29,13 +30,13 @@ function krxEnvelope(rows: readonly Record<string, unknown>[]): {
 /**
  * DART `corpCode.xml` 이 실제로 내려주는 단일 엔트리 ZIP(무압축/STORED)을 손으로
  * 만든다 — `dart-corp-code-cache.ts` 의 `extractSingleFileFromZip` 은 local file
- * header 하나만 읽으므로 central directory는 필요 없다. 매핑을 빈 채로 둔다:
+ * header 하나만 읽으므로 central directory는 필요 없다. 검증 가능한 최소 매핑만 둔다:
  * 이 서버가 재무를 요구하는 어떤 종목도 실제 DART corp_code로 매핑해 줄 필요가
- * 없다 — `resolve()` 가 null을 돌려주면 호출부가 "매핑에 없는 종목코드" gap
+ * 없다. 사용하지 않는 999999만 매핑하고, `resolve()` 가 null을 돌려주면 호출부가 "매핑에 없는 종목코드" gap
  * 하나만 남기고 정상적으로 완주한다(dart-fact-source.ts fetchFinancials 참고).
  */
-function emptyCorpCodeZip(): Buffer {
-  const xml = '<result><list><corp_code></corp_code><corp_name></corp_name></list></result>';
+function fixtureCorpCodeZip(): Buffer {
+  const xml = '<result><list><corp_code>99999999</corp_code><corp_name>E2E 검증용</corp_name><stock_code>999999</stock_code></list></result>';
   const data = Buffer.from(xml, 'utf8');
   const name = Buffer.from('CORPCODE.xml', 'utf8');
   const header = Buffer.alloc(30);
@@ -260,10 +261,22 @@ const KOSDAQ_DAILY_ROWS = [
  */
 function seedCorporateActionCoverageOnRegistration(container: Container): void {
   const years = Array.from({ length: 36 }, (_, index) => 2000 + index);
+  const raw = new SqliteDartRawSnapshotStore(container.database.db);
   const originalAddSymbol = container.symbolService.addSymbol.bind(container.symbolService);
   container.symbolService.addSymbol = (code, market, name = null, standardCode = null) => {
     const summary = originalAddSymbol(code, market, name, standardCode);
-    container.actionCoverageStore.addCoveredYears(code, years, container.clock.now());
+    container.database.db.transaction(() => {
+      // 완료된 자본변동 자료는 공유 주식수 원문도 보유한 정상 무자료로 구성한다.
+      for (const businessYear of years) {
+        for (const reportCode of ['11013', '11012', '11014', '11011'] as const) {
+          for (const endpoint of ['SHARE_STATUS', 'ISSUANCE_STATUS'] as const) {
+            const key = {symbol:code, businessYear, reportCode, endpoint, fsDiv:'NONE' as const};
+            if (raw.get(key) === null) raw.put(key, {status:'013',message:'조회된 데이타가 없습니다.'}, container.clock.now());
+          }
+        }
+      }
+      container.actionCoverageStore.addCoveredYears(code, years, container.clock.now());
+    });
     return summary;
   };
 }
@@ -356,11 +369,11 @@ async function startFakeKrxServer(): Promise<void> {
   app.get('/api/fnlttSinglAcntAll.json', dartNoData);
   app.get('/api/stockTotqySttus.json', dartNoData);
   app.get('/api/irdsSttus.json', dartNoData);
-  // corp_code 매핑 zip — 빈 매핑을 준다. 재무 요청 종목은 매핑 실패 gap 하나로 남고
+  // corp_code 매핑 zip — 미사용 검증 종목만 담는다. 재무 요청 종목은 매핑 실패 gap 하나로 남고
   // (dart-fact-source.ts fetchFinancials) 수집 자체는 정상 완주한다.
   app.get('/api/corpCode.xml', async (_request, reply) => {
     reply.header('content-type', 'application/zip');
-    return emptyCorpCodeZip();
+    return fixtureCorpCodeZip();
   });
 
   await app.listen({ host: '127.0.0.1', port: KRX_FAKE_PORT });
@@ -423,6 +436,8 @@ async function main(): Promise<void> {
   const app = await buildServer(container);
   await app.listen({ host: config.bindAddress, port: config.port });
   container.jobOrchestrator.start();
+  // 운영 진입점과 동일하게 서버 계산 실행기도 시작한다.
+  container.agentCoordinator.start();
   console.log(`e2e server ready on http://127.0.0.1:${config.port}`);
 }
 

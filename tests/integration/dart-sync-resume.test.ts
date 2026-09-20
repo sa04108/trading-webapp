@@ -1,3 +1,6 @@
+import { DartFilingDiscovery, type FilingPage } from '../../src/server/modules/facts/application/dart-filing-discovery.js';
+import { SqliteDartPendingFilingStore } from '../../src/server/modules/facts/infrastructure/dart/dart-pending-filing-store.js';
+import { SqliteProviderRequestPolicy } from '../../src/server/shared/provider-request-policy.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,38 +23,53 @@ const REQUEST = {
 function setup(database: DatabaseHandle, now: number, corrected = false) {
   const calls: string[] = [];
   const clock = { now: () => now };
-  const source = createDartFactSource({ baseUrl: 'https://dart.test', apiKey: 'test' }, LOGGER, {
-    clock,
-    rawSnapshots: new SqliteDartRawSnapshotStore(database.db),
-    corpCodeResolver: { resolve: async () => '00126380' },
-    sleep: async () => {},
-    fetchImpl: (async (url: string | URL) => {
+  const pending = new SqliteDartPendingFilingStore(database.sqlite);
+  const policy = new SqliteProviderRequestPolicy(database.sqlite, clock.now);
+  const fetchImpl = (async (url: string | URL) => {
       const parsed = new URL(String(url));
       const year = parsed.searchParams.get('bsns_year');
       const report = parsed.searchParams.get('reprt_code');
+      const isCorrection = corrected && year === '2016' && report === '11011';
       calls.push(`${parsed.pathname}:${year}:${report}`);
       if (parsed.pathname.endsWith('/list.json')) {
-        return Response.json({ status: '000', total_page: 1, list: corrected ? [{
+        return Response.json({ status: '000', total_page: 1, list: corrected && (parsed.searchParams.get('bgn_de') ?? '').replaceAll('-', '') <= '20260913' && (parsed.searchParams.get('end_de') ?? '99991231').replaceAll('-', '') >= '20260913' ? [{
           stock_code: '005930', report_nm: '사업보고서 (2016.12)',
           rcept_no: '20260913000001', rcept_dt: '20260913',
         }] : [] });
       }
       if (parsed.pathname.includes('fnlttSinglAcntAll')) {
         return Response.json({ status: '000', list: [{
-          rcept_no: corrected && year === '2016' ? '20260913000001' : `${year}0515000001`,
+          rcept_no: isCorrection ? '20260913000001' : `${year}0515000001`,
           reprt_code: report, bsns_year: year, sj_div: 'BS',
           account_id: 'ifrs-full_CurrentAssets', account_nm: '유동자산',
-          thstrm_amount: corrected && year === '2016' ? '2000' : '1000',
+          thstrm_amount: isCorrection ? '2000' : '1000',
         }] });
       }
+      if (isCorrection && parsed.pathname.includes('stockTotqySttus')) return Response.json({status:'000',list:[{
+        rcept_no:'20260913000001',se:'보통주',istc_totqy:'1000',now_to_isu_stock_totqy:'1000',
+      }]});
+      if (isCorrection && parsed.pathname.includes('irdsSttus')) return Response.json({status:'000',list:[{
+        rcept_no:'20260913000001',isu_dcrs_de:'2016-12-20',isu_dcrs_stle:'유상증자',isu_dcrs_stock_knd:'보통주',isu_dcrs_qy:'100',
+      }]});
       return Response.json({ status: '013', message: '조회된 데이터가 없습니다' });
-    }) as typeof fetch,
+    }) as typeof fetch;
+  const source = createDartFactSource({ baseUrl: 'https://dart.test', apiKey: 'test' }, LOGGER, {
+    clock, rawSnapshots: new SqliteDartRawSnapshotStore(database.db), pendingFilings:pending, requestPolicy:policy,
+    corpCodeResolver: { resolve: async () => '00126380' }, sleep: async () => {}, fetchImpl,
+  });
+  const discovery = () => new DartFilingDiscovery({sqlite:database.sqlite,logger:LOGGER,now:clock.now,
+    onPageStored:async()=>{pending.reconcileDiscoveredFilings();},
+    fetchPage:async(from,to,page,beforeAttempt)=>{
+      beforeAttempt();
+      const query=new URLSearchParams({bgn_de:from,end_de:to,page_no:String(page)});
+      return await (await fetchImpl(`https://dart.test/api/list.json?${query}`)).json() as FilingPage;
+    },
   });
   const facts = new SqliteFactRepository(database.db);
   const coverage = new SqliteFactCoverageStore(database.db);
   const actions = new SqliteCorporateActionCoverageStore(database.db);
   return {
-    calls, facts, coverage, actions,
+    calls, facts, coverage, actions, pending, policy, discovery,
     service: new FactSyncService(source, facts, LOGGER, { bumpVersion() {} }, clock, coverage, actions),
   };
 }
@@ -123,7 +141,7 @@ describe('DART 수집 중단 후 SQLite 재개', () => {
     }
   });
 
-  it('최신성을 확인할 수 없는 90일 이전의 미완료 원문은 강제로 갱신한다', async () => {
+  it('91일 지난 미완료 원문도 재사용하고 실제 누락된 요청만 이어받는다', async () => {
     const database = openDatabase(':memory:');
     try {
       seed(database);
@@ -132,16 +150,16 @@ describe('DART 수집 중단 후 SQLite 재개', () => {
         beforeDartRequest: () => first.calls.length >= 7 ? 'PAUSE_DAILY_QUOTA' : 'CONTINUE',
       });
       const resumed = setup(database, START + 91 * 86_400_000);
-      expect(resumed.service.planFinancialSync(['005930'], 2016, 2017).calls).toBe(28);
+      expect(resumed.service.planFinancialSync(['005930'], 2016, 2017).calls).toBe(21);
       expect((await resumed.service.sync(REQUEST)).stopReason).toBeNull();
-      expect(resumed.calls).toHaveLength(28);
-      expect(resumed.calls.filter((call) => first.calls.includes(call))).toHaveLength(7);
+      expect(resumed.calls).toHaveLength(21);
+      expect(resumed.calls.filter((call) => first.calls.includes(call))).toHaveLength(0);
     } finally {
       database.close();
     }
   });
 
-  it('재개 사이 새 정정공시가 생기면 완료 연도도 갱신하고 접수번호를 닫는다', async () => {
+  it('일일 발견과 승인 이후 정정 보고서의 endpoint만 갱신하고 재시작은 모두 재사용한다', async () => {
     const database = openDatabase(':memory:');
     try {
       seed(database);
@@ -149,20 +167,38 @@ describe('DART 수집 중단 후 SQLite 재개', () => {
       await first.service.sync(REQUEST, {
         beforeDartRequest: () => first.calls.length >= 20 ? 'PAUSE_DAILY_QUOTA' : 'CONTINUE',
       });
-      const resumed = setup(database, START + 86_400_000, true);
+      const resumed = setup(database, START + 2 * 86_400_000, true);
       expect((await resumed.service.sync(REQUEST)).stopReason).toBeNull();
-      expect(resumed.calls.some((call) => call.includes('fnlttSinglAcntAll.json:2016:'))).toBe(true);
-      const facts = await resumed.facts.getFacts({ scope: 'SYMBOL' });
-      expect(facts.filter((fact) => fact.periodKey.startsWith('2016')).every((fact) => fact.value === 2000)).toBe(true);
-      expect(resumed.coverage.getProcessedFilingReceiptNos(['20260913000001']).size).toBe(1);
-      const next = setup(database, START + 86_400_000, true);
-      await next.service.sync(REQUEST);
-      expect(next.calls.every((call) => call.includes('/list.json'))).toBe(true);
-      const actions = setup(database, START + 86_400_000, true);
-      await actions.service.syncCorporateActions(REQUEST);
-      expect(actions.calls.every((call) => call.includes('/list.json'))).toBe(true);
-    } finally {
-      database.close();
-    }
+      expect(resumed.calls).toHaveLength(8);
+      expect(resumed.calls.every((call)=>call.includes(':2017:'))).toBe(true);
+      resumed.calls.length=0;
+      await resumed.discovery().tick();
+      expect(resumed.calls).toEqual(['/api/list.json:null:null']);
+      expect(resumed.pending.reconcileDiscoveredFilings()).toEqual([{symbol:'005930',year:2016}]);
+      resumed.calls.length=0;
+      const correction={...REQUEST,toYear:2016,mode:'FULL' as const};
+      await expect(resumed.service.sync(correction)).rejects.toThrow(/SOURCE_CHANGE_CONFIRMED/);
+      expect(resumed.calls).toEqual([]);
+      const blocked=database.sqlite.prepare("SELECT fingerprint FROM provider_request_plans WHERE status='BLOCKED'").all() as {fingerprint:string}[];
+      expect(blocked).toHaveLength(1);
+      expect(resumed.policy.decide(blocked[0]!.fingerprint,true)).toBe(true);
+      expect((await resumed.service.sync(correction)).stopReason).toBeNull();
+      expect(resumed.calls.sort()).toEqual([
+        '/api/fnlttSinglAcntAll.json:2016:11011',
+        '/api/irdsSttus.json:2016:11011',
+        '/api/stockTotqySttus.json:2016:11011',
+      ]);
+      resumed.pending.markNormalized('005930',2016);
+      expect(database.sqlite.prepare('SELECT * FROM provider_input_issues').all()).toEqual([]);
+      expect(database.sqlite.prepare("SELECT endpoint FROM dart_filing_endpoint_checkpoints WHERE receipt_no='20260913000001' AND status='APPLIED'").all()).toHaveLength(3);
+      const facts=await resumed.facts.getFacts({scope:'SYMBOL'});
+      expect(facts.find((fact)=>fact.field==='CURRENT_ASSETS' && fact.periodKey==='2016Q4')?.value).toBe(2000);
+      expect(facts.filter((fact)=>fact.field==='CURRENT_ASSETS' && fact.periodKey.startsWith('2016') && fact.periodKey!=='2016Q4').every((fact)=>fact.value===1000)).toBe(true);
+      const restarted=setup(database,START + 2 * 86_400_000,true);
+      await restarted.discovery().tick();
+      await restarted.service.sync(REQUEST);
+      await restarted.service.syncCorporateActions(REQUEST);
+      expect(restarted.calls).toEqual([]);
+    } finally { database.close(); }
   });
 });

@@ -6,7 +6,7 @@ import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
 } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
-import { symbolMasterMarketCaps } from '../../src/server/shared/db/schema.js';
+import { symbolMasterMarketCaps, dailySelectionMetrics, dailySelectionMetricCoverage } from '../../src/server/shared/db/schema.js';
 import type { TestApp } from '../helpers/test-app.js';
 import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
 import {
@@ -50,20 +50,18 @@ async function ingestSingleSymbolUniverse(ctx: Ctx, date: string, basDd: string)
 }
 
 describe('SymbolMasterService.getMarketCapsAt', () => {
-  it('캐시 미스: KRX 를 2회(KOSPI·KOSDAQ) 조회해 맵을 반환하고 캐시 테이블에 저장한다', async ({ krxApps }) => {
+  it('기존 선정 지표의 시총은 원문 캐시 없이 HTTP 0회로 재사용한다', async ({ krxApps }) => {
     const ctx = await setup(krxApps);
     await ingestSingleSymbolUniverse(ctx, '2023-01-02', '20230102');
 
-    // 일별 거래 응답을 다시 세팅한다 — ingestDate 가 이미 같은 basDd 를 한 번 조회했으므로
-    // 이번 호출이 정말 새로 조회하는지는 요청 수 델타로 확인한다.
+    // 원문 저장소를 주입하지 않은 legacy 구성에서도 이미 저장된 지표를 재사용한다.
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     const before = ctx.fake.requests.length;
 
     const marketCaps = await ctx.svc.getMarketCapsAt('2023-01-02');
 
     const daily = ctx.fake.requests.slice(before);
-    expect(daily).toHaveLength(2);
-    expect(daily.map((r) => r.path).sort()).toEqual(['ksq_bydd_trd', 'stk_bydd_trd']);
+    expect(daily).toHaveLength(0);
     expect(marketCaps.get('KR7005930003')).toBe('350000000000000');
     expect(marketCaps.size).toBe(1);
 
@@ -72,9 +70,19 @@ describe('SymbolMasterService.getMarketCapsAt', () => {
       .from(symbolMasterMarketCaps)
       .where(eq(symbolMasterMarketCaps.date, '2023-01-02'))
       .all();
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ standardCode: 'KR7005930003', marketCapKrw: '350000000000000' });
+    expect(rows).toHaveLength(0);
 
+  });
+
+  it('기존 날짜의 필수 지표와 원문이 모두 없으면 미승인 HTTP를 차단한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
+    await ingestSingleSymbolUniverse(ctx, '2023-01-02', '20230102');
+    ctx.t.container.database.db.delete(dailySelectionMetrics).run();
+    ctx.t.container.database.db.delete(dailySelectionMetricCoverage).run();
+    const before = ctx.fake.requests.length;
+    await expect(ctx.svc.getMarketCapsAt('2023-01-02')).rejects.toThrow('BLOCKED_SOURCE_REQUIREMENT');
+    await expect(ctx.svc.ensureSelectionMetrics(['2023-01-02'])).rejects.toThrow('BLOCKED_SOURCE_REQUIREMENT');
+    expect(ctx.fake.requests.length).toBe(before);
   });
 
   it('캐시 히트: 재호출해도 fake 서버 요청 수가 늘지 않는다', async ({ krxApps }) => {
@@ -126,10 +134,8 @@ describe('SymbolMasterService.getMarketCapsAt', () => {
 
   });
 
-  it('캐시 미스에 같은 date 로 동시 호출 2회 — KRX 는 1회분만 조회하고 같은 Promise 를 반환하며 UNIQUE 위반 없이 둘 다 성공한다', async ({ krxApps }) => {
-    // inflightIngests 와 같은 이유의 dedup 가드(Finding 3, T6 최종 리뷰)가 없으면
-    // 두 호출이 각각 KRX 를 부르고 각각 writeMarketCaps 로 같은 (date, standardCode)
-    // 행을 넣으려다 idx_smmc_date_code UNIQUE 위반으로 하나가 죽는다.
+  it('같은 날짜 동시 조회는 정상 로컬 값을 공유하며 HTTP 요청을 만들지 않는다', async ({ krxApps }) => {
+    // 동시 호출도 같은 로컬 조회 결과를 공유한다.
     const ctx = await setup(krxApps);
     await ingestSingleSymbolUniverse(ctx, '2023-01-02', '20230102');
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
@@ -137,8 +143,7 @@ describe('SymbolMasterService.getMarketCapsAt', () => {
 
     const p1 = ctx.svc.getMarketCapsAt('2023-01-02');
     const p2 = ctx.svc.getMarketCapsAt('2023-01-02');
-    // 가드가 캐시 미스 시점에 바로 같은 Promise 를 반환한다 — 두 번째 호출이 새로
-    // 실행되지 않고 진행 중인 첫 호출에 합류했다는 뜻이다.
+    // 두 번째 호출은 진행 중인 로컬 조회에 합류한다.
     expect(p2).toBe(p1);
 
     const [marketCaps1, marketCaps2] = await Promise.all([p1, p2]);
@@ -146,15 +151,14 @@ describe('SymbolMasterService.getMarketCapsAt', () => {
     expect(marketCaps1.get('KR7005930003')).toBe('350000000000000');
 
     const daily = ctx.fake.requests.slice(before);
-    expect(daily).toHaveLength(2);
-    expect(daily.map((r) => r.path).sort()).toEqual(['ksq_bydd_trd', 'stk_bydd_trd']);
+    expect(daily).toHaveLength(0);
 
     const rows = ctx.t.container.database.db
       .select()
       .from(symbolMasterMarketCaps)
       .where(eq(symbolMasterMarketCaps.date, '2023-01-02'))
       .all();
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(0);
 
   });
 });

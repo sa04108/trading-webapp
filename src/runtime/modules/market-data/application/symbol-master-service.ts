@@ -68,7 +68,29 @@ function storedTradingDateIsWeekday() {
 export interface SymbolMasterEventRow extends SymbolMasterEventDraft {
   readonly id: string;
 }
-type SymbolMasterCoverageRow = typeof symbolMasterCoverage.$inferSelect;
+interface CompletedRange {
+  startDate: string;
+  endDate: string;
+  syncedAtMs: number;
+}
+
+/** 실행 버전과 무관하게 완료 구간만 합치고 실제 미수집 날짜는 남긴다. */
+function unionCompletedRanges(ranges: readonly CompletedRange[]): CompletedRange[] {
+  const merged: CompletedRange[] = [];
+  for (const range of [...ranges].sort((a, b) =>
+    a.startDate.localeCompare(b.startDate),
+  )) {
+    const previous = merged.at(-1);
+    if (previous && range.startDate <= addCalendarDays(previous.endDate, 1)) {
+      previous.endDate =
+        previous.endDate > range.endDate ? previous.endDate : range.endDate;
+      previous.syncedAtMs = Math.max(previous.syncedAtMs, range.syncedAtMs);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
 type SymbolMasterVersionRow = typeof symbolMasterVersions.$inferSelect;
 type IdentityVersionWithId = KnownSymbolIdentityVersion & {
   readonly id: number;
@@ -286,17 +308,9 @@ export class SymbolMasterService {
    * 그 안에서 가장 최근 거래일은 실제로 date 까지 하루도 빠짐없이 확인됐다는 뜻이다.
    */
   effectiveTradingDateWithinCoverage(date: string): string | undefined {
-    const covering = this.deps.db
-      .select({ startDate: symbolMasterCoverage.startDate })
-      .from(symbolMasterCoverage)
-      .where(
-        and(
-          eq(symbolMasterCoverage.collectionVersion, this.collectionVersion),
-          lte(symbolMasterCoverage.startDate, date),
-          gte(symbolMasterCoverage.endDate, date),
-        ),
-      )
-      .get();
+    const covering = this.coverageRanges().find(
+      (range) => range.startDate <= date && range.endDate >= date,
+    );
     if (covering === undefined) return undefined;
 
     const row = this.deps.db
@@ -317,6 +331,19 @@ export class SymbolMasterService {
 
   private async ingestDateUnguarded(date: string): Promise<IngestResult> {
     if (this.isCovered(date)) {
+      if (this.hasStoredTradingDay(date)) {
+        const universe = this.getUniverseAsOf(date);
+        const bars = this.deps.db.select().from(krxDailyBars).where(eq(krxDailyBars.date, date)).all();
+        const nonTrading = new Set(this.deps.db.select().from(krxNonTradingDays)
+          .where(eq(krxNonTradingDays.date, date)).all().map((row) => row.shortCode));
+        const valid = new Set(bars.filter((row) => isValidCandle({
+          ...row, symbol: row.shortCode, market: "KR", timeframe: "1d", tsMs: Date.parse(`${date}T00:00:00Z`),
+        })).map((row) => row.shortCode));
+        const targets = this.normalizationTargets(date, universe);
+        if (targets.some((entry) => !valid.has(entry.shortCode) && !nonTrading.has(entry.shortCode))) {
+          await this.replayNormalizedDate(date, universe);
+        }
+      }
       return { kind: "ALREADY_COVERED" };
     }
 
@@ -618,7 +645,6 @@ export class SymbolMasterService {
         .from(symbolMasterCoverage)
         .where(
           and(
-            eq(symbolMasterCoverage.collectionVersion, this.collectionVersion),
             lte(symbolMasterCoverage.startDate, date),
             gte(symbolMasterCoverage.endDate, date),
           ),
@@ -920,28 +946,45 @@ export class SymbolMasterService {
   }
 
   /**
-   * 이미 symbol master coverage 가 있는 날짜에서 거래대금이 빈 경우만 KRX 일별
-   * 응답을 다시 받아 선정 지표를 보강한다. 기존 일봉·legacy 시총 캐시는 건드리지 않는다.
+   * 이미 수집한 날짜의 지표는 정상 로컬 값이나 저장 원문으로 보강한다.
+   * 원문까지 없으면 필수 필드 결손으로 분류해 승인 없이 재수집하지 않는다.
    */
   async ensureSelectionMetrics(dates: readonly string[]): Promise<void> {
     const requestedDates = [...new Set(dates)];
     if (requestedDates.length === 0) return;
 
-    this.backfillSelectionMetricVolume(requestedDates);
     const repository = new SelectionMetricRepository(this.deps.db, {
       collectionVersion: this.collectionVersion,
     });
-    for (const date of repository.findMissingTradingValueDates(
-      requestedDates,
-    )) {
+    // volume 보강이 손실된 행을 부분 행으로 만들기 전에 결손을 기록한다.
+    const resolvableDates = requestedDates.filter((date) => this.canResolveUniverseAsOf(date));
+    const missingBeforeBackfill = new Set(resolvableDates.filter((date) => {
       const universe = this.getUniverseAsOf(date);
+      const codes = this.normalizationTargets(date, universe).map((entry) => entry.standardCode);
+      const existing = repository.getAt(date, codes);
+      return codes.some((code) => !existing.has(code));
+    }));
+    this.backfillSelectionMetricVolume(resolvableDates);
+    const missingMarkers = new Set(repository.findMissingTradingValueDates(requestedDates));
+    for (const date of requestedDates) {
+      // 완료 표식만 재사용하는 경로는 거래일 앵커가 없어도 새 유니버스를 해석하지 않는다.
+      if (!missingMarkers.has(date) && !missingBeforeBackfill.has(date)) continue;
+      if (this.isCovered(date) && !this.hasStoredTradingDay(date)) continue;
+      const universe = this.getUniverseAsOf(date);
+      const existing = repository.getAt(date, [...universe.keys()]);
+      const missingRows = missingBeforeBackfill.has(date) || [...universe.keys()].some((code) => !existing.has(code));
+      if (!missingMarkers.has(date) && !missingRows) continue;
+      if (universe.size > 0 && [...universe.keys()].every((code) => existing.get(code)?.tradingValueKrw != null)) continue;
+      if (this.isCovered(date) && !this.hasStoredTradingDay(date)) continue;
       const kospiTrades = await this.deps.source.fetchDailyTrades(
         "KOSPI",
         date,
+        { requireExisting: this.isCovered(date) },
       );
       const kosdaqTrades = await this.deps.source.fetchDailyTrades(
         "KOSDAQ",
         date,
+        { requireExisting: this.isCovered(date) },
       );
       this.deps.db.transaction((tx) => {
         this.writeSelectionMetrics(
@@ -950,9 +993,39 @@ export class SymbolMasterService {
           universe,
           kospiTrades,
           kosdaqTrades,
+          missingMarkers.has(date),
         );
       });
     }
+  }
+
+  /** 다른 정규화 값이 남은 종목은 관측된 대상으로 보고, 전부 유실됐으면 원문을 확인한다. */
+  private normalizationTargets(date: string, universe: UniverseState): SymbolMasterEntry[] {
+    const shorts = new Set([
+      ...this.deps.db.select({ shortCode: krxDailyBars.shortCode }).from(krxDailyBars)
+        .where(eq(krxDailyBars.date, date)).all(),
+      ...this.deps.db.select({ shortCode: krxNonTradingDays.shortCode }).from(krxNonTradingDays)
+        .where(eq(krxNonTradingDays.date, date)).all(),
+    ].map((row) => row.shortCode));
+    const standards = new Set([
+      ...this.deps.db.select({ standardCode: dailySelectionMetrics.standardCode }).from(dailySelectionMetrics)
+        .where(eq(dailySelectionMetrics.date, date)).all(),
+      ...this.deps.db.select({ standardCode: symbolMasterMarketCaps.standardCode }).from(symbolMasterMarketCaps)
+        .where(eq(symbolMasterMarketCaps.date, date)).all(),
+    ].map((row) => row.standardCode));
+    const entries = [...universe.values()];
+    if (shorts.size === 0 && standards.size === 0) return entries;
+    return entries.filter((entry) => shorts.has(entry.shortCode) || standards.has(entry.standardCode));
+  }
+
+  /** 완료 표식과 SCD는 보존하고 기존 원문으로 손실된 정규화 행만 재구성한다. */
+  private async replayNormalizedDate(date: string, universe: UniverseState): Promise<void> {
+    const kospiTrades = await this.deps.source.fetchDailyTrades("KOSPI", date, { requireExisting: true });
+    const kosdaqTrades = await this.deps.source.fetchDailyTrades("KOSDAQ", date, { requireExisting: true });
+    this.deps.db.transaction((tx) => {
+      this.writeDailyBars(tx, date, kospiTrades, kosdaqTrades);
+      this.writeSelectionMetrics(tx, date, universe, kospiTrades, kosdaqTrades, false);
+    });
   }
 
   /**
@@ -1051,10 +1124,11 @@ export class SymbolMasterService {
       standardCodeByShortCode.set(entry.shortCode, entry.standardCode);
     }
 
-    const kospiTrades = await this.deps.source.fetchDailyTrades("KOSPI", date);
+    const kospiTrades = await this.deps.source.fetchDailyTrades("KOSPI", date, { requireExisting: this.isCovered(date) });
     const kosdaqTrades = await this.deps.source.fetchDailyTrades(
       "KOSDAQ",
       date,
+      { requireExisting: this.isCovered(date) },
     );
 
     const marketCaps = new Map<string, string>();
@@ -1086,9 +1160,7 @@ export class SymbolMasterService {
   }
 
   /**
-   * date 캐시 행이 하나라도 있으면 히트로 본다. 휴장일 등으로 결과가 0건인 날은
-   * 매번 KRX 를 재조회하게 되지만, 그런 날짜는 애초에 커버 밖으로 걸러지는 경우가
-   * 대부분이라 수용한다.
+   * 기존 시총과 선정 지표를 우선 재사용한다. 완료된 정상 0건도 다시 받지 않는다.
    */
   private readCachedMarketCaps(
     date: string,
@@ -1101,8 +1173,34 @@ export class SymbolMasterService {
       .from(symbolMasterMarketCaps)
       .where(eq(symbolMasterMarketCaps.date, date))
       .all();
-    if (rows.length === 0) return undefined;
-    return new Map(rows.map((row) => [row.standardCode, row.marketCapKrw]));
+    const metrics = this.deps.db.select().from(dailySelectionMetrics)
+      .where(eq(dailySelectionMetrics.date, date)).all();
+    const known = metrics.filter((row) => row.marketCapKrw !== null);
+    const completed = this.deps.db.select().from(dailySelectionMetricCoverage)
+      .where(eq(dailySelectionMetricCoverage.date, date)).get();
+    const universe = this.getUniverseAsOf(date);
+    const cached = new Map(rows.map((row) => [row.standardCode, row.marketCapKrw]));
+    for (const row of known) if (!cached.has(row.standardCode)) cached.set(row.standardCode, row.marketCapKrw!);
+    // 마스터에는 일별 응답에 원래 없던 종목도 있다. 실제 관측 종목의 결손만 복구한다.
+    const observed = new Set([
+      ...this.deps.db.select({ shortCode: krxDailyBars.shortCode }).from(krxDailyBars)
+        .where(eq(krxDailyBars.date, date)).all(),
+      ...this.deps.db.select({ shortCode: krxNonTradingDays.shortCode }).from(krxNonTradingDays)
+        .where(eq(krxNonTradingDays.date, date)).all(),
+    ].map((row) => row.shortCode));
+    const expectedCodes = [...universe.values()].filter((entry) => observed.has(entry.shortCode))
+      .map((entry) => entry.standardCode);
+    const valuesComplete = cached.size > 0 && expectedCodes.every((code) => cached.has(code));
+    const metricsComplete = metrics.length > 0 && expectedCodes.every((code) =>
+      cached.has(code) || metrics.some((row) => row.standardCode === code));
+    if (universe.size === 0 || valuesComplete || (completed && metricsComplete) || (this.isCovered(date) && !this.hasStoredTradingDay(date)))
+      return cached;
+    return undefined;
+  }
+
+  private hasStoredTradingDay(date: string): boolean {
+    return this.deps.db.select().from(symbolMasterTradingDays)
+      .where(eq(symbolMasterTradingDays.date, date)).get() !== undefined;
   }
 
   /** SQLite 바인딩 변수 한도(999)를 피하려 500개 단위로 나눠 넣는다. */
@@ -1134,16 +1232,17 @@ export class SymbolMasterService {
     endDate: string;
     syncedAtMs: number;
   }[] {
-    return this.deps.db
-      .select({
-        startDate: symbolMasterCoverage.startDate,
-        endDate: symbolMasterCoverage.endDate,
-        syncedAtMs: symbolMasterCoverage.syncedAtMs,
-      })
-      .from(symbolMasterCoverage)
-      .where(eq(symbolMasterCoverage.collectionVersion, this.collectionVersion))
-      .orderBy(asc(symbolMasterCoverage.startDate))
-      .all();
+    return unionCompletedRanges(
+      this.deps.db
+        .select({
+          startDate: symbolMasterCoverage.startDate,
+          endDate: symbolMasterCoverage.endDate,
+          syncedAtMs: symbolMasterCoverage.syncedAtMs,
+        })
+        .from(symbolMasterCoverage)
+        .orderBy(asc(symbolMasterCoverage.startDate))
+        .all(),
+    );
   }
 
   /**
@@ -1221,8 +1320,8 @@ export class SymbolMasterService {
    * 위 둘 중 어디에도 안 걸리는데 `isValidCandle` 이 거부하는 행(high < low 등)은
    * 진짜 파싱 버그다. `invalidCount` 로 따로 센다.
    *
-   * 같은 수집 버전은 coverage 게이트에서 재조회를 생략한다. 새 수집 버전으로
-   * 다시 받은 유효 응답은 기존 행에 반영하되, 이번 응답에 없는 원문 기록은 보존한다.
+   * 완료된 날짜는 실행 버전과 무관하게 coverage 게이트에서 재조회를 생략한다.
+   * 허용된 갱신 응답은 기존 행에 반영하되, 이번 응답에 없는 원문 기록은 보존한다.
    */
   private writeDailyBars(
     tx: AppDatabase,
@@ -1365,6 +1464,7 @@ export class SymbolMasterService {
     universe: UniverseState,
     kospiTrades: readonly KrxDailyTradeRow[],
     kosdaqTrades: readonly KrxDailyTradeRow[],
+    recordCoverage = true,
   ): void {
     const standardCodeByShortCode = new Map<string, string>();
     for (const entry of universe.values()) {
@@ -1399,6 +1499,7 @@ export class SymbolMasterService {
         })
         .run();
     }
+    if (!recordCoverage) return;
     tx.insert(dailySelectionMetricCoverage)
       .values({
         date,
@@ -1422,7 +1523,6 @@ export class SymbolMasterService {
       .from(symbolMasterCoverage)
       .where(
         and(
-          eq(symbolMasterCoverage.collectionVersion, this.collectionVersion),
           lte(symbolMasterCoverage.startDate, date),
           gte(symbolMasterCoverage.endDate, date),
         ),
@@ -1508,24 +1608,13 @@ export class SymbolMasterService {
    * 행이 없는 날짜가 "거래불가 종목이 없었다" 인지 "아직 모른다" 인지를 이 메서드로만
    * 가른다. 이 구분이 없으면 결과 경고가 백필 전에도 "반영한다" 고 거짓말한다.
    *
-   * 조각을 읽는 쪽에서 이어 붙이지 않는다. 쓰는 쪽(mergeNonTradingCoverage)이 맞닿거나
-   * 겹치는 구간을 그때그때 합치므로, 저장된 구간들은 항상 서로 떨어진 최대 구간이다.
-   * 하루씩 들어오는 수집 경로는 읽기 쪽 이어붙이기만으로는 10년치에 행 수천 개를 쌓게
-   * 되는데, 쓰기 쪽에서 합치면 그 문제까지 함께 사라진다.
+   * 과거 실행 버전별로 나뉜 구간도 합집합으로 읽는다. 쓰기에서도 연결된 구간을 합쳐
+   * 완료 표식이 날짜별로 계속 쌓이지 않도록 한다.
    */
   isNonTradingRangeCovered(from: string, to: string): boolean {
-    const row = this.deps.db
-      .select({ id: krxNonTradingCoverage.id })
-      .from(krxNonTradingCoverage)
-      .where(
-        and(
-          eq(krxNonTradingCoverage.collectionVersion, this.collectionVersion),
-          lte(krxNonTradingCoverage.startDate, from),
-          gte(krxNonTradingCoverage.endDate, to),
-        ),
-      )
-      .get();
-    return row !== undefined;
+    return unionCompletedRanges(
+      this.deps.db.select().from(krxNonTradingCoverage).all(),
+    ).some((range) => range.startDate <= from && range.endDate >= to);
   }
 
   /**
@@ -1550,9 +1639,10 @@ export class SymbolMasterService {
     let dates = 0;
     let rows = 0;
     for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
+      if (this.isNonTradingRangeCovered(date, date)) continue;
       const byMarket: readonly [KrxMarket, readonly KrxDailyTradeRow[]][] = [
-        ["KOSPI", await this.deps.source.fetchDailyTrades("KOSPI", date)],
-        ["KOSDAQ", await this.deps.source.fetchDailyTrades("KOSDAQ", date)],
+        ["KOSPI", await this.deps.source.fetchDailyTrades("KOSPI", date, { requireExisting: this.isCovered(date) })],
+        ["KOSDAQ", await this.deps.source.fetchDailyTrades("KOSDAQ", date, { requireExisting: this.isCovered(date) })],
       ];
       const values: (typeof krxNonTradingDays.$inferInsert)[] = [];
       for (const [market, trades] of byMarket) {
@@ -1609,23 +1699,14 @@ export class SymbolMasterService {
     startDate: string,
     endDate: string,
   ): void {
-    // 하루 차이로 맞닿은 구간까지 합치려고 양쪽을 하루씩 넓혀 겹침을 본다
-    const touchStart = addCalendarDays(startDate, -1);
-    const touchEnd = addCalendarDays(endDate, 1);
-
-    let mergedStart = startDate;
-    let mergedEnd = endDate;
-    const ranges = tx
-      .select()
-      .from(krxNonTradingCoverage)
-      .where(
-        eq(krxNonTradingCoverage.collectionVersion, this.collectionVersion),
-      )
-      .all();
+    const ranges = tx.select().from(krxNonTradingCoverage).all();
+    const merged = unionCompletedRanges([
+      ...ranges,
+      { startDate, endDate, syncedAtMs: this.deps.clock.now() },
+    ]).find((range) => range.startDate <= startDate && range.endDate >= endDate)!;
     for (const range of ranges) {
-      if (range.endDate < touchStart || range.startDate > touchEnd) continue;
-      if (range.startDate < mergedStart) mergedStart = range.startDate;
-      if (range.endDate > mergedEnd) mergedEnd = range.endDate;
+      if (range.endDate < merged.startDate || range.startDate > merged.endDate)
+        continue;
       tx.delete(krxNonTradingCoverage)
         .where(eq(krxNonTradingCoverage.id, range.id))
         .run();
@@ -1633,8 +1714,8 @@ export class SymbolMasterService {
 
     tx.insert(krxNonTradingCoverage)
       .values({
-        startDate: mergedStart,
-        endDate: mergedEnd,
+        startDate: merged.startDate,
+        endDate: merged.endDate,
         collectionVersion: this.collectionVersion,
         syncedAtMs: this.deps.clock.now(),
       })
@@ -2187,21 +2268,14 @@ export class SymbolMasterService {
    * 인접 구간이 없으면 date 하루짜리 구간을 새로 만든다.
    */
   private mergeCoverage(tx: AppDatabase, date: string): void {
-    const before = addCalendarDays(date, -1);
-    const after = addCalendarDays(date, 1);
-    const ranges = tx
-      .select()
-      .from(symbolMasterCoverage)
-      .where(eq(symbolMasterCoverage.collectionVersion, this.collectionVersion))
-      .all();
-    const beforeRange = ranges.find((range) => range.endDate === before);
-    const afterRange = ranges.find((range) => range.startDate === after);
-
-    const toRemove: SymbolMasterCoverageRow[] = [
-      beforeRange,
-      afterRange,
-    ].filter((range): range is SymbolMasterCoverageRow => range !== undefined);
-    for (const range of toRemove) {
+    const ranges = tx.select().from(symbolMasterCoverage).all();
+    const merged = unionCompletedRanges([
+      ...ranges,
+      { startDate: date, endDate: date, syncedAtMs: this.deps.clock.now() },
+    ]).find((range) => range.startDate <= date && range.endDate >= date)!;
+    for (const range of ranges) {
+      if (range.endDate < merged.startDate || range.startDate > merged.endDate)
+        continue;
       tx.delete(symbolMasterCoverage)
         .where(eq(symbolMasterCoverage.id, range.id))
         .run();
@@ -2210,8 +2284,8 @@ export class SymbolMasterService {
     tx.insert(symbolMasterCoverage)
       .values({
         collectionVersion: this.collectionVersion,
-        startDate: beforeRange?.startDate ?? date,
-        endDate: afterRange?.endDate ?? date,
+        startDate: merged.startDate,
+        endDate: merged.endDate,
         syncedAtMs: this.deps.clock.now(),
       })
       .run();

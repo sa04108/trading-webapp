@@ -1,3 +1,12 @@
+import { createOfficialKrxTradingCalendar } from "../../market-data/infrastructure/krx/krx-trading-calendar.js";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { SqliteDartPendingFilingStore } from "../../facts/infrastructure/dart/dart-pending-filing-store.js";
+import { ProviderRequestBlockedError } from "../../../shared/provider-request-policy.js";
+import { SqliteProviderRequestPolicy } from "../../../shared/provider-request-policy.js";
+import { SqliteKrxRawSnapshotStore } from "../../market-data/infrastructure/krx/sqlite-krx-raw-snapshot-store.js";
+import { SqliteDartCorpCodeSnapshotStore } from "../../facts/infrastructure/dart/sqlite-dart-corp-code-snapshot-store.js";
+import { DartFilingDiscovery, type FilingPage } from "../../facts/application/dart-filing-discovery.js";
+import { RestClient } from "../../../shared/rest-client.js";
 import type { AppConfig } from "../../../bootstrap/config.js";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import type { Clock } from "../../../../runtime/shared/clock.js";
@@ -24,6 +33,7 @@ import {
 
 type CollectionConfig = Pick<
   AppConfig,
+  | "dartDiscoveryHourKst"
   | "dartApiKey"
   | "dartBaseUrl"
   | "krxApiKey"
@@ -42,18 +52,33 @@ export function createAgentCollectionRuntime(input: {
   externalApiUsage: ExternalApiUsage;
 }) {
   const { database, config, clock, logger, auditLog, externalApiUsage } = input;
+  const collectionActivity = new AsyncLocalStorage<{ fetched: boolean }>();
+  const requestPolicy = new SqliteProviderRequestPolicy(database.sqlite, () => clock.now(), logger,
+    () => { const state = collectionActivity.getStore(); if (state) state.fetched = true; });
   const collectionVersion = readRuntimeVersions().collectionVersion;
   const symbolService = new SymbolService(database.db, clock, auditLog);
 
   const factRepository = new SqliteFactRepository(database.db);
   const dartRawSnapshots = new SqliteDartRawSnapshotStore(database.db);
+  const pendingFilings = new SqliteDartPendingFilingStore(database.sqlite, config.dartBaseUrl);
   const factSource = createDartFactSource(
     config.dartApiKey
       ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey }
       : null,
     logger,
     // 미래 보고서 생략(filableReportCount)이 sync 계획과 같은 시각을 봐야 한다
-    { clock, usage: externalApiUsage, rawSnapshots: dartRawSnapshots },
+    { clock, usage: externalApiUsage, rawSnapshots: dartRawSnapshots, requestPolicy, pendingFilings,
+      corpCodeSnapshots: new SqliteDartCorpCodeSnapshotStore(database.sqlite, config.dartBaseUrl,
+        (symbol, previousCorp, nextCorp) => {
+          database.sqlite.prepare(`INSERT INTO provider_input_issues
+            (id, symbol, business_year, report_code, reason, evidence)
+            VALUES (?, ?, NULL, NULL, 'IDENTITY_CHANGED', ?)
+            ON CONFLICT(id) DO UPDATE SET evidence = excluded.evidence
+            WHERE evidence <> excluded.evidence`).run(
+            `dart-identity:${symbol}`, symbol,
+            `DART 기업 식별자 변경: ${previousCorp} → ${nextCorp}`,
+          );
+        }) },
   );
   // 팩트도 백테스트 입력이다 — 캔들과 같은 버전 체인에 올린다 (§9.5).
   // SymbolService 를 통째로 넘기지 않고 좁은 포트(SymbolVersionBumper)로 받는다.
@@ -91,7 +116,8 @@ export function createAgentCollectionRuntime(input: {
       : null,
     clock,
     logger,
-    { usage: externalApiUsage },
+    { usage: externalApiUsage, requestPolicy, tradingCalendar: createOfficialKrxTradingCalendar(), rawNamespace: config.krxBaseUrl,
+      rawSnapshotStore: new SqliteKrxRawSnapshotStore(database.db) },
   );
   // 종목 마스터 (설계 2026-08-05-symbol-master-core).
   const symbolMasterService = new SymbolMasterService({
@@ -114,7 +140,59 @@ export function createAgentCollectionRuntime(input: {
     clock,
     logger,
   });
-  const collect = async (
+  let reconciliation: Promise<void> | null = null;
+  let reconciliationStopped = false;
+  const reconcileProviderFilings = (): Promise<void> => {
+    if (reconciliationStopped) return Promise.resolve();
+    if (reconciliation) return reconciliation;
+    reconciliation = (async () => {
+      for (const item of pendingFilings.reconcileDiscoveredFilings()) {
+        try {
+          const request = { symbols: [item.symbol], fromYear: item.year, toYear: item.year,
+            consolidated: true, mode: "FULL" as const };
+          const financial = await factSyncService.sync(request, { shouldStop: () => reconciliationStopped });
+          const actions = await factSyncService.syncCorporateActions(request, { shouldStop: () => reconciliationStopped });
+          if (financial.stopReason == null && actions.stopReason == null) {
+            pendingFilings.markNormalized(item.symbol, item.year);
+            const issue = database.sqlite.prepare("SELECT 1 FROM provider_input_issues WHERE symbol = ? AND (business_year IS NULL OR business_year = ?) LIMIT 1")
+              .get(item.symbol, item.year);
+            if (!issue) database.sqlite.prepare(`UPDATE agent_data_requests SET status = 'QUEUED', next_attempt_at_ms = 0
+              WHERE status = 'BLOCKED' AND error LIKE 'PENDING_PUBLICATION:%'
+              AND json_extract(request_json, '$.fromYear') <= ? AND json_extract(request_json, '$.toYear') >= ?
+              AND EXISTS (SELECT 1 FROM json_each(request_json, '$.symbols') WHERE value = ?)`)
+              .run(item.year, item.year, item.symbol);
+          }
+        } catch (error) {
+          logger.warn({ event: "provider.filing.pending", symbol: item.symbol, year: item.year,
+            blocked: error instanceof ProviderRequestBlockedError, err: error }, "공시 반영 대기");
+        }
+      }
+    })().catch((error: unknown) => {
+      logger.error({err:error}, "공시 반영 상태 재평가 실패");
+    }).finally(() => { reconciliation = null; });
+    return reconciliation;
+  };
+  const discoveryClient = new RestClient({ baseUrl: config.dartBaseUrl, logger });
+  const filingDiscovery = new DartFilingDiscovery({
+    sqlite: database.sqlite, logger, now: () => clock.now(), hourKst: config.dartDiscoveryHourKst, onPageStored: async () => { pendingFilings.reconcileDiscoveredFilings(); },
+    fetchPage: config.dartApiKey ? async (from, to, page, beforeAttempt) => {
+      const parameters = { bgn_de: from.replaceAll("-", ""), end_de: to.replaceAll("-", ""),
+        pblntf_ty: "A", page_no: String(page), page_count: "100" };
+      const query = new URLSearchParams({ ...parameters, crtfc_key: config.dartApiKey! });
+      const envelope = await discoveryClient.request<FilingPage>("dart-discovery", `/api/list.json?${query}`, {}, {
+        beforeAttempt: () => {
+          beforeAttempt();
+          if (externalApiUsage.quotaExceeded("DART", "daily")) throw new Error("DART 일일 한도 대기");
+          const callsUsed = externalApiUsage.recordCall("DART", "daily");
+          logger.info({ event: "provider.http", activity: "FILING_DISCOVERY", endpoint: "/api/list.json",
+            requestKey: parameters, callsUsed }, "일일 공시 목록 요청");
+        },
+      });
+      if (envelope.status === "020") externalApiUsage.reportQuotaExceeded("DART", "daily", "DART 일일 호출 한도 초과");
+      return envelope;
+    } : null,
+  });
+  const collectData = async (
     request: AgentDataRequest,
     shouldStop: () => boolean,
     onProgress: (progress: CollectionProgressReport) => void,
@@ -220,7 +298,18 @@ export function createAgentCollectionRuntime(input: {
         throw new Error(syncReport.failureMessage ?? "DART 수집 실패");
     }
   };
+  const collect = (request: AgentDataRequest, shouldStop: () => boolean,
+    report: (progress: CollectionProgressReport) => void): Promise<void> =>
+    collectionActivity.run({fetched:false}, () => collectData(request, shouldStop, (progress) => {
+      const activity = progress.activity.startsWith("COLLECTING_")
+        ? collectionActivity.getStore()?.fetched ? "SOURCE_FETCH" : "LOCAL_REPLAY" : progress.activity;
+      report({...progress,activity});
+    }));
   return {
+    requestPolicy,
+    filingDiscovery,
+    reconcileProviderFilings,
+    stopProviderReconciliation: async () => { reconciliationStopped = true; await reconciliation; },
     symbolService,
     factRepository,
     factCoverageStore,

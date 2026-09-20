@@ -1,4 +1,3 @@
-import { readRuntimeVersions } from "../../../shared/runtime-versions.js";
 import { and, eq, inArray } from "drizzle-orm";
 import type { AppDatabase } from "../../../shared/db/database.js";
 import {
@@ -35,15 +34,10 @@ const FULL_DATE_READ_THRESHOLD = 1_500;
 
 /** KRX 선정 지표의 bigint/text 변환을 이 저장소 경계에 가둔다. */
 export class SelectionMetricRepository {
-  private readonly collectionVersion: string;
-
   constructor(
     private readonly db: AppDatabase,
-    options?: { readonly collectionVersion: string },
-  ) {
-    this.collectionVersion =
-      options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
-  }
+    _options?: { readonly collectionVersion: string },
+  ) {}
 
   getAt(
     date: string,
@@ -100,15 +94,9 @@ export class SelectionMetricRepository {
         .select({ date: dailySelectionMetricCoverage.date })
         .from(dailySelectionMetricCoverage)
         .where(
-          and(
-            eq(
-              dailySelectionMetricCoverage.collectionVersion,
-              this.collectionVersion,
-            ),
-            inArray(
-              dailySelectionMetricCoverage.date,
-              requestedDates.slice(index, index + READ_BATCH_SIZE),
-            ),
+          inArray(
+            dailySelectionMetricCoverage.date,
+            requestedDates.slice(index, index + READ_BATCH_SIZE),
           ),
         )
         .all();

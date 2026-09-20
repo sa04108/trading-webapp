@@ -1,3 +1,4 @@
+import { ProviderDataSettings } from "./provider-data-settings";
 import { AgentSettings } from "./agent-settings";
 import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
@@ -72,6 +73,8 @@ export function SettingsPage() {
       </Card>
 
       <AgentSettings />
+
+      <ProviderDataSettings />
 
       <Card>
         <CardHeader>

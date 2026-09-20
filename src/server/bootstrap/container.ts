@@ -1,3 +1,5 @@
+import type { SqliteProviderRequestPolicy } from "../shared/provider-request-policy.js";
+import type { DartFilingDiscovery } from "../modules/facts/application/dart-filing-discovery.js";
 import { AgentRegistry } from "../modules/agents/application/agent-registry.js";
 import { DatasetSnapshots } from "../modules/agents/application/dataset-snapshots.js";
 import { AgentPreparationQueue } from "../modules/agents/application/agent-preparation-queue.js";
@@ -105,6 +107,9 @@ export interface SystemStatusProviders {
 }
 
 export interface Container {
+  readonly providerRequestPolicy: SqliteProviderRequestPolicy;
+  readonly filingDiscovery: DartFilingDiscovery;
+  readonly reconcileProviderFilings: () => Promise<void>;
   readonly config: AppConfig;
   readonly logger: Logger;
   readonly database: DatabaseHandle;
@@ -390,7 +395,7 @@ export function createContainer(
     clock,
   );
 
-  const jobQueue = new JobQueue(database, clock);
+  const jobQueue = new JobQueue(database, clock, () => collection.filingDiscovery.freshness());
   const backtestResultCompleter = new ForkedBacktestResultCompleter(
     config.databasePath,
     (input, activity) => {
@@ -666,6 +671,9 @@ export function createContainer(
     factRepository,
     financialFactAvailabilityService,
     factCoverageStore,
+    providerRequestPolicy: collection.requestPolicy,
+    filingDiscovery: collection.filingDiscovery,
+    reconcileProviderFilings: collection.reconcileProviderFilings,
     factSyncService,
     symbolMasterService,
     symbolMasterBackfill,
@@ -677,6 +685,8 @@ export function createContainer(
       if (closing !== null) return closing;
       closing = (async () => {
         clearInterval(pruneTimer);
+        await collection.filingDiscovery.stop();
+        await collection.stopProviderReconciliation();
         await agentCoordinator.stop();
         // FactSync는 symbol 단위 저장이 끝난 뒤 멈춘다. 이 경계를 기다리기 전에
         // SQLite를 닫으면 저장 callback이 닫힌 자원을 다시 건드린다.

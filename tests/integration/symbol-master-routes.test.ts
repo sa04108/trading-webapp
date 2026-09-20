@@ -88,27 +88,27 @@ describe('symbol-master routes', () => {
 
   it('휴장일 sync 요청은 직전 거래일까지 소급한 결과를 돌려준다', async ({ krxApps }) => {
     const { app, fake, cookie } = await setup(krxApps);
-    seedTradingDay(fake, '2025-01-06');
-    // 01-07·01-08 은 별도 세팅 없이 기본값(빈 응답 = 휴장)으로 둔다
+    seedTradingDay(fake, '2025-01-03');
+    // 공식 휴장일인 토·일요일은 빈 응답으로 둔다
 
     const sync = await app.app.inject({
       method: 'POST',
       url: '/api/v1/symbol-master/sync',
       cookies: { session: cookie },
-      payload: { date: '2025-01-08' },
+      payload: { date: '2025-01-05' },
     });
 
     expect(sync.statusCode).toBe(200);
     expect(sync.json()).toEqual({
-      requestedDate: '2025-01-08',
-      effectiveTradingDate: '2025-01-06',
-      ingestedDates: ['2025-01-08', '2025-01-07', '2025-01-06'],
+      requestedDate: '2025-01-05',
+      effectiveTradingDate: '2025-01-03',
+      ingestedDates: ['2025-01-05', '2025-01-04', '2025-01-03'],
     });
 
     // 소급 수집이 재구성 앵커를 남겨 이후 조회가 SymbolMasterNotCoveredError 없이 성립한다
     const universe = await app.app.inject({
       method: 'GET',
-      url: '/api/v1/symbol-master/universe?date=2025-01-08',
+      url: '/api/v1/symbol-master/universe?date=2025-01-05',
       cookies: { session: cookie },
     });
     expect(universe.statusCode).toBe(200);

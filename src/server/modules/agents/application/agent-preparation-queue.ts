@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from "node:crypto";
-import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
 import { z } from "zod";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import {
@@ -227,8 +226,9 @@ export class AgentPreparationQueue {
     identity: Identity,
     request: () => void,
   ): boolean {
-    if (!this.owns(clientId, identity)) return false;
-    this.database.sqlite.transaction(() => {
+    // 읽기 뒤 쓰기 잠금을 승격하면 동시 결과 import와 충돌할 수 있어 먼저 쓰기 잠금을 잡는다.
+    const accepted = this.database.sqlite.transaction(() => {
+      if (!this.owns(clientId, identity)) return false;
       request();
       this.database.sqlite
         .prepare(
@@ -240,9 +240,10 @@ export class AgentPreparationQueue {
           "UPDATE agent_preparation_leases SET lease_token_hash = NULL, lease_expires_at_ms = NULL WHERE job_id = ?",
         )
         .run(identity.jobId);
-    })();
-    this.changed(identity.jobId);
-    return true;
+      return true;
+    }).immediate();
+    if (accepted) this.changed(identity.jobId);
+    return accepted;
   }
 
   finish(
@@ -263,9 +264,9 @@ export class AgentPreparationQueue {
     if (row.cancel_requested) outcome = "CANCELLED";
     if (
       outcome === "COMPLETED" &&
-      dataset?.collectionVersion !== readRuntimeVersions().collectionVersion
+      dataset?.sourceRevision !== new PreparationPreviewCache(this.database).revision()
     ) {
-      // 수집 코드가 바뀐 뒤 도착한 옛 결과를 현재 미리보기 검증으로 승격하지 않는다.
+      // 실제 계산 입력이나 확인된 변경 상태가 달라진 옛 결과를 최신 검증으로 수락하지 않는다.
       this.database.sqlite.transaction(() => {
         this.database.sqlite
           .prepare(

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
+import { ProviderRequestBlockedError } from "../../../shared/provider-request-policy.js";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import type { Logger } from "../../../shared/logger.js";
 import { KrxQuotaError } from "../../../../runtime/modules/market-data/application/ports.js";
@@ -45,7 +45,6 @@ interface DataRequestRow {
 export class AgentDataQueue {
   private running: Promise<void> | null = null;
   private stopped = false;
-  private readonly collectionVersion: string;
 
   constructor(
     private readonly database: DatabaseHandle,
@@ -65,10 +64,7 @@ export class AgentDataQueue {
       readonly collectionVersion?: string;
       readonly onProgress?: (kind: AgentLease["kind"], jobId: string) => void;
     },
-  ) {
-    this.collectionVersion =
-      options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
-  }
+  ) {}
 
   /** 공유 수집 요청의 현재 상태를 작업별 행에 복사하지 않고 대기 연결로 조합한다. */
   progressForJob(jobId: string): ExecutionProgress | null {
@@ -94,7 +90,7 @@ export class AgentDataQueue {
     const waiting = queued && row.next_attempt_at_ms > Date.now();
     return {
       activity: queued ? "WAITING_RETRY" : (row.activity ?? "CHECKING_INPUT"),
-      detail: waiting
+      detail: waiting || row.status === "BLOCKED"
         ? row.error
         : queued
           ? "앞선 수집 요청 완료 대기"
@@ -143,10 +139,8 @@ export class AgentDataQueue {
       request.symbols = [...new Set(request.symbols)].sort();
     }
     const json = JSON.stringify(request);
-    // 이전 수집기의 완료 요청이 새 수집기의 재검증 요구를 가로막지 않게 한다.
+    // 실행 코드 버전과 무관한 원천 범위를 중복 제거 키로 사용한다.
     const id = createHash("sha256")
-      .update(this.collectionVersion)
-      .update("\0")
       .update(json)
       .digest("hex");
     const now = Date.now();
@@ -250,10 +244,11 @@ export class AgentDataQueue {
       this.notifyWaiters(row.id);
     } catch (error) {
       if (this.stopped) return;
+      const blocked = error instanceof ProviderRequestBlockedError;
       const quota =
         error instanceof AgentCollectionPaused ||
         error instanceof KrxQuotaError;
-      const attempts = row.attempts + (quota ? 0 : 1);
+      const attempts = row.attempts + (quota || blocked ? 0 : 1);
       const nextMidnight =
         Math.floor((Date.now() + 9 * 3600_000) / 86400_000 + 1) * 86400_000 -
         9 * 3600_000;
@@ -268,7 +263,7 @@ export class AgentDataQueue {
           "UPDATE agent_data_requests SET status = ?, attempts = ?, next_attempt_at_ms = ?, error = ?, updated_at_ms = ? WHERE id = ?",
         )
         .run(
-          attempts >= 3 ? "FAILED" : "QUEUED",
+          blocked ? "BLOCKED" : attempts >= 3 ? "FAILED" : "QUEUED",
           attempts,
           next,
           error instanceof Error ? error.message : String(error),
@@ -277,9 +272,9 @@ export class AgentDataQueue {
         );
       this.database.sqlite
         .prepare(
-          "UPDATE agent_data_requests SET activity = 'WAITING_RETRY', activity_started_at_ms = ?, updated_at_ms = ? WHERE id = ?",
+          "UPDATE agent_data_requests SET activity = ?, activity_started_at_ms = ?, updated_at_ms = ? WHERE id = ?",
         )
-        .run(Date.now(), Date.now(), row.id);
+        .run(blocked ? "BLOCKED" : "WAITING_RETRY", Date.now(), Date.now(), row.id);
       this.notifyWaiters(row.id);
     }
     this.resumeReady();

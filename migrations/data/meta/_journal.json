@@ -22,6 +22,13 @@
       "when": 1789461592013,
       "tag": "0002_collection_coverage_version",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1789890000000,
+      "tag": "0003_provider_input_issues",
+      "breakpoints": true
     }
   ]
 }

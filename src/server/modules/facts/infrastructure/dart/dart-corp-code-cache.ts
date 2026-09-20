@@ -1,8 +1,16 @@
+import { DartRawSnapshotError } from "./dart-raw-snapshot-store.js";
 import { inflateRawSync } from "node:zlib";
 
 export interface CorpCodeResolver {
   /** 종목코드 → DART corp_code. 매핑에 없으면 null */
   resolve(symbol: string, beforeRequest?: () => void): Promise<string | null>;
+  /** 저장된 정체성만 검사한다. 외부 요청은 하지 않는다. */
+  lookup?(symbol: string): string | null;
+}
+
+export interface DartCorpCodeSnapshotStore {
+  get(): { readonly xml: string; readonly fetchedAtMs: number; readonly changedSymbols?: readonly string[] } | null;
+  put(xml: string, fetchedAtMs: number): void;
 }
 
 const LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
@@ -74,6 +82,8 @@ export function parseCorpCodeXml(xml: string): Map<string, string> {
     const stockCode = tagValue(block, "stock_code");
     const corpCode = tagValue(block, "corp_code");
     if (!stockCode || !corpCode) continue;
+    if (map.has(stockCode) && map.get(stockCode) !== corpCode)
+      throw new DartRawSnapshotError("IDENTITY_MISMATCH", stockCode);
     map.set(stockCode, corpCode);
   }
   return map;
@@ -87,31 +97,59 @@ export function parseCorpCodeXml(xml: string): Map<string, string> {
  * 캐시하지 않는다 — 일시적 네트워크 오류로 수집 전체가 영구히 막히면 안 된다.
  */
 export function createDartCorpCodeCache(
-  fetchXmlZip: () => Promise<Buffer>,
+  fetchXmlZip: (missingSymbol?: string) => Promise<Buffer>,
+  store?: DartCorpCodeSnapshotStore,
+  now: () => number = Date.now,
+  hooks: { beforeDownload?(missingSymbol?: string): void; afterPersist?(): void } = {},
 ): CorpCodeResolver {
   let pending: Promise<Map<string, string>> | null = null;
-
-  const load = (beforeRequest?: () => void): Promise<Map<string, string>> => {
+  let local: Map<string, string> | null = null;
+  const changed = new Set<string>();
+  const attempted = new Set<string>();
+  const readSaved = (): Map<string, string> | null => {
+    if (local !== null) return local;
+    const saved = store?.get();
+    if (saved == null) return null;
+    const map = parseCorpCodeXml(saved.xml);
+    if (map.size === 0) throw new DartRawSnapshotError("PARSER_INCOMPATIBLE", "corpCode.xml");
+    for (const symbol of saved.changedSymbols ?? []) changed.add(symbol);
+    return local = map;
+  };
+  const download = (beforeRequest?: () => void, missingSymbol?: string): Promise<Map<string, string>> => {
     if (pending) return pending;
     pending = (async () => {
-      // 캐시 miss에서만 실제 다운로드가 생긴다. quota도 이 경계에서 한 번만 차감한다.
+      hooks.beforeDownload?.(missingSymbol);
       beforeRequest?.();
-      return parseCorpCodeXml(
-        extractSingleFileFromZip(await fetchXmlZip()).toString("utf8"),
-      );
-    })().catch((error: unknown) => {
-      pending = null; // 실패는 캐시하지 않는다
-      throw error;
-    });
+      const xml = extractSingleFileFromZip(await fetchXmlZip(missingSymbol)).toString("utf8");
+      const map = parseCorpCodeXml(xml);
+      if (map.size === 0) throw new DartRawSnapshotError("PARSER_INCOMPATIBLE", "corpCode.xml");
+      for (const [symbol, previous] of local ?? [])
+        if (map.has(symbol) && map.get(symbol) !== previous) changed.add(symbol);
+      store?.put(xml, now());
+      local = map;
+      for (const symbol of store?.get()?.changedSymbols ?? []) changed.add(symbol);
+      hooks.afterPersist?.();
+      return map;
+    })().finally(() => { pending = null; });
     return pending;
   };
-
+  const lookup = (symbol: string): string | null => {
+    const map = readSaved();
+    if (changed.has(symbol)) throw new DartRawSnapshotError("IDENTITY_MISMATCH", symbol, "저장된 회사 고유번호가 변경되었습니다");
+    return map?.get(symbol) ?? null;
+  };
   return {
-    async resolve(
-      symbol: string,
-      beforeRequest?: () => void,
-    ): Promise<string | null> {
-      return (await load(beforeRequest)).get(symbol) ?? null;
+    lookup,
+    async resolve(symbol: string, beforeRequest?: () => void): Promise<string | null> {
+      const saved = readSaved();
+      const known = lookup(symbol);
+      if (known !== null) return known;
+      if (attempted.has(symbol)) return null;
+      // 누락 종목별로 한 번만 갱신하며 이미 알려진 종목은 내려받지 않는다.
+      attempted.add(symbol);
+      try { await download(beforeRequest, saved === null ? undefined : symbol); }
+      catch (error) { attempted.delete(symbol); throw error; }
+      return lookup(symbol);
     },
   };
 }

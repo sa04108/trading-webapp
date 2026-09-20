@@ -1,3 +1,4 @@
+import { ProviderRequestBlockedError } from "../shared/provider-request-policy.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,6 +75,9 @@ export async function buildServer(
   // 자식 API 플러그인이 등록 시점의 오류 처리기를 상속하므로 먼저 설치한다.
   app.setErrorHandler((error: FastifyError, request, reply) => {
     request.log.error({ err: error }, "request failed");
+    if (error instanceof ProviderRequestBlockedError) return reply.code(409).send({
+      error: "PROVIDER_DATA_BLOCKED", reason: error.reason, requestKey: error.requestKey, evidence: error.evidence,
+    });
     if (error instanceof PreparationReferenceError) {
       return reply
         .code(409)
@@ -96,6 +100,29 @@ export async function buildServer(
   await app.register(
     async (api) => {
       registerSystemRoutes(api, container, requireAuth);
+      api.get("/provider-data/freshness", { preHandler: requireAuth }, async () => container.filingDiscovery.freshness());
+      api.get<{ Params: { jobId: string } }>("/provider-data/provenance/:jobId", { preHandler: requireAuth }, async (request) => {
+        const row = container.database.sqlite.prepare("SELECT freshness_json FROM provider_execution_provenance WHERE job_id = ?")
+          .get(request.params.jobId) as {freshness_json:string} | undefined;
+        return { freshness: row ? JSON.parse(row.freshness_json) as unknown : null };
+      });
+      api.get("/provider-data/plans", { preHandler: requireAuth }, async () => ({
+        plans: container.providerRequestPolicy.list(), freshness: container.filingDiscovery.freshness(),
+      }));
+      api.post<{ Params: { fingerprint: string }; Body: { approved: boolean } }>(
+        "/provider-data/plans/:fingerprint", { preHandler: requireAuth }, async (request, reply) => {
+          if (!/^[a-f0-9]{64}$/.test(request.params.fingerprint) || typeof request.body?.approved !== "boolean")
+            return reply.code(400).send({ error: "승인 계획과 결정을 확인하세요" });
+          if (!container.providerRequestPolicy.decide(request.params.fingerprint, request.body.approved))
+            return reply.code(409).send({ error: "완료되었거나 존재하지 않는 계획입니다" });
+          if (request.body.approved) {
+            container.database.sqlite.prepare(`UPDATE agent_data_requests SET status = 'QUEUED',
+              next_attempt_at_ms = 0 WHERE status = 'BLOCKED' AND instr(error, ?) > 0`)
+              .run(request.params.fingerprint);
+            void container.reconcileProviderFilings();
+          }
+          return { ok: true };
+        });
       registerAgentManagementRoutes(
         api,
         container.agentCoordinator,
@@ -209,6 +236,12 @@ export async function buildServer(
     3_600_000,
   );
   symbolMasterSchedulerTimer.unref();
+  const filingDiscoveryTimer = setInterval(() => void container.filingDiscovery.tick().then(container.reconcileProviderFilings), 60_000);
+  filingDiscoveryTimer.unref();
+  app.addHook("onClose", async () => {
+    clearInterval(filingDiscoveryTimer);
+    await container.filingDiscovery.stop();
+  });
   app.addHook("onClose", (_instance, done) => {
     clearInterval(symbolMasterSchedulerTimer);
     done();

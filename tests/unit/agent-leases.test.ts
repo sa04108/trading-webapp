@@ -1,9 +1,11 @@
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
 import { AgentPreparationQueue } from '../../src/server/modules/agents/application/agent-preparation-queue.js';
 import { AgentDataQueue } from '../../src/server/modules/agents/application/agent-data-queue.js';
+import { ProviderRequestBlockedError } from '../../src/server/shared/provider-request-policy.js';
+import { PreparationPreviewCache } from '../../src/runtime/modules/backtest/application/preparation-preview-cache.js';
 import { AgentRegistry } from '../../src/server/modules/agents/application/agent-registry.js';
 import { JobQueue } from '../../src/server/modules/backtest/application/job-queue.js';
 import { pino } from 'pino';
@@ -113,7 +115,7 @@ describe('에이전트 리스와 데이터 대기', () => {
     await queue.stop();
   });
 
-  it('수집 버전이 달라지면 이전 완료 요청을 재사용하지 않고 새 수집을 실행한다', async () => {
+  it('수집 실행 버전이 달라져도 완료된 같은 요청을 다시 수집하지 않는다', async () => {
     const collect = vi.fn(async () => undefined);
     const ready = vi.fn();
     const snapshots = { ensureLatest: async () => ({ ...dataset, version: 2 }) } as DatasetSnapshots;
@@ -124,25 +126,73 @@ describe('에이전트 리스와 데이터 대기', () => {
       previous.request('PREPARATION', 'old-job', 1, request);
       previous.tick();
       await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
-      expect(() => current.request('PREPARATION', 'new-job', 2, request)).not.toThrow();
+      expect(() => current.request('PREPARATION', 'new-job', 2, request)).toThrow('같은 결손');
       current.tick();
-      await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(2));
-      expect(collect).toHaveBeenCalledTimes(2);
-      expect(database.sqlite.prepare('SELECT status FROM agent_data_requests').all()).toEqual([
-        { status: 'COMPLETED' }, { status: 'COMPLETED' },
-      ]);
+      await current.stop();
+      expect(collect).toHaveBeenCalledTimes(1);
+      expect(database.sqlite.prepare('SELECT status FROM agent_data_requests').all()).toEqual([{ status: 'COMPLETED' }]);
     } finally { await previous.stop(); await current.stop(); }
   });
 
-  it('옛 수집 버전의 준비 결과는 현재 미리보기로 확정하지 않고 실패 소모 없이 재배정한다', () => {
+  it('승인 차단은 재시도 시각과 재시작·동일 요청에도 자동 수집하지 않는다', async () => {
+    const collect = vi.fn(async () => { throw new ProviderRequestBlockedError('SOURCE_RECOVERY', 'a'.repeat(64), '원문 해시 불일치'); });
+    const ready = vi.fn();
+    const snapshots = { ensureLatest: vi.fn(async () => dataset) } as unknown as DatasetSnapshots;
+    const queue = new AgentDataQueue(database, snapshots, collect, ready, pino({ enabled: false }));
+    const request = { kind: 'MARKET' as const, dates: ['2026-01-05'] };
+    try {
+      queue.request('PREPARATION', 'blocked-job', 1, request);
+      queue.tick();
+      await vi.waitFor(() => expect(queue.progressForJob('blocked-job')).toMatchObject({ activity: 'BLOCKED', nextResumeAtMs: null }));
+      database.sqlite.prepare('UPDATE agent_data_requests SET next_attempt_at_ms = 0').run();
+      queue.recover();
+      queue.request('PREPARATION', 'another-job', 1, request);
+      queue.tick();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      queue.tick();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(collect).toHaveBeenCalledTimes(1);
+      expect(ready).not.toHaveBeenCalled();
+      expect(snapshots.ensureLatest).not.toHaveBeenCalled();
+      expect(database.sqlite.prepare('SELECT status FROM agent_data_requests').all()).toEqual([{ status: 'BLOCKED' }]);
+      expect(queue.progressForJob('another-job')).toMatchObject({ activity: 'BLOCKED', nextResumeAtMs: null });
+    } finally { await queue.stop(); }
+  });
+
+  it('실행 해시만 오래된 준비 결과는 실제 입력 버전이 같으면 검증해 수락한다', () => {
     seedPreparation('old-collection');
-    const previous = { ...dataset, collectionVersion: 'c'.repeat(64) };
+    const revision = new PreparationPreviewCache(database).revision();
+    const previous = { ...dataset, sourceRevision: revision, collectionVersion: 'c'.repeat(64) };
     const lease = preparations.claim(clientId, previous)!;
-    expect(preparations.finish(clientId, lease, 'COMPLETED', null, previous)).toBe(true);
+    const result = validPreparationResult(revision);
+    expect(preparations.finish(clientId, lease, 'COMPLETED', result, previous)).toBe(true);
+    expect(database.sqlite.prepare('SELECT status FROM backtest_preparation_jobs WHERE id = ?').get(lease.jobId)).toEqual({ status: 'COMPLETED' });
+    expect(new PreparationPreviewCache(database).isFresh(lease.jobId)).toBe(true);
+    expect(preparations.claim(clientId, dataset)).toBeNull();
+  });
+
+  it('실제 입력 버전이 바뀐 결과는 실패 소모 없이 새 입력으로 재배정한다', () => {
+    seedPreparation('old-data');
+    const revision = new PreparationPreviewCache(database).revision();
+    const previous = { ...dataset, sourceRevision: revision };
+    const lease = preparations.claim(clientId, previous)!;
+    database.sqlite.prepare('UPDATE dataset_state SET revision = revision + 1 WHERE singleton = 1').run();
+    expect(preparations.finish(clientId, lease, 'COMPLETED', validPreparationResult(revision), previous)).toBe(true);
     expect(database.sqlite.prepare('SELECT status, preview_json FROM backtest_preparation_jobs WHERE id = ?').get(lease.jobId)).toEqual({ status: 'QUEUED', preview_json: null });
     expect(database.sqlite.prepare('SELECT failures, lease_token_hash FROM agent_preparation_leases WHERE job_id = ?').get(lease.jobId)).toEqual({ failures: 0, lease_token_hash: null });
     expect(preparations.heartbeat(clientId, lease).accepted).toBe(false);
-    expect(preparations.claim(clientId, { ...dataset, version: 2 })).toMatchObject({ attempt: 2, dataset: { collectionVersion: dataset.collectionVersion } });
+    expect(preparations.claim(clientId, { ...dataset, version: 2, sourceRevision: revision + 1 })).toMatchObject({ attempt: 2, dataset: { sourceRevision: revision + 1 } });
+  });
+
+  it('실행 해시 재사용 중에도 실제 결과의 버전과 일정 무결성을 검증한다', () => {
+    seedPreparation('invalid-result');
+    const revision = new PreparationPreviewCache(database).revision();
+    const previous = { ...dataset, sourceRevision: revision, collectionVersion: 'c'.repeat(64) };
+    const lease = preparations.claim(clientId, previous)!;
+    expect(() => preparations.finish(clientId, lease, 'COMPLETED', validPreparationResult(revision + 1), previous)).toThrow('데이터 버전 또는 일정 해시');
+    const altered = validPreparationResult(revision);
+    altered.preview.scheduleHash = '0'.repeat(64);
+    expect(() => preparations.finish(clientId, lease, 'COMPLETED', altered, previous)).toThrow('데이터 버전 또는 일정 해시');
   });
 
   it('큰 백테스트를 작은 장치가 가져가지 않고 재시도 토큰으로 이전 결과를 차단한다', () => {
@@ -161,3 +211,17 @@ describe('에이전트 리스와 데이터 대기', () => {
     expect(queue.getJob('small')?.status).toBe('FAILED');
   });
 });
+
+function validPreparationResult(dataRevision: number) {
+  const schedule = [{ rebalanceDate: '2026-01-05', effectiveDate: '2026-01-05', members: [{ symbol: '005930', standardCode: 'KR7005930003' }], excludedNonTradingCount: 0 }];
+  return {
+    dataRevision,
+    fundamentalSymbols: [],
+    preview: {
+      schedule,
+      scheduleHash: createHash('sha256').update(JSON.stringify(schedule)).digest('hex'),
+      unionSymbols: ['005930'], diagnostics: [], stages: [], uncoveredDates: [],
+      periodCovered: true, missingCandleSymbols: [], warnings: [],
+    },
+  };
+}

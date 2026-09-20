@@ -1089,8 +1089,8 @@ describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매�
 
   it('휴장일만 수집돼 거래일 anchor가 없으면 durable preparation job을 시작한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
-    const date = '2026-01-05';
-    // KOSPI·KOSDAQ 양쪽 다 fake 서버 기본값(빈 응답)이라 ingestDate 는 이 날짜를
+    const date = '2026-01-04';
+    // 공식 휴장일인 일요일에 양쪽 시장이 빈 응답을 반환하므로 이 날짜를
     // 휴장으로 처리한다 — coverage 는 생기지만 거래일 기록은 생기지 않는다.
     await ctx.container.symbolMasterService.ingestDate(date);
     expect(ctx.container.symbolMasterService.isCovered(date)).toBe(true);

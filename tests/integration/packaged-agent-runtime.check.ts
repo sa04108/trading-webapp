@@ -94,7 +94,7 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
     ]);
     expect(fs.readdirSync(path.join(packageRoot, 'migrations'))).toEqual(['agent']);
     expect(fs.readdirSync(path.join(packageRoot, 'dist/runtime/workers')).sort()).toEqual([
-      'backtest-child.js', 'cancellation.js', 'preparation-child.js', 'preparation-runtime.js',
+      'backtest-child.js', 'cancellation.js', 'preparation-child.js', 'preparation-runtime.js', 'worker-reporting.js',
     ]);
     expect(files).toEqual(expect.arrayContaining(['bin/node', 'quant-agent', 'dist/agent/main.js', 'migrations/agent/meta/_journal.json']));
     expect(files.filter((file) => /^(src|scripts|tests|data|dist\/(server|web|workers))\//.test(file))).toEqual([]);
@@ -170,7 +170,8 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
       env: { NODE_ENV: 'production', PATH: path.join(packageRoot, 'bin') },
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
-    const capture = (chunk: Buffer) => { output = (output + chunk.toString()).slice(-8_000); };
+    // 단계별 진단 로그가 추가되어 두 작업의 시작 로그까지 보존한다.
+    const capture = (chunk: Buffer) => { output = (output + chunk.toString()).slice(-64_000); };
     child.stdout?.on('data', capture);
     child.stderr?.on('data', capture);
     child.on('error', (error) => { output += error.message; });

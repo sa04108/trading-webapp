@@ -4,6 +4,7 @@ import type { AppDatabase } from "../../../../../runtime/shared/db/database.js";
 import { dartRawApiSnapshots } from "../../../../shared/db/collection-schema.js";
 import type { DartReportCode } from "./dart-report-parser.js";
 import {
+  DartRawSnapshotError,
   dartRawSnapshotKeyId,
   type DartRawSnapshot,
   type DartRawSnapshotEndpoint,
@@ -98,8 +99,9 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
       );
       for (const key of batch) {
         const snapshot = this.parseRow(byKey.get(dartRawSnapshotKeyId(key)));
-        if (snapshot === null || !isValidPayload(snapshot.payload))
-          missing += 1;
+        if (snapshot === null) missing += 1;
+        else if (!isValidPayload(snapshot.payload))
+          throw new DartRawSnapshotError("PARSER_INCOMPATIBLE", dartRawSnapshotKeyId(key));
       }
     }
     return missing;
@@ -108,16 +110,40 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
   private parseRow(
     row: typeof dartRawApiSnapshots.$inferSelect | undefined,
   ): DartRawSnapshot | null {
-    if (row === undefined || hash(row.payloadJson) !== row.contentHash)
-      return null;
+    if (row === undefined) return null;
+    const key = `${row.code}:${row.endpoint}:${row.businessYear}:${row.reportCode}:${row.fsDiv}`;
+    if (hash(row.payloadJson) !== row.contentHash) {
+      // 현재 원문이 기대하는 바로 그 해시만 과거 보존본에서 복구한다. 더 오래된 다른 값으로 대체하지 않는다.
+      const archived = this.db.get<{ snapshot_json: string }>(sql`SELECT snapshot_json
+        FROM dart_raw_api_snapshot_history WHERE json_extract(snapshot_json, '$.contentHash') = ${row.contentHash}
+        AND json_extract(snapshot_json, '$.code') = ${row.code}
+        AND json_extract(snapshot_json, '$.endpoint') = ${row.endpoint}
+        AND json_extract(snapshot_json, '$.businessYear') = ${row.businessYear}
+        AND json_extract(snapshot_json, '$.reportCode') = ${row.reportCode}
+        AND json_extract(snapshot_json, '$.fsDiv') = ${row.fsDiv} ORDER BY id DESC LIMIT 1`);
+      if (archived !== undefined) {
+        try {
+          const prior = JSON.parse(archived.snapshot_json) as typeof row;
+          if (hash(prior.payloadJson) === row.contentHash)
+            return { payload: JSON.parse(prior.payloadJson) as unknown, fetchedAtMs: row.fetchedAtMs };
+        } catch { /* 손상된 보존본은 복구 근거로 쓰지 않는다. */ }
+      }
+      throw new DartRawSnapshotError("HASH_MISMATCH", key, `${row.contentHash}:${hash(row.payloadJson)}`);
+    }
     try {
       return {
         payload: JSON.parse(row.payloadJson) as unknown,
         fetchedAtMs: row.fetchedAtMs,
       };
     } catch {
-      return null;
+      throw new DartRawSnapshotError("INVALID_JSON", key, row.contentHash);
     }
+  }
+
+  observe(key: DartRawSnapshotKey, payload: unknown, fetchedAtMs: number): void {
+    const payloadJson = JSON.stringify(payload);
+    this.db.run(sql`INSERT INTO dart_raw_api_snapshot_history (snapshot_json, archived_at_ms)
+      VALUES (${JSON.stringify({kind:"PENDING_PUBLICATION", key, payloadJson, contentHash:hash(payloadJson), fetchedAtMs})}, ${fetchedAtMs})`);
   }
 
   put(key: DartRawSnapshotKey, payload: unknown, fetchedAtMs: number): void {
@@ -125,7 +151,17 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
     if (payloadJson === undefined) {
       throw new Error("DART 원문 snapshot을 JSON으로 직렬화할 수 없습니다.");
     }
-    this.db
+    this.db.transaction((tx) => {
+      const previous = tx.select().from(dartRawApiSnapshots).where(and(
+        eq(dartRawApiSnapshots.code, key.symbol),
+        eq(dartRawApiSnapshots.endpoint, key.endpoint),
+        eq(dartRawApiSnapshots.businessYear, key.businessYear),
+        eq(dartRawApiSnapshots.reportCode, key.reportCode),
+        eq(dartRawApiSnapshots.fsDiv, key.fsDiv),
+      )).get();
+      if (previous !== undefined) tx.run(sql`INSERT INTO dart_raw_api_snapshot_history
+        (snapshot_json, archived_at_ms) VALUES (${JSON.stringify(previous)}, ${fetchedAtMs})`);
+      tx
       .insert(dartRawApiSnapshots)
       .values({
         code: key.symbol,
@@ -152,6 +188,7 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
         },
       })
       .run();
+    });
   }
 }
 

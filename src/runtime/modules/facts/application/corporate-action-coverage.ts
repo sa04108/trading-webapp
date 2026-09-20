@@ -1,7 +1,7 @@
 import { eq, inArray } from "drizzle-orm";
 import type { AppDatabase } from "../../../shared/db/database.js";
 import { readRuntimeVersions } from "../../../shared/runtime-versions.js";
-import { symbolFactsState } from "../../../shared/db/schema.js";
+import { providerInputIssues, symbolFactsState } from "../../../shared/db/schema.js";
 import { parseYears } from "./fact-coverage-store.js";
 
 export const CORPORATE_ACTION_COVERAGE_PROTOCOL_VERSION = 10;
@@ -19,16 +19,12 @@ interface ActionCoverageProtocol {
   readonly years: readonly number[];
 }
 
-function parseProtocolYears(
-  raw: string | null,
-  collectionVersion: string,
-): number[] {
+function parseProtocolYears(raw: string | null): number[] {
   if (raw === null) return [];
   try {
     const parsed = JSON.parse(raw) as Partial<ActionCoverageProtocol>;
     if (
       parsed.version !== CORPORATE_ACTION_COVERAGE_PROTOCOL_VERSION ||
-      parsed.collectionVersion !== collectionVersion ||
       !Array.isArray(parsed.years)
     )
       return [];
@@ -203,12 +199,9 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
         : query.where(inArray(symbolFactsState.code, batch)).all();
     });
     for (const row of rows) {
-      // 구버전은 periodKey='-' gap을 버리고도 legacy coverage를 닫았다. 현재 프로토콜로
-      // 실제 재수집한 연도만 신뢰해, 선택 유니버스의 필요한 연도만 on-demand로 연다.
-      result.set(
-        row.code,
-        parseProtocolYears(row.protocol, this.collectionVersion),
-      );
+      // 구버전은 periodKey='-' gap을 버리고도 완료로 기록했으므로 의미 프로토콜은
+      // 계속 검증한다. 실행 해시 차이는 기존 데이터의 재수집 근거가 아니다.
+      result.set(row.code, parseProtocolYears(row.protocol));
     }
     return result;
   }
@@ -222,7 +215,14 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
   getGapYears(
     codes?: readonly string[],
   ): ReadonlyMap<string, readonly number[]> {
-    return this.readYears("actionGapYearsJson", codes);
+    const result = new Map(this.readYears("actionGapYearsJson", codes));
+    for (const issue of this.db.select().from(providerInputIssues).all()) {
+      if (codes && !codes.includes(issue.symbol)) continue;
+      const years = issue.businessYear === null
+        ? this.getCollectedYears([issue.symbol]).get(issue.symbol) ?? [] : [issue.businessYear];
+      result.set(issue.symbol, [...new Set([...(result.get(issue.symbol) ?? []), ...years])].sort());
+    }
+    return result;
   }
 
   getGapDetails(
@@ -362,10 +362,7 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     const verifiedYears = [
       ...new Set([
         ...(existing
-          ? parseProtocolYears(
-              existing.actionCoverageProtocolJson,
-              this.collectionVersion,
-            )
+          ? parseProtocolYears(existing.actionCoverageProtocolJson)
           : []),
         ...coveredYears,
       ]),

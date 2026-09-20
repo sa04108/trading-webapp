@@ -78,3 +78,54 @@ export const dartRawApiSnapshots = sqliteTable(
     ),
   ],
 );
+
+/** 공급자 응답 전체와 이력을 운영 DB에 보존한다. */
+export const krxRawApiSnapshots = sqliteTable("krx_raw_api_snapshots", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  namespace: text("namespace").notNull(),
+  endpoint: text("endpoint").notNull(),
+  basDd: text("bas_dd").notNull(),
+  payloadJson: text("payload_json").notNull(),
+  contentHash: text("content_hash").notNull(),
+  fetchedAtMs: integer("fetched_at_ms").notNull(),
+}, (table) => [index("idx_krx_raw_api_snapshots_key").on(table.namespace, table.endpoint, table.basDd)]);
+
+/** 원문 요청의 최소 범위와 승인·취소·물리 재시도 이력. */
+export const providerRequestPlans = sqliteTable("provider_request_plans", {
+  fingerprint: text("fingerprint").primaryKey().notNull(),
+  requestJson: text("request_json").notNull(), reason: text("reason").notNull(), evidence: text("evidence").notNull(),
+  status: text("status").notNull(), attempts: integer("attempts").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull().default(5), createdAtMs: integer("created_at_ms").notNull(),
+  decidedAtMs: integer("decided_at_ms"),
+});
+export const dartDiscoveryJobs = sqliteTable("dart_discovery_jobs", {
+  windowDays: integer("window_days").notNull().default(80),
+  day: text("day").primaryKey().notNull(), fromDate: text("from_date").notNull(), toDate: text("to_date").notNull(),
+  page: integer("page").notNull(), status: text("status").notNull(), owner: text("owner"),
+  leaseUntilMs: integer("lease_until_ms"), completedAtMs: integer("completed_at_ms"), error: text("error"),
+});
+export const dartDiscoveryPages = sqliteTable("dart_discovery_pages", {
+  day: text("day").notNull(), fromDate: text("from_date").notNull(), page: integer("page").notNull(),
+  payloadJson: text("payload_json").notNull(), fetchedAtMs: integer("fetched_at_ms").notNull(),
+}, (table) => [primaryKey({columns:[table.day,table.fromDate,table.page]})]);
+export const dartDiscoveredFilings = sqliteTable("dart_discovered_filings", {
+  identity: text("identity").primaryKey().notNull(), receiptNo: text("receipt_no"), symbol: text("symbol"),
+  businessYear: integer("business_year"), reportCode: text("report_code"), payloadJson: text("payload_json").notNull(),
+  discoveredAtMs: integer("discovered_at_ms").notNull(), status: text("status").notNull(),
+});
+export const dartCorpCodeSnapshot = sqliteTable("dart_corp_code_snapshot", {
+  namespace: text("namespace").primaryKey().notNull(), xml: text("xml").notNull(),
+  contentHash: text("content_hash").notNull(), fetchedAtMs: integer("fetched_at_ms").notNull(),
+});
+export const dartRawApiSnapshotHistory = sqliteTable("dart_raw_api_snapshot_history", {
+  id: integer("id").primaryKey({autoIncrement:true}), snapshotJson: text("snapshot_json").notNull(),
+  archivedAtMs: integer("archived_at_ms").notNull(),
+});
+export const dartFilingEndpointCheckpoints = sqliteTable("dart_filing_endpoint_checkpoints", {
+  receiptNo: text("receipt_no").notNull(), endpoint: text("endpoint").notNull(), fsDiv: text("fs_div").notNull(),
+  status: text("status").notNull(), retryAfterMs: integer("retry_after_ms"),
+}, (table) => [primaryKey({columns:[table.receiptNo,table.endpoint,table.fsDiv]})]);
+/** 완료 결과의 입력 출처가 나중의 일일 확인으로 바뀌지 않도록 제출 시점 상태를 고정한다. */
+export const providerExecutionProvenance = sqliteTable("provider_execution_provenance", {
+  jobId: text("job_id").primaryKey().notNull(), freshnessJson: text("freshness_json").notNull(),
+});

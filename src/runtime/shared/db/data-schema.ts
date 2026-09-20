@@ -399,3 +399,13 @@ export const datasetState = sqliteTable(
   },
   (table) => [check("data_singleton_one", sql`${table.singleton} = 1`)],
 );
+
+/** 확인된 공급자 변경 중 아직 원문·계산 반영이 끝나지 않은 최소 입력 범위. */
+export const providerInputIssues = sqliteTable("provider_input_issues", {
+  id: text("id").primaryKey(),
+  symbol: text("symbol").notNull(),
+  businessYear: integer("business_year"),
+  reportCode: text("report_code"),
+  reason: text("reason").notNull(),
+  evidence: text("evidence").notNull(),
+});

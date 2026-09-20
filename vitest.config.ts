@@ -15,6 +15,7 @@ export default defineConfig({
     },
   },
   test: {
+    setupFiles: ['tests/setup/provider-network-guard.ts'],
     include: [
       'tests/unit/**/*.test.ts',
       'tests/unit/**/*.test.tsx',

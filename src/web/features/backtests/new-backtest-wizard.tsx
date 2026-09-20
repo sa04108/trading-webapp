@@ -168,6 +168,17 @@ function parseStrategyParameters(
 export function NewBacktestWizard() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  // 저장된 미리보기 재사용 여부와 무관하게 서버의 공시 확인 상태를 읽는다.
+  const providerFreshness = useQuery({
+    queryKey: ["provider-data", "freshness"],
+    queryFn: () => api<{
+      lastCheckedAtMs: number | null;
+      checkedThrough: string | null;
+      warning: string | null;
+    }>("/provider-data/freshness"),
+    refetchInterval: 30_000,
+    refetchOnMount: "always",
+  });
   const params = useParams();
   const location = useLocation();
   /** URL 이 가리키는 단계. null 은 모르는 slug 다 */
@@ -1164,6 +1175,32 @@ export function NewBacktestWizard() {
       <h2 className="text-lg font-semibold">
         {sourceJobId !== null ? "재설정 및 복제" : "새 백테스트"}
       </h2>
+
+      <Alert role="status">
+        <AlertDescription className="space-y-1">
+          <p>
+            마지막 공시 확인: {providerFreshness.data?.lastCheckedAtMs != null
+              ? `${new Date(providerFreshness.data.lastCheckedAtMs).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })} (한국 시간)`
+              : providerFreshness.isPending
+                ? "불러오는 중…"
+                : providerFreshness.isError
+                  ? "확인 상태를 불러오지 못했습니다."
+                  : "확인 이력 없음"}
+          </p>
+          {providerFreshness.data?.checkedThrough && (
+            <p>확인 완료 범위: {providerFreshness.data.checkedThrough}까지</p>
+          )}
+          {(providerFreshness.isError || providerFreshness.data?.warning ||
+            providerFreshness.data?.lastCheckedAtMs === null) && (
+            <>
+              <p>{providerFreshness.data?.warning ?? "최신 공시 반영 여부를 확인하지 못했습니다."}</p>
+              <p>
+                기존 검증 데이터로 진행할 수 있습니다. 손상·정정이 확인되거나 필수 입력이 없는 범위는 복구·승인 전까지 차단됩니다.
+              </p>
+            </>
+          )}
+        </AlertDescription>
+      </Alert>
 
       {prefillError ? (
         <Alert variant="destructive" role="alert">

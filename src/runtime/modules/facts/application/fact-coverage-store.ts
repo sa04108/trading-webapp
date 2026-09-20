@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, ne } from "drizzle-orm";
 import type { AppDatabase } from "../../../shared/db/database.js";
 import { readRuntimeVersions } from "../../../shared/runtime-versions.js";
 import {
+  providerInputIssues,
   dartFinancialFilingReceipts,
   facts as factRows,
   symbolFactsState,
@@ -174,6 +175,7 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
         ]),
       ),
     );
+    const issues = this.db.select().from(providerInputIssues).all();
     const result = new Map<string, FinancialCoverageState>();
     for (const row of rows) {
       const protocol = protocols.get(row.code);
@@ -211,6 +213,13 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
             year: manifest.year,
             examples: manifest.blockingGapExamples,
           });
+        }
+      }
+      for (const issue of issues.filter((issue) => issue.symbol === row.code)) {
+        const affected = issue.businessYear === null ? verified : [issue.businessYear];
+        for (const year of affected) {
+          if (!blocking.includes(year)) blocking.push(year);
+          blockingDetails.push({ year, examples: [`${issue.reason}: ${issue.evidence}`] });
         }
       }
       result.set(row.code, {
@@ -471,7 +480,6 @@ function parseFinancialCoverageProtocol(
     const parsed = JSON.parse(raw) as Partial<FinancialCoverageProtocol>;
     if (
       parsed.version !== FINANCIAL_COVERAGE_PROTOCOL_VERSION ||
-      parsed.collectionVersion !== collectionVersion ||
       !Array.isArray(parsed.manifests)
     )
       return null;

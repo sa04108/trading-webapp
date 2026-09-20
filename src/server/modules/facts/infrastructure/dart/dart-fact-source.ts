@@ -1,3 +1,8 @@
+import { ProviderRequestBlockedError } from "../../../../shared/provider-request-policy.js";
+import type { DartPendingFilingStore } from "./dart-pending-filing-store.js";
+import { createHash } from "node:crypto";
+import type { ProviderRequestPolicy, ProviderRequestPermit, ProviderSourceState } from "../../../../shared/provider-request-policy.js";
+import type { DartCorpCodeSnapshotStore } from "./dart-corp-code-cache.js";
 import type { Clock } from "../../../../../runtime/shared/clock.js";
 import type { Logger } from "../../../../shared/logger.js";
 import type { ExternalApiUsage } from "../../../../shared/db/external-api-usage.js";
@@ -39,7 +44,10 @@ import type {
   DartRawSnapshotKey,
   DartRawSnapshotStore,
 } from "./dart-raw-snapshot-store.js";
-import { dartRawSnapshotKeyId } from "./dart-raw-snapshot-store.js";
+import { DartRawSnapshotError, dartRawSnapshotKeyId } from "./dart-raw-snapshot-store.js";
+
+// 서로 다른 preview scope도 같은 저장소의 동일 물리 요청은 한 번만 진행한다.
+const rawStoreRequests = new WeakMap<DartRawSnapshotStore, Map<string, Promise<readonly unknown[]>>>();
 
 export interface DartConfig {
   /** 예: https://opendart.fss.or.kr */
@@ -274,6 +282,9 @@ export function createDartFactSource(
     usage?: ExternalApiUsage;
     /** protocol 변경 때 외부 호출 없이 파서를 다시 돌리기 위한 원문 snapshot */
     rawSnapshots?: DartRawSnapshotStore;
+    corpCodeSnapshots?: DartCorpCodeSnapshotStore;
+    requestPolicy?: ProviderRequestPolicy;
+    pendingFilings?: DartPendingFilingStore;
   } = {},
 ): FactSource {
   // 설정이 없어도 raw snapshot이 완전하면 로컬 재처리가 가능해야 한다. 실제 cache miss나
@@ -377,7 +388,6 @@ export function createDartFactSource(
     request: FetchFinancialsRequest,
     includeFinancials: boolean,
   ): number {
-    const forceRefresh = request.rawSnapshotPolicy === "REFRESH";
     const fsDiv = request.consolidated ? "CFS" : "OFS";
     const keys: DartRawSnapshotKey[] = [];
     for (const symbol of new Set(request.symbols)) {
@@ -412,13 +422,15 @@ export function createDartFactSource(
         }
       }
     }
-    if (forceRefresh) return keys.length;
-    return (
-      options.rawSnapshots?.countMissing(
-        keys,
-        (payload) => rowsFromSnapshot(payload) !== null,
-      ) ?? keys.length
-    );
+    try {
+      return options.rawSnapshots?.countMissing(
+        keys, (payload) => rowsFromSnapshot(payload) !== null,
+      ) ?? keys.length;
+    } catch (error) {
+      // 손상은 자동 HTTP 비용이 아니다. 실행 경계에서 구체적 복구 계획을 만들고 차단한다.
+      if (error instanceof ProviderRequestBlockedError) return 0;
+      throw error;
+    }
   }
 
   interface RequestRowsEntry {
@@ -427,10 +439,8 @@ export function createDartFactSource(
     readonly token: object;
   }
 
-  // 같은 sync scope의 재무·자본변동과 인접 연도 work-unit이 응답을 공유한다. REFRESH로
-  // 실제 갱신한 응답은 뒤의 REFRESH/PREFER_CACHE 모두 재사용하고, PREFER_CACHE로 읽은
-  // 낡을 수 있는 응답은 뒤의 REFRESH가 우회한다. WeakMap이라 sync가 끝나면 다음 실행의
-  // 최신화를 막는 전역 cache로 남지 않는다.
+  // 한 실행의 재무·자본변동 및 인접 연도는 같은 응답을 공유한다.
+  // 영속 원문 교체 여부는 아래의 공시·손상 근거와 요청 정책으로만 판단한다.
   const requestRows = new WeakMap<object, Map<string, RequestRowsEntry>>();
 
   class CorpCodeMissingError extends Error {}
@@ -445,7 +455,7 @@ export function createDartFactSource(
     hooks: FactSourceRequestHooks,
   ): Promise<readonly T[]> {
     const scope = request.rawSnapshotScope ?? request;
-    const policy = request.rawSnapshotPolicy ?? "REFRESH";
+    const policy = "PREFER_CACHE" as const;
     const requestCache =
       requestRows.get(scope) ?? new Map<string, RequestRowsEntry>();
     requestRows.set(scope, requestCache);
@@ -458,28 +468,103 @@ export function createDartFactSource(
       return pending.rows as Promise<readonly T[]>;
 
     const load = async (): Promise<readonly T[]> => {
-      if (policy === "PREFER_CACHE") {
+      const mappedCorp = corpCodes.lookup?.(key.symbol) ?? null;
+      const discoveredCorp = options.pendingFilings?.getExpectedCorpCode?.(key.symbol) ?? null;
+      if (mappedCorp !== null && discoveredCorp !== null && mappedCorp !== discoveredCorp)
+        throw new ProviderRequestBlockedError("IDENTITY_CHANGED", cacheKey, `${mappedCorp} -> ${discoveredCorp}`);
+      const expectedCorp = discoveredCorp ?? mappedCorp;
+      const filing = options.pendingFilings?.get(key);
+      if (filing?.status === "UNRESOLVED")
+        throw new ProviderRequestBlockedError("UNRESOLVED_FILING", cacheKey, filing.receiptNo);
+      if (filing?.retryAfterMs != null && filing.retryAfterMs > clock.now())
+        throw new ProviderRequestBlockedError("PENDING_PUBLICATION", cacheKey, filing.receiptNo);
+      let state: ProviderSourceState = {
+        kind: options.pendingFilings?.isCollected?.(key) === true ? "REQUIREMENT" : "MISSING",
+        evidence: `원문 부재: ${cacheKey}`,
+      };
+      try {
         const snapshot = options.rawSnapshots?.get(key);
         if (snapshot !== null && snapshot !== undefined) {
           const cachedRows = rowsFromSnapshot<T>(snapshot.payload);
-          if (cachedRows !== null) return cachedRows;
+          if (cachedRows !== null) {
+            for (const row of cachedRows) {
+              if (typeof row !== "object" || row === null) continue;
+              const identity = row as Record<string, unknown>;
+              if (expectedCorp !== null && identity.corp_code !== undefined && identity.corp_code !== expectedCorp)
+                throw new ProviderRequestBlockedError("IDENTITY_MISMATCH", cacheKey, `${String(identity.corp_code)} != ${expectedCorp}`);
+              if ((identity.bsns_year !== undefined && String(identity.bsns_year) !== String(key.businessYear)) ||
+                  (identity.reprt_code !== undefined && identity.reprt_code !== key.reportCode))
+                throw new DartRawSnapshotError("IDENTITY_MISMATCH", cacheKey, createHash("sha256").update(JSON.stringify(snapshot.payload)).digest("hex"));
+            }
+            const reflected = filing == null || cachedRows.some((row) =>
+              typeof row === "object" && row !== null &&
+              String((row as Record<string, unknown>).rcept_no ?? "") >= filing.receiptNo);
+            if (reflected) {
+              if (filing != null) options.pendingFilings?.markApplied(key, filing.receiptNo);
+              return cachedRows;
+            }
+            state = { kind: cachedRows.length === 0 ? "PUBLICATION" : "REPLACEMENT", evidence: `공시 ${filing.receiptNo}: ${createHash("sha256").update(JSON.stringify(snapshot.payload)).digest("hex")}` };
+          } else {
+            throw new DartRawSnapshotError("PARSER_INCOMPATIBLE", cacheKey, createHash("sha256").update(JSON.stringify(snapshot.payload)).digest("hex"));
+          }
+
+
         }
+      } catch (error) {
+        if (!(error instanceof DartRawSnapshotError) || options.requestPolicy === undefined) throw error;
+        state = { kind: error.reason === "PARSER_INCOMPATIBLE" ? "REQUIREMENT" : "CORRUPT", evidence: `${error.reason}: ${cacheKey}: ${error.evidence}` };
       }
 
+      if (state.kind !== "MISSING" && state.kind !== "PUBLICATION" && options.requestPolicy === undefined)
+        throw new ProviderRequestBlockedError(state.kind, cacheKey, state.evidence);
+      const permit = options.requestPolicy?.authorize({
+        provider: "DART", namespace: dartConfig?.baseUrl ?? "opendart",
+        endpoint: path, parameters: {
+          symbol: key.symbol, businessYear: String(key.businessYear),
+          reportCode: key.reportCode, fsDiv: key.fsDiv,
+        },
+      }, state);
       const corpCode = await resolveCorpCode();
       if (corpCode === null) throw new CorpCodeMissingError();
-      const envelope = await liveCall<T>(path, params(corpCode), hooks);
+      const parameters = params(corpCode);
+      const envelope = await liveCall<T>(path, parameters, {
+        beforeRequest: () => { hooks.beforeRequest?.(); permit?.beforeAttempt(); },
+      });
       const liveRows = rowsFromSnapshot<T>(envelope);
       if (liveRows === null) {
         throw new DartSymbolPayloadError(
           "DART 응답의 list 필드가 배열 형식이 아닙니다",
         );
       }
+      for (const row of liveRows) {
+        if (typeof row === "object" && row !== null && "corp_code" in row && row.corp_code !== corpCode)
+          throw new ProviderRequestBlockedError("IDENTITY_MISMATCH", cacheKey, `${String(row.corp_code)} != ${corpCode}`);
+      }
+      if (filing != null && !liveRows.some((row) => typeof row === "object" && row !== null &&
+          String((row as Record<string, unknown>).rcept_no ?? "") >= filing.receiptNo)) {
+        options.rawSnapshots?.observe?.(key, envelope, clock.now());
+        options.pendingFilings?.markPendingPublication(key, filing.receiptNo, clock.now() + 86_400_000);
+        throw new ProviderRequestBlockedError("PENDING_PUBLICATION", cacheKey, filing.receiptNo);
+      }
       options.rawSnapshots?.put(key, envelope, clock.now());
+      if (filing != null) options.pendingFilings?.markApplied(key, filing.receiptNo);
+      permit?.complete();
       return liveRows;
     };
     const token = {};
-    const rows = load().catch((error: unknown) => {
+    const store = options.rawSnapshots;
+    const inflight = store === undefined ? undefined : rawStoreRequests.get(store) ?? new Map<string, Promise<readonly unknown[]>>();
+    if (store !== undefined && inflight !== undefined) rawStoreRequests.set(store, inflight);
+    const sharedKey = `${dartConfig?.baseUrl ?? "opendart"}:${cacheKey}`;
+    let shared = inflight?.get(sharedKey);
+    if (shared === undefined) {
+      const started = load();
+      shared = started.finally(() => {
+        if (inflight !== undefined && inflight.get(sharedKey) === shared) inflight.delete(sharedKey);
+      });
+      inflight?.set(sharedKey, shared);
+    }
+    const rows = shared.catch((error: unknown) => {
       // PREFER_CACHE가 진행 중인 동안 REFRESH가 같은 키를 교체할 수 있다. 먼저 시작한
       // promise의 실패가 뒤의 유효한 entry까지 지우지 않도록 identity를 확인한다.
       if (requestCache.get(cacheKey)?.token === token)
@@ -492,6 +577,7 @@ export function createDartFactSource(
   }
 
   // 종목코드 → DART corp_code. 주입되지 않으면 corpCode.xml 을 1회 내려받아 캐시한다.
+  let corpCodePermit: ProviderRequestPermit | undefined;
   const corpCodes: CorpCodeResolver =
     options.corpCodeResolver ??
     createDartCorpCodeCache(async () => {
@@ -513,6 +599,16 @@ export function createDartFactSource(
       if (/<status>\s*020\s*<\/status>/.test(errorEnvelope))
         reportQuotaExceeded();
       return body;
+    }, options.corpCodeSnapshots, () => clock.now(), {
+      beforeDownload: (missingSymbol) => {
+        if (dartConfig === null) throw new FactSourceNotConfiguredError();
+        corpCodePermit = options.requestPolicy?.authorize({
+        provider: "DART", namespace: dartConfig.baseUrl,
+        endpoint: "/api/corpCode.xml", parameters: missingSymbol === undefined ? {} : {symbol:missingSymbol},
+      }, { kind: "MISSING", evidence: missingSymbol === undefined ? "고유번호 원문 부재"
+        : `신규 종목 ${missingSymbol}: ${createHash("sha256").update(options.corpCodeSnapshots?.get()?.xml ?? "").digest("hex")}` });
+      },
+      afterPersist: () => { corpCodePermit?.complete(); },
     });
 
   function lazyCorpCode(
@@ -525,7 +621,7 @@ export function createDartFactSource(
         return Promise.reject(new FactSourceNotConfiguredError());
       }
       pending ??= corpCodes.resolve(symbol, () =>
-        beforePhysicalRequest(hooks.beforeRequest),
+        beforePhysicalRequest(() => { hooks.beforeRequest?.(); corpCodePermit?.beforeAttempt(); }),
       );
       return pending;
     };

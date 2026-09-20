@@ -252,6 +252,9 @@ export class BenchmarkService {
   }
 
   async syncDate(benchmarkId: BenchmarkId, date: string): Promise<void> {
+    // 기존 값과 확인된 무자료 날짜는 원문이 없는 과거 자료도 재사용한다.
+    if (!isFredBenchmarkId(benchmarkId) && (this.list(benchmarkId, date, date).length > 0 ||
+      this.benchmarkCoverageRanges(benchmarkId, date, date).length > 0)) return;
     if (isFredBenchmarkId(benchmarkId)) {
       const points = await this.deps.fredSource.fetchBenchmarkRange(
         benchmarkId,

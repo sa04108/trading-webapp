@@ -76,8 +76,8 @@ export interface FetchFinancialsRequest {
   readonly rawSnapshotScope?: object;
   /**
    * PREFER_CACHE는 영속 원문 snapshot을 먼저 재생하고 없는 요청만 원천에서 채운다.
-   * REFRESH는 정정공시·명시적 FULL 수집처럼 원천 최신성이 필요한 work unit이다.
-   * 생략 시 직접 어댑터 호출의 기존 의미를 지키기 위해 REFRESH로 동작한다.
+   * 생략과 REFRESH 모두 기존 정상 원문을 재사용한다. 전체 재생은 외부 갱신 권한이 아니다.
+   * 원문 교체는 별도 공급자 요청 정책의 구체적 근거와 승인이 필요하다.
    */
   readonly rawSnapshotPolicy?: "PREFER_CACHE" | "REFRESH";
 }

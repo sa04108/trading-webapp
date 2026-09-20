@@ -66,6 +66,7 @@ export interface KrxHistoricalUniverseSource {
   fetchDailyTrades(
     market: KrxMarket,
     isoDate: string,
+    options?: { readonly requireExisting?: boolean },
   ): Promise<readonly KrxDailyTradeRow[]>;
   /** 해당 날짜의 대표지수 종가. 휴장일은 null이다. 테스트용 옛 소스는 생략할 수 있다. */
   fetchBenchmarkClose?(

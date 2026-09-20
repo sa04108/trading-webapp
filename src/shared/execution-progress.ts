@@ -3,6 +3,10 @@ export type ExecutionActorKind = "SERVER" | "REMOTE_AGENT" | "SERVER_AGENT";
 export type ExecutionProgressUnit = "DATES" | "SYMBOLS" | "BARS" | "BYTES";
 
 export type ExecutionActivity =
+  | "LOCAL_REPLAY"
+  | "SOURCE_FETCH"
+  | "FILING_DISCOVERY"
+  | "BLOCKED"
   | "WAITING_FOR_EXECUTOR"
   | "CHECKING_INPUT"
   | "COLLECTING_MARKET"

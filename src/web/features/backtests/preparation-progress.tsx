@@ -25,6 +25,10 @@ const PHASE_LABELS: Record<PreparationPhase, string> = {
 };
 
 const ACTIVITY_LABELS: Record<ExecutionActivity, string> = {
+  LOCAL_REPLAY: "저장 원문 재처리",
+  SOURCE_FETCH: "공급자 원문 수집",
+  FILING_DISCOVERY: "일일 공시 확인",
+  BLOCKED: "데이터 갱신 승인 필요",
   WAITING_FOR_EXECUTOR: "실행 자원 대기",
   CHECKING_INPUT: "계산 입력 확인",
   COLLECTING_MARKET: "KRX 시장 데이터 수집·확인",

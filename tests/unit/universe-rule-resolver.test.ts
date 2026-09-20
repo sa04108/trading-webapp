@@ -116,6 +116,17 @@ describe('UniverseRuleResolver.resolve', () => {
     rebalanceInterval: { value: 1, unit: 'MONTH' },
   });
 
+  it('일별 미보고 종목이 있는 legacy 완료 날짜는 원문 없이 다시 사용할 수 있다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
+    await ingestFixtureUniverse(ctx);
+    const requests = ctx.fake.requests.length;
+    const before = ctx.t.container.database.sqlite.prepare('SELECT * FROM symbol_master_coverage').all();
+    expect(await ctx.svc.ingestDate('2023-01-02')).toEqual({ kind: 'ALREADY_COVERED' });
+    await ctx.svc.ensureSelectionMetrics(['2023-01-02']);
+    expect(ctx.fake.requests).toHaveLength(requests);
+    expect(ctx.t.container.database.sqlite.prepare('SELECT * FROM symbol_master_coverage').all()).toEqual(before);
+  });
+
   it('시총 상위 N 을 내림차순으로 고르고, 시장·instrumentType·시총 유무로 거른다', async ({ krxApps }) => {
     const ctx = await setup(krxApps);
     await ingestFixtureUniverse(ctx);
@@ -181,9 +192,8 @@ describe('UniverseRuleResolver.resolve', () => {
         excludedNonTradingCount: 0,
       },
     ]);
-    // 커버된 날짜의 getMarketCapsAt 캐시 미스(KOSPI·KOSDAQ 2회)만 발생한다 —
-    // 커버 밖 날짜는 isCovered 에서 걸러져 KRX 호출 예산을 쓰지 않는다.
-    expect(duringResolve).toHaveLength(2);
+    // 커버된 날짜는 이미 수집한 지표를 재사용하고 커버 밖 날짜는 조회하지 않는다.
+    expect(duringResolve).toHaveLength(0);
 
   });
 

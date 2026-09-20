@@ -93,6 +93,7 @@ export class JobQueue {
   constructor(
     private readonly handle: DatabaseHandle,
     private readonly clock: Clock,
+    private readonly providerFreshness?: () => { lastCheckedAtMs: number | null; checkedThrough: string | null; warning: string | null },
   ) {
     this.db = handle.db;
   }
@@ -142,6 +143,8 @@ export class JobQueue {
         ) {
           throw new PreparationReferenceError();
         }
+        const freshness = this.providerFreshness?.();
+        const warnings = [...submitWarnings, ...(freshness?.warning ? [freshness.warning] : [])];
         const row: typeof backtestJobs.$inferInsert = {
           id: newId("bt"),
           preparationJobId,
@@ -168,10 +171,12 @@ export class JobQueue {
           cloneBatchId: metadata.cloneBatchId ?? null,
           cloneSourceJobId: metadata.cloneSourceJobId ?? null,
           submitWarningsJson:
-            submitWarnings.length > 0 ? JSON.stringify(submitWarnings) : null,
+            warnings.length > 0 ? JSON.stringify(warnings) : null,
           createdAtMs: this.clock.now(),
         };
         this.db.insert(backtestJobs).values(row).run();
+        if (freshness) this.handle.sqlite.prepare(`INSERT INTO provider_execution_provenance
+          (job_id, freshness_json) VALUES (?, ?)`).run(row.id, JSON.stringify(freshness));
         if (metadata.wizardOwner && preparationJobId) {
           const context = metadata.wizardOwner.context ?? owner?.context;
           if (context !== undefined) {

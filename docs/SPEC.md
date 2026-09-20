@@ -65,7 +65,7 @@
 | 저장소 | 보관 내용·접근 주체 |
 | --- | --- |
 | 운영 DB `app.sqlite` | 계정·세션, API 사용량·수집 큐, 준비·작업·결과·알림. 서버가 조회·변경한다. |
-| 계산 데이터 DB `app.data.sqlite` | 가격·종목 이력, 재무·자본변동 facts, 벤치마크·coverage. 서버가 수집·갱신한다. |
+| 계산 데이터 DB `app.data.sqlite` | 가격·종목 이력, 재무·자본변동 facts, 벤치마크·coverage·확인된 입력 문제. 서버가 수집·갱신한다. |
 | 계산 스냅샷 | 계산 데이터 DB에서 게시한 버전별 읽기 전용 파일. 운영 인증 정보와 원본 API 응답 캐시는 포함하지 않는다. |
 | 에이전트 작업 DB·결과 파일 | 계산에 필요한 최소 작업 상태와 전송 대기 결과. 서버 운영 DB의 복제본이 아니며 최종 결과의 기준점도 아니다. |
 
@@ -81,7 +81,7 @@ KRX는 가격·과거 종목 구성, DART는 재무·자본변동, FRED는 추�
 
 실행 중인 스냅샷과 작업·미리보기가 참조하는 준비 결과는 보존한다. 참조 없는 종료 작업·캐시만 정리하며 **캐시 무효화와 과거 실행 근거 삭제를 구분**한다.
 
-Git SHA는 출처를 기록한다. `agentVersion`·`collectionVersion`·`previewVersion`·`executionVersion`·`validationVersion`은 각각 배포 클라이언트·수집·미리보기·실행·기간 검증의 호환성을 판단한다. 데이터셋 ID·데이터 revision·게시 버전·스키마 버전·파일 해시는 이 코드 버전과 구분한다.
+Git SHA는 출처를 기록한다. `agentVersion`·`collectionVersion`·`previewVersion`·`executionVersion`·`validationVersion`은 배포 클라이언트·수집 실행 출처·미리보기·실행·기간 검증을 구분한다. 수집 실행 해시는 원천 재사용이나 외부 요청 허용 기준이 아니다(D-096). 데이터셋 ID·데이터 revision·게시 버전·스키마 버전·파일 해시는 이 코드 버전과 구분한다.
 
 구현: [container.ts](../src/server/bootstrap/container.ts), [agent-coordinator.ts](../src/server/modules/agents/application/agent-coordinator.ts), [database.ts](../src/runtime/shared/db/database.ts).
 

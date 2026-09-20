@@ -1,3 +1,4 @@
+import type { KrxTradingCalendar } from "./krx-trading-calendar.js";
 import type { Clock } from "../../../../../runtime/shared/clock.js";
 import type { Logger } from "../../../../shared/logger.js";
 import type { ExternalApiUsage } from "../../../../shared/db/external-api-usage.js";
@@ -29,6 +30,13 @@ import {
   parseKrxEnvelope,
 } from "./krx-contract.js";
 
+import { KrxRawSnapshotCorruptError, type KrxRawSnapshotKey, type KrxRawSnapshotStore } from "./krx-raw-snapshot-store.js";
+
+import { ProviderRequestBlockedError, type ProviderRequestPolicy, type ProviderSourceState } from "../../../../shared/provider-request-policy.js";
+
+// 같은 서버 저장소를 공유하는 진입점은 하나의 물리 요청을 기다린다.
+const storeRequests = new WeakMap<KrxRawSnapshotStore, Map<string, Promise<unknown>>>();
+
 export interface KrxConfig {
   readonly baseUrl: string;
   readonly apiKey: string;
@@ -56,6 +64,14 @@ const BENCHMARK_PATHS: Record<KrxBenchmarkId, string> = {
 
 const SAFE_REQUEST_ERROR_MESSAGE = "KRX Open API 요청에 실패했습니다.";
 
+function isBlockedError(value: unknown): value is ProviderRequestBlockedError {
+  try {
+    return value instanceof ProviderRequestBlockedError;
+  } catch {
+    return false;
+  }
+}
+
 function readCaughtErrorMessage(value: unknown): string | null {
   try {
     if (!(value instanceof Error)) return null;
@@ -63,21 +79,6 @@ function readCaughtErrorMessage(value: unknown): string | null {
   } catch {
     return null;
   }
-}
-
-function notConfiguredSource(): KrxHistoricalUniverseSource {
-  return {
-    fetchIssueBaseInfo: async () => {
-      throw new KrxNotConfiguredError();
-    },
-    fetchDailyTrades: async () => {
-      throw new KrxNotConfiguredError();
-    },
-    fetchBenchmarkClose: async () => {
-      throw new KrxNotConfiguredError();
-    },
-    todayMaxEndpointCallCount: () => 0,
-  };
 }
 
 export function createKrxHistoricalUniverseSource(
@@ -88,10 +89,20 @@ export function createKrxHistoricalUniverseSource(
     fetchImpl?: typeof fetch;
     sleep?: (ms: number) => Promise<void>;
     usage?: ExternalApiUsage;
+    rawSnapshotStore?: KrxRawSnapshotStore;
+    rawNamespace?: string;
+    requestPolicy?: ProviderRequestPolicy;
+    tradingCalendar?: KrxTradingCalendar;
+    beforeSourceFetch?: (key: KrxRawSnapshotKey) => void;
   } = {},
 ): KrxHistoricalUniverseSource {
-  if (config === null) return notConfiguredSource();
-  const configured = config;
+  const configured = config ?? { baseUrl: "https://data-dbg.krx.co.kr", apiKey: "", approvalExpiry: null };
+  const namespaceUrl = new URL(options.rawNamespace ?? configured.baseUrl);
+  const namespace = `${namespaceUrl.origin}${namespaceUrl.pathname}`.replace(/\/+$/, "");
+  const pending = options.rawSnapshotStore
+    ? (storeRequests.get(options.rawSnapshotStore) ?? new Map<string, Promise<unknown>>())
+    : new Map<string, Promise<unknown>>();
+  if (options.rawSnapshotStore) storeRequests.set(options.rawSnapshotStore, pending);
 
   const client = new RestClient({
     baseUrl: configured.baseUrl,
@@ -154,18 +165,64 @@ export function createKrxHistoricalUniverseSource(
     }
   }
 
-  async function fetchRows<T>(
-    market: KrxMarket,
-    isoDate: string,
-    path: string,
-    parseRows: (rows: readonly Record<string, unknown>[]) => T[],
-  ): Promise<readonly T[]> {
+  function pendingEmptyState(path: string, basDd: string, payload: unknown, fetchedAtMs: number): ProviderSourceState | null {
+    if (!options.tradingCalendar) return null;
+    const market: KrxMarket = path.includes("ksq") || path.includes("kosdaq") ? "KOSDAQ" : "KOSPI";
+    if (parseKrxEnvelope(payload).length > 0) return null;
+    const isoDate = `${basDd.slice(0, 4)}-${basDd.slice(4, 6)}-${basDd.slice(6, 8)}`;
+    const calendar = options.tradingCalendar.classify(isoDate, market);
+    if (calendar.state === "CLOSED") return null;
+    return { kind: "REQUIREMENT", evidence: `KRX_EMPTY_PENDING:${JSON.stringify({ calendar, fetchedAtMs })}` };
+  }
+
+  function authorizeSource(path: string, basDd: string, state: ProviderSourceState) {
+    const key = { provider: "KRX" as const, namespace, endpoint: path, parameters: { basDd } };
+    const pending = state.evidence.startsWith("KRX_EMPTY_PENDING:");
+    if (state.kind !== "MISSING" && !options.requestPolicy)
+      throw new ProviderRequestBlockedError(pending ? "PENDING_PUBLICATION" : "BLOCKED_SOURCE_REQUIREMENT", JSON.stringify(key), state.evidence);
+    try {
+      return options.requestPolicy?.authorize(key, state);
+    } catch (error) {
+      if (pending && isBlockedError(error))
+        throw new ProviderRequestBlockedError("PENDING_PUBLICATION", error.requestKey, error.evidence);
+      throw error;
+    }
+  }
+
+  async function fetchPayload(path: string, basDd: string, requireExisting = false): Promise<unknown> {
+    const key = { namespace, endpoint: path, basDd };
+    let state: ProviderSourceState = requireExisting
+      ? { kind: "REQUIREMENT", evidence: "기존 수집 날짜의 필수 필드에 사용할 저장 원문 없음" }
+      : { kind: "MISSING", evidence: "해당 요청 키의 저장 원문 없음" };
+    try {
+      const saved = options.rawSnapshotStore?.get(key);
+      if (saved) {
+        const pendingState = pendingEmptyState(path, basDd, saved.payload, saved.fetchedAtMs);
+        if (!pendingState) return saved.payload;
+        state = pendingState;
+      }
+    } catch (error) {
+      if (!(error instanceof KrxRawSnapshotCorruptError) || !options.requestPolicy) throw error;
+      state = { kind: "CORRUPT", evidence: error.evidence };
+    }
+    const requestKey = `${namespace}|${path}|${basDd}`;
+    const running = pending.get(requestKey);
+    if (running) return running;
+    const request = fetchRemotePayload(path, basDd, state);
+    pending.set(requestKey, request);
+    try {
+      return await request;
+    } finally {
+      pending.delete(requestKey);
+    }
+  }
+
+  async function fetchRemotePayload(path: string, basDd: string, state: ProviderSourceState): Promise<unknown> {
+    const permit = authorizeSource(path, basDd, state);
+    if (config === null) throw new KrxNotConfiguredError();
     const today = currentDate();
     ensureApprovalIsValid(today);
     if (quotaWasExceeded(path)) throw new KrxQuotaError();
-
-    const basDd = isoToBasDd(isoDate);
-    let callsToday = options.usage?.callsUsed("KRX", path) ?? 0;
     let payload: unknown;
     try {
       payload = await client.request<unknown>(
@@ -179,11 +236,16 @@ export function createKrxHistoricalUniverseSource(
           // 재시도도 공급자 입장에서는 별도 HTTP 요청이다. 실제 attempt 직전에 기록해야
           // 429/5xx 재시도가 오늘 예산에서 사라지지 않는다.
           beforeAttempt: () => {
-            callsToday = recordCall(today, path);
+            ensureApprovalIsValid(currentDate());
+            if (quotaWasExceeded(path)) throw new KrxQuotaError();
+            options.beforeSourceFetch?.({ namespace, endpoint: path, basDd });
+            permit?.beforeAttempt();
+            recordCall(currentDate(), path);
           },
         },
       );
     } catch (error) {
+      if (isBlockedError(error)) throw error;
       const message = readCaughtErrorMessage(error);
 
       // RestClient가 구조화된 HTTP 오류를 아직 제공하지 않아 상태 코드를 메시지로 구분한다.
@@ -208,6 +270,30 @@ export function createKrxHistoricalUniverseSource(
       throw new Error(SAFE_REQUEST_ERROR_MESSAGE);
     }
 
+    // 파싱과 정규화 실패 이전에 미사용 필드를 포함한 전체 응답을 보존한다.
+    const fetchedAtMs = clock.now();
+    options.rawSnapshotStore?.put({ namespace, endpoint: path, basDd }, payload, fetchedAtMs);
+    // HTTP 200이어도 오류 봉투는 수집 완료로 인증하지 않는다.
+    parseKrxEnvelope(payload);
+    // 계획의 물리 수집 권한을 소비한 뒤 빈 응답의 게시 확정 여부는 별도로 판정한다.
+    permit?.complete();
+    const pendingState = pendingEmptyState(path, basDd, payload, fetchedAtMs);
+    if (pendingState) {
+      const nextPermit = authorizeSource(path, basDd, pendingState);
+      throw new ProviderRequestBlockedError("PENDING_PUBLICATION", nextPermit?.fingerprint ?? JSON.stringify({ namespace, path, basDd }), pendingState.evidence);
+    }
+    return payload;
+  }
+
+  async function fetchRows<T>(
+    market: KrxMarket,
+    isoDate: string,
+    path: string,
+    parseRows: (rows: readonly Record<string, unknown>[]) => T[],
+    requireExisting = false,
+  ): Promise<readonly T[]> {
+    const basDd = isoToBasDd(isoDate);
+    const payload = await fetchPayload(path, basDd, requireExisting);
     const rawRows = parseKrxEnvelope(payload);
     const rows: T[] = [];
     let firstContractError: KrxContractError | null = null;
@@ -250,7 +336,7 @@ export function createKrxHistoricalUniverseSource(
         market,
         basDd,
         rows: rows.length,
-        callsToday,
+        callsToday: options.usage?.callsUsed("KRX", path) ?? callCounts.get(countKey(currentDate(), path)) ?? 0,
       },
       "krx fetch ok",
     );
@@ -266,8 +352,9 @@ export function createKrxHistoricalUniverseSource(
     fetchDailyTrades: (
       market: KrxMarket,
       isoDate: string,
+      requestOptions?: { readonly requireExisting?: boolean },
     ): Promise<readonly KrxDailyTradeRow[]> =>
-      fetchRows(market, isoDate, PATHS[market].daily, parseDailyRows),
+      fetchRows(market, isoDate, PATHS[market].daily, parseDailyRows, requestOptions?.requireExisting),
     fetchBenchmarkClose: async (
       benchmarkId: KrxBenchmarkId,
       isoDate: string,
