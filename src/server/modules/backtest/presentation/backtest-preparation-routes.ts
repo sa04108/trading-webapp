@@ -30,6 +30,7 @@ export interface BacktestPreparationRouteDeps {
   readonly candles: Pick<CandleCoverageService, "getLastTsInWindows">;
   readonly symbolMaster: Pick<SymbolMasterService, "delistedEventsBetween">;
   readonly dartApiKeyAvailable: boolean;
+  readonly refreshProviderFilings?: () => Promise<void>;
   readonly progress: Pick<AgentCoordinator, "preparationView">;
 }
 
@@ -42,6 +43,7 @@ const previewRequestSchema = z.object({
   strategyId: z.string().min(1),
   parameters: z.record(z.string(), z.unknown()),
   sourceJobId: z.string().min(1).optional(),
+  completedPreparationJobId: z.string().min(1).optional(),
 });
 
 export function registerBacktestPreparationRoutes(
@@ -70,7 +72,7 @@ export function registerBacktestPreparationRoutes(
             .join("; "),
         });
       }
-      const { sourceJobId, ...input } = parsed.data;
+      const { sourceJobId, completedPreparationJobId, ...input } = parsed.data;
       const owner = {
         userId: request.authUser!.id,
         context: sourceJobId ?? "",
@@ -94,6 +96,16 @@ export function registerBacktestPreparationRoutes(
       }
 
       try {
+        // 완료 알림 뒤의 결과 읽기는 새 미리보기 시작과 구분한다. 현재 소유한 작업만 읽는다.
+        if (completedPreparationJobId !== undefined) {
+          const owned = orchestrator.getReadyPreviewForWizard(input, owner.userId);
+          const ready = owned?.preparationJobId === completedPreparationJobId
+            ? orchestrator.getFreshPreviewDetails(input, completedPreparationJobId) : null;
+          if (!ready) return reply.code(409).send({
+            error: "PREPARATION_REQUIRED", message: "미리보기 결과가 변경되었습니다. 다시 시작하세요.",
+          });
+          return reply.send({ ...ready.preview, fundamentalSymbols: ready.fundamentalSymbols });
+        }
         // 같은 입력의 active job은 진행 상태만 담고 있다. 완료 미리보기를 다시 검증하는
         // 비싼 작업을 예약하기 전에 먼저 반환해 반복 POST가 resolver 뒤에 쌓이지 않게 한다.
         const active = orchestrator.getActive(input);
@@ -101,6 +113,10 @@ export function registerBacktestPreparationRoutes(
           orchestrator.bindWizard(owner.userId, owner.context, active.id);
           return reply.code(202).send({ job: deps.progress.preparationView(active) });
         }
+
+        if (deps.refreshProviderFilings) return reply.code(202).send({
+          job: deps.progress.preparationView(orchestrator.start(input, owner, deps.refreshProviderFilings)),
+        });
 
         const ready = orchestrator.getFreshPreviewDetails(input);
         if (ready) {

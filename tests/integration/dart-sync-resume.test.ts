@@ -58,7 +58,6 @@ function setup(database: DatabaseHandle, now: number, corrected = false) {
     corpCodeResolver: { resolve: async () => '00126380' }, sleep: async () => {}, fetchImpl,
   });
   const discovery = () => new DartFilingDiscovery({sqlite:database.sqlite,logger:LOGGER,now:clock.now,
-    onPageStored:async()=>{pending.reconcileDiscoveredFilings();},
     fetchPage:async(from,to,page,beforeAttempt)=>{
       beforeAttempt();
       const query=new URLSearchParams({bgn_de:from,end_de:to,page_no:String(page)});
@@ -159,7 +158,7 @@ describe('DART 수집 중단 후 SQLite 재개', () => {
     }
   });
 
-  it('일일 발견과 승인 이후 정정 보고서의 endpoint만 갱신하고 재시작은 모두 재사용한다', async () => {
+  it('명시적 공시 확인과 승인 이후 정정 보고서만 갱신하고 기존 원문은 재사용한다', async () => {
     const database = openDatabase(':memory:');
     try {
       seed(database);
@@ -172,9 +171,9 @@ describe('DART 수집 중단 후 SQLite 재개', () => {
       expect(resumed.calls).toHaveLength(8);
       expect(resumed.calls.every((call)=>call.includes(':2017:'))).toBe(true);
       resumed.calls.length=0;
-      await resumed.discovery().tick();
+      await resumed.discovery().refresh();
       expect(resumed.calls).toEqual(['/api/list.json:null:null']);
-      expect(resumed.pending.reconcileDiscoveredFilings()).toEqual([{symbol:'005930',year:2016}]);
+      expect(await resumed.pending.reconcileDiscoveredFilings()).toEqual([{symbol:'005930',year:2016}]);
       resumed.calls.length=0;
       const correction={...REQUEST,toYear:2016,mode:'FULL' as const};
       await expect(resumed.service.sync(correction)).rejects.toThrow(/SOURCE_CHANGE_CONFIRMED/);
@@ -195,10 +194,10 @@ describe('DART 수집 중단 후 SQLite 재개', () => {
       expect(facts.find((fact)=>fact.field==='CURRENT_ASSETS' && fact.periodKey==='2016Q4')?.value).toBe(2000);
       expect(facts.filter((fact)=>fact.field==='CURRENT_ASSETS' && fact.periodKey.startsWith('2016') && fact.periodKey!=='2016Q4').every((fact)=>fact.value===1000)).toBe(true);
       const restarted=setup(database,START + 2 * 86_400_000,true);
-      await restarted.discovery().tick();
+      await restarted.discovery().refresh();
       await restarted.service.sync(REQUEST);
       await restarted.service.syncCorporateActions(REQUEST);
-      expect(restarted.calls).toEqual([]);
+      expect(restarted.calls).toEqual(['/api/list.json:null:null']);
     } finally { database.close(); }
   });
 });

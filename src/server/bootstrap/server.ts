@@ -119,7 +119,9 @@ export async function buildServer(
             container.database.sqlite.prepare(`UPDATE agent_data_requests SET status = 'QUEUED',
               next_attempt_at_ms = 0 WHERE status = 'BLOCKED' AND instr(error, ?) > 0`)
               .run(request.params.fingerprint);
-            void container.reconcileProviderFilings();
+            void container.reconcileProviderFilings().catch((error: unknown) => {
+              api.log.error({ err: error }, "승인된 공시 반영 실패");
+            });
           }
           return { ok: true };
         });
@@ -194,6 +196,8 @@ export async function buildServer(
           candles: container.candleCoverageService,
           symbolMaster: container.symbolMasterService,
           dartApiKeyAvailable: container.config.dartApiKey !== null,
+          refreshProviderFilings: container.config.dartApiKey === null
+            ? undefined : () => container.refreshProviderFilings(),
           progress: container.agentCoordinator,
         },
         requireAuth,
@@ -236,12 +240,6 @@ export async function buildServer(
     3_600_000,
   );
   symbolMasterSchedulerTimer.unref();
-  const filingDiscoveryTimer = setInterval(() => void container.filingDiscovery.tick().then(container.reconcileProviderFilings), 60_000);
-  filingDiscoveryTimer.unref();
-  app.addHook("onClose", async () => {
-    clearInterval(filingDiscoveryTimer);
-    await container.filingDiscovery.stop();
-  });
   app.addHook("onClose", (_instance, done) => {
     clearInterval(symbolMasterSchedulerTimer);
     done();

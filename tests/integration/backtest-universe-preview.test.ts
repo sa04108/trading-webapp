@@ -1109,7 +1109,7 @@ describe('POST /backtests/universe-preview — SymbolMasterNotCoveredError 매�
     });
 
     expect(res.statusCode).toBe(202);
-    expect(res.json()).toMatchObject({ job: { status: 'QUEUED' } });
+    expect(res.json()).toMatchObject({ job: { status: 'WAITING_DATA', phase: 'FILING_DISCOVERY' } });
   });
 });
 

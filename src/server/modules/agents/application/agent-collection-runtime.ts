@@ -33,7 +33,6 @@ import {
 
 type CollectionConfig = Pick<
   AppConfig,
-  | "dartDiscoveryHourKst"
   | "dartApiKey"
   | "dartBaseUrl"
   | "krxApiKey"
@@ -146,7 +145,8 @@ export function createAgentCollectionRuntime(input: {
     if (reconciliationStopped) return Promise.resolve();
     if (reconciliation) return reconciliation;
     reconciliation = (async () => {
-      for (const item of pendingFilings.reconcileDiscoveredFilings()) {
+      for (const item of await pendingFilings.reconcileDiscoveredFilings({ shouldStop: () => reconciliationStopped })) {
+        if (reconciliationStopped) return;
         try {
           const request = { symbols: [item.symbol], fromYear: item.year, toYear: item.year,
             consolidated: true, mode: "FULL" as const };
@@ -167,14 +167,12 @@ export function createAgentCollectionRuntime(input: {
             blocked: error instanceof ProviderRequestBlockedError, err: error }, "공시 반영 대기");
         }
       }
-    })().catch((error: unknown) => {
-      logger.error({err:error}, "공시 반영 상태 재평가 실패");
-    }).finally(() => { reconciliation = null; });
+    })().finally(() => { reconciliation = null; });
     return reconciliation;
   };
   const discoveryClient = new RestClient({ baseUrl: config.dartBaseUrl, logger });
   const filingDiscovery = new DartFilingDiscovery({
-    sqlite: database.sqlite, logger, now: () => clock.now(), hourKst: config.dartDiscoveryHourKst, onPageStored: async () => { pendingFilings.reconcileDiscoveredFilings(); },
+    sqlite: database.sqlite, logger, now: () => clock.now(),
     fetchPage: config.dartApiKey ? async (from, to, page, beforeAttempt) => {
       const parameters = { bgn_de: from.replaceAll("-", ""), end_de: to.replaceAll("-", ""),
         pblntf_ty: "A", page_no: String(page), page_count: "100" };
@@ -185,13 +183,24 @@ export function createAgentCollectionRuntime(input: {
           if (externalApiUsage.quotaExceeded("DART", "daily")) throw new Error("DART 일일 한도 대기");
           const callsUsed = externalApiUsage.recordCall("DART", "daily");
           logger.info({ event: "provider.http", activity: "FILING_DISCOVERY", endpoint: "/api/list.json",
-            requestKey: parameters, callsUsed }, "일일 공시 목록 요청");
+            requestKey: parameters, callsUsed }, "미리보기 공시 목록 요청");
         },
       });
       if (envelope.status === "020") externalApiUsage.reportQuotaExceeded("DART", "daily", "DART 일일 호출 한도 초과");
       return envelope;
     } : null,
   });
+  let previewRefresh: Promise<void> | null = null;
+  const refreshProviderFilings = (): Promise<void> => {
+    if (reconciliationStopped) return Promise.reject(new Error("공시 확인이 종료되었습니다"));
+    if (previewRefresh) return previewRefresh;
+    // 목록 확인과 원문 대조 전체를 공유해 중간 revision으로 미리보기를 시작하지 않는다.
+    previewRefresh = (async () => {
+      await filingDiscovery.refresh();
+      await reconcileProviderFilings();
+    })().finally(() => { previewRefresh = null; });
+    return previewRefresh;
+  };
   const collectData = async (
     request: AgentDataRequest,
     shouldStop: () => boolean,
@@ -308,8 +317,12 @@ export function createAgentCollectionRuntime(input: {
   return {
     requestPolicy,
     filingDiscovery,
+    refreshProviderFilings,
     reconcileProviderFilings,
-    stopProviderReconciliation: async () => { reconciliationStopped = true; await reconciliation; },
+    stopProviderReconciliation: async () => {
+      reconciliationStopped = true;
+      await Promise.allSettled([reconciliation, previewRefresh]);
+    },
     symbolService,
     factRepository,
     factCoverageStore,

@@ -51,6 +51,15 @@ describe('newerPreparationJob', () => {
     const restarted = { ...snapshot(1), progressEpoch: 'server-two' };
     expect(newerPreparationJob(snapshot(50), restarted)).toBe(restarted);
   });
+
+  it.each(['COMPLETED', 'FAILED', 'CANCELLED'] as const)(
+    '종료 뒤 revision이 초기화돼도 %s 상태를 받아 진행 대기를 끝낸다',
+    (status) => {
+      const terminal = snapshot(1, status);
+      expect(newerPreparationJob(snapshot(50), terminal)).toBe(terminal);
+      expect(pollInterval(terminal.status, true)).toBe(false);
+    },
+  );
 });
 
 describe('shouldCloseStream', () => {

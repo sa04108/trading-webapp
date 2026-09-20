@@ -51,7 +51,6 @@ const envSchema = z.object({
   /** DART OpenAPI (전자공시). 미설정이면 재무 수집이 비활성 — 봉 데이터는 영향 없다 */
   DART_BASE_URL: z.string().url().default("https://opendart.fss.or.kr"),
   DART_API_KEY: z.string().min(1).optional(),
-  DART_DISCOVERY_HOUR_KST: z.coerce.number().int().min(0).max(23).default(6),
   /** FRED API. 미설정이면 미국 벤치마크 수집만 비활성 */
   FRED_BASE_URL: z.string().url().default("https://api.stlouisfed.org"),
   FRED_API_KEY: z.string().min(1).optional(),
@@ -96,7 +95,6 @@ export interface AppConfig {
   readonly tossClientSecret: string | null;
   readonly dartBaseUrl: string;
   readonly dartApiKey: string | null;
-  readonly dartDiscoveryHourKst: number;
   readonly fredBaseUrl: string;
   readonly fredApiKey: string | null;
   readonly krxBaseUrl: string;
@@ -165,7 +163,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tossClientSecret: raw.TOSS_CLIENT_SECRET ?? null,
     dartBaseUrl: raw.DART_BASE_URL,
     dartApiKey: raw.DART_API_KEY ?? null,
-    dartDiscoveryHourKst: raw.DART_DISCOVERY_HOUR_KST,
     fredBaseUrl: raw.FRED_BASE_URL,
     fredApiKey: raw.FRED_API_KEY ?? null,
     krxBaseUrl: raw.KRX_BASE_URL,

@@ -298,7 +298,7 @@ export function UniverseRuleStep({
 
   const previewMutation = useMutation({
     mutationFn: (
-      params: PreviewParams,
+      { params, completedPreparationJobId }: { params: PreviewParams; completedPreparationJobId?: string },
     ): Promise<UniversePreviewStartResponse> =>
       postJsonWithStatus<
         UniversePreviewResponseDto | { job: BacktestPreparationJob }
@@ -307,6 +307,7 @@ export function UniverseRuleStep({
         period: params.period,
         strategyId: params.strategyId,
         parameters: params.parameters,
+        ...(completedPreparationJobId === undefined ? {} : { completedPreparationJobId }),
         ...(sourceJobId === null ? {} : { sourceJobId }),
       }).then(({ status, data }) =>
         status === 202
@@ -316,7 +317,7 @@ export function UniverseRuleStep({
             }
           : { kind: "READY", preview: data as UniversePreviewResponseDto },
       ),
-    onSuccess: (startResponse, params) => {
+    onSuccess: (startResponse, { params }) => {
       if (startResponse.kind === "PREPARING") {
         preparingParamsRef.current = params;
         seedPreparationJob(queryClient, startResponse.job);
@@ -331,7 +332,7 @@ export function UniverseRuleStep({
   });
 
   const runPreview = (params: PreviewParams): void => {
-    previewMutation.mutate(params);
+    previewMutation.mutate({ params });
   };
 
   const { job: liveJob } = usePreparationLive(preparingJobId);
@@ -369,7 +370,7 @@ export function UniverseRuleStep({
     preparingParamsRef.current = null;
     setPreparingJobId(null);
     if (!sameUniverseParams(preparedParams, currentParams)) return;
-    runPreview(preparedParams);
+    previewMutation.mutate({ params: preparedParams, completedPreparationJobId: liveJob.id });
     // 의존성은 liveJob?.status 뿐이다 — currentParams 는 이 effect 가 실행되는 렌더의
     // 최신 값을 클로저로 그대로 받는다(usePreparationLive 가 job 상태를 바꿀 때마다
     // 이 컴포넌트도 다시 그려지므로, 그 렌더에서 만든 currentParams 가 여기 쓰인다).
@@ -562,7 +563,7 @@ export function UniverseRuleStep({
 
     let refreshed: UniversePreviewStartResponse;
     try {
-      refreshed = await previewMutation.mutateAsync(resolved.params);
+      refreshed = await previewMutation.mutateAsync({ params: resolved.params });
     } catch {
       return; // previewMutation.isError 알림이 이미 안내한다
     }

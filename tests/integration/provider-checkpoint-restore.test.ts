@@ -98,7 +98,7 @@ describe('공급자 원문·승인·공시 checkpoint의 두 DB 복원', () => {
       await expect(source.fetchDailyTrades('KOSPI', '2026-09-18')).resolves.toEqual([]);
       expect(new SqliteDartRawSnapshotStore(handle.db).get(dartKey)).toEqual({ payload: { status: '013', unused: '현재 원문' }, fetchedAtMs: 20 });
       const discovery = new DartFilingDiscovery({ sqlite: handle.sqlite, fetchPage: http, logger, now });
-      await discovery.tick();
+      expect(discovery.freshness().lastCheckedAtMs).toBe(now());
       expect(http).not.toHaveBeenCalled();
       expect(capture(handle)).toEqual(before);
       const policy = new SqliteProviderRequestPolicy(handle.sqlite, now);

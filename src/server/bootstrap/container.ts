@@ -110,6 +110,7 @@ export interface Container {
   readonly providerRequestPolicy: SqliteProviderRequestPolicy;
   readonly filingDiscovery: DartFilingDiscovery;
   readonly reconcileProviderFilings: () => Promise<void>;
+  readonly refreshProviderFilings: () => Promise<void>;
   readonly config: AppConfig;
   readonly logger: Logger;
   readonly database: DatabaseHandle;
@@ -674,6 +675,7 @@ export function createContainer(
     providerRequestPolicy: collection.requestPolicy,
     filingDiscovery: collection.filingDiscovery,
     reconcileProviderFilings: collection.reconcileProviderFilings,
+    refreshProviderFilings: collection.refreshProviderFilings,
     factSyncService,
     symbolMasterService,
     symbolMasterBackfill,

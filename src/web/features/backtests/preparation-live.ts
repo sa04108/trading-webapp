@@ -21,6 +21,7 @@ export type PreparationStatus =
   | "CANCELLED";
 
 export type PreparationPhase =
+  | "FILING_DISCOVERY"
   | "MARKET_DATA"
   | "RESOLVING_STAGES"
   | "VALIDATING_RESULT"
@@ -70,6 +71,9 @@ export function newerPreparationJob(
   incoming: BacktestPreparationJob,
 ): BacktestPreparationJob {
   if (!current || current.id !== incoming.id) return incoming;
+  // 서버가 종료 작업의 진행 번호를 정리해도 확정된 종료 상태는 진행 상태보다 우선한다.
+  if (!shouldCloseStream(current.status) && shouldCloseStream(incoming.status))
+    return incoming;
   if (shouldCloseStream(current.status) && !shouldCloseStream(incoming.status))
     return current;
   if (current.progressEpoch !== incoming.progressEpoch) return incoming;
@@ -236,6 +240,7 @@ export function usePreparationLive(
     void queryClient.invalidateQueries({
       queryKey: ["universe-preview", job.requestHash],
     });
+    void queryClient.invalidateQueries({ queryKey: ["provider-data"] });
   }, [job, queryClient]);
 
   return {

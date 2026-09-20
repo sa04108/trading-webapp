@@ -262,22 +262,41 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
     (resp) =>
       resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
   );
+  // 완료 결과 읽기는 작업 ID를 보내며, 새로운 공시 확인 작업을 만들지 않는다.
+  const completedPreview = page.waitForResponse(
+    (resp) =>
+      resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST'
+      && resp.status() === 200,
+    { timeout: 200_000 },
+  );
   await page.getByRole('button', { name: '미리보기' }).click();
   const first = await initialPreview;
-  if (first.status() === 202) {
-    await expect(page.getByText('데이터 준비', { exact: true })).toBeVisible();
-    const completed = page.waitForResponse(
-      (resp) =>
-        resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
-      { timeout: 200_000 },
-    );
-    await completed;
-  }
+  expect(first.status()).toBe(202);
+  const startedJob = (await first.json()).job as { id: string; phase: string };
+  expect(startedJob.phase).toBe('FILING_DISCOVERY');
+  await expect(page.getByText('데이터 준비', { exact: true })).toBeVisible();
+  const completed = await completedPreview;
+  expect(completed.request().postDataJSON().completedPreparationJobId).toBe(startedJob.id);
+  expect((await completed.json()).preparationJobId).toBe(startedJob.id);
   await expect(page.getByText('리밸런스 일정')).toBeVisible();
   // 기간이 한 달을 넘으므로(주기 초과 차단을 확인하려고 위에서 늘렸다) 리밸런스는
   // 매월 규칙대로 2회다 — 정확한 횟수보다는 준비가 끝나 실제 일정이 그려졌다는
   // 사실이 이 test의 관심사다.
   await expect(page.getByText(/리밸런스 \d+회/)).toBeVisible();
+
+  // 자료가 모두 저장된 상태의 빠른 재시작도 종료 알림을 놓치지 않아야 한다.
+  const repeatedStart = page.waitForResponse((resp) =>
+    resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST'
+    && resp.status() === 202);
+  const repeatedResult = page.waitForResponse((resp) =>
+    resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST'
+    && resp.status() === 200, { timeout: 200_000 });
+  await page.getByRole('button', { name: '미리보기', exact: true }).click();
+  const repeatedJob = (await (await repeatedStart).json()).job as { id: string; phase: string };
+  expect(repeatedJob.id).not.toBe(startedJob.id);
+  expect(repeatedJob.phase).toBe('FILING_DISCOVERY');
+  expect((await repeatedResult).request().postDataJSON().completedPreparationJobId).toBe(repeatedJob.id);
+  await expect(page.getByText('리밸런스 일정')).toBeVisible();
 
   await page.getByRole('button', { name: '다음' }).click(); // 유니버스 → 자본·비용
   await page.getByRole('button', { name: '다음' }).click(); // 자본·비용 기본값 → 검토

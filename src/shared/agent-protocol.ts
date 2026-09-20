@@ -139,6 +139,7 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
     preparationProgress: z
       .object({
         phase: z.enum([
+          "FILING_DISCOVERY",
           "MARKET_DATA",
           "RESOLVING_STAGES",
           "VALIDATING_RESULT",

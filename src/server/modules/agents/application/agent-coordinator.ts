@@ -377,7 +377,7 @@ export class AgentCoordinator {
   }
 
   private preparationProgress(job: BacktestPreparationJobDto): ExecutionProgress | null {
-    if (job.status === "WAITING_DATA") {
+    if (job.status === "WAITING_DATA" && job.phase !== "FILING_DISCOVERY") {
       const collection = this.dataQueue.progressForJob(job.id);
       const publishing = this.snapshots.publishProgress();
       if (collection && publishing && collection.activity.startsWith("PUBLISHING_"))
@@ -396,6 +396,12 @@ export class AgentCoordinator {
       )
       .get(job.id) as { created_at_ms: number; updated_at_ms: number } | undefined;
     const activityAt = times?.updated_at_ms ?? times?.created_at_ms ?? Date.now();
+    if (job.status === "WAITING_DATA" && job.phase === "FILING_DISCOVERY") return {
+      activity: "FILING_DISCOVERY", detail: "최신 공시와 저장 원문을 확인하고 있습니다", actorKind: "SERVER",
+      actorId: null, actorName: "운영 서버", unit: null, completed: null, total: null,
+      currentItem: null, attempt: null, retryCount: 0, startedAtMs: activityAt,
+      lastProgressAtMs: null, lastReceivedAtMs: activityAt, nextResumeAtMs: null,
+    };
     if (job.status === "WAITING_DAILY_QUOTA")
       return {
         activity: "WAITING_RETRY", detail: job.error, actorKind: "SERVER",
@@ -412,6 +418,7 @@ export class AgentCoordinator {
       ).get(job.id) as { client_id: string; attempt: number; last_received_at_ms: number | null; name: string | null } | undefined;
       const actorKind = lease?.client_id === LOCAL_AGENT_ID ? "SERVER_AGENT" : "REMOTE_AGENT";
       const activities = {
+        FILING_DISCOVERY: "FILING_DISCOVERY",
         MARKET_DATA: "CHECKING_INPUT",
         RESOLVING_STAGES: "RESOLVING_UNIVERSE",
         VALIDATING_RESULT: "VALIDATING_INPUT",

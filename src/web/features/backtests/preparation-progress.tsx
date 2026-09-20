@@ -17,6 +17,7 @@ import {
 import type { ExecutionActivity } from "../../../shared/execution-progress.js";
 
 const PHASE_LABELS: Record<PreparationPhase, string> = {
+  FILING_DISCOVERY: "최신 공시 확인",
   MARKET_DATA: "KRX 시장 데이터 수집",
   RESOLVING_STAGES: "유니버스 선정 계산",
   VALIDATING_RESULT: "미리보기 결과 검증",
@@ -27,7 +28,7 @@ const PHASE_LABELS: Record<PreparationPhase, string> = {
 const ACTIVITY_LABELS: Record<ExecutionActivity, string> = {
   LOCAL_REPLAY: "저장 원문 재처리",
   SOURCE_FETCH: "공급자 원문 수집",
-  FILING_DISCOVERY: "일일 공시 확인",
+  FILING_DISCOVERY: "최신 공시 확인",
   BLOCKED: "데이터 갱신 승인 필요",
   WAITING_FOR_EXECUTOR: "실행 자원 대기",
   CHECKING_INPUT: "계산 입력 확인",

@@ -15,7 +15,7 @@ const DAY = 86_400_000;
 function dateAt(ms: number): string { return new Date(ms).toISOString().slice(0, 10); }
 function shift(date: string, days: number): string { return dateAt(Date.parse(date) + days * DAY); }
 
-/** 공시 조회는 서버 일일 작업에서만 수행하고 페이지 저장 이후에만 cursor를 진행한다. */
+/** 사용자가 시작한 미리보기에서만 당일까지 확인하고 저장한 페이지부터 재개한다. */
 export class DartFilingDiscovery {
   private running: Promise<void> | null = null;
   private stopped = false;
@@ -25,23 +25,22 @@ export class DartFilingDiscovery {
     fetchPage: ((from: string, to: string, page: number, beforeAttempt: () => void) => Promise<FilingPage>) | null;
     logger: Logger;
     now?: () => number;
-    hourKst?: number;
-    onPageStored?: () => Promise<void>;
   }) {}
 
   freshness() {
-    const last = this.options.sqlite.prepare("SELECT day, completed_at_ms, to_date FROM dart_discovery_jobs WHERE status = 'COMPLETED' ORDER BY day DESC LIMIT 1").get() as
+    const last = this.options.sqlite.prepare("SELECT day, completed_at_ms, to_date FROM dart_discovery_jobs WHERE status = 'COMPLETED' ORDER BY completed_at_ms DESC, rowid DESC LIMIT 1").get() as
       {day: string; completed_at_ms: number; to_date: string} | undefined;
     const today = dateAt(this.now() + 9 * 3600_000);
     const unknownLegacy = this.options.sqlite.prepare(`SELECT 1 FROM symbol_facts_state
       WHERE (covered_years_json != '[]' AND (financial_updated_at_ms IS NULL OR financial_updated_at_ms <= 0))
          OR (action_covered_years_json != '[]' AND (action_updated_at_ms IS NULL OR action_updated_at_ms <= 0)) LIMIT 1`).get();
     const baseline = this.options.sqlite.prepare("SELECT 1 FROM dart_discovered_filings WHERE status = 'BASELINE_UNKNOWN' LIMIT 1").get();
+    const unfinished = this.options.sqlite.prepare("SELECT 1 FROM dart_discovery_jobs WHERE status != 'COMPLETED' LIMIT 1").get();
     return { lastCheckedAtMs: last?.completed_at_ms ?? null, checkedThrough: last?.to_date ?? null,
-      warning: unknownLegacy ? "기존 수집 자료의 공시 확인 기준시각 미확인" : baseline ? "기존 원문이 없어 일부 공시의 반영 여부 미확인" : last?.day === today ? null : last ? "최신 공시 확인 미완료" : "공시 확인 이력 없음" };
+      warning: unknownLegacy ? "기존 수집 자료의 공시 확인 기준시각 미확인" : baseline ? "기존 원문이 없어 일부 공시의 반영 여부 미확인" : !unfinished && last?.to_date === today ? null : last ? "최신 공시 확인 미완료" : "공시 확인 이력 없음" };
   }
 
-  tick(): Promise<void> {
+  refresh(): Promise<void> {
     if (this.stopped) return Promise.resolve();
     if (this.running) return this.running;
     this.running = this.run().catch((error: unknown) => {
@@ -53,17 +52,17 @@ export class DartFilingDiscovery {
   private now(): number { return (this.options.now ?? Date.now)(); }
 
   private async run(): Promise<void> {
-    await this.options.onPageStored?.();
+    if (this.stopped) return;
     const fetchPage = this.options.fetchPage;
     const now = this.now();
     const kst = new Date(now + 9 * 3600_000);
-    if (!fetchPage || kst.getUTCHours() < (this.options.hourKst ?? 6)) return;
+    if (!fetchPage) return;
     const today = dateAt(kst.getTime());
     const sqlite = this.options.sqlite;
     const job = sqlite.transaction(() => {
-      const last = sqlite.prepare("SELECT to_date FROM dart_discovery_jobs WHERE status = 'COMPLETED' ORDER BY day DESC LIMIT 1").get() as {to_date: string} | undefined;
-      // 완료된 과거 날짜 경계를 하루 겹친다. 당일 목록은 다음 일일 작업에서 확인한다.
-      const end = shift(today, -1);
+      const last = sqlite.prepare("SELECT to_date FROM dart_discovery_jobs WHERE status = 'COMPLETED' ORDER BY completed_at_ms DESC, rowid DESC LIMIT 1").get() as {to_date: string} | undefined;
+      // 같은 날 다시 시작해도 당일 추가 접수를 확인한다. 이전 완료 경계는 하루 겹친다.
+      const end = today;
       const earliest = sqlite.prepare(`SELECT MIN(checked_at_ms) AS checked_at_ms FROM (
         SELECT financial_updated_at_ms AS checked_at_ms FROM symbol_facts_state WHERE covered_years_json != '[]'
         UNION ALL SELECT action_updated_at_ms FROM symbol_facts_state WHERE action_covered_years_json != '[]'
@@ -71,9 +70,10 @@ export class DartFilingDiscovery {
       const initialFrom = earliest.checked_at_ms == null ? shift(end, -79)
         : shift(dateAt(earliest.checked_at_ms + 9 * 3600_000), -1);
       const unfinished = sqlite.prepare("SELECT 1 FROM dart_discovery_jobs WHERE status != 'COMPLETED' LIMIT 1").get();
+      // 기존 day 기본키를 요청 식별자로 확장한다. 과거 날짜 키와 미완료 cursor는 그대로 읽는다.
       if (!unfinished) sqlite.prepare(`INSERT OR IGNORE INTO dart_discovery_jobs(day, from_date, to_date, page, status)
-        VALUES (?, ?, ?, 1, 'PENDING')`).run(today, last ? shift(last.to_date, -1) : initialFrom < end ? initialFrom : end, end);
-      const row = sqlite.prepare("SELECT * FROM dart_discovery_jobs WHERE status != 'COMPLETED' ORDER BY day LIMIT 1").get() as DiscoveryJob | undefined;
+        VALUES (?, ?, ?, 1, 'PENDING')`).run(`${today}:${randomUUID()}`, last ? shift(last.to_date, -1) : initialFrom < end ? initialFrom : end, end);
+      const row = sqlite.prepare("SELECT * FROM dart_discovery_jobs WHERE status != 'COMPLETED' ORDER BY rowid LIMIT 1").get() as DiscoveryJob | undefined;
       if (!row) return null;
       const claimed = sqlite.prepare("UPDATE dart_discovery_jobs SET owner = ?, lease_until_ms = ? WHERE day = ? AND (owner IS NULL OR lease_until_ms < ?)")
         .run(this.owner, now + 300_000, row.day, now);
@@ -131,11 +131,12 @@ export class DartFilingDiscovery {
           sqlite.prepare("UPDATE dart_discovery_jobs SET from_date = ?, page = ?, lease_until_ms = ? WHERE day = ? AND owner = ?")
             .run(nextFrom, nextPage, this.now() + 300_000, job.day, this.owner);
         })();
-        await this.options.onPageStored?.();
         from = nextFrom; page = nextPage;
       }
       sqlite.prepare("UPDATE dart_discovery_jobs SET status = 'COMPLETED', completed_at_ms = ?, owner = NULL, error = NULL WHERE day = ? AND owner = ?")
         .run(this.now(), job.day, this.owner);
+      // 이전 날짜에 멈춘 작업을 먼저 닫은 뒤 이번 요청의 당일까지 이어서 확인한다.
+      if (job.to_date < today) await this.run();
     } catch (error) {
       sqlite.prepare("UPDATE dart_discovery_jobs SET owner = NULL, error = ? WHERE day = ? AND owner = ?")
         .run(error instanceof Error ? error.message : String(error), job.day, this.owner);
