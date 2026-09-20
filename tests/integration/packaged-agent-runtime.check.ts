@@ -133,6 +133,9 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
     let childClosed: Promise<void> | undefined;
     let childExited = false;
     let output = '';
+    let sawPreparationStart = false;
+    let sawBacktestStart = false;
+    let backtestId: string | undefined;
     let bundledExecutable: string | undefined;
     const waitFor = async (read: () => boolean, label: string): Promise<void> => {
       const started = Date.now();
@@ -170,8 +173,12 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
       env: { NODE_ENV: 'production', PATH: path.join(packageRoot, 'bin') },
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
-    // 단계별 진단 로그가 추가되어 두 작업의 시작 로그까지 보존한다.
-    const capture = (chunk: Buffer) => { output = (output + chunk.toString()).slice(-64_000); };
+    const capture = (chunk: Buffer) => {
+      const captured = output + chunk.toString();
+      if (captured.includes(`PREPARATION 작업 시작: ${preparation.id}`)) sawPreparationStart = true;
+      if (backtestId !== undefined && captured.includes(`BACKTEST 작업 시작: ${backtestId}`)) sawBacktestStart = true;
+      output = captured.slice(-8_000);
+    };
     child.stdout?.on('data', capture);
     child.stderr?.on('data', capture);
     child.on('error', (error) => { output += error.message; });
@@ -205,6 +212,7 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
       excludedNonTradingCount: entry.excludedNonTradingCount,
     }));
     const backtest = container.jobQueue.enqueue(request, schedule);
+    backtestId = backtest.id;
     await waitFor(() => /^(COMPLETED|FAILED|CANCELLED)$/.test(container.jobQueue.getJob(backtest.id)?.status ?? ''), '백테스트');
     expect(container.jobQueue.getJob(backtest.id), output).toMatchObject({
       status: 'COMPLETED', error: null, agentId: credential.id, attempt: 1,
@@ -212,8 +220,8 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
     expect(container.resultsService.getRun(backtest.id)).toMatchObject({ executionVersion: versions.executionVersion });
     expect(container.resultsService.getMetrics(backtest.id)).not.toBeNull();
     expect(container.resultsService.getFullExport(backtest.id).equityPoints.length).toBeGreaterThan(0);
-    expect(output).toContain(`PREPARATION 작업 시작: ${preparation.id}`);
-    expect(output).toContain(`BACKTEST 작업 시작: ${backtest.id}`);
+    expect(sawPreparationStart).toBe(true);
+    expect(sawBacktestStart).toBe(true);
     expect(output).not.toMatch(/ERR_MODULE_NOT_FOUND|Cannot find (?:package|module)|버전이 다릅니다/);
     } finally {
       if (child !== undefined && !childExited) {
