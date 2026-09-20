@@ -687,8 +687,7 @@ export class AgentClient {
       kind: running.lease.kind, diagnostics, pendingType: pending?.type,
       pendingOutcome: pending?.type === "FINISH" ? pending.outcome : undefined,
       resourceError: running.resourceError,
-      // 제어 오류 때문에 중단한 프로세스는 사용자의 취소로 오인하지 않는다.
-      cancellation: running.cancellation && running.cancellationReason !== "PROCESS_CONTROL_ERROR",
+      cancellation: running.cancellation,
     });
     if (this.stopping || this.updating) {
       diagnostics.code = "AGENT_INTERRUPTED";

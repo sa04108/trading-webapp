@@ -27,6 +27,15 @@ describe("에이전트 종료 진단 분류", () => {
     ["SIGKILL을 OOM으로 단정하지 않음", (d) => { d.exitCode = null; d.signal = "SIGKILL"; }, {}, "WORKER_SIGNAL_EXIT"],
     ["spawn 이전 오류", (d) => { d.spawned = false; d.processErrors = [diagnosticError(new Error("ENOENT"))]; }, {}, "WORKER_SPAWN_FAILED"],
     ["spawn 이후 제어 오류", (d) => { d.processErrors = [diagnosticError(new Error("IPC"))]; }, {}, "WORKER_PROCESS_ERROR"],
+    ["제어 오류로 중단한 워커의 DB 취소 기록은 실패를 덮어쓰지 않음", (d) => {
+      d.cancellationReason = "PROCESS_CONTROL_ERROR";
+      d.processErrors = [diagnosticError(new Error("IPC"))];
+      d.jobDb.status = "CANCELLED";
+    }, { cancellation: true }, "WORKER_PROCESS_ERROR"],
+    ["제어 오류로 중단한 준비 워커의 취소 IPC는 실패를 덮어쓰지 않음", (d) => {
+      d.cancellationReason = "PROCESS_CONTROL_ERROR";
+      d.processErrors = [diagnosticError(new Error("IPC"))];
+    }, { kind: "PREPARATION", cancellation: true, pendingType: "FINISH", pendingOutcome: "CANCELLED" }, "WORKER_PROCESS_ERROR"],
     ["존재하지 않는 작업 DB", (d) => { d.jobDb.state = "MISSING"; }, {}, "JOB_DB_MISSING"],
     ["열 수 없는 작업 DB", (d) => { d.jobDb.state = "OPEN_FAILED"; }, {}, "JOB_DB_READ_FAILED"],
     ["테이블 조회 실패", (d) => { d.jobDb.state = "QUERY_FAILED"; }, {}, "JOB_DB_READ_FAILED"],

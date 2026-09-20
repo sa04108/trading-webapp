@@ -4,7 +4,6 @@ import type { ChildProcess } from "node:child_process";
 import {
   DIAGNOSTIC_OUTPUT_BYTES, diagnosticError, parseDiagnosticError,
   type ArtifactObservation,
-  type DiagnosticError,
   type JobDatabaseObservation,
   type OutputTail,
   type WorkerDiagnosticCode,
@@ -169,7 +168,9 @@ export interface WorkerDecisionInput {
 export function classifyWorker(input: WorkerDecisionInput): WorkerDiagnosticCode {
   const { diagnostics: d, pendingOutcome: outcome, pendingType: type } = input;
   if (input.resourceError) return "RESOURCE_BUDGET_EXCEEDED";
-  if (input.cancellation || outcome === "CANCELLED" || d.jobDb.status === "CANCELLED")
+  // 제어 오류로 보낸 중단 요청에 워커가 취소로 응답해도 최초 실패 원인을 유지한다.
+  if (d.cancellationReason !== "PROCESS_CONTROL_ERROR" &&
+      (input.cancellation || outcome === "CANCELLED" || d.jobDb.status === "CANCELLED"))
     return "CANCELLED";
   if (!d.spawned && d.processErrors.length) return "WORKER_SPAWN_FAILED";
   const abnormal = d.signal !== null || d.exitCode !== 0 || d.processErrors.length > 0 || d.workerError !== null;

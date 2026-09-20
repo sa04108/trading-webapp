@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { describe, it } from "vitest";
 import Database from "better-sqlite3";
 import { AgentClient, type AgentRuntimeAdapter, type AgentResultUpload } from "../../src/agent/client.js";
-import { emptyDiagnostics, type WorkerObservation } from "../../src/agent/worker-diagnostics.js";
+import { diagnosticError, emptyDiagnostics, type WorkerObservation } from "../../src/agent/worker-diagnostics.js";
 import type { WorkerDiagnostics } from "../../src/shared/agent-diagnostics.js";
 import type { AgentLease, AgentMessage, ServerAgentMessage } from "../../src/shared/agent-protocol.js";
 
@@ -19,6 +19,7 @@ interface FinalizingJob {
   peakRss: number;
   budgetBytes: number;
   cancellation: boolean;
+  cancellationReason?: string;
   timers: NodeJS.Timeout[];
   observation: Pick<WorkerObservation, "snapshot">;
 }
@@ -34,7 +35,7 @@ async function scenario(run: (h: {
   sent: AgentMessage[];
   uploads: AgentResultUpload[];
   receive(message: ServerAgentMessage): void;
-  finish(diagnostics?: WorkerDiagnostics): Promise<void>;
+  finish(diagnostics?: WorkerDiagnostics, cancellationReason?: string): Promise<void>;
   retry(): void;
 }) => Promise<void>): Promise<void> {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "agent-client-diagnostics-"));
@@ -65,11 +66,12 @@ async function scenario(run: (h: {
     fs.mkdirSync(jobDirectory, { recursive: true });
     await run({ directory, jobDirectory, lease, sent, uploads,
       receive: (message) => receive(message), retry: () => finalizer.heartbeat(),
-      finish: async (diagnostics) => {
+      finish: async (diagnostics, cancellationReason) => {
         const observed = diagnostics ?? { ...emptyDiagnostics(), spawned: true, exitCode: 0 };
         await finalizer.finished({ lease, directory: jobDirectory,
           jobPath: path.join(jobDirectory, "job.sqlite"), peakRss: 1024,
-          budgetBytes: 1024 * 1024, cancellation: false, timers: [],
+          budgetBytes: 1024 * 1024, cancellation: cancellationReason !== undefined,
+          cancellationReason, timers: [],
           observation: { snapshot: () => observed } }, undefined);
         // 업로드 ACK의 microtask까지 정리한 뒤 결과를 관측한다.
         await new Promise<void>((resolve) => setImmediate(resolve));
@@ -114,6 +116,25 @@ describe("AgentClient 종료 결과 전달", () => {
     diagnostics.stderr = { text: "native failure", totalBytes: 14, truncated: false };
     await h.finish(diagnostics);
     assert.match(finishMessage(h.sent).error ?? "", /native failure/);
+  }));
+
+  it.each([
+    ["PROCESS_CONTROL_ERROR", "FAILED", "WORKER_PROCESS_ERROR"],
+    ["SERVER_CANCEL_REQUEST", "CANCELLED", "CANCELLED"],
+  ] as const)("취소된 워커 DB와 제어 오류가 함께 있어도 중단 원인 %s에 맞게 %s를 전송", async (reason, outcome, code) => scenario(async (h) => {
+    seedJob(h.jobDirectory, "CANCELLED");
+    const diagnostics = { ...emptyDiagnostics(), spawned: true, exitCode: 0 };
+    diagnostics.processErrors = [diagnosticError(new Error("IPC operation failed"))];
+    await h.finish(diagnostics, reason);
+    const message = finishMessage(h.sent);
+    assert.equal(message.outcome, outcome);
+    const reported = message.result?.diagnostics as WorkerDiagnostics;
+    assert.equal(reported.code, code);
+    assert.equal(reported.cancellationReason, reason);
+    assert.equal(reported.jobDb.status, "CANCELLED");
+    assert.equal(reported.processErrors[0]?.message, "IPC operation failed");
+    const persisted = JSON.parse(fs.readFileSync(path.join(h.jobDirectory, "outbox.json"), "utf8"));
+    assert.equal(persisted.message.outcome, outcome);
   }));
 
   it("깨진 SQLite도 종료 보고를 중단시키지 않음", async () => scenario(async (h) => {
