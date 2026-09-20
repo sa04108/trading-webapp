@@ -6,23 +6,19 @@ import {
   type AgentLease,
 } from "../../shared/agent-protocol.js";
 import { createPreparationWorkerRuntime } from "./preparation-runtime.js";
+import { disconnectWorker, reportWorkerError, reportWorkerPhase, sendWorkerMessage } from "./worker-reporting.js";
+
+reportWorkerPhase("BOOTSTRAP_READY");
 
 process.once(
   "message",
   (input: { lease: AgentLease; jobPath: string; dataPath: string }) => {
     void run(input).catch((error: unknown) => {
-      if (process.connected)
-        process.send?.(
-          {
-            type: "FINISH",
-            outcome: "FAILED",
-            error: error instanceof Error ? error.message : String(error),
-          },
-          () => process.disconnect(),
-        );
-      else console.error(error);
+      reportWorkerError(error);
+      sendWorkerMessage({ type: "FINISH", outcome: "FAILED",
+        error: error instanceof Error ? error.message : String(error) });
       process.exitCode = 1;
-    });
+    }).finally(() => disconnectWorker());
   },
 );
 
@@ -31,11 +27,14 @@ async function run(input: {
   jobPath: string;
   dataPath: string;
 }): Promise<void> {
+  reportWorkerPhase("JOB_RECEIVED");
   const lease = agentLeaseSchema.parse(input.lease);
+  reportWorkerPhase("JOB_DB_OPENING");
   const database = openDatabase(input.jobPath, {
     dataPath: input.dataPath,
     dataReadonly: true,
   });
+  reportWorkerPhase("JOB_DB_OPENED");
   let orchestrator:
     ReturnType<typeof createPreparationWorkerRuntime> | undefined;
   let stop: (() => void) | undefined;
@@ -61,7 +60,10 @@ async function run(input: {
       collectionVersion: lease.dataset.collectionVersion,
       onJobUpdated: () => {
         const progress = orchestrator?.get(input.lease.jobId);
-        if (progress) process.send?.({ type: "PROGRESS", progress });
+        if (progress) {
+          reportWorkerPhase(progress.phase);
+          sendWorkerMessage({ type: "PROGRESS", progress });
+        }
       },
     });
     stop = () => {
@@ -84,7 +86,7 @@ async function run(input: {
       dataRevision: number | null;
       fundamentalSymbols: string | null;
     };
-    process.send?.({
+    sendWorkerMessage({
       type: "FINISH",
       outcome: job?.status,
       error: job?.error,
@@ -98,13 +100,16 @@ async function run(input: {
     });
   } catch (error) {
     if (error instanceof AgentDataRequired)
-      process.send?.({ type: "NEEDS_DATA", request: error.request });
-    else
-      process.send?.({
+      sendWorkerMessage({ type: "NEEDS_DATA", request: error.request });
+    else {
+      reportWorkerError(error);
+      sendWorkerMessage({
         type: "FINISH",
         outcome: "FAILED",
         error: error instanceof Error ? error.message : String(error),
       });
+      process.exitCode = 1;
+    }
   } finally {
     // 자체 IPC 종료가 취소 처리로 되돌아가 닫힌 작업 DB를 읽지 않도록 먼저 해제한다.
     if (stop) {
@@ -112,8 +117,7 @@ async function run(input: {
       process.off("disconnect", stop);
     }
     if (onMessage) process.off("message", onMessage);
-    await orchestrator?.stop();
-    database.close();
-    if (process.connected) process.disconnect();
+    try { await orchestrator?.stop(); }
+    finally { database.close(); }
   }
 }
