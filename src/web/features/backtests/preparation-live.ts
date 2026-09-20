@@ -240,7 +240,6 @@ export function usePreparationLive(
     void queryClient.invalidateQueries({
       queryKey: ["universe-preview", job.requestHash],
     });
-    void queryClient.invalidateQueries({ queryKey: ["provider-data"] });
   }, [job, queryClient]);
 
   return {

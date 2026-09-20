@@ -1,4 +1,3 @@
-import type { SqliteProviderRequestPolicy } from "../shared/provider-request-policy.js";
 import type { DartFilingDiscovery } from "../modules/facts/application/dart-filing-discovery.js";
 import { AgentRegistry } from "../modules/agents/application/agent-registry.js";
 import { DatasetSnapshots } from "../modules/agents/application/dataset-snapshots.js";
@@ -107,7 +106,6 @@ export interface SystemStatusProviders {
 }
 
 export interface Container {
-  readonly providerRequestPolicy: SqliteProviderRequestPolicy;
   readonly filingDiscovery: DartFilingDiscovery;
   readonly refreshProviderFilings: () => Promise<void>;
   readonly config: AppConfig;
@@ -671,7 +669,6 @@ export function createContainer(
     factRepository,
     financialFactAvailabilityService,
     factCoverageStore,
-    providerRequestPolicy: collection.requestPolicy,
     filingDiscovery: collection.filingDiscovery,
     refreshProviderFilings: collection.refreshProviderFilings,
     factSyncService,

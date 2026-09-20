@@ -245,7 +245,7 @@ export class AgentDataQueue {
     } catch (error) {
       if (this.stopped) return;
       const blocked = error instanceof ProviderRequestBlockedError;
-      const pendingPublication = blocked && error.reason === "PENDING_PUBLICATION";
+      const scheduledRetry = blocked && ["PENDING_PUBLICATION", "RETRY_BACKOFF"].includes(error.reason);
       const quota =
         error instanceof AgentCollectionPaused ||
         error instanceof KrxQuotaError;
@@ -254,7 +254,7 @@ export class AgentDataQueue {
         Math.floor((Date.now() + 9 * 3600_000) / 86400_000 + 1) * 86400_000 -
         9 * 3600_000;
       const next =
-        pendingPublication
+        scheduledRetry
           ? error.retryAfterMs ?? Date.now() + 86_400_000
           : error instanceof AgentCollectionPaused
           ? error.resumeAtMs
@@ -266,7 +266,7 @@ export class AgentDataQueue {
           "UPDATE agent_data_requests SET status = ?, attempts = ?, next_attempt_at_ms = ?, error = ?, updated_at_ms = ? WHERE id = ?",
         )
         .run(
-          pendingPublication ? "QUEUED" : blocked ? "BLOCKED" : attempts >= 3 ? "FAILED" : "QUEUED",
+          scheduledRetry ? "QUEUED" : blocked ? "BLOCKED" : attempts >= 3 ? "FAILED" : "QUEUED",
           attempts,
           next,
           error instanceof Error ? error.message : String(error),
@@ -277,7 +277,7 @@ export class AgentDataQueue {
         .prepare(
           "UPDATE agent_data_requests SET activity = ?, activity_started_at_ms = ?, updated_at_ms = ? WHERE id = ?",
         )
-        .run(blocked && !pendingPublication ? "BLOCKED" : "WAITING_RETRY", Date.now(), Date.now(), row.id);
+        .run(blocked && !scheduledRetry ? "BLOCKED" : "WAITING_RETRY", Date.now(), Date.now(), row.id);
       this.notifyWaiters(row.id);
     }
     this.resumeReady();

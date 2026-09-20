@@ -76,7 +76,7 @@ export async function buildServer(
   app.setErrorHandler((error: FastifyError, request, reply) => {
     request.log.error({ err: error }, "request failed");
     if (error instanceof ProviderRequestBlockedError) return reply.code(409).send({
-      error: "PROVIDER_DATA_BLOCKED", reason: error.reason, requestKey: error.requestKey, evidence: error.evidence,
+      error: "PROVIDER_DATA_BLOCKED", reason: error.reason, requestKey: error.requestKey, evidence: error.evidence, retryAfterMs: error.retryAfterMs,
     });
     if (error instanceof PreparationReferenceError) {
       return reply
@@ -100,35 +100,6 @@ export async function buildServer(
   await app.register(
     async (api) => {
       registerSystemRoutes(api, container, requireAuth);
-      api.get("/provider-data/freshness", { preHandler: requireAuth }, async () => container.filingDiscovery.freshness());
-      api.get<{ Params: { jobId: string } }>("/provider-data/provenance/:jobId", { preHandler: requireAuth }, async (request) => {
-        const row = container.database.sqlite.prepare("SELECT freshness_json FROM provider_execution_provenance WHERE job_id = ?")
-          .get(request.params.jobId) as {freshness_json:string} | undefined;
-        return { freshness: row ? JSON.parse(row.freshness_json) as unknown : null };
-      });
-      api.post("/provider-data/filings/collect", { preHandler: requireAuth }, async (_request, reply) => {
-        void container.filingDiscovery.collectPending().catch((error: unknown) => {
-          api.log.error({err:error}, "별도 공시 목록 수집 실패");
-        });
-        return reply.code(202).send({ok:true});
-      });
-      api.get("/provider-data/plans", { preHandler: requireAuth }, async () => ({
-        plans: container.providerRequestPolicy.list(), freshness: container.filingDiscovery.freshness(),
-      }));
-      api.post<{ Params: { fingerprint: string }; Body: { approved: boolean } }>(
-        "/provider-data/plans/:fingerprint", { preHandler: requireAuth }, async (request, reply) => {
-          if (!/^[a-f0-9]{64}$/.test(request.params.fingerprint) || typeof request.body?.approved !== "boolean")
-            return reply.code(400).send({ error: "승인 계획과 결정을 확인하세요" });
-          if (!container.providerRequestPolicy.decide(request.params.fingerprint, request.body.approved))
-            return reply.code(409).send({ error: "완료되었거나 존재하지 않는 계획입니다" });
-          if (request.body.approved) {
-            container.database.sqlite.prepare(`UPDATE agent_data_requests SET status = 'QUEUED',
-              next_attempt_at_ms = 0 WHERE status = 'BLOCKED' AND instr(error, ?) > 0`)
-              .run(request.params.fingerprint);
-            container.agentCoordinator.wake();
-          }
-          return { ok: true };
-        });
       registerAgentManagementRoutes(
         api,
         container.agentCoordinator,

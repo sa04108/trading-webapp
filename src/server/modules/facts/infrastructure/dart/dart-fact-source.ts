@@ -333,7 +333,7 @@ export function createDartFactSource(
   async function liveCall<T>(
     path: string,
     params: Record<string, string>,
-    hooks: FactSourceRequestHooks = {},
+    hooks: FactSourceRequestHooks & { onTransientFailure?(): void } = {},
   ): Promise<DartEnvelope<T>> {
     if (dartConfig === null || client === null)
       throw new FactSourceNotConfiguredError();
@@ -347,7 +347,7 @@ export function createDartFactSource(
         "default",
         `${path}?${query.toString()}`,
         {},
-        { beforeAttempt: () => beforePhysicalRequest(hooks.beforeRequest) },
+        { beforeAttempt: () => beforePhysicalRequest(hooks.beforeRequest), onTransientFailure: hooks.onTransientFailure },
       );
     } catch (error) {
       if (error instanceof DartQuotaError) throw error;
@@ -529,6 +529,7 @@ export function createDartFactSource(
       const parameters = params(corpCode);
       const envelope = await liveCall<T>(path, parameters, {
         beforeRequest: () => { hooks.beforeRequest?.(); permit?.beforeAttempt(); },
+        onTransientFailure: () => permit?.deferRetry(),
       });
       const liveRows = rowsFromSnapshot<T>(envelope);
       if (liveRows === null) {
@@ -584,16 +585,29 @@ export function createDartFactSource(
     createDartCorpCodeCache(async () => {
       if (dartConfig === null) throw new FactSourceNotConfiguredError();
       const query = new URLSearchParams({ crtfc_key: dartConfig.apiKey });
-      const response = await (options.fetchImpl ?? fetch)(
-        `${dartConfig.baseUrl}/api/corpCode.xml?${query.toString()}`,
-      );
+      let response: Response;
+      try {
+        response = await (options.fetchImpl ?? fetch)(
+          `${dartConfig.baseUrl}/api/corpCode.xml?${query.toString()}`,
+        );
+      } catch (error) {
+        corpCodePermit?.deferRetry();
+        throw error;
+      }
       if (response.status === 429) reportQuotaExceeded();
       if (!response.ok) {
+        if (response.status >= 500) corpCodePermit?.deferRetry();
         throw new Error(
           `DART 종목 코드 목록을 내려받지 못했습니다 (HTTP ${response.status})`,
         );
       }
-      const body = Buffer.from(await response.arrayBuffer());
+      let body: Buffer;
+      try {
+        body = Buffer.from(await response.arrayBuffer());
+      } catch (error) {
+        corpCodePermit?.deferRetry();
+        throw error;
+      }
       // corpCode.xml은 정상일 때 ZIP이지만 오류일 때 HTTP 200 XML 봉투를 돌려줄 수 있다.
       // ZIP 파서 오류로 바뀌기 전에 020을 명시적인 quota 오류로 보존한다.
       const errorEnvelope = body.subarray(0, 512).toString("utf8");
@@ -601,13 +615,15 @@ export function createDartFactSource(
         reportQuotaExceeded();
       return body;
     }, options.corpCodeSnapshots, () => clock.now(), {
-      beforeDownload: (missingSymbol) => {
+      allowRecovery: options.requestPolicy !== undefined,
+      beforeDownload: (missingSymbol, recovery) => {
         if (dartConfig === null) throw new FactSourceNotConfiguredError();
         corpCodePermit = options.requestPolicy?.authorize({
         provider: "DART", namespace: dartConfig.baseUrl,
         endpoint: "/api/corpCode.xml", parameters: missingSymbol === undefined ? {} : {symbol:missingSymbol},
-      }, { kind: "MISSING", evidence: missingSymbol === undefined ? "고유번호 원문 부재"
-        : `신규 종목 ${missingSymbol}: ${createHash("sha256").update(options.corpCodeSnapshots?.get()?.xml ?? "").digest("hex")}` });
+      }, recovery ? { kind: "CORRUPT", evidence: `${recovery.reason}: ${recovery.evidence}` }
+        : { kind: "MISSING", evidence: missingSymbol === undefined ? "고유번호 원문 부재"
+          : `신규 종목 ${missingSymbol}: ${createHash("sha256").update(options.corpCodeSnapshots?.get()?.xml ?? "").digest("hex")}` });
       },
       afterPersist: () => { corpCodePermit?.complete(); },
     });

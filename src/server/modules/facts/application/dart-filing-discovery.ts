@@ -14,15 +14,17 @@ interface DiscoveryJob {
 const DAY = 86_400_000;
 export const PREVIEW_FILING_REQUEST_LIMIT = 2;
 export const PREVIEW_FILING_TIMEOUT_MS = 5_000;
+export const FILING_CONTINUATION_DELAY_MS = 15 * 60_000;
 function dateAt(ms: number): string { return new Date(ms).toISOString().slice(0, 10); }
 function shift(date: string, days: number): string { return dateAt(Date.parse(date) + days * DAY); }
 
-/** 미리보기는 소량의 목록만 확인하고, 미완료 이력은 명시적인 목록 수집에서 처리한다. */
+/** 미리보기는 소량의 목록만 확인하고, 미완료 이력은 내부에서 나눠 이어받는다. */
 export class DartFilingDiscovery {
   private running: Promise<void> | null = null;
   private activity: "PREVIEW" | "COLLECTION" | null = null;
   private controller: AbortController | null = null;
   private stopped = false;
+  private continuationTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly owner = randomUUID();
   constructor(private readonly options: {
     sqlite: Database.Database;
@@ -41,7 +43,7 @@ export class DartFilingDiscovery {
     const today = dateAt(this.now() + 9 * 3600_000);
     return {
       lastCheckedAtMs: last?.completed_at_ms ?? null, checkedThrough: last?.to_date ?? null,
-      warning: pending ? "공시 목록 일부 미확인: 기존 DB로 진행하며 나머지는 별도 목록 수집이 필요합니다."
+      warning: pending ? "공시 목록 일부 미확인: 기존 DB로 진행하며 나머지는 내부에서 이어서 확인합니다."
         : uncertain ? "일부 공시의 기존 자료 반영 여부 미확인"
           : last?.to_date === today ? null : last ? "최신 공시 확인 미완료" : "공시 확인 이력 없음",
       pending: pending !== undefined,
@@ -56,6 +58,8 @@ export class DartFilingDiscovery {
   }
 
   collectPending(): Promise<void> {
+    if (this.continuationTimer !== null) clearTimeout(this.continuationTimer);
+    this.continuationTimer = null;
     if (this.activity === "PREVIEW") return this.running!.then(() => this.collectPending());
     return this.start("COLLECTION");
   }
@@ -75,12 +79,26 @@ export class DartFilingDiscovery {
       this.controller = null;
       this.activity = null;
       this.running = null;
+      this.scheduleContinuation(activity === "PREVIEW" ? 0 : FILING_CONTINUATION_DELAY_MS);
     });
     return this.running;
   }
 
+  private scheduleContinuation(delay: number): void {
+    if (this.stopped || this.continuationTimer !== null || !this.options.fetchPage) return;
+    const pending = this.options.sqlite.prepare("SELECT 1 FROM dart_discovery_jobs WHERE status != 'COMPLETED' LIMIT 1").get();
+    if (!pending) return;
+    this.continuationTimer = setTimeout(() => {
+      this.continuationTimer = null;
+      void this.collectPending();
+    }, delay);
+    this.continuationTimer.unref();
+  }
+
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.continuationTimer !== null) clearTimeout(this.continuationTimer);
+    this.continuationTimer = null;
     this.controller?.abort(new Error("공시 목록 확인 종료"));
     await this.running;
   }
@@ -123,10 +141,11 @@ export class DartFilingDiscovery {
       const firstPage = job.page > 1 ? sqlite.prepare(`SELECT fetched_at_ms FROM dart_discovery_pages
         WHERE day = ? AND from_date = ? AND page = ?`).get(job.day, from, 1) as
         {fetched_at_ms:number} | undefined : undefined;
-      // 당시 열린 날짜의 목록은 자정 이후에도 접수가 추가됐을 수 있으므로 첫 페이지부터 다시 확인한다.
-      // 저장 시점이 없는 구버전 커서도 안전하게 재시작하고, 닫힌 기간의 커서만 이어 읽는다.
-      const wasOpen = firstPage === undefined || windowEnd >= dateAt(firstPage.fetched_at_ms + 9 * 3600_000);
-      let page = wasOpen ? 1 : job.page;
+      // 같은 날의 내부 작업은 커서를 이어받아 분량 제한 때문에 앞부분만 반복하지 않는다.
+      // 당시 열린 기간의 날짜가 바뀌었거나 저장 시점이 없으면 추가 접수를 확인하기 위해 다시 시작한다.
+      const firstCheckedDay = firstPage === undefined ? null : dateAt(firstPage.fetched_at_ms + 9 * 3600_000);
+      const restart = firstCheckedDay === null || (windowEnd >= firstCheckedDay && today > firstCheckedDay);
+      let page = restart ? 1 : job.page;
       try {
         while (from <= job.to_date && attempts < limit) {
           signal.throwIfAborted();
@@ -176,7 +195,7 @@ export class DartFilingDiscovery {
           })();
           from = nextFrom; page = nextPage;
         }
-        if (from <= job.to_date) throw new Error("공시 목록 요청 한도 도달: 나머지는 별도 목록 수집에서 처리합니다");
+        if (from <= job.to_date) throw new Error("공시 목록 요청 한도 도달: 나머지는 내부에서 이어서 확인합니다");
         sqlite.prepare("UPDATE dart_discovery_jobs SET status = 'COMPLETED', completed_at_ms = ?, owner = NULL, error = NULL WHERE day = ?")
           .run(this.now(), job.day);
         // 이번에 완전히 확인한 구간에 포함된 이전 실패 기록도 함께 닫는다.

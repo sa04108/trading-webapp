@@ -100,15 +100,30 @@ export function createDartCorpCodeCache(
   fetchXmlZip: (missingSymbol?: string) => Promise<Buffer>,
   store?: DartCorpCodeSnapshotStore,
   now: () => number = Date.now,
-  hooks: { beforeDownload?(missingSymbol?: string): void; afterPersist?(): void } = {},
+  hooks: {
+    allowRecovery?: boolean;
+    beforeDownload?(missingSymbol?: string, recovery?: DartRawSnapshotError): void;
+    afterPersist?(): void;
+  } = {},
 ): CorpCodeResolver {
   let pending: Promise<Map<string, string>> | null = null;
   let local: Map<string, string> | null = null;
   const changed = new Set<string>();
   const attempted = new Set<string>();
+  let recovery: DartRawSnapshotError | null = null;
   const readSaved = (): Map<string, string> | null => {
     if (local !== null) return local;
-    const saved = store?.get();
+    if (recovery !== null) return null;
+    let saved: ReturnType<NonNullable<DartCorpCodeSnapshotStore["get"]>>;
+    try {
+      saved = store?.get() ?? null;
+    } catch (error) {
+      if (error instanceof DartRawSnapshotError && error.reason === "HASH_MISMATCH" && error.requestKey === "corpCode.xml" && hooks.allowRecovery) {
+        recovery = error;
+        return null;
+      }
+      throw error;
+    }
     if (saved == null) return null;
     const map = parseCorpCodeXml(saved.xml);
     if (map.size === 0) throw new DartRawSnapshotError("PARSER_INCOMPATIBLE", "corpCode.xml");
@@ -118,7 +133,7 @@ export function createDartCorpCodeCache(
   const download = (beforeRequest?: () => void, missingSymbol?: string): Promise<Map<string, string>> => {
     if (pending) return pending;
     pending = (async () => {
-      hooks.beforeDownload?.(missingSymbol);
+      hooks.beforeDownload?.(missingSymbol, recovery ?? undefined);
       beforeRequest?.();
       const xml = extractSingleFileFromZip(await fetchXmlZip(missingSymbol)).toString("utf8");
       const map = parseCorpCodeXml(xml);
@@ -127,6 +142,7 @@ export function createDartCorpCodeCache(
         if (map.has(symbol) && map.get(symbol) !== previous) changed.add(symbol);
       store?.put(xml, now());
       local = map;
+      recovery = null;
       for (const symbol of store?.get()?.changedSymbols ?? []) changed.add(symbol);
       hooks.afterPersist?.();
       return map;

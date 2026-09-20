@@ -159,46 +159,30 @@ describe('DART 수집 중단 후 SQLite 재개', () => {
     }
   });
 
-  it('명시적 공시 확인과 승인 이후 정정 보고서만 갱신하고 기존 원문은 재사용한다', async () => {
+  it('확인된 정정은 별도 조작 없이 세 원문만 갱신하고 다음 실행에서 모두 재사용한다', async () => {
     const database = openDatabase(':memory:');
     try {
       seed(database);
-      const first = setup(database, START);
-      await first.service.sync(REQUEST, {
-        beforeDartRequest: () => first.calls.length >= 20 ? 'PAUSE_DAILY_QUOTA' : 'CONTINUE',
-      });
-      const resumed = setup(database, START + 2 * 86_400_000, true);
-      expect((await resumed.service.sync(REQUEST)).stopReason).toBeNull();
-      expect(resumed.calls).toHaveLength(8);
-      expect(resumed.calls.every((call)=>call.includes(':2017:'))).toBe(true);
-      resumed.calls.length=0;
-      await resumed.discovery().refresh();
-      expect(resumed.calls).toEqual(['/api/list.json:null:null']);
-      expect(resumed.pending.observeFilings(['20260913000001'])).toEqual([{symbol:'005930',year:2016}]);
-      resumed.calls.length=0;
-      const correction={...REQUEST,toYear:2016,mode:'FULL' as const};
-      await expect(resumed.service.sync(correction)).rejects.toThrow(/SOURCE_CHANGE_CONFIRMED/);
-      expect(resumed.calls).toEqual([]);
-      const blocked=database.sqlite.prepare("SELECT fingerprint FROM provider_request_plans WHERE status='BLOCKED'").all() as {fingerprint:string}[];
-      expect(blocked).toHaveLength(1);
-      expect(resumed.policy.decide(blocked[0]!.fingerprint,true)).toBe(true);
-      expect((await resumed.service.sync(correction)).stopReason).toBeNull();
-      expect(resumed.calls.sort()).toEqual([
+      await setup(database, START).service.sync(REQUEST);
+      const current = setup(database, START + 2 * 86_400_000, true);
+      await current.discovery().refresh();
+      current.pending.observeFilings(['20260913000001']);
+      current.calls.length = 0;
+      await current.service.sync(REQUEST);
+      expect(current.calls.sort()).toEqual([
         '/api/fnlttSinglAcntAll.json:2016:11011',
         '/api/irdsSttus.json:2016:11011',
         '/api/stockTotqySttus.json:2016:11011',
       ]);
-      resumed.pending.markNormalized('005930',2016);
-      expect(database.sqlite.prepare('SELECT * FROM provider_input_issues').all()).toEqual([]);
-      expect(database.sqlite.prepare("SELECT endpoint FROM dart_filing_endpoint_checkpoints WHERE receipt_no='20260913000001' AND status='APPLIED'").all()).toHaveLength(3);
-      const facts=await resumed.facts.getFacts({scope:'SYMBOL'});
-      expect(facts.find((fact)=>fact.field==='CURRENT_ASSETS' && fact.periodKey==='2016Q4')?.value).toBe(2000);
-      expect(facts.filter((fact)=>fact.field==='CURRENT_ASSETS' && fact.periodKey.startsWith('2016') && fact.periodKey!=='2016Q4').every((fact)=>fact.value===1000)).toBe(true);
-      const restarted=setup(database,START + 2 * 86_400_000,true);
-      await restarted.discovery().refresh();
+      const values = await current.facts.getFacts({ scope: 'SYMBOL' });
+      expect(values.find((fact) => fact.field === 'CURRENT_ASSETS' && fact.periodKey === '2016Q4')?.value).toBe(2000);
+      expect(values.filter((fact) => fact.field === 'CURRENT_ASSETS' && fact.periodKey !== '2016Q4').every((fact) => fact.value === 1000)).toBe(true);
+      expect(database.sqlite.prepare("SELECT status FROM dart_filing_endpoint_checkpoints WHERE receipt_no = '20260913000001'").all())
+        .toEqual([{ status: 'APPLIED' }, { status: 'APPLIED' }, { status: 'APPLIED' }]);
+      const restarted = setup(database, START + 3 * 86_400_000, true);
       await restarted.service.sync(REQUEST);
       await restarted.service.syncCorporateActions(REQUEST);
-      expect(restarted.calls).toEqual(['/api/list.json:null:null']);
+      expect(restarted.calls).toEqual([]);
     } finally { database.close(); }
   });
 });

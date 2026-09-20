@@ -183,7 +183,7 @@ export function createKrxHistoricalUniverseSource(
     try {
       return options.requestPolicy?.authorize(key, state);
     } catch (error) {
-      if (pending && isBlockedError(error))
+      if (pending && isBlockedError(error) && error.reason !== "RETRY_BACKOFF")
         throw new ProviderRequestBlockedError("PENDING_PUBLICATION", error.requestKey, error.evidence);
       throw error;
     }
@@ -235,6 +235,7 @@ export function createKrxHistoricalUniverseSource(
         {
           // 재시도도 공급자 입장에서는 별도 HTTP 요청이다. 실제 attempt 직전에 기록해야
           // 429/5xx 재시도가 오늘 예산에서 사라지지 않는다.
+          onTransientFailure: () => permit?.deferRetry(),
           beforeAttempt: () => {
             ensureApprovalIsValid(currentDate());
             if (quotaWasExceeded(path)) throw new KrxQuotaError();

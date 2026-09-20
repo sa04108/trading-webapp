@@ -93,13 +93,14 @@ export const krxRawApiSnapshots = sqliteTable("krx_raw_api_snapshots", {
   fetchedAtMs: integer("fetched_at_ms").notNull(),
 }, (table) => [index("idx_krx_raw_api_snapshots_key").on(table.namespace, table.endpoint, table.basDd)]);
 
-/** 원문 요청의 최소 범위와 승인·취소·물리 재시도 이력. */
+/** 원문 요청의 최소 범위와 자동 수집·물리 재시도 이력. */
 export const providerRequestPlans = sqliteTable("provider_request_plans", {
   fingerprint: text("fingerprint").primaryKey().notNull(),
   requestJson: text("request_json").notNull(), reason: text("reason").notNull(), evidence: text("evidence").notNull(),
   status: text("status").notNull(), attempts: integer("attempts").notNull().default(0),
   maxAttempts: integer("max_attempts").notNull().default(5), createdAtMs: integer("created_at_ms").notNull(),
   decidedAtMs: integer("decided_at_ms"),
+  retryAfterMs: integer("retry_after_ms"),
 });
 export const dartDiscoveryJobs = sqliteTable("dart_discovery_jobs", {
   windowDays: integer("window_days").notNull().default(80),

@@ -19,6 +19,7 @@ export interface ProviderRequestPermit {
   readonly reason: string;
   beforeAttempt(): void;
   complete(): void;
+  deferRetry(): never;
 }
 export interface ProviderRequestPolicy {
   authorize(key: ProviderRequestKey, state: ProviderSourceState): ProviderRequestPermit;
@@ -33,7 +34,17 @@ export function providerPlanFingerprint(key: ProviderRequestKey, state: Provider
   })).digest("hex");
 }
 
-/** 승인은 단일 요청·근거에만 적용하며 각 물리 재시도에서도 취소와 상한을 확인한다. */
+const ATTEMPTS_PER_BATCH = 5;
+export const PROVIDER_RETRY_DELAY_MS = 15 * 60_000;
+
+interface RequestPlanRow {
+  status: string;
+  attempts: number;
+  max_attempts: number;
+  retry_after_ms: number | null;
+}
+
+/** 필요한 요청만 자동 수집하며 누적 시도와 재시도 대기를 재시작 후에도 유지한다. */
 export class SqliteProviderRequestPolicy implements ProviderRequestPolicy {
   constructor(private readonly sqlite: Database.Database, private readonly now: () => number = Date.now, private readonly logger?: Logger, private readonly onSourceAttempt?: (key: ProviderRequestKey) => void) {}
 
@@ -45,44 +56,82 @@ export class SqliteProviderRequestPolicy implements ProviderRequestPolicy {
         .get(JSON.stringify(key)) as {fingerprint:string} | undefined;
       if (previous) return this.authorize(key, {kind:"CORRUPT", evidence:`수집 완료 기록 ${previous.fingerprint}의 원문 유실: ${state.evidence}`});
     }
-    const fingerprint = providerPlanFingerprint(key, state);
+    let fingerprint = providerPlanFingerprint(key, state);
+    // 같은 결손이 나중에 재발하면 완료 기록을 보존한 새 복구 회차를 만든다.
+    while ((this.sqlite.prepare("SELECT status FROM provider_request_plans WHERE fingerprint = ?")
+      .get(fingerprint) as { status: string } | undefined)?.status === "COMPLETED") {
+      fingerprint = createHash("sha256").update(JSON.stringify({ previous: fingerprint, key, state })).digest("hex");
+    }
     const reason = state.kind === "PUBLICATION" ? "PUBLICATION_CONFIRMED" : state.kind === "MISSING" ? "FIRST_ACQUISITION"
       : state.kind === "CORRUPT" ? "SOURCE_RECOVERY"
         : state.kind === "REPLACEMENT" ? "SOURCE_CHANGE_CONFIRMED" : "BLOCKED_SOURCE_REQUIREMENT";
     this.sqlite.prepare(`INSERT OR IGNORE INTO provider_request_plans
       (fingerprint, request_json, reason, evidence, status, attempts, max_attempts, created_at_ms)
-      VALUES (?, ?, ?, ?, ?, 0, 5, ?)`).run(fingerprint, JSON.stringify(key), reason, state.evidence,
-        state.kind === "MISSING" || state.kind === "PUBLICATION" ? "APPROVED" : "BLOCKED", this.now());
-    const check = () => {
-      const row = this.sqlite.prepare("SELECT status, attempts, max_attempts FROM provider_request_plans WHERE fingerprint = ?")
-        .get(fingerprint) as {status: string; attempts: number; max_attempts: number};
-      if (row.status !== "APPROVED" || row.attempts >= row.max_attempts)
-        throw new ProviderRequestBlockedError(reason, fingerprint, state.evidence);
+      VALUES (?, ?, ?, ?, 'READY', 0, ?, ?)`).run(
+        fingerprint, JSON.stringify(key), reason, state.evidence, ATTEMPTS_PER_BATCH, this.now());
+    const check = (): ProviderRequestBlockedError | null => {
+      const row = this.sqlite.prepare("SELECT status, attempts, max_attempts, retry_after_ms FROM provider_request_plans WHERE fingerprint = ?")
+        .get(fingerprint) as RequestPlanRow;
+      if (row.status === "COMPLETED")
+        return new ProviderRequestBlockedError("SOURCE_REQUEST_COMPLETED", fingerprint, state.evidence);
+      if (row.status !== "READY" && row.status !== "WAITING_RETRY")
+        return new ProviderRequestBlockedError("SOURCE_REQUEST_INVALID", fingerprint, state.evidence);
+      const now = this.now();
+      if (row.retry_after_ms !== null && row.retry_after_ms > now)
+        return new ProviderRequestBlockedError("RETRY_BACKOFF", fingerprint, state.evidence, row.retry_after_ms);
+      if (row.attempts >= row.max_attempts) {
+        const retryAfterMs = row.retry_after_ms ?? now + PROVIDER_RETRY_DELAY_MS;
+        if (retryAfterMs > now) {
+          this.sqlite.prepare("UPDATE provider_request_plans SET status = 'WAITING_RETRY', retry_after_ms = ? WHERE fingerprint = ?")
+            .run(retryAfterMs, fingerprint);
+          return new ProviderRequestBlockedError("RETRY_BACKOFF", fingerprint, state.evidence, retryAfterMs);
+        }
+        this.sqlite.prepare("UPDATE provider_request_plans SET status = 'READY', max_attempts = attempts + ?, retry_after_ms = NULL WHERE fingerprint = ?")
+          .run(ATTEMPTS_PER_BATCH, fingerprint);
+      } else if (row.retry_after_ms !== null) {
+        this.sqlite.prepare("UPDATE provider_request_plans SET status = 'READY', retry_after_ms = NULL WHERE fingerprint = ?")
+          .run(fingerprint);
+      }
+      return null;
     };
-    check();
+    // 대기 시각 저장은 오류를 던지기 전에 커밋해 반복 조회가 대기 시간을 늘리지 않게 한다.
+    const blocked = this.sqlite.transaction(check).immediate();
+    if (blocked) throw blocked;
     return {
       fingerprint, reason,
-      beforeAttempt: () => this.sqlite.transaction(() => {
-        check();
-        this.sqlite.prepare("UPDATE provider_request_plans SET attempts = attempts + 1 WHERE fingerprint = ?").run(fingerprint);
-        this.onSourceAttempt?.(key);
-        const attempt = this.sqlite.prepare("SELECT attempts FROM provider_request_plans WHERE fingerprint = ?").get(fingerprint) as {attempts:number};
-        this.logger?.info({ event: "provider.http", activity: "SOURCE_FETCH", provider: key.provider,
-          endpoint: key.endpoint, requestKey: key.parameters, reason, fingerprint, attempt: attempt.attempts }, "승인 범위 내 원문 HTTP 요청");
-      }).immediate(),
-      complete: () => { this.logger?.info({event:"provider.http.completed", fingerprint, reason}, "원문 저장 완료"); this.sqlite.prepare("UPDATE provider_request_plans SET status = 'COMPLETED' WHERE fingerprint = ? AND status = 'APPROVED'").run(fingerprint); },
+      beforeAttempt: () => {
+        const blocked = this.sqlite.transaction(() => {
+          const blocked = check();
+          if (blocked) return blocked;
+          this.sqlite.prepare(`UPDATE provider_request_plans SET attempts = attempts + 1,
+            status = CASE WHEN attempts + 1 >= max_attempts THEN 'WAITING_RETRY' ELSE 'READY' END,
+            retry_after_ms = CASE WHEN attempts + 1 >= max_attempts THEN ? ELSE NULL END
+            WHERE fingerprint = ?`).run(this.now() + PROVIDER_RETRY_DELAY_MS, fingerprint);
+          this.onSourceAttempt?.(key);
+          const attempt = this.sqlite.prepare("SELECT attempts FROM provider_request_plans WHERE fingerprint = ?").get(fingerprint) as {attempts:number};
+          this.logger?.info({ event: "provider.http", activity: "SOURCE_FETCH", provider: key.provider,
+            endpoint: key.endpoint, requestKey: key.parameters, reason, fingerprint, attempt: attempt.attempts }, "필요 범위의 원문 자동 수집");
+          return null;
+        }).immediate();
+        if (blocked) throw blocked;
+      },
+      deferRetry: () => {
+        const retryAfterMs = this.sqlite.transaction(() => {
+          const row = this.sqlite.prepare("SELECT attempts, retry_after_ms FROM provider_request_plans WHERE fingerprint = ?")
+            .get(fingerprint) as { attempts: number; retry_after_ms: number | null };
+          const retryAfterMs = row.retry_after_ms ?? this.now() + 5000 * 2 ** Math.min(row.attempts, 5);
+          this.sqlite.prepare("UPDATE provider_request_plans SET status = 'WAITING_RETRY', retry_after_ms = ? WHERE fingerprint = ? AND status != 'COMPLETED'")
+            .run(retryAfterMs, fingerprint);
+          return retryAfterMs;
+        }).immediate();
+        throw new ProviderRequestBlockedError("RETRY_BACKOFF", fingerprint, state.evidence, retryAfterMs);
+      },
+      complete: () => {
+        this.sqlite.prepare("UPDATE provider_request_plans SET status = 'COMPLETED', retry_after_ms = NULL WHERE fingerprint = ?")
+          .run(fingerprint);
+        this.logger?.info({event:"provider.http.completed", fingerprint, reason}, "원문 저장 완료");
+      },
     };
   }
 
-  list() {
-    return this.sqlite.prepare("SELECT * FROM provider_request_plans ORDER BY created_at_ms DESC LIMIT 200").all();
-  }
-
-  decide(fingerprint: string, approved: boolean): boolean {
-    // 명시적 재승인만 다음 다섯 번을 허용한다. 기존 attempt 이력은 초기화하지 않는다.
-    return this.sqlite.prepare(`UPDATE provider_request_plans SET status = ?, decided_at_ms = ?,
-      max_attempts = CASE WHEN ? = 1 AND attempts >= max_attempts THEN max_attempts + 5 ELSE max_attempts END
-      WHERE fingerprint = ? AND status IN ('BLOCKED', 'APPROVED', 'CANCELLED')`)
-      .run(approved ? "APPROVED" : "CANCELLED", this.now(), approved ? 1 : 0, fingerprint).changes === 1;
-  }
 }

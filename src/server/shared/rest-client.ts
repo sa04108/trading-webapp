@@ -37,6 +37,8 @@ export interface RestClientOptions {
 /** 물리적인 HTTP attempt마다 실행되는 hook. 재시도도 각각 한 번씩 호출한다. */
 export interface RestRequestHooks {
   beforeAttempt?(): void;
+  /** 일시적인 연결 실패나 서버 오류의 다음 수집 시각을 호출자가 예약한다. */
+  onTransientFailure?(): void;
 }
 
 const DEFAULT_MIN_INTERVAL_MS = 250;
@@ -105,21 +107,35 @@ export class RestClient {
       init.signal?.throwIfAborted();
       hooks.beforeAttempt?.();
 
-      const response = await this.fetchImpl(`${this.options.baseUrl}${path}`, {
-        ...(init.signal ? { signal: init.signal } : {}),
-        method: init.method ?? "GET",
-        headers: {
-          ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
-          ...(init.body !== undefined
-            ? { "content-type": "application/json" }
-            : {}),
-          ...init.headers,
-        },
-        ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-      });
+      let response: Response;
+      try {
+        response = await this.fetchImpl(`${this.options.baseUrl}${path}`, {
+          ...(init.signal ? { signal: init.signal } : {}),
+          method: init.method ?? "GET",
+          headers: {
+            ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
+            ...(init.body !== undefined
+              ? { "content-type": "application/json" }
+              : {}),
+            ...init.headers,
+          },
+          ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+        });
+      } catch (error) {
+        init.signal?.throwIfAborted();
+        hooks.onTransientFailure?.();
+        throw error;
+      }
 
       if (response.ok) {
-        return (await response.json()) as T;
+        try {
+          return (await response.json()) as T;
+        } catch (error) {
+          init.signal?.throwIfAborted();
+          // 응답 본문을 받는 도중 끊긴 연결도 재시도하되 JSON 형식 오류는 그대로 보고한다.
+          if (!(error instanceof SyntaxError)) hooks.onTransientFailure?.();
+          throw error;
+        }
       }
 
       // 토큰 인증일 때만 401 재발급을 시도한다 — 쿼리 키 방식에서 401 은 키가
@@ -136,6 +152,7 @@ export class RestClient {
 
       const retryable = response.status === 429 || response.status >= 500;
       if (!retryable || attempt >= this.maxRetries) {
+        if (response.status >= 500) hooks.onTransientFailure?.();
         const body = await response.text().catch(() => "");
         throw new Error(
           `REST 요청 실패: ${response.status} ${body.slice(0, 200)}`,
