@@ -397,7 +397,7 @@ export class AgentCoordinator {
       .get(job.id) as { created_at_ms: number; updated_at_ms: number } | undefined;
     const activityAt = times?.updated_at_ms ?? times?.created_at_ms ?? Date.now();
     if (job.status === "WAITING_DATA" && job.phase === "FILING_DISCOVERY") return {
-      activity: "FILING_DISCOVERY", detail: "최신 공시와 저장 원문을 확인하고 있습니다", actorKind: "SERVER",
+      activity: "FILING_DISCOVERY", detail: "최근 공시 목록을 확인하고 있습니다", actorKind: "SERVER",
       actorId: null, actorName: "운영 서버", unit: null, completed: null, total: null,
       currentItem: null, attempt: null, retryCount: 0, startedAtMs: activityAt,
       lastProgressAtMs: null, lastReceivedAtMs: activityAt, nextResumeAtMs: null,

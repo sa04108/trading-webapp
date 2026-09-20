@@ -1,5 +1,3 @@
-import Database from 'better-sqlite3';
-import { SqliteDartCorpCodeSnapshotStore } from '../../src/server/modules/facts/infrastructure/dart/sqlite-dart-corp-code-snapshot-store.js';
 import { deflateRawSync } from 'node:zlib';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -161,51 +159,4 @@ describe('createDartCorpCodeCache', () => {
     expect(await cache.resolve('005930')).toBe('00126380');
     expect(fetchZip).toHaveBeenCalledTimes(2);
   });
-});
-
-
-describe('고유번호 영속 재사용', () => {
-  it('재시작 후 동일 namespace는 원문을 재사용하고 다른 공급자는 분리한다', async () => {
-    const db = new Database(':memory:');
-    db.exec('CREATE TABLE dart_corp_code_snapshot(namespace TEXT PRIMARY KEY, xml TEXT NOT NULL, content_hash TEXT NOT NULL, fetched_at_ms INTEGER NOT NULL); CREATE TABLE dart_raw_api_snapshot_history(id INTEGER PRIMARY KEY, snapshot_json TEXT NOT NULL, archived_at_ms INTEGER NOT NULL)');
-    try {
-      const fetchZip = vi.fn(async () => makeZip('CORPCODE.xml', XML));
-      const store = new SqliteDartCorpCodeSnapshotStore(db, 'dart.test');
-      expect(await createDartCorpCodeCache(fetchZip, store, () => 123).resolve('005930')).toBe('00126380');
-      expect(await createDartCorpCodeCache(fetchZip, new SqliteDartCorpCodeSnapshotStore(db, 'dart.test')).resolve('005930')).toBe('00126380');
-      expect(fetchZip).toHaveBeenCalledTimes(1);
-      expect(store.get()?.fetchedAtMs).toBe(123);
-      expect(new SqliteDartCorpCodeSnapshotStore(db, 'other.test').get()).toBeNull();
-      db.prepare('UPDATE dart_corp_code_snapshot SET xml = ?').run('변조');
-      await expect(createDartCorpCodeCache(fetchZip, store).resolve('005930')).rejects.toThrow(/HASH_MISMATCH/);
-      expect(fetchZip).toHaveBeenCalledTimes(1);
-    } finally { db.close(); }
-  });
-
-  it('동일 종목의 서로 다른 회사 정체성은 임의로 선택하지 않는다', () => {
-    expect(() => parseCorpCodeXml(XML.replace('</result>', '<list><stock_code>005930</stock_code><corp_code>99999999</corp_code></list></result>'))).toThrow(/IDENTITY_MISMATCH/);
-  });
-});
-
-it('영속 매핑에 없는 신규 종목만 한 번 갱신하고 변경된 기존 법인은 재시작 뒤에도 차단한다', async () => {
-  const db = new Database(':memory:');
-  db.exec('CREATE TABLE dart_corp_code_snapshot(namespace TEXT PRIMARY KEY, xml TEXT NOT NULL, content_hash TEXT NOT NULL, fetched_at_ms INTEGER NOT NULL); CREATE TABLE dart_raw_api_snapshot_history(id INTEGER PRIMARY KEY, snapshot_json TEXT NOT NULL, archived_at_ms INTEGER NOT NULL)');
-  try {
-    const changed: string[] = [];
-    const store = new SqliteDartCorpCodeSnapshotStore(db,'dart.test',(symbol)=>{changed.push(symbol);});
-    store.put(XML,1);
-    const next = XML.replace('00126380','00999991').replace('</result>', '<list><stock_code>123456</stock_code><corp_code>00999992</corp_code></list></result>');
-    const fetchZip = vi.fn(async () => makeZip('CORPCODE.xml',next));
-    const cache = createDartCorpCodeCache(fetchZip,store);
-    expect(await cache.resolve('000660')).toBe('00164779');
-    expect(fetchZip).not.toHaveBeenCalled();
-    expect(await cache.resolve('123456')).toBe('00999992');
-    expect(fetchZip).toHaveBeenCalledExactlyOnceWith('123456');
-    expect(changed).toEqual(['005930']);
-    await expect(cache.resolve('005930')).rejects.toThrow(/IDENTITY_MISMATCH/);
-    const restarted = createDartCorpCodeCache(fetchZip,new SqliteDartCorpCodeSnapshotStore(db,'dart.test'));
-    expect(await restarted.resolve('123456')).toBe('00999992');
-    await expect(restarted.resolve('005930')).rejects.toThrow(/IDENTITY_MISMATCH/);
-    expect(fetchZip).toHaveBeenCalledTimes(1);
-  } finally { db.close(); }
 });

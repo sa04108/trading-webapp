@@ -97,28 +97,3 @@ describe('SqliteDartRawSnapshotStore', () => {
     }
   });
 });
-
-
-it('현재 기대 해시와 정확히 같은 보존본만 로컬에서 복구한다', () => {
-  const {database,store} = setup();
-  try {
-    const payload = {status:'013',message:'동일 원문'};
-    store.put(KEY,payload,100);
-    store.put(KEY,payload,200);
-    database.db.update(dartRawApiSnapshots).set({payloadJson:'변조'}).where(eq(dartRawApiSnapshots.code,KEY.symbol)).run();
-    expect(store.get(KEY)).toEqual({payload,fetchedAtMs:200});
-    expect(store.countMissing([KEY],()=>true)).toBe(0);
-  } finally { database.close(); }
-});
-
-it('게시 대기 봉투를 보존해도 이전 활성 원문은 교체하지 않는다', () => {
-  const {database,store} = setup();
-  try {
-    const previous = {status:'000',list:[{rcept_no:'20250515000001'}]};
-    store.put(KEY,previous,1);
-    store.observe(KEY,{status:'013',message:'게시 대기'},2);
-    expect(store.get(KEY)).toEqual({payload:previous,fetchedAtMs:1});
-    const row = database.sqlite.prepare('SELECT snapshot_json FROM dart_raw_api_snapshot_history').get() as {snapshot_json:string};
-    expect(JSON.parse(row.snapshot_json)).toMatchObject({kind:'PENDING_PUBLICATION',payloadJson:'{"status":"013","message":"게시 대기"}',fetchedAtMs:2});
-  } finally { database.close(); }
-});

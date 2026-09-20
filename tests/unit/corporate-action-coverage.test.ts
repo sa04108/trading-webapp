@@ -64,7 +64,7 @@ describe('SqliteCorporateActionCoverageStore', () => {
     expect(store.getGapDetails(['005930']).get('005930')).toEqual([]);
   });
 
-  it('구버전 coverage는 신뢰하지 않고 필요한 연도를 현재 프로토콜로 재수집하게 연다', async ({ ctx }) => {
+  it('정상 형식의 구버전 coverage는 재수집하지 않고 재사용한다', async ({ ctx }) => {
     const { db, store } = await setup(ctx);
     db.insert(symbolFactsState).values({
       code: '005930',
@@ -75,7 +75,7 @@ describe('SqliteCorporateActionCoverageStore', () => {
       actionUpdatedAtMs: 100,
     }).run();
 
-    expect(store.getCoveredYears(['005930']).get('005930')).toEqual([]);
+    expect(store.getCoveredYears(['005930']).get('005930')).toEqual([2025]);
     expect(store.getCollectedYears(['005930']).get('005930')).toEqual([2025]);
 
     store.addCoverageResult('005930', [2025], [], 200);

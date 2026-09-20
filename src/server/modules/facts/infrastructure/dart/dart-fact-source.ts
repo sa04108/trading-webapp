@@ -477,7 +477,7 @@ export function createDartFactSource(
       if (filing?.status === "UNRESOLVED")
         throw new ProviderRequestBlockedError("UNRESOLVED_FILING", cacheKey, filing.receiptNo);
       if (filing?.retryAfterMs != null && filing.retryAfterMs > clock.now())
-        throw new ProviderRequestBlockedError("PENDING_PUBLICATION", cacheKey, filing.receiptNo);
+        throw new ProviderRequestBlockedError("PENDING_PUBLICATION", cacheKey, filing.receiptNo, filing.retryAfterMs);
       let state: ProviderSourceState = {
         kind: options.pendingFilings?.isCollected?.(key) === true ? "REQUIREMENT" : "MISSING",
         evidence: `원문 부재: ${cacheKey}`,
@@ -543,8 +543,9 @@ export function createDartFactSource(
       if (filing != null && !liveRows.some((row) => typeof row === "object" && row !== null &&
           String((row as Record<string, unknown>).rcept_no ?? "") >= filing.receiptNo)) {
         options.rawSnapshots?.observe?.(key, envelope, clock.now());
-        options.pendingFilings?.markPendingPublication(key, filing.receiptNo, clock.now() + 86_400_000);
-        throw new ProviderRequestBlockedError("PENDING_PUBLICATION", cacheKey, filing.receiptNo);
+        const retryAfterMs = clock.now() + 86_400_000;
+        options.pendingFilings?.markPendingPublication(key, filing.receiptNo, retryAfterMs);
+        throw new ProviderRequestBlockedError("PENDING_PUBLICATION", cacheKey, filing.receiptNo, retryAfterMs);
       }
       options.rawSnapshots?.put(key, envelope, clock.now());
       if (filing != null) options.pendingFilings?.markApplied(key, filing.receiptNo);

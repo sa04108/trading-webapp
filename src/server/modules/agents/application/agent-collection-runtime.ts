@@ -1,7 +1,6 @@
 import { createOfficialKrxTradingCalendar } from "../../market-data/infrastructure/krx/krx-trading-calendar.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { SqliteDartPendingFilingStore } from "../../facts/infrastructure/dart/dart-pending-filing-store.js";
-import { ProviderRequestBlockedError } from "../../../shared/provider-request-policy.js";
 import { SqliteProviderRequestPolicy } from "../../../shared/provider-request-policy.js";
 import { SqliteKrxRawSnapshotStore } from "../../market-data/infrastructure/krx/sqlite-krx-raw-snapshot-store.js";
 import { SqliteDartCorpCodeSnapshotStore } from "../../facts/infrastructure/dart/sqlite-dart-corp-code-snapshot-store.js";
@@ -59,7 +58,7 @@ export function createAgentCollectionRuntime(input: {
 
   const factRepository = new SqliteFactRepository(database.db);
   const dartRawSnapshots = new SqliteDartRawSnapshotStore(database.db);
-  const pendingFilings = new SqliteDartPendingFilingStore(database.sqlite, config.dartBaseUrl);
+  const pendingFilings = new SqliteDartPendingFilingStore(database.sqlite);
   const factSource = createDartFactSource(
     config.dartApiKey
       ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey }
@@ -139,45 +138,15 @@ export function createAgentCollectionRuntime(input: {
     clock,
     logger,
   });
-  let reconciliation: Promise<void> | null = null;
-  let reconciliationStopped = false;
-  const reconcileProviderFilings = (): Promise<void> => {
-    if (reconciliationStopped) return Promise.resolve();
-    if (reconciliation) return reconciliation;
-    reconciliation = (async () => {
-      for (const item of await pendingFilings.reconcileDiscoveredFilings({ shouldStop: () => reconciliationStopped })) {
-        if (reconciliationStopped) return;
-        try {
-          const request = { symbols: [item.symbol], fromYear: item.year, toYear: item.year,
-            consolidated: true, mode: "FULL" as const };
-          const financial = await factSyncService.sync(request, { shouldStop: () => reconciliationStopped });
-          const actions = await factSyncService.syncCorporateActions(request, { shouldStop: () => reconciliationStopped });
-          if (financial.stopReason == null && actions.stopReason == null) {
-            pendingFilings.markNormalized(item.symbol, item.year);
-            const issue = database.sqlite.prepare("SELECT 1 FROM provider_input_issues WHERE symbol = ? AND (business_year IS NULL OR business_year = ?) LIMIT 1")
-              .get(item.symbol, item.year);
-            if (!issue) database.sqlite.prepare(`UPDATE agent_data_requests SET status = 'QUEUED', next_attempt_at_ms = 0
-              WHERE status = 'BLOCKED' AND error LIKE 'PENDING_PUBLICATION:%'
-              AND json_extract(request_json, '$.fromYear') <= ? AND json_extract(request_json, '$.toYear') >= ?
-              AND EXISTS (SELECT 1 FROM json_each(request_json, '$.symbols') WHERE value = ?)`)
-              .run(item.year, item.year, item.symbol);
-          }
-        } catch (error) {
-          logger.warn({ event: "provider.filing.pending", symbol: item.symbol, year: item.year,
-            blocked: error instanceof ProviderRequestBlockedError, err: error }, "공시 반영 대기");
-        }
-      }
-    })().finally(() => { reconciliation = null; });
-    return reconciliation;
-  };
-  const discoveryClient = new RestClient({ baseUrl: config.dartBaseUrl, logger });
+  const discoveryClient = new RestClient({ baseUrl: config.dartBaseUrl, logger, maxRetries: 0 });
   const filingDiscovery = new DartFilingDiscovery({
     sqlite: database.sqlite, logger, now: () => clock.now(),
-    fetchPage: config.dartApiKey ? async (from, to, page, beforeAttempt) => {
+    onFilingsStored: (identities) => { pendingFilings.observeFilings(identities); },
+    fetchPage: config.dartApiKey ? async (from, to, page, beforeAttempt, signal) => {
       const parameters = { bgn_de: from.replaceAll("-", ""), end_de: to.replaceAll("-", ""),
-        pblntf_ty: "A", page_no: String(page), page_count: "100" };
+        pblntf_ty: "A", sort: "date", sort_mth: "desc", page_no: String(page), page_count: "100" };
       const query = new URLSearchParams({ ...parameters, crtfc_key: config.dartApiKey! });
-      const envelope = await discoveryClient.request<FilingPage>("dart-discovery", `/api/list.json?${query}`, {}, {
+      const envelope = await discoveryClient.request<FilingPage>("dart-discovery", `/api/list.json?${query}`, { signal }, {
         beforeAttempt: () => {
           beforeAttempt();
           if (externalApiUsage.quotaExceeded("DART", "daily")) throw new Error("DART 일일 한도 대기");
@@ -190,17 +159,7 @@ export function createAgentCollectionRuntime(input: {
       return envelope;
     } : null,
   });
-  let previewRefresh: Promise<void> | null = null;
-  const refreshProviderFilings = (): Promise<void> => {
-    if (reconciliationStopped) return Promise.reject(new Error("공시 확인이 종료되었습니다"));
-    if (previewRefresh) return previewRefresh;
-    // 목록 확인과 원문 대조 전체를 공유해 중간 revision으로 미리보기를 시작하지 않는다.
-    previewRefresh = (async () => {
-      await filingDiscovery.refresh();
-      await reconcileProviderFilings();
-    })().finally(() => { previewRefresh = null; });
-    return previewRefresh;
-  };
+  const refreshProviderFilings = (): Promise<void> => filingDiscovery.refresh();
   const collectData = async (
     request: AgentDataRequest,
     shouldStop: () => boolean,
@@ -268,6 +227,25 @@ export function createAgentCollectionRuntime(input: {
         });
       }
     } else {
+      // 새 공시는 요청 범위 안에서만 반영한다. 자본변동 요청이라도 미반영 공시의 세 소비자를 함께 완료한다.
+      if (request.kind === "ACTIONS") {
+        for (const symbol of request.symbols) {
+          const pendingYears = database.sqlite.prepare(`SELECT DISTINCT business_year AS year FROM provider_input_issues
+            WHERE symbol = ? AND reason = 'PENDING_FILING' AND business_year BETWEEN ? AND ?`)
+            .all(symbol, request.fromYear, request.toYear) as {year:number}[];
+          for (const {year} of pendingYears) {
+            if (shouldStop()) return;
+            const report = await factSyncService.sync({symbols:[symbol],fromYear:year,toYear:year,consolidated:true,mode:"INCREMENTAL"}, {shouldStop});
+            if (report.stopReason === "DAILY_QUOTA") {
+              const next = Math.floor((clock.now() + 9 * 3600_000) / 86400_000 + 1) * 86400_000 - 9 * 3600_000;
+              throw new AgentCollectionPaused(report.failureMessage ?? "DART 일일 호출 한도 대기", next);
+            }
+            if (report.stopReason === "CANCELLED") return;
+            if (report.stopReason !== null) throw new Error(report.failureMessage ?? "공시 반영 수집 미완료");
+            pendingFilings.markNormalized(symbol, year);
+          }
+        }
+      }
       const input = {
         ...request,
         mode: "INCREMENTAL" as const,
@@ -305,6 +283,10 @@ export function createAgentCollectionRuntime(input: {
       }
       if (syncReport.stopReason === "ERROR")
         throw new Error(syncReport.failureMessage ?? "DART 수집 실패");
+      if (syncReport.stopReason === null && request.kind === "FINANCIAL") {
+        for (const symbol of request.symbols) for (let year = request.fromYear; year <= request.toYear; year += 1)
+          pendingFilings.markNormalized(symbol, year);
+      }
     }
   };
   const collect = (request: AgentDataRequest, shouldStop: () => boolean,
@@ -318,11 +300,6 @@ export function createAgentCollectionRuntime(input: {
     requestPolicy,
     filingDiscovery,
     refreshProviderFilings,
-    reconcileProviderFilings,
-    stopProviderReconciliation: async () => {
-      reconciliationStopped = true;
-      await Promise.allSettled([reconciliation, previewRefresh]);
-    },
     symbolService,
     factRepository,
     factCoverageStore,

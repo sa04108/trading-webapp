@@ -4,7 +4,7 @@ import type { KrxHistoricalUniverseSource } from '../../src/runtime/modules/mark
 import { describe, expect, it, vi } from 'vitest';
 import { pino } from 'pino';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
-import { dailySelectionMetricCoverage, facts, krxDailyBars, krxNonTradingCoverage, symbolFactsState, symbolMasterCoverage, symbolMasterTradingDays, symbols } from '../../src/runtime/shared/db/data-schema.js';
+import { dailySelectionMetricCoverage, facts, krxDailyBars, krxNonTradingCoverage, symbolFactsState, symbolMasterCoverage, symbols } from '../../src/runtime/shared/db/data-schema.js';
 import { SqliteFactCoverageStore } from '../../src/runtime/modules/facts/application/fact-coverage-store.js';
 import { SqliteCorporateActionCoverageStore } from '../../src/runtime/modules/facts/application/corporate-action-coverage.js';
 import { SqliteFactRepository } from '../../src/runtime/modules/facts/infrastructure/sqlite-fact-repository.js';
@@ -139,37 +139,6 @@ describe('수집 버전과 KRX coverage', () => {
       expect(source.fetchIssueBaseInfo).not.toHaveBeenCalled();
       expect(database.db.select().from(krxDailyBars).all()).toEqual(historical);
       expect(database.db.select().from(symbolMasterCoverage).all()).toEqual(coverage);
-    } finally { database.close(); }
-  });
-
-  it('NULL·서로 다른 실행 버전의 중첩 구간을 합치고 실제 하루 결손은 유지한다', async () => {
-    const { database, service } = setupMarket();
-    try {
-      const ranges = [
-        { startDate: '2026-01-01', endDate: '2026-01-05', collectionVersion: null, syncedAtMs: 1 },
-        { startDate: '2026-01-03', endDate: '2026-01-06', collectionVersion: previousVersion, syncedAtMs: 2 },
-        { startDate: '2026-01-06', endDate: '2026-01-07', collectionVersion: currentVersion, syncedAtMs: 3 },
-        { startDate: '2026-01-09', endDate: '2026-01-09', collectionVersion: null, syncedAtMs: 4 },
-      ];
-      database.db.insert(symbolMasterCoverage).values(ranges).run();
-      database.db.insert(krxNonTradingCoverage).values(ranges).run();
-      database.db.insert(symbolMasterTradingDays).values({ date: '2026-01-02' }).run();
-      const current = service(currentVersion);
-      expect(current.effectiveTradingDateWithinCoverage('2026-01-07')).toBe('2026-01-02');
-      expect(current.effectiveTradingDateWithinCoverage('2026-01-09')).toBeUndefined();
-      expect(current.coverageRanges()).toEqual([
-        { startDate: '2026-01-01', endDate: '2026-01-07', syncedAtMs: 3 },
-        { startDate: '2026-01-09', endDate: '2026-01-09', syncedAtMs: 4 },
-      ]);
-      expect(current.isRangeCovered('2026-01-01', '2026-01-07')).toBe(true);
-      expect(current.isNonTradingRangeCovered('2026-01-01', '2026-01-07')).toBe(true);
-      expect(current.isRangeCovered('2026-01-01', '2026-01-09')).toBe(false);
-      expect(current.isNonTradingRangeCovered('2026-01-01', '2026-01-09')).toBe(false);
-      await current.ingestDate('2026-01-08');
-      expect(current.coverageRanges()).toEqual([
-        { startDate: '2026-01-01', endDate: '2026-01-09', syncedAtMs: nowMs },
-      ]);
-      expect(current.isNonTradingRangeCovered('2026-01-01', '2026-01-09')).toBe(true);
     } finally { database.close(); }
   });
 

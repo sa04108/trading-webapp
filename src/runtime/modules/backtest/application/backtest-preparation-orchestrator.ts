@@ -1872,9 +1872,8 @@ export class BacktestPreparationOrchestrator {
       beforeDartRequest: (): "CONTINUE" | "PAUSE_DAILY_QUOTA" =>
         this.reserveDartCall(jobId),
     };
-    // 최신화는 sync 내부의 공시검색 판정이 맡는다 — coverage watermark 이후 정기공시가
-    // 접수된 종목·연도만 다시 받으므로 quota/재시작 복구가 닫힌 symbol-year 를
-    // 반복하지 않는 성질은 그대로다 (fact-sync-service.ts detectRedisclosedYears).
+    // 미리보기의 목록 확인과 분리된 수집 단계다. 실제 결손이나 확인된 공시의 요청 범위만
+    // 처리하고, 이미 완료된 종목·연도는 실행 버전 변경만으로 다시 수집하지 않는다.
     const input = {
       ...request,
       consolidated: true,

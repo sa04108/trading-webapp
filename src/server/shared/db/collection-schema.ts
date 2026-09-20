@@ -52,6 +52,8 @@ export const dartRawApiSnapshots = sqliteTable(
     payloadJson: text("payload_json").notNull(),
     contentHash: text("content_hash").notNull(),
     fetchedAtMs: integer("fetched_at_ms").notNull(),
+    /** 원문 저장 시 한 번 추출한다. 과거 NULL은 본문 재검증 없이 보존한다. */
+    receiptNo: text("receipt_no"),
   },
   (table) => [
     primaryKey({
@@ -64,6 +66,7 @@ export const dartRawApiSnapshots = sqliteTable(
       ],
     }),
     index("idx_dart_raw_api_snapshots_fetched_at").on(table.fetchedAtMs),
+    index("idx_dart_raw_report_metadata").on(table.code, table.businessYear, table.reportCode),
     check(
       "chk_dart_raw_api_snapshots_endpoint",
       sql`${table.endpoint} IN ('FINANCIAL_STATEMENT', 'SHARE_STATUS', 'ISSUANCE_STATUS')`,
@@ -103,7 +106,7 @@ export const dartDiscoveryJobs = sqliteTable("dart_discovery_jobs", {
   day: text("day").primaryKey().notNull(), fromDate: text("from_date").notNull(), toDate: text("to_date").notNull(),
   page: integer("page").notNull(), status: text("status").notNull(), owner: text("owner"),
   leaseUntilMs: integer("lease_until_ms"), completedAtMs: integer("completed_at_ms"), error: text("error"),
-});
+}, (table) => [index("idx_dart_discovery_completed").on(table.status, table.toDate, table.completedAtMs)]);
 export const dartDiscoveryPages = sqliteTable("dart_discovery_pages", {
   day: text("day").notNull(), fromDate: text("from_date").notNull(), page: integer("page").notNull(),
   payloadJson: text("payload_json").notNull(), fetchedAtMs: integer("fetched_at_ms").notNull(),
@@ -112,7 +115,10 @@ export const dartDiscoveredFilings = sqliteTable("dart_discovered_filings", {
   identity: text("identity").primaryKey().notNull(), receiptNo: text("receipt_no"), symbol: text("symbol"),
   businessYear: integer("business_year"), reportCode: text("report_code"), payloadJson: text("payload_json").notNull(),
   discoveredAtMs: integer("discovered_at_ms").notNull(), status: text("status").notNull(),
-});
+}, (table) => [
+  index("idx_dart_filings_scope").on(table.symbol, table.businessYear, table.reportCode, table.receiptNo),
+  index("idx_dart_filings_status").on(table.status),
+]);
 export const dartCorpCodeSnapshot = sqliteTable("dart_corp_code_snapshot", {
   namespace: text("namespace").primaryKey().notNull(), xml: text("xml").notNull(),
   contentHash: text("content_hash").notNull(), fetchedAtMs: integer("fetched_at_ms").notNull(),

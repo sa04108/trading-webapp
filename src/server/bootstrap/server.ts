@@ -106,6 +106,12 @@ export async function buildServer(
           .get(request.params.jobId) as {freshness_json:string} | undefined;
         return { freshness: row ? JSON.parse(row.freshness_json) as unknown : null };
       });
+      api.post("/provider-data/filings/collect", { preHandler: requireAuth }, async (_request, reply) => {
+        void container.filingDiscovery.collectPending().catch((error: unknown) => {
+          api.log.error({err:error}, "별도 공시 목록 수집 실패");
+        });
+        return reply.code(202).send({ok:true});
+      });
       api.get("/provider-data/plans", { preHandler: requireAuth }, async () => ({
         plans: container.providerRequestPolicy.list(), freshness: container.filingDiscovery.freshness(),
       }));
@@ -119,9 +125,7 @@ export async function buildServer(
             container.database.sqlite.prepare(`UPDATE agent_data_requests SET status = 'QUEUED',
               next_attempt_at_ms = 0 WHERE status = 'BLOCKED' AND instr(error, ?) > 0`)
               .run(request.params.fingerprint);
-            void container.reconcileProviderFilings().catch((error: unknown) => {
-              api.log.error({ err: error }, "승인된 공시 반영 실패");
-            });
+            container.agentCoordinator.wake();
           }
           return { ok: true };
         });

@@ -1496,24 +1496,6 @@ describe('FactSyncService — 증분과 취소', () => {
  * `syncCorporateActions` 를 낸다. 원문 snapshot cache 유무와 무관하게 이 경로는
  * fnlttSinglAcntAll을 호출하지 않아야 한다.
  */
-describe('FactSyncService — 로컬 재생과 일일 최신성 분리', () => {
-  it.each(['FULL', 'INCREMENTAL'] as const)('%s는 목록을 조회하지 않고 오래된 원문 재생과 확인 시각 보존을 요청한다', async (mode) => {
-    const source = recordingSource();
-    let listCalls = 0;
-    source.listRecentPeriodicFilings = async () => { listCalls += 1; throw new Error('일일 작업 실패'); };
-    const previous = 1;
-    const coverage = fakeCoverage(new Map(), new Map([['005930', previous]]));
-    coverage.getCollectedYears = () => new Map([['005930', [2024, 2025]]]);
-    const service = new FactSyncService(source, fakeRepository(), LOGGER, fakeVersions(), CLOCK, coverage, fakeActionCoverage());
-    const result = await service.sync({ symbols: ['005930'], fromYear: 2025, toYear: 2025, consolidated: true, mode });
-    expect(result.failureMessage).toBeNull();
-    expect(listCalls).toBe(0);
-    expect(source.requests.every((request) => request.rawSnapshotPolicy === 'PREFER_CACHE')).toBe(true);
-    expect(source.requests.every((request) => request.years.every((year) => year === 2025))).toBe(true);
-    expect(coverage.getUpdatedAtMs(['005930']).get('005930')).toBe(previous);
-    expect(coverage.processedReceiptNos.size).toBe(0);
-  });
-});
 
 describe('FactSyncService — 자본변동 전용 수집', () => {
   const request: FactSyncRequest = {

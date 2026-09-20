@@ -151,6 +151,14 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
     if (payloadJson === undefined) {
       throw new Error("DART 원문 snapshot을 JSON으로 직렬화할 수 없습니다.");
     }
+    const rows = typeof payload === "object" && payload !== null && "list" in payload && Array.isArray(payload.list)
+      ? payload.list as unknown[] : [];
+    let receiptNo: string | null = null;
+    for (const row of rows) {
+      if (typeof row !== "object" || row === null) continue;
+      if ("rcept_no" in row && typeof row.rcept_no === "string" && /^\d{14}$/.test(row.rcept_no) &&
+          (receiptNo === null || row.rcept_no > receiptNo)) receiptNo = row.rcept_no;
+    }
     this.db.transaction((tx) => {
       const previous = tx.select().from(dartRawApiSnapshots).where(and(
         eq(dartRawApiSnapshots.code, key.symbol),
@@ -172,6 +180,7 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
         payloadJson,
         contentHash: hash(payloadJson),
         fetchedAtMs,
+        receiptNo,
       })
       .onConflictDoUpdate({
         target: [
@@ -185,6 +194,7 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
           payloadJson: sql`excluded.payload_json`,
           contentHash: sql`excluded.content_hash`,
           fetchedAtMs: sql`excluded.fetched_at_ms`,
+          receiptNo: sql`excluded.receipt_no`,
         },
       })
       .run();

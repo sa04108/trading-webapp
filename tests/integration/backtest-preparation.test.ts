@@ -98,7 +98,7 @@ describe('backtest preparation HTTP/SSE', () => {
     });
   });
 
-  it('완료 preview는 action protocol이 구버전이면 캐시 대신 재준비를 요구한다', async ({ ctx, cookie }) => {
+  it('구버전 action protocol도 원천 재수집 없이 미리보기에 재사용한다', async ({ ctx, cookie }) => {
     await seedReadyUniverse(ctx);
 
     const started = await ctx.app.inject({
@@ -132,8 +132,17 @@ describe('backtest preparation HTTP/SSE', () => {
       method: 'POST', url: '/api/v1/backtests/universe-preview',
       cookies: { session: cookie }, payload: previewInput(),
     });
-    expect(invalidated.statusCode).toBe(503);
-    expect(invalidated.json<{ error: string }>().error).toMatch(/DART/);
+    expect(invalidated.statusCode).toBe(202);
+    const nextId = invalidated.json<{job:{id:string}}>().job.id;
+    await waitFor(() => ctx.container.backtestPreparationOrchestrator.get(nextId), job => job?.status === 'COMPLETED');
+    const reused = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/backtests/universe-preview',
+      cookies: { session: cookie }, payload: previewInput(),
+    });
+    expect(reused.statusCode).toBe(200);
+    expect(reused.json().unionSymbols).toEqual(['005930']);
+    const coverage = ctx.container.database.db.select().from(symbolFactsState).where(eq(symbolFactsState.code, '005930')).get()!;
+    expect(JSON.parse(coverage.actionCoverageProtocolJson!)).toEqual({version:2,years:[2024,2025,2026]});
   });
 
   it('같은 request hash라도 resolver schedule이 달라졌으면 완료 결과를 재사용하지 않는다', async ({ ctx, cookie }) => {

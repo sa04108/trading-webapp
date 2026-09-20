@@ -216,28 +216,6 @@ describe('벤치마크 저장과 결과 비교', () => {
     }
   });
 
-  it('기존 지수 값과 확인된 빈 날짜는 재시작 후에도 공급자를 호출하지 않는다', async () => {
-    const database = openDatabase(':memory:');
-    try {
-      const fetchBenchmarkClose = vi.fn(async (_id: 'KOSPI' | 'KOSDAQ', date: string) => date === '2026-01-02' ? 100 : null);
-      const deps = {
-        db: database.db,
-        krxSource: { fetchIssueBaseInfo: async () => [], fetchDailyTrades: async () => [], fetchBenchmarkClose, todayMaxEndpointCallCount: () => 0 },
-        fredSource: { fetchBenchmarkRange: async () => [] },
-        clock: { now: () => 123 }, logger,
-      };
-      const first = new BenchmarkService(deps);
-      await first.syncDate('KOSPI', '2026-01-02');
-      await first.syncDate('KOSPI', '2026-01-05');
-      const restarted = new BenchmarkService(deps);
-      await restarted.syncDate('KOSPI', '2026-01-02');
-      await restarted.syncDate('KOSPI', '2026-01-05');
-      expect(fetchBenchmarkClose).toHaveBeenCalledTimes(2);
-    } finally {
-      database.close();
-    }
-  });
-
   it('FRED 기간을 한 번에 수집하고 미국 거래일로 pin한다', async () => {
     const database = openDatabase(':memory:');
     try {

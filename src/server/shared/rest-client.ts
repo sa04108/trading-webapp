@@ -92,17 +92,21 @@ export class RestClient {
       method?: string;
       body?: unknown;
       headers?: Record<string, string>;
+      signal?: AbortSignal;
     } = {},
     hooks: RestRequestHooks = {},
   ): Promise<T> {
     let attempt = 0;
 
     for (;;) {
+      init.signal?.throwIfAborted();
       await this.respectRateLimit(group);
       const token = await this.getToken();
+      init.signal?.throwIfAborted();
       hooks.beforeAttempt?.();
 
       const response = await this.fetchImpl(`${this.options.baseUrl}${path}`, {
+        ...(init.signal ? { signal: init.signal } : {}),
         method: init.method ?? "GET",
         headers: {
           ...(token !== null ? { authorization: `Bearer ${token}` } : {}),

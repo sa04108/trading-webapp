@@ -19,12 +19,12 @@ interface ActionCoverageProtocol {
   readonly years: readonly number[];
 }
 
-function parseProtocolYears(raw: string | null): number[] {
-  if (raw === null) return [];
+function parseProtocolYears(raw: string | null): number[] | null {
+  if (raw === null) return null;
   try {
     const parsed = JSON.parse(raw) as Partial<ActionCoverageProtocol>;
     if (
-      parsed.version !== CORPORATE_ACTION_COVERAGE_PROTOCOL_VERSION ||
+      !Number.isInteger(parsed.version) || parsed.version! <= 0 ||
       !Array.isArray(parsed.years)
     )
       return [];
@@ -192,16 +192,19 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
         .select({
           code: symbolFactsState.code,
           protocol: symbolFactsState.actionCoverageProtocolJson,
+          collected: symbolFactsState.actionCoveredYearsJson,
         })
         .from(symbolFactsState);
       return batch === undefined
         ? query.all()
         : query.where(inArray(symbolFactsState.code, batch)).all();
     });
+    const issues = this.readIssuesForCodes(codes);
     for (const row of rows) {
-      // 구버전은 periodKey='-' gap을 버리고도 완료로 기록했으므로 의미 프로토콜은
-      // 계속 검증한다. 실행 해시 차이는 기존 데이터의 재수집 근거가 아니다.
-      result.set(row.code, parseProtocolYears(row.protocol));
+      const protocolYears = parseProtocolYears(row.protocol);
+      const covered = protocolYears === null ? parseYears(row.collected) : protocolYears;
+      const pendingYears = new Set(issues.filter((issue) => issue.symbol === row.code && issue.reason === "PENDING_FILING" && issue.businessYear !== null).map((issue) => issue.businessYear!));
+      result.set(row.code, covered.filter((year) => !pendingYears.has(year)));
     }
     return result;
   }
@@ -216,8 +219,8 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     codes?: readonly string[],
   ): ReadonlyMap<string, readonly number[]> {
     const result = new Map(this.readYears("actionGapYearsJson", codes));
-    for (const issue of this.db.select().from(providerInputIssues).all()) {
-      if (codes && !codes.includes(issue.symbol)) continue;
+    for (const issue of this.readIssuesForCodes(codes)) {
+      if (issue.reason === "UNRESOLVED_FILING") continue;
       const years = issue.businessYear === null
         ? this.getCollectedYears([issue.symbol]).get(issue.symbol) ?? [] : [issue.businessYear];
       result.set(issue.symbol, [...new Set([...(result.get(issue.symbol) ?? []), ...years])].sort());
@@ -362,7 +365,7 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     const verifiedYears = [
       ...new Set([
         ...(existing
-          ? parseProtocolYears(existing.actionCoverageProtocolJson)
+          ? parseProtocolYears(existing.actionCoverageProtocolJson) ?? parseYears(existing.actionCoveredYearsJson)
           : []),
         ...coveredYears,
       ]),
@@ -411,6 +414,17 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
       .insert(symbolFactsState)
       .values({ code: symbol, coveredYearsJson: "[]", ...values })
       .run();
+  }
+
+  private readIssuesForCodes(codes: readonly string[] | undefined) {
+    if (codes === undefined) return this.db.select().from(providerInputIssues).all();
+    const result: Array<typeof providerInputIssues.$inferSelect> = [];
+    const unique = [...new Set(codes)];
+    for (let offset = 0; offset < unique.length; offset += 500) {
+      const batch = unique.slice(offset, offset + 500);
+      result.push(...this.db.select().from(providerInputIssues).where(inArray(providerInputIssues.symbol, batch)).all());
+    }
+    return result;
   }
 
   private readYears(

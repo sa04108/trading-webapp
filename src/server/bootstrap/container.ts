@@ -109,7 +109,6 @@ export interface SystemStatusProviders {
 export interface Container {
   readonly providerRequestPolicy: SqliteProviderRequestPolicy;
   readonly filingDiscovery: DartFilingDiscovery;
-  readonly reconcileProviderFilings: () => Promise<void>;
   readonly refreshProviderFilings: () => Promise<void>;
   readonly config: AppConfig;
   readonly logger: Logger;
@@ -674,7 +673,6 @@ export function createContainer(
     factCoverageStore,
     providerRequestPolicy: collection.requestPolicy,
     filingDiscovery: collection.filingDiscovery,
-    reconcileProviderFilings: collection.reconcileProviderFilings,
     refreshProviderFilings: collection.refreshProviderFilings,
     factSyncService,
     symbolMasterService,
@@ -688,7 +686,6 @@ export function createContainer(
       closing = (async () => {
         clearInterval(pruneTimer);
         await collection.filingDiscovery.stop();
-        await collection.stopProviderReconciliation();
         await agentCoordinator.stop();
         // FactSync는 symbol 단위 저장이 끝난 뒤 멈춘다. 이 경계를 기다리기 전에
         // SQLite를 닫으면 저장 callback이 닫힌 자원을 다시 건드린다.

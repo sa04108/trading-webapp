@@ -26,6 +26,8 @@ interface ProviderDataStatus {
     lastCheckedAtMs: number | null;
     checkedThrough: string | null;
     warning: string | null;
+    pending: boolean;
+    collecting: boolean;
   };
 }
 
@@ -88,7 +90,11 @@ export function ProviderDataSettings() {
   const status = useQuery({
     queryKey: ["provider-data", "plans"],
     queryFn: () => api<ProviderDataStatus>("/provider-data/plans"),
-    refetchInterval: 30_000,
+    refetchInterval: (query) => query.state.data?.freshness.collecting ? 1_000 : 30_000,
+  });
+  const collectFilings = useMutation({
+    mutationFn: () => postJson("/provider-data/filings/collect", {}),
+    onSuccess: () => queryClient.invalidateQueries({queryKey:["provider-data"]}),
   });
   const decision = useMutation({
     mutationFn: ({ fingerprint, approved }: { fingerprint: string; approved: boolean }) =>
@@ -104,12 +110,20 @@ export function ProviderDataSettings() {
       <CardContent className="space-y-4 text-sm">
         {status.isPending && <p className="text-muted-foreground">불러오는 중…</p>}
         {status.error && <p role="alert" className="text-destructive">{status.error.message}</p>}
+        {collectFilings.error && <p role="alert" className="text-destructive">{collectFilings.error.message}</p>}
         {decision.error && <p role="alert" className="text-destructive">{decision.error.message}</p>}
         {decision.isSuccess && <p role="status">수집 승인 상태를 변경했습니다.</p>}
         {status.data && (
           <>
             <div className="space-y-1">
               <p>마지막 공시 확인: {checkedAt(status.data.freshness.lastCheckedAtMs)} (한국 시간)</p>
+              {status.data.freshness.pending && <div className="space-y-2">
+                <p>미확인 공시 목록은 별도 수집으로 이어서 확인할 수 있습니다.</p>
+                <Button variant="outline" disabled={collectFilings.isPending || status.data.freshness.collecting}
+                  onClick={() => collectFilings.mutate()}>
+                  {status.data.freshness.collecting ? "공시 목록 수집 중…" : "미확인 공시 목록 수집"}
+                </Button>
+              </div>}
               {status.data.freshness.checkedThrough && <p>확인 완료 범위: {status.data.freshness.checkedThrough}까지</p>}
               {(status.data.freshness.warning || status.data.freshness.lastCheckedAtMs === null) && (
                 <div role="status" className="rounded-md border p-3">

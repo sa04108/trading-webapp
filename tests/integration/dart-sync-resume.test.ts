@@ -58,6 +58,7 @@ function setup(database: DatabaseHandle, now: number, corrected = false) {
     corpCodeResolver: { resolve: async () => '00126380' }, sleep: async () => {}, fetchImpl,
   });
   const discovery = () => new DartFilingDiscovery({sqlite:database.sqlite,logger:LOGGER,now:clock.now,
+    onFilingsStored:(ids)=>{pending.observeFilings(ids);},
     fetchPage:async(from,to,page,beforeAttempt)=>{
       beforeAttempt();
       const query=new URLSearchParams({bgn_de:from,end_de:to,page_no:String(page)});
@@ -173,7 +174,7 @@ describe('DART 수집 중단 후 SQLite 재개', () => {
       resumed.calls.length=0;
       await resumed.discovery().refresh();
       expect(resumed.calls).toEqual(['/api/list.json:null:null']);
-      expect(await resumed.pending.reconcileDiscoveredFilings()).toEqual([{symbol:'005930',year:2016}]);
+      expect(resumed.pending.observeFilings(['20260913000001'])).toEqual([{symbol:'005930',year:2016}]);
       resumed.calls.length=0;
       const correction={...REQUEST,toYear:2016,mode:'FULL' as const};
       await expect(resumed.service.sync(correction)).rejects.toThrow(/SOURCE_CHANGE_CONFIRMED/);

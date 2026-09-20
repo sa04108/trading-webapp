@@ -714,7 +714,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       '공시 확인 이력 없음',
     ]);
     const provenance = ctx.container.database.sqlite.prepare('SELECT freshness_json FROM provider_execution_provenance WHERE job_id = ?').get(job.id) as {freshness_json:string};
-    expect(JSON.parse(provenance.freshness_json)).toEqual({lastCheckedAtMs:null,checkedThrough:null,warning:'공시 확인 이력 없음'});
+    expect(JSON.parse(provenance.freshness_json)).toEqual({lastCheckedAtMs:null,checkedThrough:null,warning:'공시 확인 이력 없음',pending:false,collecting:false});
     ctx.container.database.sqlite.prepare("INSERT INTO dart_discovery_jobs(day,from_date,to_date,page,status,completed_at_ms) VALUES ('2026-09-20','2026-09-18','2026-09-19',1,'COMPLETED',1)").run();
     expect(ctx.container.database.sqlite.prepare('SELECT freshness_json FROM provider_execution_provenance WHERE job_id = ?').get(job.id)).toEqual(provenance);
   });

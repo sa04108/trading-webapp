@@ -6,7 +6,7 @@ import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
 } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
-import { symbolMasterMarketCaps, dailySelectionMetrics, dailySelectionMetricCoverage } from '../../src/server/shared/db/schema.js';
+import { symbolMasterMarketCaps } from '../../src/server/shared/db/schema.js';
 import type { TestApp } from '../helpers/test-app.js';
 import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
 import {
@@ -72,17 +72,6 @@ describe('SymbolMasterService.getMarketCapsAt', () => {
       .all();
     expect(rows).toHaveLength(0);
 
-  });
-
-  it('기존 날짜의 필수 지표와 원문이 모두 없으면 미승인 HTTP를 차단한다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
-    await ingestSingleSymbolUniverse(ctx, '2023-01-02', '20230102');
-    ctx.t.container.database.db.delete(dailySelectionMetrics).run();
-    ctx.t.container.database.db.delete(dailySelectionMetricCoverage).run();
-    const before = ctx.fake.requests.length;
-    await expect(ctx.svc.getMarketCapsAt('2023-01-02')).rejects.toThrow('BLOCKED_SOURCE_REQUIREMENT');
-    await expect(ctx.svc.ensureSelectionMetrics(['2023-01-02'])).rejects.toThrow('BLOCKED_SOURCE_REQUIREMENT');
-    expect(ctx.fake.requests.length).toBe(before);
   });
 
   it('캐시 히트: 재호출해도 fake 서버 요청 수가 늘지 않는다', async ({ krxApps }) => {

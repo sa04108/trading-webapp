@@ -114,7 +114,7 @@ export class AgentDataQueue {
   recover(): void {
     this.database.sqlite
       .prepare(
-        "UPDATE agent_data_requests SET status = 'QUEUED' WHERE status = 'RUNNING'",
+        "UPDATE agent_data_requests SET status = 'QUEUED' WHERE status = 'RUNNING' OR (status = 'BLOCKED' AND substr(error, 1, 20) = 'PENDING_PUBLICATION:')",
       )
       .run();
   }
@@ -245,6 +245,7 @@ export class AgentDataQueue {
     } catch (error) {
       if (this.stopped) return;
       const blocked = error instanceof ProviderRequestBlockedError;
+      const pendingPublication = blocked && error.reason === "PENDING_PUBLICATION";
       const quota =
         error instanceof AgentCollectionPaused ||
         error instanceof KrxQuotaError;
@@ -253,7 +254,9 @@ export class AgentDataQueue {
         Math.floor((Date.now() + 9 * 3600_000) / 86400_000 + 1) * 86400_000 -
         9 * 3600_000;
       const next =
-        error instanceof AgentCollectionPaused
+        pendingPublication
+          ? error.retryAfterMs ?? Date.now() + 86_400_000
+          : error instanceof AgentCollectionPaused
           ? error.resumeAtMs
           : quota
             ? nextMidnight
@@ -263,7 +266,7 @@ export class AgentDataQueue {
           "UPDATE agent_data_requests SET status = ?, attempts = ?, next_attempt_at_ms = ?, error = ?, updated_at_ms = ? WHERE id = ?",
         )
         .run(
-          blocked ? "BLOCKED" : attempts >= 3 ? "FAILED" : "QUEUED",
+          pendingPublication ? "QUEUED" : blocked ? "BLOCKED" : attempts >= 3 ? "FAILED" : "QUEUED",
           attempts,
           next,
           error instanceof Error ? error.message : String(error),
@@ -274,7 +277,7 @@ export class AgentDataQueue {
         .prepare(
           "UPDATE agent_data_requests SET activity = ?, activity_started_at_ms = ?, updated_at_ms = ? WHERE id = ?",
         )
-        .run(blocked ? "BLOCKED" : "WAITING_RETRY", Date.now(), Date.now(), row.id);
+        .run(blocked && !pendingPublication ? "BLOCKED" : "WAITING_RETRY", Date.now(), Date.now(), row.id);
       this.notifyWaiters(row.id);
     }
     this.resumeReady();
