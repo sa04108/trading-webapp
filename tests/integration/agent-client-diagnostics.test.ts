@@ -55,7 +55,7 @@ async function scenario(run: (h: {
     connect: (listener) => { receive = listener; },
     send: (message) => { sent.push(message); }, close: () => {},
     upload: async (input) => { uploads.push(input); return 200; },
-    resources: () => ({ cpus: 1, availableBytes: 0, reserveBytes: 0, slots: 0, heapMb: 64, maxBars: 1, budgetBytes: 0 }),
+    resources: () => ({ cpus: 1, availableBytes: 128 * 1024 ** 2, reserveBytes: 0, slots: 1, heapMb: 64, maxBars: 1, budgetBytes: 128 * 1024 ** 2 }),
   };
   const client = new AgentClient({ serverUrl: "http://localhost", token: "agent-secret" }, directory, undefined, () => {}, runtime);
   const finalizer = client as unknown as Finalizer;

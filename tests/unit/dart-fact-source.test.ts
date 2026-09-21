@@ -334,6 +334,41 @@ describe('createDartFactSource — 영속 원문 snapshot 재처리', () => {
     })?.payload).toMatchObject({ message: '깨진 봉투' });
   });
 
+  it('현재·직전 연도 원문은 공유하고 더 오래된 원문은 영속 저장소에서 다시 읽는다', async () => {
+    const reads: DartRawSnapshotKey[] = [];
+    const store = new MemoryRawSnapshotStore();
+    const get = store.get.bind(store);
+    store.get = (key) => { reads.push(key); return get(key); };
+    let physicalCalls = 0;
+    const source = createDartFactSource({ baseUrl: 'https://dart.test', apiKey: 'k' }, LOGGER, {
+      rawSnapshots: store,
+      corpCodeResolver: STUB_RESOLVER,
+      sleep: async () => {},
+      clock: { now: () => Date.UTC(2026, 8, 21) },
+      fetchImpl: (async () => {
+        physicalCalls += 1;
+        return jsonResponse({ status: '013', message: '없음' });
+      }) as typeof fetch,
+    });
+    const rawSnapshotScope = {};
+    const collect = (year: number) => source.fetchCorporateActions({
+      symbols: ['005930'], years: [year], shareYears: [year - 1, year],
+      consolidated: true, rawSnapshotScope,
+    });
+    await collect(2020);
+    const oldAnchorReads = () => reads.filter((key) =>
+      key.endpoint === 'SHARE_STATUS' && key.businessYear === 2020).length;
+    const initiallyRead = oldAnchorReads();
+    expect(initiallyRead).toBeGreaterThan(0);
+    await collect(2021);
+    expect(oldAnchorReads()).toBe(initiallyRead);
+    await collect(2022);
+    const callsBeforeReplay = physicalCalls;
+    await collect(2020);
+    expect(oldAnchorReads()).toBeGreaterThan(initiallyRead);
+    expect(physicalCalls).toBe(callsBeforeReplay);
+  });
+
   it('같은 sync scope의 연속 REFRESH는 인접 연도 주식수 앵커를 한 번만 호출한다', async () => {
     const calls: string[] = [];
     const source = createDartFactSource(

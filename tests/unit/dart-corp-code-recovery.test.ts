@@ -77,6 +77,33 @@ describe("corpCode.xml 손상 복구", () => {
     } finally { database.close(); }
   });
 
+  it("새 원문이 현재와 같아도 과거 정체성 변경을 put 결과에 보존한다", () => {
+    const database = openDatabase(":memory:");
+    try {
+      const store = new SqliteDartCorpCodeSnapshotStore(database.sqlite, "dart");
+      store.put(XML_A, 1);
+      store.put(XML_B, 2);
+
+      expect(store.put(XML_B, 3).changedSymbols).toEqual(["005930"]);
+    } finally { database.close(); }
+  });
+
+  it("복구 사본을 찾은 뒤의 손상 이력도 차단한다", () => {
+    const database = openDatabase(":memory:");
+    try {
+      const store = new SqliteDartCorpCodeSnapshotStore(database.sqlite, "dart");
+      store.put(XML_A, 1);
+      store.put(XML_A, 2);
+      database.sqlite.prepare("UPDATE dart_corp_code_snapshot SET xml = ? WHERE namespace = ?").run("<tampered/>", "dart");
+      database.sqlite.prepare("INSERT INTO dart_raw_api_snapshot_history (snapshot_json, archived_at_ms) VALUES (?, ?)")
+        .run(JSON.stringify({kind:"CORP_CODE", namespace:"dart", xml:XML_B, contentHash:hash(XML_A), fetchedAtMs:3}), 3);
+      database.sqlite.prepare("INSERT INTO dart_raw_api_snapshot_history (snapshot_json, archived_at_ms) VALUES (?, ?)")
+        .run(JSON.stringify({kind:"CORP_CODE", namespace:"dart", xml:XML_A, contentHash:hash(XML_A), fetchedAtMs:4}), 4);
+
+      expect(() => store.get()).toThrow("HASH_MISMATCH");
+    } finally { database.close(); }
+  });
+
   it("같은 해시 사본으로 복구해도 기존 회사 변경 이력을 숨기지 않는다", async () => {
     const database = openDatabase(":memory:");
     try {

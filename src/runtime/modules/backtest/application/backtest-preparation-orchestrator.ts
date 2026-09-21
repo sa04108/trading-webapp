@@ -1610,34 +1610,35 @@ export class BacktestPreparationOrchestrator {
   private async corporateActionAlignmentExclusionsForPlan(
     actions: BacktestPreparationPlan["actions"],
   ): Promise<RelevantCorporateActionGap[]> {
-    if (actions.symbols.length === 0) return [];
-    const rawFacts = await this.deps.facts.getFacts({
-      scope: "SYMBOL",
-      keys: actions.symbols,
-      fields: [CORPORATE_ACTION_FIELD],
-    });
-    const rawRange = corporateActionRawDateRange(rawFacts);
-    if (rawRange === null) return [];
-    const sharesChanges = this.deps.symbolMaster.sharesChangesBetween(
-      addCalendarDays(
-        rawRange.from,
-        -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
-      ),
-      addCalendarDays(rawRange.to, CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays),
-    );
+    const exclusions: RelevantCorporateActionGap[] = [];
+    const symbols = [...new Set(actions.symbols)].sort();
     const rawFrom = `${actions.fromYear}-01-01`;
     const rawTo = `${actions.toYear}-12-31`;
-    return alignCorporateActionEffectiveDates(rawFacts, sharesChanges)
-      .unaligned.filter(
-        (action) => action.periodKey >= rawFrom && action.periodKey <= rawTo,
-      )
-      .map((action) => ({
-        symbol: action.symbol,
-        year: Number(action.periodKey.slice(0, 4)),
-        periodKey: action.periodKey,
-        reason: "KRX 상장주식수 변경일과 정렬할 수 없는 자본변동",
-        severity: "BLOCKING" as const,
-      }));
+    // 종목별 매칭은 독립이므로 최종 선정 검증도 전체 원본을 한꺼번에 읽지 않는다.
+    for (let index = 0; index < symbols.length; index += 32) {
+      const batch = symbols.slice(index, index + 32);
+      const rawFacts = await this.deps.facts.getFacts({
+        scope: "SYMBOL", keys: batch, fields: [CORPORATE_ACTION_FIELD],
+      });
+      const rawRange = corporateActionRawDateRange(rawFacts);
+      if (rawRange === null) continue;
+      const sharesChanges = this.deps.symbolMaster.sharesChangesBetween(
+        addCalendarDays(rawRange.from, -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays),
+        addCalendarDays(rawRange.to, CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays),
+        batch,
+      );
+      for (const action of alignCorporateActionEffectiveDates(rawFacts, sharesChanges).unaligned) {
+        if (action.periodKey < rawFrom || action.periodKey > rawTo) continue;
+        exclusions.push({
+          symbol: action.symbol,
+          year: Number(action.periodKey.slice(0, 4)),
+          periodKey: action.periodKey,
+          reason: "KRX 상장주식수 변경일과 정렬할 수 없는 자본변동",
+          severity: "BLOCKING",
+        });
+      }
+    }
+    return exclusions;
   }
 
   private recordDataExclusions(

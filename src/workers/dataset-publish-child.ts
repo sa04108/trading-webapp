@@ -27,6 +27,20 @@ function writeJson(file: string, value: unknown): void {
   fs.renameSync(temporary, file);
 }
 
+function assertAllowedTables(database: Database.Database): void {
+  const allowed = new Set<string>([
+    ...DATA_TABLE_NAMES,
+    "dataset_state",
+    "__drizzle_migrations",
+    "sqlite_sequence",
+  ]);
+  const tables = database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+    .all() as Array<{ name: string }>;
+  if (tables.some(({ name }) => !allowed.has(name)))
+    throw new Error("배포할 수 없는 운영 테이블이 계산 DB에 있습니다");
+}
+
 process.once(
   "message",
   (input: {
@@ -63,33 +77,26 @@ async function publish(input: {
     input.directory,
     `.${input.version}-${randomUUID()}.sqlite`,
   );
-  const source = new Database(input.sourcePath, {
-    readonly: true,
-    fileMustExist: true,
-  });
   try {
-    progress("PUBLISHING_COPY");
-    await source.backup(temporary);
-  } finally {
-    source.close();
-  }
-  try {
+    const source = new Database(input.sourcePath, {
+      readonly: true,
+      fileMustExist: true,
+    });
+    try {
+      // 대용량 파일 복사 전에 운영 테이블이 섞이지 않았는지 먼저 막는다.
+      assertAllowedTables(source);
+      progress("PUBLISHING_COPY");
+      await source.backup(temporary);
+    } finally {
+      source.close();
+    }
     progress("PUBLISHING_VERIFY");
     const snapshot = new Database(temporary, { fileMustExist: true });
     let identity: ReturnType<typeof datasetIdentity>;
     try {
       snapshot.pragma("journal_mode = DELETE");
-      const allowed = new Set<string>([
-        ...DATA_TABLE_NAMES,
-        "dataset_state",
-        "__drizzle_migrations",
-        "sqlite_sequence",
-      ]);
-      const tables = snapshot
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
-        .all() as Array<{ name: string }>;
-      if (tables.some(({ name }) => !allowed.has(name)))
-        throw new Error("배포할 수 없는 운영 테이블이 계산 DB에 있습니다");
+      // 복사 중 원본이 바뀔 수 있으므로 게시본에서도 다시 확인한다.
+      assertAllowedTables(snapshot);
       if (snapshot.pragma("quick_check", { simple: true }) !== "ok")
         throw new Error("계산 DB 무결성 검사 실패");
       identity = datasetIdentity(snapshot, "main");

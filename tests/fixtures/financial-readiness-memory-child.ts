@@ -5,7 +5,6 @@ import * as schema from '../../src/runtime/shared/db/schema.js';
 import { CandleCoverageService } from '../../src/runtime/modules/market-data/application/candle-coverage-service.js';
 import { SqliteFactRepository } from '../../src/runtime/modules/facts/infrastructure/sqlite-fact-repository.js';
 import {
-  findIncompleteFundamentalCheckpoints,
   findIncompleteFundamentalCheckpointsFromCoverage,
   findIncompleteFundamentalCheckpointsFromCoverageSync,
 } from '../../src/runtime/modules/backtest/application/backtest-financial-data-readiness.js';
@@ -31,28 +30,19 @@ facts.getFacts = (query) => {
   maxFactBatch = Math.max(maxFactBatch, query.keys?.length ?? 0);
   return readFacts(query);
 };
-let result;
-if (process.argv[3] === 'legacy') {
-  result = findIncompleteFundamentalCheckpoints({
-    ...input,
-    facts: await facts.getFacts({ scope: 'SYMBOL', keys: symbols }),
-    validDatesBySymbol: candles.getValidDatesByCodeBetween(symbols, input.period.from, input.period.to),
-  });
-} else {
-  // 새 경로가 전체 날짜 조회를 다시 호출하면 메모리 수치와 관계없이 실패시킨다.
-  candles.getValidDatesByCodeBetween = () => { throw new Error('전체기간 날짜 적재 금지'); };
-  result = await findIncompleteFundamentalCheckpointsFromCoverage({ ...input, candles, facts });
-  const syncResult = findIncompleteFundamentalCheckpointsFromCoverageSync({
-    ...input,
-    candles,
-    readFacts: (query) => sqlite.prepare(
-      `SELECT scope, key, field, period_key AS periodKey, as_of_ts_ms AS asOfTsMs, value, unit
-       FROM facts WHERE scope = 'SYMBOL' AND key IN (${query.keys!.map(() => '?').join(',')})
-       AND as_of_ts_ms <= ?`,
-    ).all(...query.keys!, query.asOfMaxTsMs!) as Awaited<ReturnType<typeof readFacts>>,
-  });
-  if (JSON.stringify(result) !== JSON.stringify(syncResult)) throw new Error('동기 검증 결과 불일치');
-}
+// 전체 날짜 조회를 다시 호출하면 메모리 수치와 관계없이 실패시킨다.
+candles.getValidDatesByCodeBetween = () => { throw new Error('전체기간 날짜 적재 금지'); };
+const result = await findIncompleteFundamentalCheckpointsFromCoverage({ ...input, candles, facts });
+const syncResult = findIncompleteFundamentalCheckpointsFromCoverageSync({
+  ...input,
+  candles,
+  readFacts: (query) => sqlite.prepare(
+    `SELECT scope, key, field, period_key AS periodKey, as_of_ts_ms AS asOfTsMs, value, unit
+     FROM facts WHERE scope = 'SYMBOL' AND key IN (${query.keys!.map(() => '?').join(',')})
+     AND as_of_ts_ms <= ?`,
+  ).all(...query.keys!, query.asOfMaxTsMs!) as Awaited<ReturnType<typeof readFacts>>,
+});
+if (JSON.stringify(result) !== JSON.stringify(syncResult)) throw new Error('동기 검증 결과 불일치');
 sqlite.close();
 process.send?.({
   incomplete: result.length,

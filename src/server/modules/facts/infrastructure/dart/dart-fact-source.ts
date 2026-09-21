@@ -434,6 +434,7 @@ export function createDartFactSource(
   }
 
   interface RequestRowsEntry {
+    readonly key: DartRawSnapshotKey;
     readonly policy: "PREFER_CACHE" | "REFRESH";
     readonly rows: Promise<readonly unknown[]>;
     readonly token: object;
@@ -459,6 +460,14 @@ export function createDartFactSource(
     const requestCache =
       requestRows.get(scope) ?? new Map<string, RequestRowsEntry>();
     requestRows.set(scope, requestCache);
+    // 현재 work-unit과 직전 연도 앵커만 보관한다. 오래된 원문은 영속 저장소에서
+    // 다시 읽을 수 있으므로 종목의 전체 수집 기간만큼 메모리에 쌓지 않는다.
+    const symbols = new Set(request.symbols);
+    const years = new Set([...request.years, ...request.shareYears]);
+    for (const [id, entry] of requestCache) {
+      if (!symbols.has(entry.key.symbol) || !years.has(entry.key.businessYear))
+        requestCache.delete(id);
+    }
     const cacheKey = snapshotCacheKey(key);
     const pending = requestCache.get(cacheKey);
     if (
@@ -573,7 +582,7 @@ export function createDartFactSource(
         requestCache.delete(cacheKey);
       throw error;
     });
-    const entry = { policy, rows, token };
+    const entry = { key, policy, rows, token };
     requestCache.set(cacheKey, entry);
     return rows as Promise<readonly T[]>;
   }

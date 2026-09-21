@@ -58,3 +58,60 @@ it('수집 버전만 바뀌어도 새 데이터셋을 게시하고 이전 스냅
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 20_000);
+
+
+it("금지 테이블은 복사 전에 거부하고 같은 실패는 잠시 재시도하지 않는다", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "qp-publish-backoff-"));
+  const database = openDatabase(path.join(directory, "app.sqlite"));
+  let now = 1_000;
+  const snapshots = new DatasetSnapshots(database, path.join(directory, "published"), {
+    now: () => now,
+  });
+  const activities: string[] = [];
+  const unsubscribe = snapshots.subscribe((progress) => {
+    if (progress) activities.push(progress.activity);
+  });
+  try {
+    database.sqlite.exec("CREATE TABLE data.forbidden_operation_state (id INTEGER)");
+    await expect(snapshots.ensureLatest()).rejects.toThrow("운영 테이블");
+    expect(activities).not.toContain("PUBLISHING_COPY");
+    expect(fs.readdirSync(path.join(directory, "published"))).not.toContainEqual(
+      expect.stringMatching(/^\.\d+-.*\.sqlite$/),
+    );
+
+    await expect(snapshots.ensureLatest()).rejects.toThrow("재시도 대기");
+    expect(activities).not.toContain("PUBLISHING_COPY");
+
+    now += 30_000;
+    await expect(snapshots.ensureLatest()).rejects.toThrow("운영 테이블");
+
+    database.sqlite.exec("DROP TABLE data.forbidden_operation_state");
+    now += 30_000;
+    const recovered = await snapshots.ensureLatest();
+    await expect(snapshots.ensureLatest()).resolves.toEqual(recovered);
+  } finally {
+    unsubscribe();
+    await snapshots.stop();
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 20_000);
+
+it("게시 실패 후 source revision이 바뀌면 대기 시간 없이 다시 시도한다", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "qp-publish-revision-"));
+  const database = openDatabase(path.join(directory, "app.sqlite"));
+  const snapshots = new DatasetSnapshots(database, path.join(directory, "published"));
+  try {
+    database.sqlite.exec("CREATE TABLE data.forbidden_operation_state (id INTEGER)");
+    await expect(snapshots.ensureLatest()).rejects.toThrow("운영 테이블");
+    database.sqlite.exec("DROP TABLE data.forbidden_operation_state");
+    database.sqlite
+      .prepare("UPDATE data.dataset_state SET revision = revision + 1 WHERE singleton = 1")
+      .run();
+    await expect(snapshots.ensureLatest()).resolves.toMatchObject({ sourceRevision: 1 });
+  } finally {
+    await snapshots.stop();
+    database.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}, 20_000);

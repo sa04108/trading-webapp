@@ -282,6 +282,16 @@ function fakeRepository(): FactRepository & {
 }
 
 describe('factsFingerprint', () => {
+  it('기존 지문 형식을 빈 입력·개행·유니코드·지수 숫자에서도 보존한다', () => {
+    const values: Fact[] = [
+      { ...fact('A\n"한글', 1e-7) },
+      { ...fact('SPLIT_RATIO', 5), periodKey: '2025-01-02', asOfTsMs: 2, unit: 'ratio',
+        corporateActionBeforeShares: 10, corporateActionAfterShares: 50 },
+    ];
+    expect(factsFingerprint([])).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
+    expect(factsFingerprint(values)).toBe('3186bd718e6df534724e037c7117876d0b149c49d6b7aa628942844c780416a8');
+    expect(factsFingerprint([...values].reverse())).toBe(factsFingerprint(values));
+  });
   it('자본변동 절대 주식수가 바뀌면 데이터셋 버전 지문도 바뀐다', () => {
     const base = {
       ...fact('SPLIT_RATIO', 5),
@@ -856,6 +866,28 @@ describe('FactSyncService — 데이터셋 버전 승격 (재현성 §9.5)', () 
 });
 
 describe('FactSyncService — 증분과 취소', () => {
+  it('캐시 응답이 즉시 끝나도 연도 저장 후 이벤트 루프를 넘기고 종목 경계에서 취소한다', async () => {
+    let stopped = false;
+    const years: number[] = [];
+    const coverage = fakeCoverage();
+    const source = recordingSource();
+    source.fetchFinancials = async (request) => {
+      years.push(request.years[0]!);
+      if (years.length === 1) setImmediate(() => { stopped = true; });
+      else expect(stopped).toBe(true);
+      return { facts: [], gaps: [] };
+    };
+    const report = await new FactSyncService(
+      source, fakeRepository(), LOGGER, fakeVersions(), CLOCK, coverage, fakeActionCoverage(),
+    ).sync({ symbols: ['005930', '000660'], fromYear: 2020, toYear: 2021,
+      consolidated: true, mode: 'FULL' }, { shouldStop: () => stopped });
+    expect(years).toEqual([2020, 2021]);
+    expect(coverage.added).toEqual([
+      { symbol: '005930', years: [2020] }, { symbol: '005930', years: [2021] },
+    ]);
+    expect(report).toMatchObject({ stopReason: 'CANCELLED', stoppedAtSymbol: '000660' });
+  });
+
   it('완전한 raw snapshot은 coverage 재처리 계획을 DART 네트워크 작업으로 세지 않는다', () => {
     const source = recordingSource();
     source.countRawSnapshotMisses = (fetchRequest) =>

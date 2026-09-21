@@ -26,6 +26,13 @@ export interface DatasetPublishProgress {
   readonly updatedAtMs: number;
 }
 
+interface DatasetPublishFailure {
+  readonly key: string;
+  readonly atMs: number;
+}
+
+const PUBLISH_RETRY_DELAY_MS = 30_000;
+
 /** 준비가 끝난 파일만 latest에 게시한다. 작업별 입력 DB를 다시 구성하지 않는다. */
 export class DatasetSnapshots {
   private publishing: Promise<DatasetManifest> | null = null;
@@ -35,11 +42,15 @@ export class DatasetSnapshots {
   private readonly collectionVersion: string;
   private progress: DatasetPublishProgress | null = null;
   private readonly listeners = new Set<(progress: DatasetPublishProgress | null) => void>();
+  private lastFailure: DatasetPublishFailure | null = null;
 
   constructor(
     private readonly database: DatabaseHandle,
     readonly directory: string,
-    options?: { readonly collectionVersion: string },
+    private readonly options?: {
+      readonly collectionVersion?: string;
+      readonly now?: () => number;
+    },
   ) {
     this.collectionVersion =
       options?.collectionVersion ?? readRuntimeVersions().collectionVersion;
@@ -64,7 +75,7 @@ export class DatasetSnapshots {
   }
 
   private setProgress(activity: DatasetPublishProgress["activity"] | null): void {
-    const now = Date.now();
+    const now = this.now();
     this.progress =
       activity === null
         ? null
@@ -75,6 +86,14 @@ export class DatasetSnapshots {
             updatedAtMs: now,
           };
     for (const listener of this.listeners) listener(this.progress);
+  }
+
+  private now(): number {
+    return this.options?.now?.() ?? Date.now();
+  }
+
+  private failureKey(source: ReturnType<typeof datasetIdentity>): string {
+    return [source.datasetId, source.revision, this.collectionVersion].join(":");
   }
 
   file(manifest: DatasetManifest): string {
@@ -101,6 +120,13 @@ export class DatasetSnapshots {
       return Promise.reject(new Error("데이터 게시 서비스가 종료되었습니다"));
     if (this.publishing) return this.publishing;
     const source = datasetIdentity(this.database.sqlite);
+    const failureKey = this.failureKey(source);
+    if (
+      this.lastFailure?.key === failureKey &&
+      this.now() - this.lastFailure.atMs < PUBLISH_RETRY_DELAY_MS
+    ) {
+      return Promise.reject(new Error("계산 DB 게시 재시도 대기 중"));
+    }
     if (
       this.current?.datasetId === source.datasetId &&
       this.current.sourceRevision === source.revision &&
@@ -122,7 +148,12 @@ export class DatasetSnapshots {
     this.publishing = this.publish(version)
       .then((manifest) => {
         this.current = manifest;
+        this.lastFailure = null;
         return manifest;
+      })
+      .catch((error: unknown) => {
+        this.lastFailure = { key: failureKey, atMs: this.now() };
+        throw error;
       })
       .finally(() => {
         this.publishing = null;

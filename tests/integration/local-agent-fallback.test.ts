@@ -45,8 +45,10 @@ const agentBase = base.extend({ appOptions: { agentPreparation: true } });
 const it = agentBase.extend<{ scenario: Scenario }>({
   scenario: async ({ ctx }, use) => {
     let localAvailable = true;
+    // 이 통합 검사는 tsx 자식의 배정 계약을 검증한다. 1 GB 배포 예산은 자원 단위 검사와
+    // compiled 서버의 cgroup 검증에서 확인하며 개발용 TS 로더 메모리는 그 예산에 섞지 않는다.
     vi.spyOn(resources, 'availableServerResources').mockImplementation((running, observed, profiled, requestedBars) =>
-      resources.calculateResources({ cpus: 2, total: 4 * GIB, available: localAvailable ? 3 * GIB : 0, load: 0 }, running, observed, profiled, requestedBars, true));
+      resources.calculateResources({ cpus: 2, total: 4 * GIB, available: localAvailable ? 3 * GIB : GIB, load: 0 }, running, observed, profiled, requestedBars, true));
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [{ standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '1000000000' }]);
     registerSymbols(ctx.container, 'KR', ['005930']);
     seedDailyBars(ctx.container.database.db, [{ symbol: '005930', market: 'KR', timeframe: '1d', tsMs: Date.parse('2026-01-05T00:00:00Z'), open: 100, high: 110, low: 90, close: 105, volume: 1000 }]);
@@ -86,8 +88,41 @@ const it = agentBase.extend<{ scenario: Scenario }>({
 });
 
 describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
-  it('에이전트 없이 실제 자식 프로세스로 미리보기와 백테스트를 완료한다', { timeout: 90_000 }, async ({ scenario }) => {
+  it('두 작업을 한 로컬 워커씩 순서대로 완료하고 HTTP 응답을 유지한다', { timeout: 90_000 }, async ({ scenario }) => {
     const { ctx, finished } = scenario;
+    ctx.container.agentCoordinator.start();
+    await ctx.container.agentCoordinator.snapshots.ensureLatest();
+    const first = ctx.container.jobQueue.enqueue(request, schedule);
+    const second = ctx.container.jobQueue.enqueue(request, schedule);
+    const probes: Array<Promise<void>> = [];
+    const statuses: number[] = [];
+    let maxRunning = 0;
+    const sample = setInterval(() => {
+      const row = ctx.container.database.sqlite.prepare(
+        "SELECT COUNT(*) AS n FROM backtest_jobs WHERE status IN ('STARTING', 'RUNNING', 'CANCELLING')",
+      ).get() as { n: number };
+      maxRunning = Math.max(maxRunning, row.n);
+      probes.push(ctx.app.inject({ method: 'GET', url: '/health/ready' }).then((response) => {
+        statuses.push(response.statusCode);
+      }));
+    }, 50);
+    try {
+      await finished(first.id);
+      await finished(second.id);
+    } finally {
+      clearInterval(sample);
+      await Promise.all(probes);
+    }
+    expect(maxRunning).toBe(1);
+    expect(statuses.length).toBeGreaterThan(0);
+    expect(statuses.every((status) => status === 200)).toBe(true);
+    for (const job of [first, second])
+      expect(ctx.container.database.sqlite.prepare('SELECT job_id FROM backtest_runs WHERE job_id = ?').get(job.id)).toEqual({ job_id: job.id });
+    expect(ctx.container.agentCoordinator.registry.list()).toEqual([]);
+  });
+
+  it('에이전트 없이 미리보기를 서버 본체 대신 실제 자식 프로세스에서 완료한다', { timeout: 90_000 }, async ({ scenario }) => {
+    const { ctx } = scenario;
     const resolver = vi.spyOn(ctx.container.universeRuleResolver, 'resolveOrDescribeNeeds');
     ctx.container.agentCoordinator.start();
     await ctx.container.agentCoordinator.snapshots.ensureLatest();
@@ -96,17 +131,11 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
     await vi.waitFor(() => expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED'), { timeout: 60_000 });
     expect(ctx.container.database.sqlite.prepare('SELECT client_id FROM agent_preparation_leases WHERE job_id = ?').get(preparation.id)).toEqual({ client_id: LOCAL_AGENT_ID });
     expect(resolver).not.toHaveBeenCalled();
-    const backtest = ctx.container.jobQueue.enqueue(request, schedule);
-    await finished(backtest.id);
-    expect(ctx.container.database.sqlite.prepare('SELECT job_id FROM backtest_runs WHERE job_id = ?').get(backtest.id)).toEqual({ job_id: backtest.id });
-    expect(ctx.container.agentCoordinator.registry.list()).toEqual([]);
   });
 
   it('원격이 바쁘면 새 작업만 로컬에서 실행하고 단절된 기존 리스는 건드리지 않는다', { timeout: 90_000 }, async ({ scenario }) => {
     const { ctx, connect, finished } = scenario;
     ctx.container.agentCoordinator.start();
-    const warmup = ctx.container.backtestPreparationOrchestrator.start(input);
-    await vi.waitFor(() => expect(ctx.container.backtestPreparationOrchestrator.get(warmup.id)?.status).toBe('COMPLETED'), { timeout: 60_000 });
     const { peer, id } = await connect(1);
     const remote = ctx.container.jobQueue.enqueue(request, schedule);
     await vi.waitFor(() => expect(peer.jobs()[0]?.jobId).toBe(remote.id));

@@ -12,14 +12,14 @@ interface MemoryResult {
   readonly maxRssMiB: number;
 }
 
-function runChild(databasePath: string, legacy: boolean): Promise<MemoryResult> {
+function runChild(databasePath: string): Promise<MemoryResult> {
   const env = { ...process.env };
   delete env.NODE_OPTIONS;
   const child = fork(new URL('../fixtures/financial-readiness-memory-child.ts', import.meta.url), [
-    databasePath, legacy ? 'legacy' : 'bounded',
+    databasePath,
   ], {
     env,
-    execArgv: ['--import', 'tsx', `--max-old-space-size=${legacy ? 256 : 128}`, '--max-semi-space-size=1'],
+    execArgv: ['--import', 'tsx', '--max-old-space-size=128', '--max-semi-space-size=1'],
     stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
   });
   return new Promise((resolve, reject) => {
@@ -81,16 +81,14 @@ function seed(databasePath: string): void {
   }
 }
 
-it('10년 재무 검증은 128 MiB child에서 완료하고 기존 256 MiB 판정과 일치한다', async () => {
+it('10년 재무 검증은 128 MiB child에서 기준 결과를 재현한다', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-financial-memory-'));
   try {
     const databasePath = path.join(dir, 'synthetic.sqlite');
     seed(databasePath);
-    const current = await runChild(databasePath, false);
-    const legacy = await runChild(databasePath, true);
+    const current = await runChild(databasePath);
     expect(current.incomplete).toBe(54);
     expect(current.hash).toBe('26d3e0b2acc437027da5534275128995908226b5dae65aa9a4c7cb22f53891fe');
-    expect(current.hash).toBe(legacy.hash);
     expect(current.maxFactBatch).toBeLessThanOrEqual(32);
     expect(current.maxRssMiB).toBeLessThan(320);
   } finally {

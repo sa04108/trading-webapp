@@ -120,7 +120,7 @@ completion 중 readiness 1,554회와 replay 중 768회는 모두 실패가 없�
 - coverage manifest는 32종목씩 조회하며 정렬 순서대로 SHA-256에 값을 공급한다. 전체 직렬화 문자열을 보존하지 않고 기존 줄바꿈·빈 연도·정정 공시 해시를 유지한다.
 - 자식 stderr에서 V8 OOM을 구분해 작업에 힙 부족과 상한을 표시한다. 로그에는 jobId, child PID, 요청 종류, 종료 code/signal과 설정 상한을 연결한다. 재시도나 heap 상향은 추가하지 않는다.
 
-`tests/integration/financial-readiness-memory.test.ts`는 275종목·날짜 607,309행·facts 93,313행을 생성하고 실제 Node 자식에서 검증한다. 개선된 비동기/동기 경로는 old-space 128 MiB에서 완료하며, 기존 256 MiB 경로와 모두 제외 54종목, 결과 SHA-256 `26d3e0b2acc437027da5534275128995908226b5dae65aa9a4c7cb22f53891fe`로 일치한다. 이 회귀 테스트는 전체 날짜 조회를 호출하면 실패하고, facts 묶음 32종목 및 관측 max RSS 320 MiB 미만도 검사한다. 두 실행은 같은 Node 24.19.0 및 `--max-semi-space-size=1`을 사용한다. 운영 Node 24.18.0과 버전·호스트가 다르며, 아래 실제 준비 cgroup 검증은 별도로 수행한다.
+`tests/integration/financial-readiness-memory.test.ts`는 275종목·날짜 607,309행·facts 93,313행을 생성하고 실제 Node 자식에서 검증한다. 비동기/동기 경로가 old-space 128 MiB에서 같은 판정을 내리는지 확인하며, 최초 256 MiB 구형 경로와 비교해 확정한 제외 54종목·결과 SHA-256 `26d3e0b2acc437027da5534275128995908226b5dae65aa9a4c7cb22f53891fe`를 기준으로 유지한다. 1 GB 메모리 보호 후속 정리에서는 같은 기준을 중복 확인하던 구형 자식 실행을 제거했다. 전체 날짜 조회 금지, facts 묶음 32종목 및 관측 max RSS 320 MiB 미만 검사는 유지한다. 최초 비교는 같은 Node 24.19.0 및 `--max-semi-space-size=1`에서 수행했다. 운영 Node 24.18.0과 버전·호스트가 다르며, 아래 실제 준비 cgroup 검증은 별도로 수행한다.
 
 집중 의미 검증은 휴장일, 거래정지, 편출 경계와 재편입, 기간 밖 봉, 뒤늦은 공시, 정정 공시, 초반 미준비 후 정상화, 취소, 101개 후보의 PER·ROE 순위, 기존 저장 manifest 해시를 포함한다. 제출 경합 fixture는 새 월별 집계가 아니라 원래 검사 대상인 전체기간 제출 coverage 조회 직후에만 봉을 삭제하도록 보완했으며, 4개 경로의 409와 job/batch 미생성 assertion은 유지했다.
 

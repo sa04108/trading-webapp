@@ -146,6 +146,15 @@ describe('createDartCorpCodeCache', () => {
     expect(await cache.resolve('999999')).toBeNull();
   });
 
+  it('저장소가 검증하며 만든 맵은 원문을 다시 파싱하지 않고 사용한다', () => {
+    const cache = createDartCorpCodeCache(async () => makeZip('CORPCODE.xml', XML), {
+      get: () => ({ xml: '<형식이-바뀐-원문/>', fetchedAtMs: 1, parsedMap: new Map([['005930', '00126380']]) }),
+      put() {},
+    });
+
+    expect(cache.lookup?.('005930')).toBe('00126380');
+  });
+
   it('다운로드가 실패하면 다음 호출에서 다시 시도한다 — 실패를 캐시하지 않는다', async () => {
     let attempt = 0;
     const fetchZip = vi.fn(async () => {

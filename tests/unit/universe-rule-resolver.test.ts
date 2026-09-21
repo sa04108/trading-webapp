@@ -978,30 +978,37 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     expect(metricDateReads).toEqual([dates]);
   });
 
-  it('여러 리밸런스 날짜의 동일 급하락 후보는 action coverage와 fact를 한 번만 읽는다', async () => {
-    const day = (offset: number) => PIPELINE_TS - offset * 86_400_000;
-    const candle = (symbol: string, offset: number): Candle => ({
-      symbol, market: 'KR', timeframe: '1d', tsMs: day(offset),
-      open: 100, high: 100, low: 100, close: 100, volume: 1,
-    });
-    const factReads: string[][] = [];
+  it('자본변동 원본은 32종목씩 읽고 월별 반복 선정에서는 준비한 그래프를 재사용한다', async () => {
+    const entries = Array.from({ length: 70 }, (_, index) => ({
+      ...PIPELINE_ENTRIES[0]!, shortCode: String(index + 1).padStart(6, '0'),
+      standardCode: `KR7${String(index + 1).padStart(9, '0')}`,
+    }));
+    const factQueries: FactQuery[] = [];
     const actionCoverageReads: string[][] = [];
-    const resolver = makePipelineResolver({
-      candles: PIPELINE_ENTRIES.flatMap((entry) => [
-        candle(entry.shortCode, 2), candle(entry.shortCode, 1), candle(entry.shortCode, 0),
-      ]),
-      factReads,
-      actionCoverageReads,
-    });
-
-    const result = await resolver.resolveOrDescribeNeeds(
-      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 1, lookbackTradingDays: 3 }]),
-      { from: PIPELINE_DATE, to: '2025-06-15' },
+    const result = await makePipelineResolver({
+      entries, factQueries, actionCoverageReads,
+      metrics: entries.map((entry) => ({ ...pipelineMetrics[0]!, standardCode: entry.standardCode })),
+      facts: entries.map((entry) => ({
+        scope: 'SYMBOL', key: entry.shortCode, field: 'SPLIT_RATIO', periodKey: '2025-05-13',
+        asOfTsMs: PIPELINE_TS, value: 2, unit: 'ratio',
+      })),
+      candles: entries.flatMap((entry) => [2, 1, 0].map((offset): Candle => ({
+        symbol: entry.shortCode, market: 'KR', timeframe: '1d', tsMs: PIPELINE_TS - offset * 86_400_000,
+        open: 100, high: 100, low: 100, close: 100, volume: 1,
+      }))),
+    }).resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'DECLINE', direction: 'LOW', limit: 20, lookbackTradingDays: 3 }]),
+      { from: '2025-05-15', to: '2025-08-15' },
     );
-
     expect(result.kind).toBe('READY');
-    expect(actionCoverageReads).toEqual([['000001', '000002', '000003']]);
-    expect(factReads).toEqual([['000001', '000002', '000003']]);
+    if (result.kind !== 'READY') throw new Error('fixture coverage가 완전해야 합니다.');
+    const reads = factQueries.filter((query) => query.fields?.includes('SPLIT_RATIO'));
+    expect(reads.map((query) => query.keys?.length)).toEqual([32, 32, 6]);
+    expect(reads.flatMap((query) => query.keys ?? [])).toEqual(entries.map((entry) => entry.shortCode));
+    expect(actionCoverageReads).toEqual([entries.map((entry) => entry.shortCode)]);
+    expect(result.schedule.length).toBeGreaterThan(1);
+    for (const date of result.schedule)
+      expect(date.members.map((member) => member.symbol)).toEqual(entries.slice(0, 20).map((entry) => entry.shortCode));
   });
 
   it('PER은 effective KST date가 끝난 뒤 다음 KST 날짜에 공시된 재집계를 제외한다', async () => {

@@ -1,5 +1,5 @@
 import { and, asc, eq, inArray, like, lte, ne, sql } from "drizzle-orm";
-import type { AppDatabase } from "../../../shared/db/database.js";
+import type { NativeAppDatabase } from "../../../shared/db/database.js";
 import { facts as factRows } from "../../../shared/db/schema.js";
 import { SYMBOL_PATTERN } from "../../market-data/domain/candle.js";
 import { CORPORATE_ACTION_FIELD, type Fact } from "../domain/fact.js";
@@ -11,7 +11,7 @@ const READ_KEY_BATCH_SIZE = 500;
 
 /** SQLite의 복합 PK와 UPSERT를 그대로 쓰는 FactRepository. */
 export class SqliteFactRepository implements FactRepository {
-  constructor(private readonly db: AppDatabase) {}
+  constructor(private readonly db: NativeAppDatabase) {}
 
   async saveFacts(facts: readonly Fact[]): Promise<void> {
     if (facts.length === 0) return;
@@ -155,8 +155,20 @@ export class SqliteFactRepository implements FactRepository {
       if (query.asOfMaxTsMs !== undefined) {
         conditions.push(lte(factRows.asOfTsMs, query.asOfMaxTsMs));
       }
+      // raw SQLite iterator에서도 동일한 필드명을 받도록 별칭을 명시한다.
+      // .all()의 전체 중간 객체 배열을 만들지 않고 반환할 Fact만 누적한다.
       const selected = this.db
-        .select()
+        .select({
+          scope: sql`${factRows.scope}`.as("scope"),
+          key: sql`${factRows.key}`.as("key"),
+          field: sql`${factRows.field}`.as("field"),
+          periodKey: sql`${factRows.periodKey}`.as("periodKey"),
+          asOfTsMs: sql`${factRows.asOfTsMs}`.as("asOfTsMs"),
+          value: sql`${factRows.value}`.as("value"),
+          unit: sql`${factRows.unit}`.as("unit"),
+          corporateActionBeforeShares: sql`${factRows.corporateActionBeforeShares}`.as("corporateActionBeforeShares"),
+          corporateActionAfterShares: sql`${factRows.corporateActionAfterShares}`.as("corporateActionAfterShares"),
+        })
         .from(factRows)
         .where(and(...conditions))
         .orderBy(
@@ -165,8 +177,11 @@ export class SqliteFactRepository implements FactRepository {
           asc(factRows.periodKey),
           asc(factRows.asOfTsMs),
         )
-        .all();
-      for (const row of selected) {
+        .toSQL();
+      const selectedRows = this.db.$client
+        .prepare(selected.sql)
+        .iterate(...selected.params) as Iterable<typeof factRows.$inferSelect>;
+      for (const row of selectedRows) {
         const {
           corporateActionBeforeShares,
           corporateActionAfterShares,

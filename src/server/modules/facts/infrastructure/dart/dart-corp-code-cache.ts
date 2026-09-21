@@ -9,8 +9,17 @@ export interface CorpCodeResolver {
 }
 
 export interface DartCorpCodeSnapshotStore {
-  get(): { readonly xml: string; readonly fetchedAtMs: number; readonly changedSymbols?: readonly string[] } | null;
-  put(xml: string, fetchedAtMs: number): void;
+  get(): DartCorpCodeSnapshot | null;
+  put(xml: string, fetchedAtMs: number): DartCorpCodeSnapshot | void;
+}
+
+/** 저장소가 원문 무결성을 검증한 뒤 캐시에 넘기는 스냅샷이다. */
+export interface DartCorpCodeSnapshot {
+  readonly xml: string;
+  readonly fetchedAtMs: number;
+  readonly changedSymbols?: readonly string[];
+  /** 저장소가 검증 과정에서 만든 맵이다. 같은 원문을 다시 파싱하지 않도록 쓴다. */
+  readonly parsedMap?: ReadonlyMap<string, string>;
 }
 
 const LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
@@ -106,12 +115,12 @@ export function createDartCorpCodeCache(
     afterPersist?(): void;
   } = {},
 ): CorpCodeResolver {
-  let pending: Promise<Map<string, string>> | null = null;
-  let local: Map<string, string> | null = null;
+  let pending: Promise<ReadonlyMap<string, string>> | null = null;
+  let local: ReadonlyMap<string, string> | null = null;
   const changed = new Set<string>();
   const attempted = new Set<string>();
   let recovery: DartRawSnapshotError | null = null;
-  const readSaved = (): Map<string, string> | null => {
+  const readSaved = (): ReadonlyMap<string, string> | null => {
     if (local !== null) return local;
     if (recovery !== null) return null;
     let saved: ReturnType<NonNullable<DartCorpCodeSnapshotStore["get"]>>;
@@ -125,12 +134,12 @@ export function createDartCorpCodeCache(
       throw error;
     }
     if (saved == null) return null;
-    const map = parseCorpCodeXml(saved.xml);
+    const map = saved.parsedMap ?? parseCorpCodeXml(saved.xml);
     if (map.size === 0) throw new DartRawSnapshotError("PARSER_INCOMPATIBLE", "corpCode.xml");
     for (const symbol of saved.changedSymbols ?? []) changed.add(symbol);
     return local = map;
   };
-  const download = (beforeRequest?: () => void, missingSymbol?: string): Promise<Map<string, string>> => {
+  const download = (beforeRequest?: () => void, missingSymbol?: string): Promise<ReadonlyMap<string, string>> => {
     if (pending) return pending;
     pending = (async () => {
       hooks.beforeDownload?.(missingSymbol, recovery ?? undefined);
@@ -140,12 +149,13 @@ export function createDartCorpCodeCache(
       if (map.size === 0) throw new DartRawSnapshotError("PARSER_INCOMPATIBLE", "corpCode.xml");
       for (const [symbol, previous] of local ?? [])
         if (map.has(symbol) && map.get(symbol) !== previous) changed.add(symbol);
-      store?.put(xml, now());
-      local = map;
+      const persisted = store?.put(xml, now());
+      local = persisted?.parsedMap ?? map;
       recovery = null;
-      for (const symbol of store?.get()?.changedSymbols ?? []) changed.add(symbol);
+      // 이전 저장소 구현은 put 결과를 주지 않으므로 그 경우에만 다시 읽는다.
+      for (const symbol of (persisted ?? store?.get())?.changedSymbols ?? []) changed.add(symbol);
       hooks.afterPersist?.();
-      return map;
+      return local;
     })().finally(() => { pending = null; });
     return pending;
   };

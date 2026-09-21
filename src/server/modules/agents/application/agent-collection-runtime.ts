@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { createOfficialKrxTradingCalendar } from "../../market-data/infrastructure/krx/krx-trading-calendar.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { SqliteDartPendingFilingStore } from "../../facts/infrastructure/dart/dart-pending-filing-store.js";
@@ -167,6 +168,7 @@ export function createAgentCollectionRuntime(input: {
   ): Promise<void> => {
     if (request.kind === "MARKET") {
       for (const [index, date] of request.dates.entries()) {
+        await yieldToEventLoop();
         if (shouldStop()) return;
         await symbolMasterService.ensureTradingDay(date);
         onProgress({
@@ -179,6 +181,7 @@ export function createAgentCollectionRuntime(input: {
       }
     } else if (request.kind === "SELECTION") {
       for (const [index, date] of request.dates.entries()) {
+        await yieldToEventLoop();
         if (shouldStop()) return;
         await symbolMasterService.ensureSelectionMetrics([date]);
         onProgress({
@@ -191,6 +194,7 @@ export function createAgentCollectionRuntime(input: {
       }
     } else if (request.kind === "REGISTER") {
       for (const [index, entry] of request.symbols.entries()) {
+        await yieldToEventLoop();
         if (shouldStop()) return;
         const registered = symbolService.getRegisteredIdentity(entry.symbol);
         if (registered) {

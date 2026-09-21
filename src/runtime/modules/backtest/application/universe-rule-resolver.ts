@@ -416,8 +416,6 @@ export class UniverseRuleResolver {
       readonly CorporateActionGapDetail[]
     >();
     const checkedActionCoverageSymbols = new Set<string>();
-    const actionFactsBySymbol = new Map<string, Fact[]>();
-    const checkedActionFactSymbols = new Set<string>();
     // 자본변동 매칭은 종목별로 독립이다. resolve 호출 수명 동안 한 종목의 전체
     // fact/change 그래프를 한 번만 준비해 월별 리밸런스마다 같은 min-cost flow를
     // 다시 풀지 않는다. 다음 resolve는 새 Map을 만들어 sync 결과를 즉시 본다.
@@ -450,84 +448,60 @@ export class UniverseRuleResolver {
       return { covered: actionCoveredYears, details: actionGapDetails };
     };
 
-    const readActionFacts = async (
-      codes: readonly string[],
-    ): Promise<Fact[]> => {
-      const requested = [...new Set(codes)];
-      const missing = requested.filter(
-        (code) => !checkedActionFactSymbols.has(code),
-      );
-      if (missing.length > 0) {
-        const loaded = await facts.getFacts({
-          scope: "SYMBOL",
-          keys: missing,
-          fields: [CORPORATE_ACTION_FIELD],
-        });
-        for (const code of missing) {
-          checkedActionFactSymbols.add(code);
-          actionFactsBySymbol.set(code, []);
-        }
-        for (const fact of loaded) {
-          const values = actionFactsBySymbol.get(fact.key);
-          if (values !== undefined) values.push(fact);
-        }
-      }
-      return requested.flatMap((code) => actionFactsBySymbol.get(code) ?? []);
-    };
-
     const prepareActionGraphs = async (
       codes: readonly string[],
     ): Promise<
       ReadonlyMap<string, ReturnType<typeof alignCorporateActionEffectiveDates>>
     > => {
-      const requested = [...new Set(codes)];
-      const missing = requested.filter(
+      const missing = [...new Set(codes)].filter(
         (code) => !alignedActionGraphBySymbol.has(code),
       );
-      if (missing.length === 0) return alignedActionGraphBySymbol;
-
-      await readActionFacts(missing);
-      throwIfStopped();
-      const factsToPrepare = missing.flatMap(
-        (code) => actionFactsBySymbol.get(code) ?? [],
-      );
-      const rawRange = corporateActionRawDateRange(factsToPrepare);
-      const changes =
-        rawRange === null
+      // 전체 종목의 원본과 가공 그래프를 동시에 유지하지 않는다. 종목별 전체 이력은
+      // 그대로 읽어 매칭 결과를 보존하고, 묶음이 끝나면 가공 결과만 재사용한다.
+      const batchSize = 32;
+      for (let index = 0; index < missing.length; index += batchSize) {
+        throwIfStopped();
+        const batch = missing.slice(index, index + batchSize);
+        const loaded = await facts.getFacts({
+          scope: "SYMBOL",
+          keys: batch,
+          fields: [CORPORATE_ACTION_FIELD],
+        });
+        throwIfStopped();
+        const factsBySymbol = new Map<string, Fact[]>();
+        for (const fact of loaded) {
+          const values = factsBySymbol.get(fact.key) ?? [];
+          values.push(fact);
+          factsBySymbol.set(fact.key, values);
+        }
+        const rawRange = corporateActionRawDateRange(loaded);
+        const changes = rawRange === null
           ? []
           : this.deps.symbolMaster.sharesChangesBetween(
-              addCalendarDays(
-                rawRange.from,
-                -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
-              ),
-              addCalendarDays(
-                rawRange.to,
-                CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
-              ),
-              missing,
+              addCalendarDays(rawRange.from, -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays),
+              addCalendarDays(rawRange.to, CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays),
+              batch,
             );
-      const changesBySymbol = new Map<
-        string,
-        Array<(typeof changes)[number]>
-      >();
-      for (const change of changes) {
-        const symbolChanges = changesBySymbol.get(change.shortCode) ?? [];
-        symbolChanges.push(change);
-        changesBySymbol.set(change.shortCode, symbolChanges);
-      }
-
-      // 한 종목의 전체 시간 그래프가 취소 가능한 최소 작업 단위다. 각 그래프 뒤에
-      // event loop를 넘겨 inline 실행에서도 HTTP/cancel 신호가 다음 종목 전에 처리된다.
-      for (const code of missing) {
-        throwIfStopped();
-        alignedActionGraphBySymbol.set(
-          code,
-          alignCorporateActionEffectiveDates(
-            actionFactsBySymbol.get(code) ?? [],
-            changesBySymbol.get(code) ?? [],
-          ),
-        );
-        await yieldToEventLoop();
+        const changesBySymbol = new Map<string, Array<(typeof changes)[number]>>();
+        for (const change of changes) {
+          const values = changesBySymbol.get(change.shortCode) ?? [];
+          values.push(change);
+          changesBySymbol.set(change.shortCode, values);
+        }
+        // 종목의 전체 그래프가 최소 계산 단위다. 월별로 다시 계산하지 않는다.
+        for (const code of batch) {
+          throwIfStopped();
+          alignedActionGraphBySymbol.set(
+            code,
+            alignCorporateActionEffectiveDates(
+              factsBySymbol.get(code) ?? [],
+              changesBySymbol.get(code) ?? [],
+            ),
+          );
+          factsBySymbol.delete(code);
+          changesBySymbol.delete(code);
+          await yieldToEventLoop();
+        }
       }
       throwIfStopped();
       return alignedActionGraphBySymbol;

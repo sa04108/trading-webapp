@@ -40,12 +40,13 @@ export const CORPORATE_ACTION_ALIGNMENT_WINDOW = {
 export function corporateActionRawDateRange(
   facts: readonly Fact[],
 ): { readonly from: string; readonly to: string } | null {
-  const dates = facts
-    .filter((fact) => fact.field === CORPORATE_ACTION_FIELD)
-    .map((fact) => fact.periodKey)
-    .sort();
-  const from = dates[0];
-  const to = dates[dates.length - 1];
+  let from: string | undefined;
+  let to: string | undefined;
+  for (const fact of facts) {
+    if (fact.field !== CORPORATE_ACTION_FIELD) continue;
+    if (from === undefined || fact.periodKey < from) from = fact.periodKey;
+    if (to === undefined || fact.periodKey > to) to = fact.periodKey;
+  }
   return from === undefined || to === undefined ? null : { from, to };
 }
 

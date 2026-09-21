@@ -15,9 +15,12 @@ import {
 } from "./database-layout.js";
 
 export type AppDatabase = BetterSQLite3Database<typeof schema>;
+export type NativeAppDatabase = AppDatabase & {
+  readonly $client: Database.Database;
+};
 
 export interface DatabaseHandle {
-  readonly db: AppDatabase;
+  readonly db: NativeAppDatabase;
   readonly sqlite: Database.Database;
   readonly dataPath: string;
   close(): void;

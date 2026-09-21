@@ -143,7 +143,8 @@ export class AgentClient {
       () => this.heartbeat(),
       AGENT_HEARTBEAT_MS,
     );
-    this.sampleTimer = setInterval(() => this.sample(), 1000);
+    // 운영 API와 메모리를 공유하는 로컬 계산은 여유 소진을 더 빨리 감지한다.
+    this.sampleTimer = setInterval(() => this.sample(), this.runtime ? 250 : 1000);
   }
 
   private lock(): void {
@@ -394,16 +395,23 @@ export class AgentClient {
       Date.now() - this.lastServerContact > 45_000
     )
       this.socket.terminate();
+    const serverPressure = this.runtime?.resources(
+      this.running.size, this.observedRss, this.profiled, this.requestedBars,
+    ).memoryPressure === true;
     for (const running of this.running.values()) {
       if (running.observation.exited) continue;
       running.peakRss = Math.max(
         running.peakRss,
         running.child.pid ? processRss(running.child.pid) : 0,
       );
-      if (running.peakRss > running.budgetBytes && !running.cancellation) {
+      if (serverPressure) {
+        running.resourceError = "운영 API의 메모리 여유를 보존하기 위해 로컬 계산을 중단했습니다";
+        this.cancel(running, "SERVER_MEMORY_PRESSURE", true);
+      } else if (running.peakRss > running.budgetBytes &&
+          (!running.cancellation || this.runtime !== undefined)) {
         running.resourceError =
           "계산 프로세스가 자동 산정된 가용 메모리 예산을 초과했습니다";
-        this.cancel(running, "MEMORY_BUDGET_EXCEEDED");
+        this.cancel(running, "MEMORY_BUDGET_EXCEEDED", this.runtime !== undefined);
       }
       if (Date.now() > running.lease.leaseExpiresAtMs) this.cancel(running, "LEASE_EXPIRED");
     }
@@ -411,6 +419,17 @@ export class AgentClient {
   }
 
   private spawn(lease: AgentLease): void {
+    if (this.runtime) {
+      // 배정 이후 자원이 바뀌거나 이전 리스의 자식이 아직 종료 중이면 시작하지 않는다.
+      this.admission = this.runtime.resources(
+        this.running.size, this.observedRss, this.profiled, this.requestedBars,
+      );
+      if (this.running.size >= 1 || this.admission.slots < 1 || this.admission.memoryPressure) {
+        this.failSetup(lease, new Error("운영 API를 보호할 로컬 계산 여유가 없습니다"),
+          "RESOURCE_BUDGET_EXCEEDED");
+        return;
+      }
+    }
     const key = this.key(lease);
     const directory = path.join(this.directory, "jobs", key);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -636,7 +655,7 @@ export class AgentClient {
 
   private failSetup(
     lease: AgentLease, error: unknown,
-    code: "JOB_SETUP_FAILED" | "WORKER_SPAWN_FAILED" = "JOB_SETUP_FAILED",
+    code: "JOB_SETUP_FAILED" | "WORKER_SPAWN_FAILED" | "RESOURCE_BUDGET_EXCEEDED" = "JOB_SETUP_FAILED",
   ): void {
     const directory = path.join(this.directory, "jobs", this.key(lease));
     const diagnostics = emptyDiagnostics();
@@ -832,8 +851,19 @@ export class AgentClient {
   private error(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
   }
-  private cancel(running: Running, reason = "AGENT_SHUTDOWN"): void {
-    if (running.cancellation || running.observation.exited) return;
+  private cancel(running: Running, reason = "AGENT_SHUTDOWN", immediate = false): void {
+    if (running.observation.exited || running.cancelPath === "SIGKILL" ||
+        (running.cancellation && !immediate)) return;
+    // 자원 고갈 때에는 이미 진행 중인 일반 취소의 5초 유예도 기다리지 않는다.
+    if (immediate) {
+      for (const timer of running.timers) clearTimeout(timer);
+      running.timers.length = 0;
+      running.cancellation = true;
+      running.cancellationReason = reason;
+      running.cancelPath = "SIGKILL";
+      running.child.kill("SIGKILL");
+      return;
+    }
     running.cancellation = true;
     running.cancellationReason = reason;
     running.cancelPath = "IPC";

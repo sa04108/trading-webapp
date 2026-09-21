@@ -11,6 +11,7 @@ export type {
   FactSyncReport,
 } from "../../../../runtime/modules/facts/application/fact-sync-port.js";
 import { createHash } from "node:crypto";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { Clock } from "../../../../runtime/shared/clock.js";
 import type { Logger } from "../../../shared/logger.js";
 import {
@@ -451,6 +452,8 @@ export class FactSyncService {
     });
 
     for (const [index, symbol] of symbols.entries()) {
+      // 캐시 적중이 연속돼도 HTTP 요청과 취소 신호가 종목 경계에서 처리되게 한다.
+      await yieldToEventLoop();
       // 취소는 종목을 시작하기 전에 확인한다 — 시작한 종목을 중간에 버리면
       // 저장분과 이력이 어긋난다
       if (hooks.shouldStop?.()) {
@@ -574,6 +577,8 @@ export class FactSyncService {
             currentActionGapDetails,
             coverageTimestamp,
           );
+          // 연도 저장·버전·coverage를 마친 뒤에만 다른 요청에 실행을 양보한다.
+          await yieldToEventLoop();
         }
 
         doneSymbols += 1;
@@ -724,5 +729,11 @@ export function factsFingerprint(facts: readonly Fact[]): string {
       ]),
     )
     .sort();
-  return createHash("sha256").update(rows.join("\n")).digest("hex");
+  // 기존 정렬·개행 계약을 유지하면서 전체 원문 크기의 결합 문자열을 만들지 않는다.
+  const hash = createHash("sha256");
+  for (const [index, row] of rows.entries()) {
+    if (index > 0) hash.update("\n");
+    hash.update(row);
+  }
+  return hash.digest("hex");
 }
