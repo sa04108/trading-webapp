@@ -41,3 +41,42 @@ it('반영 근거 없는 과거 자료는 원문을 채우지 않고 기존 DB�
     expect(sqlite.prepare('SELECT * FROM symbol_facts_state').all()).toEqual(before);
   }finally{db.close();}
 });
+
+it('자본변동 두 원문과 정상화가 끝난 공시만 재무 미반영으로 좁히고 다시 발견해도 보존한다', () => {
+  const db = openDatabase(':memory:');
+  const sqlite = db.sqlite;
+  const store = new SqliteDartPendingFilingStore(sqlite);
+  const receipt = '20260828001423';
+  const actionKey = { ...key, symbol: '058970', businessYear: 2026, reportCode: '11012', fsDiv: 'NONE' } as const;
+  try {
+    sqlite.exec("INSERT INTO symbols(code,market,created_at_ms) VALUES('058970','KR',1)");
+    sqlite.exec("INSERT INTO symbol_facts_state(code,covered_years_json,action_covered_years_json) VALUES('058970','[2026]','[2026]')");
+    for (const [id, symbol, year, status] of [
+      [receipt, '058970', 2026, 'PENDING'], ['neighbor', '309710', 2026, 'PENDING'],
+      ['outside', '058970', 2025, 'PENDING'], ['unresolved', '058970', 2026, 'UNRESOLVED'],
+    ] as const) {
+      sqlite.prepare(`INSERT INTO dart_discovered_filings
+        (identity,receipt_no,symbol,business_year,report_code,payload_json,discovered_at_ms,status)
+        VALUES(?,?,?,?,'11012','{}',1,?)`).run(id, id, symbol, year, status);
+      sqlite.prepare(`INSERT INTO provider_input_issues(id,symbol,business_year,report_code,reason,evidence)
+        VALUES(?,?,?,'11012','PENDING_FILING',?)`).run(`dart-filing:${id}`, symbol, year, id);
+    }
+    const reason = () => sqlite.prepare('SELECT reason FROM provider_input_issues WHERE id=?').get(`dart-filing:${receipt}`);
+    store.markApplied({ ...actionKey, endpoint: 'SHARE_STATUS' }, receipt);
+    store.markNormalized('058970', 2026, 'ACTION');
+    expect(reason()).toEqual({ reason: 'PENDING_FILING' });
+    store.markApplied({ ...actionKey, endpoint: 'ISSUANCE_STATUS' }, receipt);
+    expect(reason()).toEqual({ reason: 'PENDING_FILING' });
+    store.markNormalized('058970', 2026, 'ACTION');
+    expect(reason()).toEqual({ reason: 'PENDING_FINANCIAL_FILING' });
+    expect(store.observeFilings([receipt])).toEqual([{ symbol: '058970', year: 2026 }]);
+    expect(reason()).toEqual({ reason: 'PENDING_FINANCIAL_FILING' });
+    expect(sqlite.prepare("SELECT COUNT(*) AS n FROM provider_input_issues WHERE reason='PENDING_FILING'").get()).toEqual({ n: 3 });
+    store.markApplied({ ...actionKey, endpoint: 'FINANCIAL_STATEMENT', fsDiv: 'CFS' }, receipt);
+    expect(reason()).toEqual({ reason: 'PENDING_FINANCIAL_FILING' });
+    store.markNormalized('058970', 2026);
+    expect(reason()).toBeUndefined();
+    expect(sqlite.prepare('SELECT status FROM dart_discovered_filings WHERE identity=?').get(receipt)).toEqual({ status: 'APPLIED' });
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM provider_input_issues').get()).toEqual({ n: 3 });
+  } finally { db.close(); }
+});

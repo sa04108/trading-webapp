@@ -231,25 +231,8 @@ export function createAgentCollectionRuntime(input: {
         });
       }
     } else {
-      // 새 공시는 요청 범위 안에서만 반영한다. 자본변동 요청이라도 미반영 공시의 세 소비자를 함께 완료한다.
-      if (request.kind === "ACTIONS") {
-        for (const symbol of request.symbols) {
-          const pendingYears = database.sqlite.prepare(`SELECT DISTINCT business_year AS year FROM provider_input_issues
-            WHERE symbol = ? AND reason = 'PENDING_FILING' AND business_year BETWEEN ? AND ?`)
-            .all(symbol, request.fromYear, request.toYear) as {year:number}[];
-          for (const {year} of pendingYears) {
-            if (shouldStop()) return;
-            const report = await factSyncService.sync({symbols:[symbol],fromYear:year,toYear:year,consolidated:true,mode:"INCREMENTAL"}, {shouldStop});
-            if (report.stopReason === "DAILY_QUOTA") {
-              const next = Math.floor((clock.now() + 9 * 3600_000) / 86400_000 + 1) * 86400_000 - 9 * 3600_000;
-              throw new AgentCollectionPaused(report.failureMessage ?? "DART 일일 호출 한도 대기", next);
-            }
-            if (report.stopReason === "CANCELLED") return;
-            if (report.stopReason !== null) throw new Error(report.failureMessage ?? "공시 반영 수집 미완료");
-            pendingFilings.markNormalized(symbol, year);
-          }
-        }
-      }
+      // 미반영 공시의 해당 연도는 소비자별 coverage가 다시 연다.
+      // 자본변동은 주식총수·증자감자만 반영하며 재무제표 게시를 기다리지 않는다.
       const input = {
         ...request,
         mode: "INCREMENTAL" as const,
@@ -287,9 +270,9 @@ export function createAgentCollectionRuntime(input: {
       }
       if (syncReport.stopReason === "ERROR")
         throw new Error(syncReport.failureMessage ?? "DART 수집 실패");
-      if (syncReport.stopReason === null && request.kind === "FINANCIAL") {
+      if (syncReport.stopReason === null) {
         for (const symbol of request.symbols) for (let year = request.fromYear; year <= request.toYear; year += 1)
-          pendingFilings.markNormalized(symbol, year);
+          pendingFilings.markNormalized(symbol, year, request.kind === "ACTIONS" ? "ACTION" : "ALL");
       }
     }
   };

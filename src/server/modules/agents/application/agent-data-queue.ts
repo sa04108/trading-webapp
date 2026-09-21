@@ -42,6 +42,25 @@ interface DataRequestRow {
   error: string | null;
 }
 
+const LEGACY_ACTION_FINANCIAL_WAIT =
+  /^PENDING_PUBLICATION: ([0-9A-Z]{6}):FINANCIAL_STATEMENT:(\d{4}):(11011|11012|11013|11014):CFS \(.*\)$/;
+
+/** 이전 ACTIONS 작업이 재무 CFS 대기를 잘못 공유한 경우만 시작 시 다시 평가한다. */
+function isLegacyActionFinancialWait(row: Pick<DataRequestRow, "request_json" | "error">): boolean {
+  if (row.error === null) return false;
+  const match = LEGACY_ACTION_FINANCIAL_WAIT.exec(row.error);
+  if (match === null) return false;
+  try {
+    const request = agentDataRequestSchema.parse(JSON.parse(row.request_json));
+    if (request.kind !== "ACTIONS") return false;
+    const year = Number(match[2]);
+    return request.symbols.includes(match[1]!) &&
+      request.fromYear <= year && year <= request.toYear;
+  } catch {
+    return false;
+  }
+}
+
 export class AgentDataQueue {
   private running: Promise<void> | null = null;
   private stopped = false;
@@ -117,6 +136,20 @@ export class AgentDataQueue {
         "UPDATE agent_data_requests SET status = 'QUEUED' WHERE status = 'RUNNING' OR (status = 'BLOCKED' AND substr(error, 1, 20) = 'PENDING_PUBLICATION:')",
       )
       .run();
+    const rows = this.database.sqlite
+      .prepare(
+        "SELECT id, request_json, error FROM agent_data_requests WHERE status IN ('QUEUED', 'BLOCKED') AND error LIKE 'PENDING_PUBLICATION:%:FINANCIAL_STATEMENT:%:CFS (%)'",
+      )
+      .all() as Array<Pick<DataRequestRow, "id" | "request_json" | "error">>;
+    const now = Date.now();
+    const repair = this.database.sqlite.prepare(
+      `UPDATE agent_data_requests SET status = 'QUEUED', next_attempt_at_ms = 0,
+       error = NULL, activity = NULL, activity_started_at_ms = NULL,
+       last_progress_at_ms = NULL, current_item = NULL, updated_at_ms = ? WHERE id = ?`,
+    );
+    for (const row of rows) {
+      if (isLegacyActionFinancialWait(row)) repair.run(now, row.id);
+    }
   }
 
   /** 같은 데이터 요구는 여러 작업이 공유하고, 데이터 대기는 계산 재시도에 포함하지 않는다. */

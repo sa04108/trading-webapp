@@ -406,6 +406,7 @@ export const providerInputIssues = sqliteTable("provider_input_issues", {
   symbol: text("symbol").notNull(),
   businessYear: integer("business_year"),
   reportCode: text("report_code"),
+  /** PENDING_FILING은 공통 미반영, PENDING_FINANCIAL_FILING은 자본변동 반영 후 재무만 미반영이다. */
   reason: text("reason").notNull(),
   evidence: text("evidence").notNull(),
 });

@@ -215,7 +215,7 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
       }
       for (const issue of issues.filter((issue) => issue.symbol === row.code)) {
         if (issue.reason === "UNRESOLVED_FILING") continue;
-        if (issue.reason === "PENDING_FILING" && issue.businessYear !== null) {
+        if ((issue.reason === "PENDING_FILING" || issue.reason === "PENDING_FINANCIAL_FILING") && issue.businessYear !== null) {
           const index = verified.indexOf(issue.businessYear);
           if (index >= 0) verified.splice(index, 1);
           continue;

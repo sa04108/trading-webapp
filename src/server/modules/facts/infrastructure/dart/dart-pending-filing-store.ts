@@ -112,9 +112,22 @@ export class SqliteDartPendingFilingStore implements DartPendingFilingStore {
     return [...affected.values()];
   }
 
-  /** 정상화 성공 후 모든 본문 endpoint가 같은 공시를 반영한 경우에만 입력 차단을 해제한다. */
-  markNormalized(symbol: string, year: number, consumer: "ALL" | "FINANCIAL" | "ACTION" = "ALL"): void {
-    if (consumer !== "ALL") return;
+  /** 정상화 성공 후 소비자가 반영한 범위만 해제하고 나머지는 계산 DB에도 남긴다. */
+  markNormalized(symbol: string, year: number, consumer: "ALL" | "ACTION" = "ALL"): void {
+    if (consumer === "ACTION") {
+      // endpoint 체크포인트는 원문 확인일 뿐이다. 자본변동 저장·coverage가 끝난 뒤에만
+      // 이 메서드가 호출되므로 재무 미반영만 남겨도 agent가 완료를 오판하지 않는다.
+      this.sqlite.prepare(`UPDATE provider_input_issues SET reason = 'PENDING_FINANCIAL_FILING'
+        WHERE symbol = ? AND business_year = ? AND reason = 'PENDING_FILING'
+        AND id IN (SELECT 'dart-filing:' || f.identity FROM dart_discovered_filings f
+          WHERE f.symbol = ? AND f.business_year = ? AND f.status != 'UNRESOLVED'
+          AND EXISTS (SELECT 1 FROM dart_filing_endpoint_checkpoints c WHERE c.receipt_no = f.receipt_no
+            AND c.endpoint = 'SHARE_STATUS' AND c.fs_div = 'NONE' AND c.status = 'APPLIED')
+          AND EXISTS (SELECT 1 FROM dart_filing_endpoint_checkpoints c WHERE c.receipt_no = f.receipt_no
+            AND c.endpoint = 'ISSUANCE_STATUS' AND c.fs_div = 'NONE' AND c.status = 'APPLIED'))`)
+        .run(symbol, year, symbol, year);
+      return;
+    }
     this.sqlite.transaction(() => {
     this.sqlite.prepare(`UPDATE dart_discovered_filings SET status = 'APPLIED' WHERE symbol = ? AND business_year = ? AND status != 'UNRESOLVED' AND (SELECT COUNT(DISTINCT endpoint) FROM dart_filing_endpoint_checkpoints c WHERE c.receipt_no = dart_discovered_filings.receipt_no AND c.status = 'APPLIED') = 3`).run(symbol, year);
     this.sqlite.prepare(`DELETE FROM provider_input_issues WHERE symbol = ? AND business_year = ?

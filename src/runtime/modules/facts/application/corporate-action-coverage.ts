@@ -220,7 +220,7 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
   ): ReadonlyMap<string, readonly number[]> {
     const result = new Map(this.readYears("actionGapYearsJson", codes));
     for (const issue of this.readIssuesForCodes(codes)) {
-      if (issue.reason === "UNRESOLVED_FILING") continue;
+      if (issue.reason === "UNRESOLVED_FILING" || issue.reason === "PENDING_FINANCIAL_FILING") continue;
       const years = issue.businessYear === null
         ? this.getCollectedYears([issue.symbol]).get(issue.symbol) ?? [] : [issue.businessYear];
       result.set(issue.symbol, [...new Set([...(result.get(issue.symbol) ?? []), ...years])].sort());
