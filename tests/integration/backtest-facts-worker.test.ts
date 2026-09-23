@@ -155,14 +155,33 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
   });
 
   it(
-    '제출된 밸류 전략이 저장된 팩트로 완주해 예상 종목을 매수한다 (실제 큐·자식 프로세스)',
+    '저장된 팩트로 예상 종목을 매수하고 재무 없는 종목을 제외·경고한다 (실제 큐·자식 프로세스)',
     { timeout: 90_000 },
     async ({ scenario }) => {
       const { ctx, cookie } = scenario;
+      // 재무 행이 없는 후보도 같은 실행에 넣어 준비 제외와 결과 경고를 함께 확인한다.
+      registerSymbols(ctx.container, 'KR', ['NOFACTS']);
+      await seedCorporateActionCoverage(ctx.container, ['NOFACTS'], yearRange(2024, 2025));
+      seedFinancialCoverage(ctx.container, ['NOFACTS'], yearRange(2024, 2025));
+      const noFactsCandles: Candle[] = [];
+      for (let index = 0; index < 40; index += 1) {
+        noFactsCandles.push({
+          symbol: 'NOFACTS',
+          market: 'KR',
+          timeframe: '1d',
+          tsMs: START + index * DAY,
+          open: 1_000,
+          high: 1_000,
+          low: 1_000,
+          close: 1_000,
+          volume: 1_000,
+        });
+      }
+      seedDailyBars(ctx.container.database.db, noFactsCandles);
       const payload: BacktestRequest = {
         strategyId: 'value-quality-rank',
         parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
-        universeRule: factsUniverseRule(2),
+        universeRule: factsUniverseRule(3),
         timeframe: '1d',
         period: { from: '2025-01-02', to: '2025-03-01' },
         capital: { initialCash: 10_000_000, currency: 'KRW' },
@@ -209,9 +228,13 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       expect(openSymbols).toContain('CHEAP');
       expect(openSymbols).not.toContain('RICH');
 
-      // 두 종목 모두 재무가 있으므로 "재무 없는 종목" 목록은 나오지 않아야 한다
       const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
-      expect(warnings.some((w) => w.includes('재무 데이터가 하나도 없어'))).toBe(false);
+      expect(warnings.some((warning) => warning.includes('재무 데이터가 하나도 없어'))).toBe(false);
+      const factWarning = warnings.find((warning) => warning.includes('재무 정보를 온전히 확보할 수 없어'));
+      expect(factWarning).toBeDefined();
+      expect(factWarning).toContain('NOFACTS');
+      expect(factWarning).not.toContain('CHEAP');
+      expect(factWarning).not.toContain('RICH');
     },
   );
 
@@ -384,81 +407,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
     },
   );
 
-  /** 준비에서 재무가 없어 제외된 종목은 이름과 함께 경고한다. */
-  it(
-    '재무가 없는 종목을 준비에서 제외하고 이름을 밝힌다',
-    { timeout: 90_000 },
-    async ({ scenario }) => {
-      const { ctx, cookie } = scenario;
-      // 데이터셋·봉은 있지만 팩트가 없는 종목을 하나 더한다 — topN 을 3으로 올려
-      // 마스터에 미리 둔 NOFACTS 도 유니버스에 들어오게 한다
-      registerSymbols(ctx.container, 'KR', ['NOFACTS']);
-      // NOFACTS 도 unionSymbols 에 들어오므로 자본변동 게이트도 통과해 둬야 한다
-      await seedCorporateActionCoverage(ctx.container, ['NOFACTS'], yearRange(2024, 2025));
-      // DART가 필수 연도를 모두 조회했지만 공시 행이 0건인 상태다. 준비는 해당
-      // 종목을 매매 대상에서 제외하고 나머지 유니버스를 다시 확정해야 한다.
-      seedFinancialCoverage(ctx.container, ['NOFACTS'], yearRange(2024, 2025));
-      const extra: Candle[] = [];
-      for (let index = 0; index < 40; index += 1) {
-        extra.push({
-          symbol: 'NOFACTS',
-          market: 'KR',
-          timeframe: '1d',
-          tsMs: START + index * DAY,
-          open: 1_000,
-          high: 1_000,
-          low: 1_000,
-          close: 1_000,
-          volume: 1_000,
-        });
-      }
-      seedDailyBars(ctx.container.database.db, extra);
 
-      const payload: BacktestRequest = {
-        strategyId: 'value-quality-rank',
-        parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
-        universeRule: factsUniverseRule(3),
-        timeframe: '1d',
-        period: { from: '2025-01-02', to: '2025-03-01' },
-        capital: { initialCash: 10_000_000, currency: 'KRW' },
-        execution: {
-          fillTiming: 'NEXT_BAR_OPEN',
-          commissionProfileId: 'zero-cost',
-          slippageProfileId: 'zero-slippage',
-        },
-        risk: { maxPositions: 1 },
-        randomSeed: 1,
-      };
-      await scenario.prepare(payload);
-      const created = await ctx.app.inject({
-        method: 'POST',
-        url: '/api/v1/backtests',
-        cookies: { session: cookie },
-        payload,
-      });
-      expect(created.statusCode).toBe(201);
-      const jobId = (created.json().job as { id: string }).id;
-
-      await ctx.startAgent();
-      await waitFor(() => {
-        const job = ctx.container.jobQueue.getJob(jobId);
-        return job !== null && ctx.container.jobQueue.isTerminal(job.status);
-      }, 60_000);
-
-      const job = ctx.container.jobQueue.getJob(jobId)!;
-      expect(job.error).toBeNull();
-      expect(job.status).toBe('COMPLETED');
-
-      const run = ctx.container.resultsService.getRun(jobId)!;
-      const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
-      const factWarning = warnings.find((w) => w.includes('재무 정보를 온전히 확보할 수 없어'));
-      expect(factWarning).toBeDefined();
-      expect(factWarning).toContain('NOFACTS');
-      // 재무가 있는 종목은 이 목록에 끼지 않는다
-      expect(factWarning).not.toContain('CHEAP');
-      expect(factWarning).not.toContain('RICH');
-    },
-  );
 });
 
 /**

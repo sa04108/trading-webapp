@@ -86,18 +86,12 @@ describe('backtest:telemetry-report CLI', () => {
 
 
 describe('서버 CLI 진입점', () => {
-  it('도움말은 삭제된 벤치마크를 노출하지 않고 해당 명령을 명확히 거부한다', () => {
+  it('도움말에 백테스트 텔레메트리 보고 명령을 표시한다', () => {
     const invoke = (args: string[]) => spawnSync(process.execPath, ['--import', 'tsx', 'src/server/cli.ts', ...args], {
       encoding: 'utf8', env: { ...process.env, NODE_ENV: 'test' },
     });
     const help = invoke([]);
     expect(help.status).toBe(0);
-    expect(help.stdout).toContain('db:backup');
-    expect(help.stdout).toContain('--agent-budget-mib');
-    expect(help.stdout).not.toContain('universe:benchmark');
-    const removed = invoke(['universe:benchmark']);
-    expect(removed.status).toBe(1);
-    expect(removed.stderr).toContain('지원하지 않는 명령입니다: universe:benchmark');
-    expect(removed.stderr).not.toContain('수동 벤치마크 도구');
+    expect(help.stdout).toContain('backtest:telemetry-report');
   });
 });

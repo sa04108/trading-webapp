@@ -96,14 +96,18 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
     const second = ctx.container.jobQueue.enqueue(request, schedule);
     const probes: Array<Promise<void>> = [];
     const statuses: number[] = [];
+    const unexpectedResponses: Array<{ statusCode: number; payload: string }> = [];
     let maxRunning = 0;
     const sample = setInterval(() => {
       const row = ctx.container.database.sqlite.prepare(
         "SELECT COUNT(*) AS n FROM backtest_jobs WHERE status IN ('STARTING', 'RUNNING', 'CANCELLING')",
       ).get() as { n: number };
       maxRunning = Math.max(maxRunning, row.n);
-      probes.push(ctx.app.inject({ method: 'GET', url: '/health/ready' }).then((response) => {
+      probes.push(ctx.app.inject({ method: 'GET', url: '/api/v1/health/ready' }).then((response) => {
         statuses.push(response.statusCode);
+        if (response.statusCode !== 200) {
+          unexpectedResponses.push({ statusCode: response.statusCode, payload: response.payload });
+        }
       }));
     }, 50);
     try {
@@ -115,7 +119,7 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
     }
     expect(maxRunning).toBe(1);
     expect(statuses.length).toBeGreaterThan(0);
-    expect(statuses.every((status) => status === 200)).toBe(true);
+    expect(unexpectedResponses).toEqual([]);
     for (const job of [first, second])
       expect(ctx.container.database.sqlite.prepare('SELECT job_id FROM backtest_runs WHERE job_id = ?').get(job.id)).toEqual({ job_id: job.id });
     expect(ctx.container.agentCoordinator.registry.list()).toEqual([]);

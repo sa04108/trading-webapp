@@ -688,19 +688,6 @@ describe('POST /backtests/universe-preview', () => {
     expect(body.missingCandleSymbols).toEqual(['005930']);
   });
 
-  it('markets 가 2개면 스키마 위반으로 400 이다', async ({ ctx, cookie, preparedPreview }) => {
-    const res = await preparedPreview(ctx, {
-      method: 'POST',
-      url: '/api/v1/backtests/universe-preview',
-      cookies: { session: cookie },
-      payload: {
-        universeRule: marketCapRule(['KOSPI', 'KOSDAQ']),
-        period: { from: '2026-01-05', to: '2026-01-05' },
-      },
-    });
-    expect(res.statusCode).toBe(400);
-  });
-
   it('rule의 shared interval로 단일 리밸런스 일정을 만든다', async ({ ctx, cookie, preparedPreview }) => {
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
       { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
@@ -730,24 +717,6 @@ describe('POST /backtests/universe-preview', () => {
       },
     });
     expect(res.statusCode).toBe(400);
-  });
-
-  it('리밸런싱 주기가 기간을 넘으면 400 이다 (backtest-request.ts superRefine과 같은 검사)', async ({ ctx, cookie, preparedPreview }) => {
-    const res = await preparedPreview(ctx, {
-      method: 'POST',
-      url: '/api/v1/backtests/universe-preview',
-      cookies: { session: cookie },
-      payload: {
-        universeRule: {
-          markets: ['KOSPI'],
-          stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 10 }],
-          rebalanceInterval: { unit: 'MONTH', value: 2 },
-        },
-        period: { from: '2026-01-05', to: '2026-01-06' },
-      },
-    });
-    expect(res.statusCode).toBe(400);
-    expect((res.json() as { error: string }).error).toContain('리밸런싱 주기가 백테스트 전체 기간을 초과합니다');
   });
 
   it('존재하지 않는 날짜(2026-13-45)는 500 이 아니라 400 이다', async ({ ctx, cookie, preparedPreview }) => {

@@ -225,13 +225,16 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
     return jobId;
   }
 
-  async function runBacktest(scenario: Scenario): Promise<{
+  async function runBacktest(
+    scenario: Scenario,
+    afterCreate?: (jobId: string) => void | Promise<void>,
+  ): Promise<{
     equity: number[];
     warnings: string[];
     openSymbols: string[];
   }> {
     const { ctx } = scenario;
-    const jobId = await submitBacktest(scenario);
+    const jobId = await submitBacktest(scenario, afterCreate);
 
     const job = ctx.container.jobQueue.getJob(jobId)!;
     expect(job.error).toBeNull();
@@ -260,9 +263,16 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
     '기준일과 변경상장일이 달라도 자산곡선이 튀지 않는다',
     { timeout: 90_000 },
     async ({ scenario }) => {
+      const warning =
+        '자본변동 정보를 온전히 확보할 수 없어 종목 063080을 매매 대상에서 제외했습니다.';
       seedSharesChange(scenario.ctx);
 
-      const { equity, warnings, openSymbols } = await runBacktest(scenario);
+      const { equity, warnings, openSymbols } = await runBacktest(scenario, (jobId) => {
+        scenario.ctx.container.database.db.update(backtestJobs)
+          .set({ submitWarningsJson: JSON.stringify([warning]) })
+          .where(eq(backtestJobs.id, jobId))
+          .run();
+      });
 
       // 주가는 분할 말고는 움직이지 않게 심었다. 분할이 부(富)를 만들지 않으므로
       // 자산곡선도 평평해야 한다. 정렬 전에는 기준일 봉에서 +12%, 변경상장일 봉에서
@@ -271,27 +281,7 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
       // 아무것도 사지 않아도 곡선은 평평하다 — 진입이 실제로 일어났는지 함께 못박는다
       expect(openSymbols).toEqual([SYMBOL]);
       expect(warnings.some((w) => w.includes('짝지어지지 않아'))).toBe(false);
-    },
-  );
-
-  it(
-    '제출 시점의 유니버스 제외 경고를 최종 결과에 보존한다',
-    { timeout: 90_000 },
-    async ({ scenario }) => {
-      const { ctx } = scenario;
-      seedSharesChange(ctx);
-      const warning =
-        '자본변동 정보를 온전히 확보할 수 없어 종목 063080을 매매 대상에서 제외했습니다.';
-      const jobId = await submitBacktest(scenario, (createdJobId) => {
-        ctx.container.database.db.update(backtestJobs)
-          .set({ submitWarningsJson: JSON.stringify([warning]) })
-          .where(eq(backtestJobs.id, createdJobId))
-          .run();
-      });
-
-      const run = ctx.container.resultsService.getRun(jobId);
-      expect(run).not.toBeNull();
-      expect(JSON.parse(run?.warningsJson ?? '[]')).toContain(warning);
+      expect(warnings).toContain(warning);
     },
   );
 
