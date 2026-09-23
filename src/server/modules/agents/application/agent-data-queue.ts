@@ -44,6 +44,10 @@ interface DataRequestRow {
 
 const LEGACY_ACTION_FINANCIAL_WAIT =
   /^PENDING_PUBLICATION: ([0-9A-Z]{6}):FINANCIAL_STATEMENT:(\d{4}):(11011|11012|11013|11014):CFS \(.*\)$/;
+const PENDING_PUBLICATION_RECEIPT =
+  /^PENDING_PUBLICATION: .+ \(([0-9]{14})\)$/;
+const UNRESOLVED_FILING_RECEIPT =
+  /^UNRESOLVED_FILING: .+ \(([0-9]{14})\)$/;
 
 /** 이전 ACTIONS 작업이 재무 CFS 대기를 잘못 공유한 경우만 시작 시 다시 평가한다. */
 function isLegacyActionFinancialWait(row: Pick<DataRequestRow, "request_json" | "error">): boolean {
@@ -149,6 +153,60 @@ export class AgentDataQueue {
     );
     for (const row of rows) {
       if (isLegacyActionFinancialWait(row)) repair.run(now, row.id);
+    }
+    const absent = this.database.sqlite
+      .prepare("SELECT receipt_no FROM dart_discovered_filings WHERE status IN ('UNLISTED', 'UNLISTED_PARTIAL')")
+      .all() as Array<{ receipt_no: string | null }>;
+    this.resumePendingPublicationForAbsentFilings(
+      absent.flatMap((row) => row.receipt_no === null ? [] : [row.receipt_no]),
+    );
+    const reappeared = this.database.sqlite
+      .prepare("SELECT receipt_no FROM dart_discovered_filings WHERE status = 'PENDING'")
+      .all() as Array<{ receipt_no: string | null }>;
+    this.resumeUnresolvedForReappearedFilings(
+      reappeared.flatMap((row) => row.receipt_no === null ? [] : [row.receipt_no]),
+    );
+  }
+
+  /** 완전한 공시 목록에서 사라진 접수의 게시 대기만 즉시 다시 평가한다. */
+  resumePendingPublicationForAbsentFilings(receiptNos: readonly string[]): void {
+    const absent = new Set(receiptNos.filter((receiptNo) => /^\d{14}$/.test(receiptNo)));
+    if (absent.size === 0) return;
+    const rows = this.database.sqlite
+      .prepare("SELECT id, error FROM agent_data_requests WHERE status = 'QUEUED' AND error LIKE 'PENDING_PUBLICATION:%'")
+      .all() as Array<Pick<DataRequestRow, "id" | "error">>;
+    const now = Date.now();
+    const resume = this.database.sqlite.prepare(
+      `UPDATE agent_data_requests SET next_attempt_at_ms = 0, error = NULL,
+       activity = NULL, activity_started_at_ms = NULL, last_progress_at_ms = NULL,
+       current_item = NULL, updated_at_ms = ?
+       WHERE id = ? AND status = 'QUEUED' AND error = ?`,
+    );
+    for (const row of rows) {
+      const match = row.error === null ? null : PENDING_PUBLICATION_RECEIPT.exec(row.error);
+      if (match === null || !absent.has(match[1]!)) continue;
+      if (resume.run(now, row.id, row.error).changes > 0) this.notifyWaiters(row.id);
+    }
+  }
+
+  /** 목록에 다시 나타난 접수의 무결성 차단만 재평가한다. */
+  resumeUnresolvedForReappearedFilings(receiptNos: readonly string[]): void {
+    const appeared = new Set(receiptNos.filter((receiptNo) => /^\d{14}$/.test(receiptNo)));
+    if (appeared.size === 0) return;
+    const rows = this.database.sqlite
+      .prepare("SELECT id, error FROM agent_data_requests WHERE status = 'BLOCKED' AND error LIKE 'UNRESOLVED_FILING:%'")
+      .all() as Array<Pick<DataRequestRow, "id" | "error">>;
+    const now = Date.now();
+    const resume = this.database.sqlite.prepare(
+      `UPDATE agent_data_requests SET status = 'QUEUED', next_attempt_at_ms = 0, error = NULL,
+       activity = NULL, activity_started_at_ms = NULL, last_progress_at_ms = NULL,
+       current_item = NULL, updated_at_ms = ?
+       WHERE id = ? AND status = 'BLOCKED' AND error = ?`,
+    );
+    for (const row of rows) {
+      const match = row.error === null ? null : UNRESOLVED_FILING_RECEIPT.exec(row.error);
+      if (match === null || !appeared.has(match[1]!)) continue;
+      if (resume.run(now, row.id, row.error).changes > 0) this.notifyWaiters(row.id);
     }
   }
 
@@ -311,6 +369,11 @@ export class AgentDataQueue {
           "UPDATE agent_data_requests SET activity = ?, activity_started_at_ms = ?, updated_at_ms = ? WHERE id = ?",
         )
         .run(blocked && !scheduledRetry ? "BLOCKED" : "WAITING_RETRY", Date.now(), Date.now(), row.id);
+      if (blocked && error.reason === "PENDING_PUBLICATION" && /^\d{14}$/.test(error.evidence)) {
+        const absent = this.database.sqlite.prepare(`SELECT 1 FROM dart_discovered_filings
+          WHERE receipt_no = ? AND status IN ('UNLISTED', 'UNLISTED_PARTIAL') LIMIT 1`).get(error.evidence);
+        if (absent) this.resumePendingPublicationForAbsentFilings([error.evidence]);
+      }
       this.notifyWaiters(row.id);
     }
     this.resumeReady();

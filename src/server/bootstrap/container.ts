@@ -455,6 +455,13 @@ export function createContainer(
       },
     },
   );
+  collection.filingDiscovery.setUnlistedListener((receipts) => {
+    dataQueue.resumePendingPublicationForAbsentFilings(receipts);
+  });
+  collection.filingDiscovery.setReappearedListener((receipts) => {
+    dataQueue.resumeUnresolvedForReappearedFilings(receipts);
+  });
+  collection.filingDiscovery.recoverPendingVerifications();
   const agentCoordinator = new AgentCoordinator(
     database,
     registry,
