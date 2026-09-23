@@ -5,6 +5,7 @@ import * as schema from '../../src/runtime/shared/db/schema.js';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
 import { createAgentCollectionRuntime } from '../../src/server/modules/agents/application/agent-collection-runtime.js';
 import { AgentCollectionPaused } from '../../src/server/modules/agents/application/agent-data-queue.js';
+import { SqliteDartCorpCodeSnapshotStore } from '../../src/server/modules/facts/infrastructure/dart/sqlite-dart-corp-code-snapshot-store.js';
 import { SqliteDartRawSnapshotStore } from '../../src/server/modules/facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
 import { facts } from '../../src/runtime/shared/db/schema.js';
 import { SqliteCorporateActionCoverageStore } from '../../src/runtime/modules/facts/application/corporate-action-coverage.js';
@@ -40,21 +41,22 @@ it.each(['DAILY_QUOTA','CANCELLED','ERROR'] as const)('ACTIONS의 %s는 재무 �
   }finally{await runtime.filingDiscovery.stop();vi.restoreAllMocks();database.close();}
 });
 
-it('CFS 게시 대기 중에도 저장된 정정공시의 자본변동을 반영하고 재무 대기는 보존한다', async () => {
+it('첨부정정의 본문 접수번호가 달라도 자본변동 수집을 완료하고 재무는 독립적으로 확인한다', async () => {
   const database = openDatabase(':memory:');
   const now = Date.parse('2026-09-21T08:25:24Z');
+  const http = vi.spyOn(globalThis, 'fetch');
   const runtime = createAgentCollectionRuntime({
     database, clock: { now: () => now },
     logger: { info() {}, warn() {}, error() {}, debug() {} } as never,
-    auditLog: {} as never, externalApiUsage: {} as never,
+    auditLog: {} as never, externalApiUsage: { quotaExceeded: () => false, recordCall() {} } as never,
     config: { dartApiKey: 'fixture', dartBaseUrl: 'https://dart.test', krxApiKey: null,
       krxBaseUrl: 'https://krx.test', krxApprovalExpiry: null, krxDailyCallBudget: 100 },
   });
-  const http = vi.spyOn(globalThis, 'fetch');
   const financialSync = vi.spyOn(runtime.factSyncService, 'sync');
   const snapshots = new SqliteDartRawSnapshotStore(database.db);
   const symbol = '058970';
   const receipt = '20260828001423';
+  const bodyReceipt = '20260814003090';
   try {
     database.sqlite.prepare("INSERT INTO symbols(code,market,created_at_ms) VALUES(?,'KR',1)").run(symbol);
     database.db.insert(facts).values({ scope: 'SYMBOL', key: symbol, field: 'NET_INCOME',
@@ -75,23 +77,35 @@ it('CFS 게시 대기 중에도 저장된 정정공시의 자본변동을 반영
       for (const reportCode of reports) {
         const current = year === 2026 && reportCode === '11012';
         snapshots.put({ symbol, endpoint: 'SHARE_STATUS', businessYear: year, reportCode, fsDiv: 'NONE' }, {
-          status: '000', list: [{ rcept_no: current ? receipt : '20260515000001', se: '보통주',
+          status: '000', list: [{ rcept_no: current ? bodyReceipt : '20260515000001', se: '보통주',
             istc_totqy: current ? '2000' : '1000', stlm_dt: current ? '2026.06.30' : `${year}.03.31` }],
         }, now - 1000);
         if (year !== 2026) continue;
         snapshots.put({ symbol, endpoint: 'ISSUANCE_STATUS', businessYear: year, reportCode, fsDiv: 'NONE' },
-          current ? { status: '000', list: [{ rcept_no: receipt, isu_dcrs_de: '2026-04-01',
+          current ? { status: '000', list: [{ rcept_no: bodyReceipt, isu_dcrs_de: '2026-04-01',
             isu_dcrs_stle: '무상증자', isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '1000' }] }
             : { status: '013' }, now - 1000);
         snapshots.put({ symbol, endpoint: 'FINANCIAL_STATEMENT', businessYear: year, reportCode, fsDiv: 'CFS' },
           { status: '013' }, now - 1000);
       }
     }
+    new SqliteDartCorpCodeSnapshotStore(database.sqlite, 'https://dart.test').put(
+      '<result><list><corp_code>01021949</corp_code><stock_code>058970</stock_code></list></result>', now);
+    const rawBefore = database.sqlite.prepare('SELECT * FROM dart_raw_api_snapshots ORDER BY code,endpoint,business_year,report_code,fs_div').all();
+    http.mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      const endpoint = url.pathname.includes('fnltt') ? 'FINANCIAL_STATEMENT'
+        : url.pathname.includes('stockTotqy') ? 'SHARE_STATUS' : 'ISSUANCE_STATUS';
+      const payload = snapshots.get({ symbol, endpoint, businessYear: Number(url.searchParams.get('bsns_year')),
+        reportCode: url.searchParams.get('reprt_code') as '11012', fsDiv: endpoint === 'FINANCIAL_STATEMENT' ? 'CFS' : 'NONE' })?.payload;
+      if (payload === undefined) throw new Error(`예상하지 않은 요청: ${url.pathname}`);
+      return Response.json(payload);
+    });
     const request = { kind: 'ACTIONS', symbols: [symbol], fromYear: 2026, toYear: 2026 } as const;
     const progress = vi.fn();
     await runtime.collect({ ...request, symbols: [...request.symbols] }, () => false, progress);
     expect(financialSync).not.toHaveBeenCalled();
-    expect(http).not.toHaveBeenCalled();
+    expect(http).toHaveBeenCalledTimes(2);
     expect(progress).toHaveBeenCalledWith(expect.objectContaining({ completed: 1, total: 1, currentItem: symbol }));
     expect(database.sqlite.prepare("SELECT value FROM facts WHERE key=? AND field='SPLIT_RATIO'").get(symbol)).toEqual({ value: 2 });
     expect(database.sqlite.prepare('SELECT reason FROM provider_input_issues').get())
@@ -115,11 +129,15 @@ it('CFS 게시 대기 중에도 저장된 정정공시의 자본변동을 반영
       expect(new SqliteCorporateActionCoverageStore(db).getGapYears([symbol]).get(symbol)).toEqual([]);
       expect(new SqliteFactCoverageStore(db).getCoveredYears([symbol]).get(symbol)).toEqual([]);
     } finally { snapshot.close(); }
+    expect(database.sqlite.prepare('SELECT * FROM dart_raw_api_snapshots ORDER BY code,endpoint,business_year,report_code,fs_div').all()).toEqual(rawBefore);
     const revision = database.sqlite.prepare('SELECT revision FROM dataset_state').get();
     await runtime.collect({ ...request, symbols: [...request.symbols] }, () => false, () => {});
     expect(database.sqlite.prepare('SELECT revision FROM dataset_state').get()).toEqual(revision);
-    await expect(runtime.collect({ kind: 'FINANCIAL', symbols: [symbol], fromYear: 2026, toYear: 2026 }, () => false, () => {}))
-      .rejects.toMatchObject({ reason: 'PENDING_PUBLICATION', retryAfterMs: now + 86_400_000 });
-    expect(http).not.toHaveBeenCalled();
+    expect(http).toHaveBeenCalledTimes(2);
+    await runtime.collect({ kind: 'FINANCIAL', symbols: [symbol], fromYear: 2026, toYear: 2026 }, () => false, () => {});
+    expect(http).toHaveBeenCalledTimes(3);
+    expect(database.sqlite.prepare('SELECT * FROM provider_input_issues').all()).toEqual([]);
+    expect(database.sqlite.prepare('SELECT status FROM dart_discovered_filings').get()).toEqual({ status: 'APPLIED' });
+    expect(database.sqlite.prepare('SELECT * FROM dart_raw_api_snapshots ORDER BY code,endpoint,business_year,report_code,fs_div').all()).toEqual(rawBefore);
   } finally { await runtime.filingDiscovery.stop(); vi.restoreAllMocks(); database.close(); }
 });

@@ -67,16 +67,14 @@ export class SqliteFactRepository implements FactRepository {
     }
 
     this.db.transaction((tx) => {
-      tx.delete(factRows)
-        .where(
-          and(
-            eq(factRows.scope, "SYMBOL"),
-            eq(factRows.key, symbol),
-            ne(factRows.field, CORPORATE_ACTION_FIELD),
-            like(factRows.periodKey, `${year}%`),
-          ),
-        )
-        .run();
+      const scope = and(
+        eq(factRows.scope, "SYMBOL"),
+        eq(factRows.key, symbol),
+        ne(factRows.field, CORPORATE_ACTION_FIELD),
+        like(factRows.periodKey, `${year}%`),
+      );
+      if (sameSnapshot(tx.select().from(factRows).where(scope).all(), facts)) return;
+      tx.delete(factRows).where(scope).run();
       for (let index = 0; index < facts.length; index += WRITE_BATCH_SIZE) {
         tx.insert(factRows)
           .values(facts.slice(index, index + WRITE_BATCH_SIZE))
@@ -112,16 +110,14 @@ export class SqliteFactRepository implements FactRepository {
     }
 
     this.db.transaction((tx) => {
-      tx.delete(factRows)
-        .where(
-          and(
-            eq(factRows.scope, "SYMBOL"),
-            eq(factRows.key, symbol),
-            eq(factRows.field, CORPORATE_ACTION_FIELD),
-            like(factRows.periodKey, `${year}%`),
-          ),
-        )
-        .run();
+      const scope = and(
+        eq(factRows.scope, "SYMBOL"),
+        eq(factRows.key, symbol),
+        eq(factRows.field, CORPORATE_ACTION_FIELD),
+        like(factRows.periodKey, `${year}%`),
+      );
+      if (sameSnapshot(tx.select().from(factRows).where(scope).all(), facts)) return;
+      tx.delete(factRows).where(scope).run();
       for (let index = 0; index < facts.length; index += WRITE_BATCH_SIZE) {
         tx.insert(factRows)
           .values(facts.slice(index, index + WRITE_BATCH_SIZE))
@@ -251,4 +247,15 @@ function compareFacts(left: Fact, right: Fact): number {
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/** 같은 API 원문을 재생한 팩트는 삭제·재삽입하지 않는다. 비교 범위는 종목의 한 연도다. */
+function sameSnapshot(previous: readonly (typeof factRows.$inferSelect)[], next: readonly Fact[]): boolean {
+  if (previous.length !== next.length) return false;
+  const values = (rows: readonly (Fact | typeof factRows.$inferSelect)[]) => rows.map((row) => JSON.stringify([
+    row.scope, row.key, row.field, row.periodKey, row.asOfTsMs, row.value, row.unit,
+    row.corporateActionBeforeShares ?? null, row.corporateActionAfterShares ?? null,
+  ])).sort();
+  const before = values(previous);
+  return values(next).every((value, index) => value === before[index]);
 }

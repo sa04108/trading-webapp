@@ -28,8 +28,6 @@ export interface DartRawSnapshotStore {
     isValidPayload: (payload: unknown) => boolean,
   ): number;
   put(key: DartRawSnapshotKey, payload: unknown, fetchedAtMs: number): void;
-  /** 게시 대기 응답도 이전 활성 원문을 덮어쓰지 않고 보존한다. */
-  observe?(key: DartRawSnapshotKey, payload: unknown, fetchedAtMs: number): void;
 }
 
 export function dartRawSnapshotKeyId(key: DartRawSnapshotKey): string {

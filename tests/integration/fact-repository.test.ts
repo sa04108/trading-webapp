@@ -35,6 +35,22 @@ afterEach(() => {
 });
 
 describe('SqliteFactRepository', () => {
+  it('동일한 연도별 재무·자본변동 snapshot은 행 순서와 무관하게 DB를 다시 쓰지 않는다', async () => {
+    const financials = [fact(), fact({ field: 'NET_INCOME', value: 10 })];
+    const actions = [fact({ field: 'SPLIT_RATIO', periodKey: '2025-04-01', value: 2, unit: 'RATIO',
+      corporateActionBeforeShares: 100, corporateActionAfterShares: 200 })];
+    await repository.saveFacts([...financials, ...actions]);
+    const changes = () => database.sqlite.prepare('SELECT total_changes() AS n').get();
+    const before = changes();
+    await repository.replaceSymbolFinancialFactsForYear('005930', 2025, [...financials].reverse());
+    await repository.replaceSymbolCorporateActionFactsForYear('005930', 2025, actions);
+    expect(changes()).toEqual(before);
+    const corrected = { ...actions[0]!, corporateActionBeforeShares: 200, corporateActionAfterShares: 400 };
+    await repository.replaceSymbolCorporateActionFactsForYear('005930', 2025, [corrected]);
+    expect((await repository.getFacts({ scope: 'SYMBOL', fields: ['SPLIT_RATIO'] }))).toEqual([corrected]);
+    expect(changes()).not.toEqual(before);
+  });
+
   it('저장한 팩트를 그대로 읽는다', async () => {
     await repository.saveFacts([fact()]);
     const rows = await repository.getFacts({ scope: 'SYMBOL' });

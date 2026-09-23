@@ -59,9 +59,8 @@ export function createAgentCollectionRuntime(input: {
 
   const factRepository = new SqliteFactRepository(database.db);
   const dartRawSnapshots = new SqliteDartRawSnapshotStore(database.db);
-  let requestFilingVerification: ((receiptNo: string) => void) | null = null;
-  const pendingFilings = new SqliteDartPendingFilingStore(database.sqlite,
-    (receiptNo) => requestFilingVerification?.(receiptNo));
+  const pendingFilings = new SqliteDartPendingFilingStore(database.sqlite);
+  pendingFilings.recover();
   const factSource = createDartFactSource(
     config.dartApiKey
       ? { baseUrl: config.dartBaseUrl, apiKey: config.dartApiKey }
@@ -144,12 +143,7 @@ export function createAgentCollectionRuntime(input: {
   const discoveryClient = new RestClient({ baseUrl: config.dartBaseUrl, logger, maxRetries: 0 });
   const filingDiscovery = new DartFilingDiscovery({
     sqlite: database.sqlite, logger, now: () => clock.now(),
-    onFilingsStored: (identities) => {
-      const reappeared: string[] = [];
-      pendingFilings.observeFilings(identities, reappeared);
-      return reappeared;
-    },
-    onMissingReceipts: (receipts) => pendingFilings.markUnlistedReceipts(receipts),
+    onFilingsStored: (identities) => { pendingFilings.observeFilings(identities); },
     fetchPage: config.dartApiKey ? async (from, to, page, beforeAttempt, signal) => {
       const parameters = { bgn_de: from.replaceAll("-", ""), end_de: to.replaceAll("-", ""),
         pblntf_ty: "A", sort: "date", sort_mth: "desc", page_no: String(page), page_count: "100" };
@@ -167,7 +161,6 @@ export function createAgentCollectionRuntime(input: {
       return envelope;
     } : null,
   });
-  requestFilingVerification = (receiptNo) => filingDiscovery.requestVerification(receiptNo);
   const refreshProviderFilings = (): Promise<void> => filingDiscovery.refresh();
   const collectData = async (
     request: AgentDataRequest,

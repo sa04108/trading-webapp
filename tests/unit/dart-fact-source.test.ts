@@ -1076,7 +1076,7 @@ describe('createDartFactSource — 요청 구성', () => {
     ).toBe(true);
   });
 
-  it('bsns_year 가 요청 연도와 다른 행뿐이면 gap 을 남긴다', async () => {
+  it('bsns_year가 요청 연도와 다르면 응답 전체를 거부한다', async () => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);
       if (target.includes('fnlttSinglAcntAll') && target.includes('reprt_code=11013')) {
@@ -1087,7 +1087,7 @@ describe('createDartFactSource — 요청 구성', () => {
             {
               rcept_no: '20250515000001',
               reprt_code: '11013',
-              bsns_year: '2024', // 요청 연도(2025)와 다르다 — 통째로 필터에서 빠진다
+              bsns_year: '2024', // 요청 연도(2025)와 다르므로 응답 전체를 거부한다
               sj_div: 'BS',
               account_id: 'ifrs-full_CurrentAssets',
               account_nm: '유동자산',
@@ -1104,18 +1104,12 @@ describe('createDartFactSource — 요청 구성', () => {
       LOGGER,
       { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER },
     );
-    const result = await source.fetchFinancials({
+    await expect(source.fetchFinancials({
       symbols: ['005930'],
       years: [2025],
       shareYears: [2024, 2025],
       consolidated: true,
-    });
-    expect(
-      result.gaps.some(
-        (gap) => gap.periodKey === '2025Q1' && gap.reason.includes('필터에서 제외'),
-      ),
-    ).toBe(true);
-    expect(result.facts.some((fact) => fact.field === 'CURRENT_ASSETS')).toBe(false);
+    })).rejects.toMatchObject({ reason: 'IDENTITY_MISMATCH' });
   });
 
   it('API 키는 실패 메시지에도 로그에도 나타나지 않는다', async () => {

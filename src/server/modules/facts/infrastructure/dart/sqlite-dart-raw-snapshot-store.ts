@@ -140,12 +140,6 @@ export class SqliteDartRawSnapshotStore implements DartRawSnapshotStore {
     }
   }
 
-  observe(key: DartRawSnapshotKey, payload: unknown, fetchedAtMs: number): void {
-    const payloadJson = JSON.stringify(payload);
-    this.db.run(sql`INSERT INTO dart_raw_api_snapshot_history (snapshot_json, archived_at_ms)
-      VALUES (${JSON.stringify({kind:"PENDING_PUBLICATION", key, payloadJson, contentHash:hash(payloadJson), fetchedAtMs})}, ${fetchedAtMs})`);
-  }
-
   put(key: DartRawSnapshotKey, payload: unknown, fetchedAtMs: number): void {
     const payloadJson = JSON.stringify(payload);
     if (payloadJson === undefined) {

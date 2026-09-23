@@ -3,7 +3,6 @@ import { pino } from "pino";
 import { openDatabase } from "../../src/runtime/shared/db/database.js";
 import { AgentDataQueue } from "../../src/server/modules/agents/application/agent-data-queue.js";
 import { ProviderRequestBlockedError } from "../../src/server/shared/provider-request-policy.js";
-import { createDartFactSource } from "../../src/server/modules/facts/infrastructure/dart/dart-fact-source.js";
 
 it.each(["PENDING_PUBLICATION", "RETRY_BACKOFF"])("%s 대기는 기존 진행률로 전달하고 예약 시각에 자동으로 작업을 재개한다", async (reason) => {
   const database = openDatabase(":memory:");
@@ -41,7 +40,7 @@ it("종목 정체성이 불일치하는 입력은 자동 재시도로 우회하�
   } finally { await queue.stop(); database.close(); }
 });
 
-it("이전 ACTIONS 작업의 CFS 대기만 시작 시 즉시 다시 평가한다", async () => {
+it("이전 재무·주식총수·증자감자 접수번호 대기는 시작 시 즉시 재평가하고 다른 범위는 보존한다", async () => {
   const database = openDatabase(":memory:");
   const collect = vi.fn().mockResolvedValue(undefined);
   const ready = vi.fn();
@@ -76,10 +75,10 @@ it("이전 ACTIONS 작업의 CFS 대기만 시작 시 즉시 다시 평가한다
     queue.recover();
     const states = database.sqlite.prepare("SELECT w.job_id, r.status, r.attempts, r.next_attempt_at_ms, r.error, r.activity, r.current_item FROM agent_data_waits w JOIN agent_data_requests r ON r.id = w.request_id").all() as Array<{ job_id: string; status: string; attempts: number; next_attempt_at_ms: number; error: string | null; activity: string | null; current_item: string | null }>;
     const byJob = new Map(states.map((row) => [row.job_id, row]));
-    for (const job of ["actions-queued", "actions-blocked"]) {
+    for (const job of ["actions-queued", "actions-blocked", "financial", "shares"]) {
       expect(byJob.get(job)).toEqual(expect.objectContaining({ status: "QUEUED", attempts: 2, next_attempt_at_ms: 0, error: null, activity: null, current_item: null }));
     }
-    for (const job of ["financial", "shares", "outside", "failed"]) {
+    for (const job of ["outside", "failed"]) {
       const state = byJob.get(job);
       expect(state).toEqual(expect.objectContaining({ attempts: 2, next_attempt_at_ms: future, error: expect.any(String) }));
     }
@@ -92,149 +91,66 @@ it("이전 ACTIONS 작업의 CFS 대기만 시작 시 즉시 다시 평가한다
   } finally { await queue.stop(); database.close(); }
 });
 
-it("완전 목록에서 사라진 접수의 공유 게시 대기만 즉시 다시 평가하고 재시작 뒤에도 복구한다", async () => {
-  const database = openDatabase(":memory:");
+
+it('이전 목록 미관측 차단은 재조회로 복구하고 실제 해석 오류·quota·네트워크 대기는 유지한다', async () => {
+  const { SqliteDartPendingFilingStore } = await import('../../src/server/modules/facts/infrastructure/dart/dart-pending-filing-store.js');
+  const database = openDatabase(':memory:');
+  const pending = new SqliteDartPendingFilingStore(database.sqlite);
   const collect = vi.fn().mockResolvedValue(undefined);
-  const notify = vi.fn();
-  const queue = new AgentDataQueue(
-    database,
-    { ensureLatest: async () => ({ version: 2 }) } as never,
-    collect,
-    vi.fn(),
-    pino({ enabled: false }),
-    { onProgress: notify },
-  );
+  const ready = vi.fn();
+  const queue = new AgentDataQueue(database, { ensureLatest: async () => ({ version: 2 }) } as never,
+    collect, ready, pino({ enabled: false }));
   const future = Date.now() + 86_400_000;
-  const absentReceipt = "20260828001423";
-  const otherReceipt = "20260828001529";
   try {
-    const input = { kind: "FINANCIAL" as const, symbols: ["058970"], fromYear: 2026, toYear: 2026 };
-    queue.request("PREPARATION", "absent-one", 1, input);
-    queue.request("PREPARATION", "absent-two", 1, input);
-    queue.request("PREPARATION", "other", 1, { kind: "FINANCIAL", symbols: ["309710"], fromYear: 2026, toYear: 2026 });
-    queue.request("PREPARATION", "backoff", 1, { kind: "MARKET", dates: ["2026-09-18"] });
-    queue.request("PREPARATION", "blocked", 1, { kind: "MARKET", dates: ["2026-09-19"] });
-    queue.request("PREPARATION", "running", 1, { kind: "MARKET", dates: ["2026-09-20"] });
-    queue.request("PREPARATION", "failed", 1, { kind: "MARKET", dates: ["2026-09-21"] });
-    const ids = new Map((database.sqlite.prepare("SELECT w.job_id, w.request_id FROM agent_data_waits w").all() as Array<{ job_id: string; request_id: string }>).map((row) => [row.job_id, row.request_id]));
-    const update = database.sqlite.prepare(`UPDATE agent_data_requests SET status = ?, attempts = 2,
-      available_version = 7, next_attempt_at_ms = ?, error = ?, activity = 'WAITING_RETRY',
-      activity_started_at_ms = 11, last_progress_at_ms = 12, progress_completed = 1,
-      progress_total = 3, current_item = 'stale' WHERE id = ?`);
-    const pending = (receipt: string) => `PENDING_PUBLICATION: 058970:FINANCIAL_STATEMENT:2026:11012:CFS (${receipt})`;
-    update.run("QUEUED", future, pending(absentReceipt), ids.get("absent-one"));
-    update.run("QUEUED", future, pending(otherReceipt), ids.get("other"));
-    update.run("QUEUED", future, "RETRY_BACKOFF: scope (retry)", ids.get("backoff"));
-    for (const job of ["blocked", "running", "failed"]) update.run(job.toUpperCase(), future, pending(absentReceipt), ids.get(job));
-
-    queue.resumePendingPublicationForAbsentFilings([absentReceipt, absentReceipt, "invalid"]);
-    queue.resumePendingPublicationForAbsentFilings([absentReceipt]);
-
-    const states = database.sqlite.prepare("SELECT w.job_id, r.status, r.attempts, r.available_version, r.next_attempt_at_ms, r.error, r.activity, r.activity_started_at_ms, r.last_progress_at_ms, r.progress_completed, r.progress_total, r.current_item FROM agent_data_waits w JOIN agent_data_requests r ON r.id = w.request_id").all() as Array<{ job_id: string; status: string; attempts: number; available_version: number | null; next_attempt_at_ms: number; error: string | null; activity: string | null; activity_started_at_ms: number | null; last_progress_at_ms: number | null; progress_completed: number | null; progress_total: number | null; current_item: string | null }>;
-    const byJob = new Map(states.map((row) => [row.job_id, row]));
-    for (const job of ["absent-one", "absent-two"]) {
-      expect(byJob.get(job)).toEqual(expect.objectContaining({ status: "QUEUED", attempts: 2, available_version: 7, next_attempt_at_ms: 0, error: null, activity: null, activity_started_at_ms: null, last_progress_at_ms: null, progress_completed: 1, progress_total: 3, current_item: null }));
+    const cases = [
+      { symbol: '206560', filing: 'UNLISTED', error: 'PENDING_PUBLICATION', resume: true },
+      { symbol: '054670', filing: 'UNLISTED_PARTIAL', error: 'UNRESOLVED_FILING', resume: true },
+      { symbol: '000660', filing: 'UNRESOLVED', error: 'UNRESOLVED_FILING', resume: false },
+      { symbol: '005930', filing: 'PENDING', error: 'RETRY_BACKOFF', resume: false },
+      { symbol: '058970', filing: 'PENDING', error: 'DART 일일 호출 한도 대기', resume: false },
+    ];
+    for (const [index, entry] of cases.entries()) {
+      const receipt = `20260820000${index + 100}`;
+      database.sqlite.prepare("INSERT INTO symbols(code,market,created_at_ms) VALUES(?,'KR',1)").run(entry.symbol);
+      database.sqlite.prepare(`INSERT INTO dart_discovered_filings
+        (identity,receipt_no,symbol,business_year,report_code,payload_json,discovered_at_ms,status)
+        VALUES(?,?,?,2026,'11012','{}',1,?)`).run(receipt, receipt, entry.symbol, entry.filing);
+      database.sqlite.prepare(`INSERT INTO dart_filing_endpoint_checkpoints
+        (receipt_no,endpoint,fs_div,status,retry_after_ms) VALUES(?,'SHARE_STATUS','NONE',?,?)`)
+        .run(receipt, entry.filing === 'UNLISTED_PARTIAL' ? 'APPLIED' : 'PENDING_PUBLICATION', future);
+      queue.request('PREPARATION', entry.symbol, 1, { kind: 'ACTIONS', symbols: [entry.symbol], fromYear: 2026, toYear: 2026 });
+      database.sqlite.prepare(`UPDATE agent_data_requests SET status = 'BLOCKED', attempts = 3,
+        next_attempt_at_ms = ?, error = ?, current_item = 'stale'
+        WHERE id = (SELECT request_id FROM agent_data_waits WHERE job_id = ?)`)
+        .run(future, `${entry.error}: ${entry.symbol}:SHARE_STATUS:2026:11012:NONE (${receipt})`, entry.symbol);
     }
-    expect(notify.mock.calls.map((call) => call[1]).sort()).toEqual(["absent-one", "absent-two"]);
-    for (const job of ["other", "backoff", "blocked", "running", "failed"]) {
-      expect(byJob.get(job)).toEqual(expect.objectContaining({ attempts: 2, available_version: 7, next_attempt_at_ms: future, error: expect.any(String), activity: "WAITING_RETRY", current_item: "stale" }));
+    database.sqlite.exec(`INSERT INTO dart_discovery_jobs(day,from_date,to_date,page,status)
+      VALUES('verify:2026-08-20','2026-08-20','2026-08-20',1,'DEFERRED'),
+        ('ordinary','2026-09-23','2026-09-24',1,'DEFERRED');
+      INSERT INTO dart_discovery_pages(day,from_date,page,payload_json,fetched_at_ms)
+        VALUES('verify:2026-08-20','2026-08-20',1,'{}',1);`);
+    pending.recover();
+    queue.recover();
+    const issues = database.sqlite.prepare('SELECT * FROM provider_input_issues ORDER BY id').all();
+    const revision = database.sqlite.prepare('SELECT revision FROM dataset_state').get();
+    pending.recover();
+    queue.recover();
+    expect(database.sqlite.prepare('SELECT * FROM provider_input_issues ORDER BY id').all()).toEqual(issues);
+    expect(issues).toHaveLength(2);
+    expect(database.sqlite.prepare('SELECT revision FROM dataset_state').get()).toEqual(revision);
+    expect(database.sqlite.prepare('SELECT day FROM dart_discovery_jobs').all()).toEqual([{ day: 'ordinary' }]);
+    expect(database.sqlite.prepare('SELECT * FROM dart_discovery_pages').all()).toEqual([]);
+    for (const entry of cases) {
+      const row = database.sqlite.prepare(`SELECT status,attempts,next_attempt_at_ms,error,current_item
+        FROM agent_data_requests WHERE id = (SELECT request_id FROM agent_data_waits WHERE job_id = ?)`).get(entry.symbol);
+      expect(row).toEqual({ status: entry.resume ? 'QUEUED' : 'BLOCKED', attempts: 3,
+        next_attempt_at_ms: entry.resume ? 0 : future, error: entry.resume ? null : expect.any(String),
+        current_item: entry.resume ? null : 'stale' });
     }
-    expect(byJob.get("other")?.error).toBe(pending(otherReceipt));
-    expect(byJob.get("backoff")?.error).toBe("RETRY_BACKOFF: scope (retry)");
-    expect(byJob.get("blocked")?.status).toBe("BLOCKED");
-    expect(byJob.get("running")?.status).toBe("RUNNING");
-    expect(byJob.get("failed")?.status).toBe("FAILED");
-
-    database.sqlite.prepare(`INSERT INTO dart_discovered_filings
-      (identity, receipt_no, symbol, business_year, report_code, payload_json, discovered_at_ms, status)
-      VALUES ('unlisted', ?, '058970', 2026, '11012', '{}', 1, 'UNLISTED')`).run(absentReceipt);
-    update.run("QUEUED", future, pending(absentReceipt), ids.get("absent-one"));
-    queue.recover();
-    expect(byJob.get("absent-one")).toBeDefined();
-    const recovered = database.sqlite.prepare("SELECT next_attempt_at_ms, error FROM agent_data_requests WHERE id = ?").get(ids.get("absent-one"));
-    expect(recovered).toEqual({ next_attempt_at_ms: 0, error: null });
     queue.tick();
-    await vi.waitFor(() => expect(collect).toHaveBeenCalledTimes(1));
-  } finally { await queue.stop(); database.close(); }
-});
-
-it("실행 중 접수가 목록에서 사라진 뒤 본문 오류가 돌아와도 하루 대기를 다시 만들지 않는다", async () => {
-  const database = openDatabase(":memory:");
-  const receipt = "20260828001423";
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => { release = resolve; });
-  const collect = vi.fn(async () => {
-    await gate;
-    throw new ProviderRequestBlockedError("PENDING_PUBLICATION",
-      "058970:FINANCIAL_STATEMENT:2026:11012:CFS", receipt, Date.now() + 86_400_000);
-  });
-  const queue = new AgentDataQueue(database,
-    { ensureLatest: async () => ({ version: 2 }) } as never, collect, vi.fn(), pino({ enabled: false }));
-  try {
-    queue.request("PREPARATION", "racing", 1,
-      { kind: "FINANCIAL", symbols: ["058970"], fromYear: 2026, toYear: 2026 });
-    const pending = database.sqlite.prepare(`INSERT INTO dart_discovered_filings
-      (identity,receipt_no,symbol,business_year,report_code,payload_json,discovered_at_ms,status)
-      VALUES ('racing',?, '058970',2026,'11012','{}',1,'UNLISTED')`);
+    await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(1));
     queue.tick();
-    await vi.waitFor(() => expect(database.sqlite.prepare("SELECT status FROM agent_data_requests").get())
-      .toEqual({ status: "RUNNING" }));
-    pending.run(receipt);
-    release();
-    await vi.waitFor(() => expect(database.sqlite.prepare("SELECT status,next_attempt_at_ms,error FROM agent_data_requests").get())
-      .toEqual({ status: "QUEUED", next_attempt_at_ms: 0, error: null }));
-    expect(collect).toHaveBeenCalledTimes(1);
-  } finally { release(); await queue.stop(); database.close(); }
-});
-
-it("부분 반영 공시가 다시 목록에 나타나면 해당 무결성 차단만 복원하고 재시작 뒤에도 회복한다", async () => {
-  const database = openDatabase(":memory:");
-  const queue = new AgentDataQueue(database,
-    { ensureLatest: async () => ({ version: 2 }) } as never,
-    vi.fn(), vi.fn(), pino({ enabled: false }));
-  const receipt = "20260828001423";
-  const error = `UNRESOLVED_FILING: 058970:FINANCIAL_STATEMENT:2026:11012:CFS (${receipt})`;
-  try {
-    queue.request("PREPARATION", "reappeared", 1,
-      { kind: "FINANCIAL", symbols: ["058970"], fromYear: 2026, toYear: 2026 });
-    queue.request("PREPARATION", "other", 1,
-      { kind: "FINANCIAL", symbols: ["309710"], fromYear: 2026, toYear: 2026 });
-    const rows = database.sqlite.prepare("SELECT w.job_id,w.request_id FROM agent_data_waits w").all() as
-      Array<{job_id:string;request_id:string}>;
-    const ids = new Map(rows.map((row) => [row.job_id, row.request_id]));
-    const block = database.sqlite.prepare("UPDATE agent_data_requests SET status='BLOCKED', error=?, next_attempt_at_ms=99 WHERE id=?");
-    block.run(error, ids.get("reappeared"));
-    block.run("UNRESOLVED_FILING: 309710:FINANCIAL_STATEMENT:2026:11012:CFS (20260828001529)", ids.get("other"));
-    queue.resumeUnresolvedForReappearedFilings([receipt]);
-    queue.resumeUnresolvedForReappearedFilings([receipt]);
-    expect(database.sqlite.prepare("SELECT status,error,next_attempt_at_ms FROM agent_data_requests WHERE id=?").get(ids.get("reappeared")))
-      .toEqual({ status: "QUEUED", error: null, next_attempt_at_ms: 0 });
-    expect(database.sqlite.prepare("SELECT status FROM agent_data_requests WHERE id=?").get(ids.get("other")))
-      .toEqual({ status: "BLOCKED" });
-    database.sqlite.prepare(`INSERT INTO dart_discovered_filings
-      (identity,receipt_no,symbol,business_year,report_code,payload_json,discovered_at_ms,status)
-      VALUES ('reappeared',?, '058970',2026,'11012','{}',1,'PENDING')`).run(receipt);
-    block.run(error, ids.get("reappeared"));
-    queue.recover();
-    expect(database.sqlite.prepare("SELECT status,error,next_attempt_at_ms FROM agent_data_requests WHERE id=?").get(ids.get("reappeared")))
-      .toEqual({ status: "QUEUED", error: null, next_attempt_at_ms: 0 });
+    await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(2));
+    expect(collect).toHaveBeenCalledTimes(2);
   } finally { await queue.stop(); database.close(); }
-});
-
-it("DART 접수 뒤 아직 게시되지 않은 본문은 하루 대기를 기록하고 그 전에 HTTP를 다시 보내지 않는다", async () => {
-  const now = Date.parse("2026-09-20T10:00:00Z");
-  let retryAfterMs: number | null = null;
-  const fetchImpl = vi.fn(async () => Response.json({ status: "013" }));
-  const source = createDartFactSource({ baseUrl: "https://dart.test", apiKey: "fixture" }, pino({ enabled: false }), {
-    clock: { now: () => now }, fetchImpl, sleep: async () => {}, corpCodeResolver: { resolve: async () => "00126380" },
-    pendingFilings: {
-      get: () => ({ receiptNo: "20260920000001", discoveredAtMs: now, status: "PENDING", retryAfterMs }),
-      markApplied() {}, markPendingPublication(_key, _receipt, deadline) { retryAfterMs = deadline; },
-    },
-  });
-  for (let i = 0; i < 2; i++) {
-    await expect(source.fetchFinancials({ symbols: ["005930"], years: [2025], shareYears: [2025], consolidated: true }))
-      .rejects.toMatchObject({ reason: "PENDING_PUBLICATION", retryAfterMs: now + 86_400_000 });
-  }
-  expect(fetchImpl).toHaveBeenCalledTimes(1);
 });

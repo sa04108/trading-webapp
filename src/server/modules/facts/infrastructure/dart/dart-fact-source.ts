@@ -85,6 +85,21 @@ function readDartString(row: unknown, field: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
+/** 행 순서와 중복을 제외한 API 접수번호 집합을 비교한다. 식별자가 없으면 재사용하지 않는다. */
+function sameReceipts(left: readonly unknown[], right: readonly unknown[]): boolean {
+  const receipts = (rows: readonly unknown[]): string | null => {
+    const values = new Set<string>();
+    for (const row of rows) {
+      const receipt = readDartString(row, "rcept_no");
+      if (receipt === null || !/^\d{14}$/.test(receipt)) return null;
+      values.add(receipt);
+    }
+    return [...values].sort().join(",");
+  };
+  const previous = receipts(left);
+  return previous !== null && previous === receipts(right);
+}
+
 function issuanceKey(row: DartIssuanceRow): string {
   return [
     readDartString(row, "isu_dcrs_de") ?? "",
@@ -485,8 +500,7 @@ export function createDartFactSource(
       const filing = options.pendingFilings?.get(key);
       if (filing?.status === "UNRESOLVED")
         throw new ProviderRequestBlockedError("UNRESOLVED_FILING", cacheKey, filing.receiptNo);
-      if (filing?.retryAfterMs != null && filing.retryAfterMs > clock.now())
-        throw new ProviderRequestBlockedError("PENDING_PUBLICATION", cacheKey, filing.receiptNo, filing.retryAfterMs);
+      let cachedRows: readonly T[] | null = null;
       let state: ProviderSourceState = {
         kind: options.pendingFilings?.isCollected?.(key) === true ? "REQUIREMENT" : "MISSING",
         evidence: `원문 부재: ${cacheKey}`,
@@ -494,7 +508,7 @@ export function createDartFactSource(
       try {
         const snapshot = options.rawSnapshots?.get(key);
         if (snapshot !== null && snapshot !== undefined) {
-          const cachedRows = rowsFromSnapshot<T>(snapshot.payload);
+          cachedRows = rowsFromSnapshot<T>(snapshot.payload);
           if (cachedRows !== null) {
             for (const row of cachedRows) {
               if (typeof row !== "object" || row === null) continue;
@@ -505,13 +519,7 @@ export function createDartFactSource(
                   (identity.reprt_code !== undefined && identity.reprt_code !== key.reportCode))
                 throw new DartRawSnapshotError("IDENTITY_MISMATCH", cacheKey, createHash("sha256").update(JSON.stringify(snapshot.payload)).digest("hex"));
             }
-            const reflected = filing == null || cachedRows.some((row) =>
-              typeof row === "object" && row !== null &&
-              String((row as Record<string, unknown>).rcept_no ?? "") >= filing.receiptNo);
-            if (reflected) {
-              if (filing != null) options.pendingFilings?.markApplied(key, filing.receiptNo);
-              return cachedRows;
-            }
+            if (filing == null) return cachedRows;
             state = { kind: cachedRows.length === 0 ? "PUBLICATION" : "REPLACEMENT", evidence: `공시 ${filing.receiptNo}: ${createHash("sha256").update(JSON.stringify(snapshot.payload)).digest("hex")}` };
           } else {
             throw new DartRawSnapshotError("PARSER_INCOMPATIBLE", cacheKey, createHash("sha256").update(JSON.stringify(snapshot.payload)).digest("hex"));
@@ -521,6 +529,7 @@ export function createDartFactSource(
         }
       } catch (error) {
         if (!(error instanceof DartRawSnapshotError) || options.requestPolicy === undefined) throw error;
+        cachedRows = null;
         state = { kind: error.reason === "PARSER_INCOMPATIBLE" ? "REQUIREMENT" : "CORRUPT", evidence: `${error.reason}: ${cacheKey}: ${error.evidence}` };
       }
 
@@ -549,18 +558,18 @@ export function createDartFactSource(
       for (const row of liveRows) {
         if (typeof row === "object" && row !== null && "corp_code" in row && row.corp_code !== corpCode)
           throw new ProviderRequestBlockedError("IDENTITY_MISMATCH", cacheKey, `${String(row.corp_code)} != ${corpCode}`);
+        if (typeof row === "object" && row !== null &&
+            (("bsns_year" in row && String(row.bsns_year) !== String(key.businessYear)) ||
+             ("reprt_code" in row && row.reprt_code !== key.reportCode)))
+          throw new ProviderRequestBlockedError("IDENTITY_MISMATCH", cacheKey, "요청 연도·보고서와 다른 DART 응답");
       }
-      if (filing != null && !liveRows.some((row) => typeof row === "object" && row !== null &&
-          String((row as Record<string, unknown>).rcept_no ?? "") >= filing.receiptNo)) {
-        options.rawSnapshots?.observe?.(key, envelope, clock.now());
-        const retryAfterMs = clock.now() + 86_400_000;
-        options.pendingFilings?.markPendingPublication(key, filing.receiptNo, retryAfterMs);
-        throw new ProviderRequestBlockedError("PENDING_PUBLICATION", cacheKey, filing.receiptNo, retryAfterMs);
-      }
-      options.rawSnapshots?.put(key, envelope, clock.now());
-      if (filing != null) options.pendingFilings?.markApplied(key, filing.receiptNo);
+      // 목록은 재조회 계기일 뿐이다. 본문 접수번호가 같으면 저장 원문을 유지하고,
+      // 달라지면 번호의 대소와 무관하게 API 응답으로 교체한다. 013은 빈 결과다.
+      const unchanged = cachedRows !== null && sameReceipts(cachedRows, liveRows);
+      if (!unchanged) options.rawSnapshots?.put(key, envelope, clock.now());
+      if (filing != null) options.pendingFilings?.markChecked(key, filing);
       permit?.complete();
-      return liveRows;
+      return unchanged ? cachedRows! : liveRows;
     };
     const token = {};
     const store = options.rawSnapshots;
