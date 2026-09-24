@@ -171,6 +171,68 @@ export class KrxDailyCandleRepository implements CandleRepository {
     }
   }
 
+  /**
+   * 날짜 경계를 넘기지 않는 크기 제한 봉 묶음을 시간순으로 읽는다.
+   * 하루 봉 수가 목표보다 많으면 그 하루를 통째로 반환한다.
+   */
+  *getCandlesByDateBatches(
+    query: CandleQuery & { fromTsMs: number; toTsMs: number },
+    targetBarsPerBatch: number,
+  ): Iterable<readonly Candle[]> {
+    if (!Number.isSafeInteger(targetBarsPerBatch) || targetBarsPerBatch <= 0) {
+      throw new RangeError("targetBarsPerBatch는 양의 안전한 정수여야 합니다");
+    }
+    if (!this.supports(query.market) || query.symbols.length === 0) return;
+
+    const firstDate = ceilToDate(query.fromTsMs);
+    const lastDate = floorToDate(query.toTsMs);
+    let firstDateTsMs = Date.parse(`${firstDate}T00:00:00Z`);
+    const lastDateTsMs = Date.parse(`${lastDate}T00:00:00Z`);
+    if (firstDateTsMs > lastDateTsMs) return;
+
+    // 봉이 하루에 종목별 최대 한 건이라는 저장 계약을 기준으로 날짜 창을 정한다.
+    // 중복 심볼도 기존 getCandles와 같은 횟수로 내보내므로 window 크기에 포함한다.
+    const calendarDaysPerBatch = Math.max(
+      1,
+      Math.floor(targetBarsPerBatch / query.symbols.length),
+    );
+    while (firstDateTsMs <= lastDateTsMs) {
+      const endDateTsMs = Math.min(
+        lastDateTsMs,
+        firstDateTsMs + (calendarDaysPerBatch - 1) * MS_PER_DAY,
+      );
+      const windowQuery = {
+        ...query,
+        fromTsMs: firstDateTsMs,
+        toTsMs: endDateTsMs,
+      };
+      const batch: Candle[] = [];
+      for (
+        let index = 0;
+        index < windowQuery.symbols.length;
+        index += READ_SYMBOL_BATCH_SIZE
+      ) {
+        const symbols = windowQuery.symbols.slice(
+          index,
+          index + READ_SYMBOL_BATCH_SIZE,
+        );
+        for (const candle of this.candlesForSymbols(windowQuery, symbols))
+          batch.push(candle);
+      }
+      batch.sort((left, right) =>
+        left.tsMs === right.tsMs
+          ? left.symbol < right.symbol
+            ? -1
+            : left.symbol > right.symbol
+              ? 1
+              : 0
+          : left.tsMs - right.tsMs,
+      );
+      if (batch.length > 0) yield batch;
+      firstDateTsMs = endDateTsMs + MS_PER_DAY;
+    }
+  }
+
   async getCandlesArray(query: CandleQuery): Promise<readonly Candle[]> {
     if (!this.supports(query.market)) return [];
     const candles: Candle[] = [];

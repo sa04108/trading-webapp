@@ -261,7 +261,7 @@ export function createSubmissionValidator(deps: SubmissionValidationDeps) {
     // 제출 시점의 종목 버전 스냅샷을 고정 — 대기 중 재무 동기화가 끼어들어도 어긋나지 않는다 (§9.5)
     const universe = symbolService.versionSnapshotFor(codes);
 
-    // 봉 수 상한 — 실행부는 전체 봉을 메모리에 올린다.
+    // 논리적 봉 수 상한 — 로컬 실행기는 날짜별 입력과 별도의 작업 메모리 예산을 적용한다.
     const { fromTsMs, toTsMs } = periodToTsRange(body.period);
     const estimated = estimateBars(
       registeredCoverage(codes).map((row) => ({ ...row, symbol: row.code })),

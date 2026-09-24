@@ -24,6 +24,7 @@ import { openDatabase } from "../runtime/shared/db/database.js";
 import { backtestJobs } from "../runtime/shared/db/schema.js";
 import {
   availableResources,
+  localBacktestMaxBars,
   processRss,
   type AgentResources,
 } from "./resources.js";
@@ -352,8 +353,14 @@ export class AgentClient {
       type: "CAPACITY",
       slots: this.cache.syncing || this.updating ? 0 : slots,
       datasetVersion: this.cache.current?.version ?? 0,
-      maxBars: this.admission.maxBars,
+      maxBars: this.maxBars(),
     });
+  }
+
+  private maxBars(): number {
+    return this.runtime
+      ? localBacktestMaxBars(this.admission.budgetBytes, this.admission.maxBars)
+      : this.admission.maxBars;
   }
 
   private heartbeat(): void {
@@ -463,6 +470,9 @@ export class AgentClient {
       child = fork(fileURLToPath(new URL(target, import.meta.url)), [], {
         execArgv: [
           `--max-old-space-size=${this.admission.heapMb}`,
+          ...(this.runtime && lease.kind === "BACKTEST"
+            ? ["--max-semi-space-size=4"]
+            : []),
           ...(ts ? ["--import", "tsx"] : []),
         ],
         env: {
@@ -470,7 +480,9 @@ export class AgentClient {
           DATABASE_PATH: jobPath,
           BACKTEST_JOB_ID: lease.jobId,
           DATA_SNAPSHOT_PATH: dataPath,
-          WORKER_MAX_BARS: String(this.admission.maxBars),
+          WORKER_MAX_BARS: String(this.maxBars()),
+          WORKER_STREAM_BARS: this.runtime ? "1" : "0",
+          WORKER_BUDGET_BYTES: String(this.admission.budgetBytes),
           BACKTEST_RESULT_PATH: path.join(directory, "result.sqlite"),
         },
         stdio: ["ignore", "pipe", "pipe", "ipc"],

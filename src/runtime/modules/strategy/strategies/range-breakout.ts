@@ -141,6 +141,7 @@ export const rangeBreakoutStrategy: TradingStrategy<
     "직전 N개 봉의 최고가를 종가가 넘어서면 사고, 고점을 따라 올라가는 손절선에 걸리면 팝니다. " +
     "모든 창이 봉 수입니다 — 일봉 기준으로 돌파 기준 20봉은 약 1달입니다.",
   parameterSchema: rangeBreakoutParameters,
+  historyLookbackBars: () => 1,
   dataRequirements: {
     priceWarmupBars: (parameters) =>
       Math.max(parameters.lookbackBars, parameters.atrPeriod),

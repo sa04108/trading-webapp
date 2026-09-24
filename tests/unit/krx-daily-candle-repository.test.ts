@@ -124,6 +124,91 @@ describe('KrxDailyCandleRepository', () => {
     expect(bulk.map((candle) => candle.symbol)).toEqual(['005930', '005930', '000660']);
   });
 
+  it('날짜 batch는 UTC 날짜와 심볼 순으로 내고 날짜를 쪼개지 않는다', ({ repository }) => {
+    const query = {
+      market: 'KR' as const,
+      timeframe: '1d' as const,
+      symbols: ['005930', '000660'],
+      fromTsMs: midnight('2026-08-05'),
+      toTsMs: midnight('2026-08-07'),
+    };
+    const batches = [...repository.getCandlesByDateBatches(query, 2)];
+
+    expect(batches.map((batch) => batch.map(({ tsMs, symbol }) => [tsMs, symbol]))).toEqual([
+      [[midnight('2026-08-05'), '005930']],
+      [[midnight('2026-08-06'), '000660'], [midnight('2026-08-06'), '005930']],
+      [[midnight('2026-08-07'), '005930']],
+    ]);
+  });
+
+  it('하루 봉 수가 목표보다 많아도 날짜 전체를 한 batch에 둔다', ({ repository }) => {
+    const batches = [...repository.getCandlesByDateBatches({
+      market: 'KR', timeframe: '1d', symbols: ['005930', '000660'],
+      fromTsMs: midnight('2026-08-06'), toTsMs: midnight('2026-08-06'),
+    }, 1)];
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]).toHaveLength(2);
+    expect(batches[0]?.every((candle) => candle.tsMs === midnight('2026-08-06'))).toBe(true);
+  });
+
+  it('부분 시각 경계를 기존 조회와 같은 유효 봉 집합으로 적용하고 중복 심볼도 보존한다', async ({ repository }) => {
+    const query = {
+      market: 'KR' as const,
+      timeframe: '1d' as const,
+      symbols: ['005930', '005930', '000660'],
+      fromTsMs: midnight('2026-08-05') + 1,
+      toTsMs: Date.parse('2026-08-07T23:59:59.999Z'),
+    };
+    const expected = (await collect(repository, query)).sort((left, right) =>
+      left.tsMs === right.tsMs
+        ? left.symbol < right.symbol ? -1 : left.symbol > right.symbol ? 1 : 0
+        : left.tsMs - right.tsMs,
+    );
+    const actual = [...repository.getCandlesByDateBatches(query, 3)].flat();
+
+    expect(actual).toEqual(expected);
+    expect(actual.filter((candle) => candle.symbol === '005930')).toHaveLength(4);
+    expect(actual[0]?.tsMs).toBe(midnight('2026-08-06'));
+  });
+
+  it('빈 범위·빈 심볼은 batch를 만들지 않고 잘못된 목표 크기는 거부한다', ({ repository }) => {
+    expect([...repository.getCandlesByDateBatches({
+      market: 'KR', timeframe: '1d', symbols: ['005930'],
+      fromTsMs: midnight('2026-08-07'), toTsMs: midnight('2026-08-06'),
+    }, 10)]).toEqual([]);
+    expect([...repository.getCandlesByDateBatches({
+      market: 'KR', timeframe: '1d', symbols: [],
+      fromTsMs: midnight('2026-08-05'), toTsMs: midnight('2026-08-07'),
+    }, 10)]).toEqual([]);
+    expect(() => [...repository.getCandlesByDateBatches({
+      market: 'KR', timeframe: '1d', symbols: ['005930'],
+      fromTsMs: midnight('2026-08-05'), toTsMs: midnight('2026-08-07'),
+    }, 0)]).toThrow(RangeError);
+  });
+
+  it('501종목 입력도 날짜 창별로 읽어 전체 기간을 한 번에 조회하지 않는다', () => {
+    let selectCalls = 0;
+    const fakeDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            orderBy: () => ({ all: () => { selectCalls += 1; return []; } }),
+          }),
+        }),
+      }),
+    };
+    const batchRepository = new KrxDailyCandleRepository(fakeDb as never);
+    const symbols = Array.from({ length: 501 }, (_, index) => String(index).padStart(6, '0'));
+    const batches = [...batchRepository.getCandlesByDateBatches({
+      market: 'KR', timeframe: '1d', symbols,
+      fromTsMs: midnight('2026-08-05'), toTsMs: midnight('2026-08-07'),
+    }, 501)];
+
+    expect(batches).toEqual([]);
+    expect(selectCalls).toBe(9);
+  });
+
   it('종가 전용 bulk 조회는 유효 봉의 시간·종가만 종목별로 돌려준다', async ({ repository }) => {
     const query = {
       market: 'KR' as const,

@@ -100,6 +100,8 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
     "상승률은 직전 한 달을 빼고 그 앞 1년을 봅니다 — 갓 오른 종목은 곧 되돌리는 일이 잦기 때문입니다. " +
     "액면분할은 분할 이력이 수집된 데이터셋에서만 신호 계산에 보정됩니다 — 체결가는 항상 실제 거래 가격입니다.",
   parameterSchema: crossSectionalMomentumParameters,
+  historyLookbackBars: (parameters) =>
+    parameters.formationDays + parameters.skipDays + 1,
   requiredRebalanceGapBars: 1,
   dataRequirements: {
     priceWarmupBars: (parameters) =>

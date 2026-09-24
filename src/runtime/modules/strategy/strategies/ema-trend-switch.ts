@@ -168,6 +168,7 @@ export const emaTrendSwitchStrategy: TradingStrategy<
     "반대로 움직이는 종목(예: 레버리지·인버스 쌍)을 함께 넣으면 같은 묶음에서 한 종목만 보유해 " +
     "방향 전환이 종목 교체로 표현됩니다.",
   parameterSchema: emaTrendSwitchParameters,
+  historyLookbackBars: () => 1,
   dataRequirements: {
     priceWarmupBars: (parameters) =>
       Math.max(

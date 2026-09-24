@@ -1,8 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { MAX_BACKTEST_BARS } from "../shared/backtest-limits.js";
 
 const MIB = 1024 * 1024;
+
+/** 검증된 로컬 작업 예산에서만 날짜 분할 백테스트의 논리 봉 상한을 연다. */
+export function localBacktestMaxBars(budgetBytes: number, fallbackMaxBars: number): number {
+  return budgetBytes >= 256 * MIB ? MAX_BACKTEST_BARS : fallbackMaxBars;
+}
 function read(file: string): string | null {
   try {
     return fs.readFileSync(file, "utf8").trim();

@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { calculateResources } from '../../src/agent/resources.js';
+import { calculateResources, localBacktestMaxBars } from '../../src/agent/resources.js';
 import { agentSettingsSchema } from '../../src/agent/config.js';
 const GIB = 1024 ** 3;
 
 describe('에이전트 자동 자원 배정', () => {
+  it('로컬 작업 예산이 256 MiB보다 작으면 기존 봉 상한을 유지한다', () => {
+    const MIB = 1024 ** 2;
+    expect(localBacktestMaxBars(255 * MIB, 200_000)).toBe(200_000);
+    expect(localBacktestMaxBars(256 * MIB, 200_000)).toBe(2_000_000);
+  });
   it('첫 작업은 하나만 관찰하고 큰 장치에서는 기존 200만 봉보다 큰 작업을 수용한다', () => {
     const result = calculateResources({ cpus: 32, total: 64 * GIB, available: 55 * GIB, load: 0 }, 0, 0, false);
     expect(result.slots).toBe(1);

@@ -144,7 +144,7 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
     await ctx.container.agentCoordinator.snapshots.ensureLatest();
     const oversized = ctx.container.jobQueue.enqueue(
       request, schedule, undefined, undefined, [], undefined,
-      { estimatedBars: 1_247_646 },
+      { estimatedBars: 2_100_000 },
     );
     await new Promise((resolve) => setImmediate(resolve));
     expect(ctx.container.jobQueue.getJob(oversized.id)?.status).toBe('QUEUED');
@@ -154,6 +154,19 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
     await vi.waitFor(() => expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED'), { timeout: 60_000 });
     expect(ctx.container.database.sqlite.prepare('SELECT client_id FROM agent_preparation_leases WHERE job_id = ?').get(preparation.id)).toEqual({ client_id: LOCAL_AGENT_ID });
     expect(ctx.container.jobQueue.getJob(oversized.id)?.status).toBe('QUEUED');
+  });
+
+  it('124만 봉 추정 작업도 원격 연결이 없으면 로컬 실행기에 배정한다', { timeout: 90_000 }, async ({ scenario }) => {
+    const { ctx, finished } = scenario;
+    ctx.container.agentCoordinator.registry.issue('disconnected');
+    ctx.container.agentCoordinator.start();
+    await ctx.container.agentCoordinator.snapshots.ensureLatest();
+    const job = ctx.container.jobQueue.enqueue(
+      request, schedule, undefined, undefined, [], undefined,
+      { estimatedBars: 1_247_646 },
+    );
+    await vi.waitFor(() => expect(ctx.container.jobQueue.getJob(job.id)?.agentId).toBe(LOCAL_AGENT_ID), { timeout: 1500 });
+    await finished(job.id);
   });
 
   it('원격이 바쁘면 새 작업만 로컬에서 실행하고 단절된 기존 리스는 건드리지 않는다', { timeout: 90_000 }, async ({ scenario }) => {

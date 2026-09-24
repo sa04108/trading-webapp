@@ -104,6 +104,7 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
   description:
     "PIT 영업이익 가속과 양의 가격 모멘텀을 함께 순위화하는 동일가중 연구 전략",
   parameterSchema: earningsAccelerationRankParameters,
+  historyLookbackBars: (parameters) => parameters.priceMomentumDays + 1,
   requiredRebalanceGapBars: 1,
   dataRequirements: {
     fundamentalLookbackQuarters: 8,

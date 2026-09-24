@@ -67,6 +67,7 @@ import type {
 } from "../modules/market-data/domain/candle.js";
 import { addCalendarDays } from "../modules/market-data/domain/kst-date.js";
 import { KrxDailyCandleRepository } from "../modules/market-data/infrastructure/krx-daily-candle-repository.js";
+import { CandleCoverageService } from "../modules/market-data/application/candle-coverage-service.js";
 import type { KrxHistoricalUniverseSource } from "../modules/market-data/application/ports.js";
 import { SymbolMasterService } from "../modules/market-data/application/symbol-master-service.js";
 import { StrategyRegistry } from "../modules/strategy/application/strategy-registry.js";
@@ -84,8 +85,8 @@ import {
   financialCoverageGapMessage,
   findFinancialCoverageGap,
 } from "../modules/backtest/application/backtest-financial-coverage.js";
-import { financialFactCutoffsFromCandles } from "../modules/backtest/application/backtest-financial-execution-window.js";
-import { findIncompleteFundamentalCheckpoints } from "../modules/backtest/application/backtest-financial-data-readiness.js";
+import { financialFactCutoffsFromCandles, financialFactCutoffsFromCoverage } from "../modules/backtest/application/backtest-financial-execution-window.js";
+import { findIncompleteFundamentalCheckpoints, findIncompleteFundamentalCheckpointsFromCoverage } from "../modules/backtest/application/backtest-financial-data-readiness.js";
 
 const cancellation = installCancellationHandlers();
 reportWorkerPhase("BOOTSTRAP_READY");
@@ -130,6 +131,12 @@ async function main(input: { lease: AgentLease }): Promise<void> {
   const dataPath = process.env.DATA_SNAPSHOT_PATH;
   const resultPath = process.env.BACKTEST_RESULT_PATH;
   const maxBars = Number(process.env.WORKER_MAX_BARS);
+  const streamCandles = process.env.WORKER_STREAM_BARS === "1";
+  const workerBudgetBytes = Number(process.env.WORKER_BUDGET_BYTES);
+  // 날짜 묶음의 입력 객체가 작업 메모리 예산의 작은 일부만 차지하게 한다.
+  const targetBarsPerBatch = Number.isFinite(workerBudgetBytes) && workerBudgetBytes > 0
+    ? Math.max(256, Math.min(8192, Math.floor(workerBudgetBytes / 32768)))
+    : 8192;
   if (
     !jobId ||
     !databasePath ||
@@ -489,28 +496,49 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     // 봉은 KRX 일봉 하나뿐이다(container.ts 조립부와 같은 모양) — db 는 위에서 이미 연
     // handle 을 재사용한다. 워커가 잡 조회로 이미 DB 를 열어 둔 상태라 새로 열 이유가 없다.
     const repository = new KrxDailyCandleRepository(db);
+    const coverage = new CandleCoverageService(db);
     const { fromTsMs, toTsMs } = periodToTsRange(request.period);
     const candleFromTsMs = Date.parse(`${warmupFromDate}T00:00:00Z`);
-    const candles: Candle[] = [];
-    for await (const candle of repository.getCandles({
+    const candleQuery = {
       market: datasetMarket,
       timeframe,
       symbols: unionSymbols,
       fromTsMs: candleFromTsMs,
       toTsMs,
-    })) {
-      candles.push(candle);
+    };
+    const candles: Candle[] = [];
+    const symbolsWithBars = new Set<string>();
+    let candleCount = 0;
+    let tradeCandleCount = 0;
+    let firstLoadedCandleTsMs = Number.POSITIVE_INFINITY;
+    for (const batch of repository.getCandlesByDateBatches(candleQuery, targetBarsPerBatch)) {
+      for (const candle of batch) {
+        candleCount += 1;
+        firstLoadedCandleTsMs = Math.min(firstLoadedCandleTsMs, candle.tsMs);
+        if (!streamCandles) candles.push(candle);
+        if (candle.tsMs >= fromTsMs && candle.tsMs <= toTsMs) {
+          tradeCandleCount += 1;
+          symbolsWithBars.add(candle.symbol);
+        }
+      }
       // 제출 검증의 추정 상한을 실측으로 다시 지킨다 — 제출 후 import 로 봉이 는 경우의 방어선
-      if (candles.length > maxBars) {
+      if (candleCount > maxBars) {
         throw new Error(
           `봉 수가 상한(${maxBars.toLocaleString()})을 넘습니다. 기간이나 종목 수를 줄이세요.`,
         );
       }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      if (cancellation.isRequested()) {
+        activeStage = null;
+        outcome = "CANCELLED";
+        finish("CANCELLED");
+        return;
+      }
     }
-    const tradeCandles = candles.filter(
+    const tradeCandles = streamCandles ? [] : candles.filter(
       (candle) => candle.tsMs >= fromTsMs && candle.tsMs <= toTsMs,
     );
-    if (tradeCandles.length === 0) {
+    if (tradeCandleCount === 0) {
       // 어떤 timeframe 을 찾았는지 밝힌다 — 커버리지가 정상인데 실패하면 여기서 갈린다
       throw new Error(
         `선택한 기간·종목에 ${timeframe} 데이터가 없습니다. 데이터 커버리지를 확인하세요.`,
@@ -524,9 +552,6 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     // 정상 preparation은 기간 내 봉이 하나도 없는 종목을 제외하고 재순위화한다.
     // 이 검사는 제출 뒤 데이터 삭제·직접 enqueue로 고정 schedule이 이미 달라진 경우의
     // 사후 drift 방어선이다. worker가 임의로 재순위화하면 제출 pin이 깨진다.
-    const symbolsWithBars = new Set(
-      tradeCandles.map((candle) => candle.symbol),
-    );
     const emptySymbols = unionSymbols.filter((s) => !symbolsWithBars.has(s));
     if (emptySymbols.length > 0) {
       throw new Error(
@@ -562,12 +587,19 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     //
     // 봉 시점별 컷오프는 두 경우 모두 엔진의 PitFactView 가 담당한다.
     const factRepository = new SqliteFactRepository(db);
-    const financialCutoffBySymbol = financialFactCutoffsFromCandles({
-      period: request.period,
-      schedule,
-      delistedTsMsBySymbol,
-      candles: tradeCandles,
-    });
+    const financialCutoffBySymbol = streamCandles
+      ? financialFactCutoffsFromCoverage({
+          period: request.period,
+          schedule,
+          delistedTsMsBySymbol,
+          candles: coverage,
+        })
+      : financialFactCutoffsFromCandles({
+          period: request.period,
+          schedule,
+          delistedTsMsBySymbol,
+          candles: tradeCandles,
+        });
     const missingExecutionSymbols = unionSymbols.filter(
       (symbol) => !financialCutoffBySymbol.has(symbol),
     );
@@ -591,7 +623,26 @@ async function main(input: { lease: AgentLease }): Promise<void> {
         fact.asOfTsMs <=
           (financialCutoffBySymbol.get(fact.key) ?? Number.NEGATIVE_INFINITY),
     );
-    if (strategy.dataRequirements?.fundamentalsReady !== undefined) {
+    if (streamCandles && strategy.dataRequirements?.fundamentalsReady !== undefined) {
+      const incomplete = await findIncompleteFundamentalCheckpointsFromCoverage({
+        strategy,
+        parameters,
+        period: request.period,
+        schedule,
+        candles: coverage,
+        facts: factRepository,
+        throwIfStopped: () => {
+          if (cancellation.isRequested()) throw new Error("백테스트가 취소되었습니다");
+        },
+      });
+      if (incomplete.length > 0) {
+        throw new Error(
+          "준비 완료 후 전략의 PIT 재무 계정·연속 분기·신선도 조건을 만족하지 못하게 된 " +
+            `종목이 있습니다: ${incomplete.map((item) => `${item.symbol}(${item.date})`).join(", ")} — ` +
+            "실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.",
+        );
+      }
+    } else if (strategy.dataRequirements?.fundamentalsReady !== undefined) {
       const validDatesBySymbol = new Map<string, string[]>();
       for (const candle of tradeCandles) {
         const dates = validDatesBySymbol.get(candle.symbol) ?? [];
@@ -658,12 +709,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     // 거래일 캘린더). 자본변동이 신호/보유에 영향을 줄 수 있는 시작은 실제로 로드한
     // 첫 봉이다. 빈 수년을 기준으로 coverage를 요구하면 준비 plan보다 과도한 옛 연도를
     // 막으면서도 결과 정확도는 늘지 않는다.
-    const firstLoadedCandleDate = new Date(
-      candles.reduce(
-        (minimum, candle) => Math.min(minimum, candle.tsMs),
-        Number.POSITIVE_INFINITY,
-      ),
-    )
+    const firstLoadedCandleDate = new Date(firstLoadedCandleTsMs)
       .toISOString()
       .slice(0, 10);
     const potentiallyRelevantFrom = addCalendarDays(
@@ -787,7 +833,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     assertSafePinnedScheduleIdentities(schedule, { symbolMaster });
 
     inputSize = {
-      candleCount: candles.length,
+      candleCount,
       factCount: facts.length,
       symbolCount: unionSymbols.length,
     };
@@ -809,7 +855,9 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     const runOutcome = await runner.run(
       strategy,
       {
-        candles,
+        ...(streamCandles
+          ? { candleBatches: () => repository.getCandlesByDateBatches(candleQuery, targetBarsPerBatch) }
+          : { candles }),
         initialCash: request.capital.initialCash,
         execution: {
           cost: costProfile,

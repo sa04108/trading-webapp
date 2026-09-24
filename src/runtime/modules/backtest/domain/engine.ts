@@ -18,6 +18,7 @@ import {
   computeMonthlyReturns,
 } from "./metrics.js";
 import { createRng } from "./seeded-rng.js";
+import { RecentCandleHistory } from "./recent-candle-history.js";
 import {
   findRebalanceSpacingViolation,
   rebalanceSpacingViolationMessage,
@@ -39,7 +40,9 @@ import type {
 
 export interface BacktestRunInput {
   /** 기간·심볼 필터가 끝난 확정 봉 전체 (임의 순서 허용 — 엔진이 정렬) */
-  readonly candles: readonly Candle[];
+  readonly candles?: readonly Candle[];
+  /** 날짜·종목 오름차순으로 다시 읽을 수 있는 봉 묶음. 같은 날짜를 묶음 사이에서 나누지 않는다. */
+  readonly candleBatches?: () => Iterable<readonly Candle[]>;
   readonly initialCash: number;
   readonly execution: ExecutionProfile;
   /** 전략 parameterSchema 로 검증이 끝난 파라미터 */
@@ -278,33 +281,93 @@ function* runBacktestSteps(
       }
     }
   }
-  const allSorted = [...input.candles].sort((a, b) =>
-    a.tsMs === b.tsMs ? (a.symbol < b.symbol ? -1 : 1) : a.tsMs - b.tsMs,
-  );
-  const ignoredPostDelistingCandleSymbols = new Set<string>();
-  const sorted = allSorted.filter((candle) => {
-    const delistedTsMs = firstDelistedTsMsBySymbol.get(candle.symbol);
-    if (delistedTsMs === undefined || candle.tsMs < delistedTsMs) return true;
-    ignoredPostDelistingCandleSymbols.add(candle.symbol);
-    return false;
-  });
-
-  // 실제 가격·전략 입력과 결과 시간축을 분리한다. 폐지 뒤 재사용 코드의 봉은 전략에서
-  // 제거하지만, 그 봉이 실행 후반부의 유일한 시장 시계였더라도 CAGR 기간을 줄이면 안 된다.
-  // raw 쪽에는 시각별 개수만 둔다. 가격 Map까지 한 벌 더 만들면 재사용 코드가 한 종목만
-  // 섞여도 거의 모든 timestamp bucket을 복제해 대형 실행의 RSS가 크게 늘어난다.
-  const allBarCountByTs = new Map<number, number>();
-  for (const candle of allSorted) {
-    allBarCountByTs.set(
-      candle.tsMs,
-      (allBarCountByTs.get(candle.tsMs) ?? 0) + 1,
-    );
+  if ((input.candles === undefined) === (input.candleBatches === undefined)) {
+    throw new Error("candles와 candleBatches 중 하나만 지정해야 합니다");
   }
-  const barsByTs = new Map<number, Map<string, Candle>>();
-  for (const candle of sorted) {
-    const bucket = barsByTs.get(candle.tsMs) ?? new Map<string, Candle>();
-    bucket.set(candle.symbol, candle);
-    barsByTs.set(candle.tsMs, bucket);
+  const allSorted = input.candles === undefined
+    ? undefined
+    : [...input.candles].sort((a, b) =>
+      a.tsMs === b.tsMs ? (a.symbol < b.symbol ? -1 : 1) : a.tsMs - b.tsMs,
+    );
+  const batches = input.candleBatches ?? (() => [allSorted ?? []]);
+  function cancelledBeforeExecution(): BacktestRunResult {
+    return {
+      metrics: computeMetrics([], [], [], input.initialCash, 0),
+      openPositions: [], equityPoints: [], drawdownPoints: [], trades: [], fills: [],
+      monthlyReturns: [], warnings: [], cancelled: true, processedBars: 0,
+      delistingLiquidations: [],
+    };
+  }
+  const ignoredPostDelistingCandleSymbols = new Set<string>();
+  const emptyBars = new Map<string, Candle>();
+  function* candleDays(): Generator<{
+    tsMs: number;
+    rawCount: number;
+    bars: Map<string, Candle>;
+  }> {
+    let tsMs: number | undefined;
+    let rawCount = 0;
+    let bars = new Map<string, Candle>();
+    let previousSymbol = "";
+    for (const batch of batches()) {
+      for (const candle of batch) {
+        if (tsMs !== undefined && candle.tsMs < tsMs) {
+          throw new Error("candleBatches는 날짜·종목 오름차순이어야 합니다");
+        }
+        if (tsMs !== undefined && candle.tsMs !== tsMs) {
+          yield { tsMs, rawCount, bars };
+          bars = new Map<string, Candle>();
+          rawCount = 0;
+          previousSymbol = "";
+        }
+        if (previousSymbol && candle.symbol < previousSymbol) {
+          throw new Error("candleBatches는 날짜·종목 오름차순이어야 합니다");
+        }
+        tsMs = candle.tsMs;
+        previousSymbol = candle.symbol;
+        rawCount += 1;
+        const delistedTsMs = firstDelistedTsMsBySymbol.get(candle.symbol);
+        if (delistedTsMs !== undefined && candle.tsMs >= delistedTsMs) {
+          ignoredPostDelistingCandleSymbols.add(candle.symbol);
+        } else {
+          bars.set(candle.symbol, candle);
+        }
+      }
+    }
+    if (tsMs !== undefined) yield { tsMs, rawCount, bars };
+  }
+  function barCursor(): (tsMs: number) => ReadonlyMap<string, Candle> {
+    const iterator = candleDays();
+    let next = iterator.next();
+    return (tsMs) => {
+      while (!next.done && next.value.tsMs < tsMs) next = iterator.next();
+      if (next.done || next.value.tsMs !== tsMs) return emptyBars;
+      const bars = next.value.bars;
+      next = iterator.next();
+      return bars;
+    };
+  }
+
+  // 가격 봉을 쌓지 않고 날짜별 개수·심볼·마지막 유효 가격만 먼저 확인한다.
+  const allBarCountByTs = new Map<number, number>();
+  const strategyTsMs = new Set<number>();
+  const symbolSet = new Set<string>();
+  const lastBarTsMsBySymbol = new Map<string, number>();
+  const lastBarBySymbol = new Map<string, Candle>();
+  let totalBars = 0;
+  for (const day of candleDays()) {
+    // 동기 SQLite 조회 사이에 IPC 취소 메시지를 처리할 시간을 준다.
+    if (input.candleBatches !== undefined) yield;
+    if (hooks.shouldCancel?.()) return cancelledBeforeExecution();
+    allBarCountByTs.set(day.tsMs, day.rawCount);
+    if (input.tradeFromTsMs === undefined || day.tsMs >= input.tradeFromTsMs)
+      totalBars += day.rawCount;
+    if (day.bars.size > 0) strategyTsMs.add(day.tsMs);
+    for (const candle of day.bars.values()) {
+      symbolSet.add(candle.symbol);
+      lastBarTsMsBySymbol.set(candle.symbol, candle.tsMs);
+      lastBarBySymbol.set(candle.symbol, candle);
+    }
   }
   const timeline = [
     ...new Set([
@@ -313,19 +376,7 @@ function* runBacktestSteps(
       ...(marketTradingTsMs ?? []),
     ]),
   ].sort((a, b) => a - b);
-  const symbols = [...new Set(sorted.map((c) => c.symbol))].sort();
-  const totalBars = allSorted.filter(
-    (candle) =>
-      input.tradeFromTsMs === undefined || candle.tsMs >= input.tradeFromTsMs,
-  ).length;
-
-  // 미청산 포지션 스냅샷이 "마지막으로 확인된 가격이 언제 것인지" 를 적는 데 쓴다.
-  const lastBarTsMsBySymbol = new Map<string, number>();
-  const lastBarBySymbol = new Map<string, Candle>();
-  for (const candle of sorted) {
-    lastBarTsMsBySymbol.set(candle.symbol, candle.tsMs);
-    lastBarBySymbol.set(candle.symbol, candle);
-  }
+  const symbols = [...symbolSet].sort();
 
   // 가격은 효력 시각 전 마지막 봉의 종가를 쓰되, 포지션·현금을 그 마지막 거래일에
   // 미리 정리하지 않는다. 장기 거래정지 뒤 폐지되는 종목에서 현금을 수주~수개월 먼저
@@ -339,7 +390,7 @@ function* runBacktestSteps(
   let delistingEventCursor = 0;
 
   // 폐지 직전 마지막 봉은 기존 발행사의 유효한 확정 가격이므로 전략 시간축에 남긴다.
-  const strategyTimeline = [...barsByTs.keys()].sort((a, b) => a - b);
+  const strategyTimeline = [...strategyTsMs].sort((a, b) => a - b);
   const requiredRebalanceGapBars = strategy.requiredRebalanceGapBars ?? 0;
   if (
     !Number.isInteger(requiredRebalanceGapBars) ||
@@ -369,9 +420,30 @@ function* runBacktestSteps(
   // 매수 경쟁이 전략의 RNG 호출 횟수를 바꾸거나, 전략의 난수 사용량이
   // 체결 우선순위를 바꾸지 않도록 같은 seed의 별도 스트림을 쓴다.
   const buyPriorityRng = createRng(input.randomSeed ^ BUY_PRIORITY_SEED_SALT);
-  const historyBySymbol = new Map<string, Candle[]>(
-    symbols.map((s) => [s, []]),
-  );
+  const historyLookbackBars = input.candleBatches === undefined
+    ? undefined
+    : strategy.historyLookbackBars?.(input.parameters);
+  if (input.candleBatches !== undefined &&
+    (historyLookbackBars === undefined ||
+      !Number.isSafeInteger(historyLookbackBars) ||
+      historyLookbackBars < 0)) {
+    throw new Error(`${strategy.id} 전략은 분할 실행의 이력 상한을 선언해야 합니다`);
+  }
+  // 거래량 한도는 전략이 이력을 읽지 않아도 직전 봉을 필요로 한다.
+  const retainedHistoryBars = historyLookbackBars === undefined
+    ? undefined
+    : Math.max(1, historyLookbackBars);
+  const historyBySymbol = retainedHistoryBars === undefined
+    ? new Map<string, Candle[]>(symbols.map((symbol) => [symbol, []]))
+    : undefined;
+  const recentHistoryBySymbol = retainedHistoryBars === undefined
+    ? undefined
+    : new Map(symbols.map((symbol) => [
+        symbol, new RecentCandleHistory(symbol, retainedHistoryBars),
+      ]));
+  const historyFor = (symbol: string): readonly Candle[] =>
+    recentHistoryBySymbol?.get(symbol)?.asArray() ??
+    historyBySymbol?.get(symbol) ?? [];
   const lastCloseBySymbol = new Map<string, number>();
   const positions = new Map<string, Position>();
   // Candle과 주문은 단축코드만 가지므로, 한 번 폐지 경계를 지난 코드를 새 발행사와
@@ -454,8 +526,11 @@ function* runBacktestSteps(
   // schedule과 시장 거래일력이 있는 생산 실행에서는 전략 초기화 전에 전체를 검사한다.
   // 실제 거래불가일과 이미 폐지된 코드는 정상 공백이다.
   if (marketTradingTsMs !== undefined && scheduleSets.length > 0) {
+    const coverageBars = barCursor();
     let coverageScheduleIndex = 0;
     for (const tsMs of timeline) {
+      if (input.candleBatches !== undefined) yield;
+      if (hooks.shouldCancel?.()) return cancelledBeforeExecution();
       if (input.tradeFromTsMs !== undefined && tsMs < input.tradeFromTsMs)
         continue;
       const allBarCount = allBarCountByTs.get(tsMs) ?? 0;
@@ -471,7 +546,7 @@ function* runBacktestSteps(
       ) {
         coverageScheduleIndex += 1;
       }
-      const bars = barsByTs.get(tsMs);
+      const bars = coverageBars(tsMs);
       const nonTrading = input.nonTradingSymbolsByTsMs?.get(tsMs);
       const missingSymbols = [
         ...(scheduleSets[coverageScheduleIndex] as ReadonlySet<string>),
@@ -589,6 +664,7 @@ function* runBacktestSteps(
     );
   };
 
+  const executionBars = barCursor();
   for (const tsMs of timeline) {
     if (hooks.shouldCancel?.()) {
       cancelled = true;
@@ -596,7 +672,7 @@ function* runBacktestSteps(
     }
 
     const allBarCount = allBarCountByTs.get(tsMs) ?? 0;
-    const bars = barsByTs.get(tsMs) ?? new Map<string, Candle>();
+    const bars = executionBars(tsMs);
     nonTradingNow = input.nonTradingSymbolsByTsMs?.get(tsMs);
     const delistingSymbolsThisBar = new Set<string>();
     while (
@@ -634,7 +710,8 @@ function* runBacktestSteps(
     priorVolumeBySymbolThisBar = new Map(
       [...bars.keys()].map((symbol) => [
         symbol,
-        historyBySymbol.get(symbol)?.at(-1)?.volume ?? 0,
+        recentHistoryBySymbol?.get(symbol)?.lastVolume() ??
+          historyBySymbol?.get(symbol)?.at(-1)?.volume ?? 0,
       ]),
     );
     volumeUnitRatioBySymbolThisBar = new Map();
@@ -1025,7 +1102,10 @@ function* runBacktestSteps(
     // 봉 이력·마지막 종가 갱신
     for (const [symbol, bar] of bars) {
       if (contextRetiredSymbols.has(symbol)) continue;
-      (historyBySymbol.get(symbol) as Candle[]).push(bar);
+      if (recentHistoryBySymbol !== undefined)
+        recentHistoryBySymbol.get(symbol)!.append(bar);
+      else
+        historyBySymbol!.get(symbol)!.push(bar);
       lastCloseBySymbol.set(symbol, bar.close);
     }
 
@@ -1052,7 +1132,7 @@ function* runBacktestSteps(
         getHistory: (symbol) =>
           contextRetiredSymbols.has(symbol)
             ? []
-            : (historyBySymbol.get(symbol) ?? []),
+            : historyFor(symbol),
         portfolio: { cash, equity: markToMarket(), positions },
         rng,
         fundamentals: (symbol) =>
@@ -1102,7 +1182,7 @@ function* runBacktestSteps(
       getHistory: (symbol) =>
         contextRetiredSymbols.has(symbol)
           ? []
-          : (historyBySymbol.get(symbol) ?? []),
+          : historyFor(symbol),
       portfolio: portfolioView,
       rng,
       fundamentals: (symbol) =>

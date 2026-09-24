@@ -94,6 +94,8 @@ export interface TradingStrategy<TParameters, TState> {
     readonly priceWarmupBars?: (parameters: TParameters) => number;
     readonly requiresCorporateActions?: boolean;
   };
+  /** 분할 실행에서 전략에 전달할 종목별 최근 봉 수. 선언하지 않은 전략은 분할 실행하지 않는다. */
+  readonly historyLookbackBars?: (parameters: TParameters) => number;
   /**
    * 한 리밸런스 신호 뒤 다음 신호 전까지 필요한 비리밸런스 실제 거래 봉 수.
    *

@@ -45,6 +45,7 @@ export const lowPerHighRoeRankStrategy: TradingStrategy<
   description:
     "PIT TTM 순이익 기준 저PER과 고ROE를 결합하는 동일가중 연구 전략",
   parameterSchema: lowPerHighRoeRankParameters,
+  historyLookbackBars: () => 1,
   requiredRebalanceGapBars: 1,
   dataRequirements: {
     fundamentalLookbackQuarters: 4,

@@ -128,6 +128,7 @@ export const rsiReversionStrategy: TradingStrategy<
     "RSI 과매도 종목을 사서 RSI 가 회복하면 팝니다. 반대로 움직이는 종목(예: 레버리지·인버스 쌍)을 " +
     "함께 넣으면 같은 묶음에서 한 종목만 보유합니다.",
   parameterSchema: rsiReversionParameters,
+  historyLookbackBars: () => 1,
   dataRequirements: {
     priceWarmupBars: (parameters) =>
       Math.max(
