@@ -1,0 +1,12 @@
+# 수동 설치용: 앱 프로세스가 이벤트 루프를 막아도 systemd가 별도 프로세스를 15초마다 시작한다.
+[Unit]
+Description=Run Quant Platform host latency sample every 15 seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=15s
+AccuracySec=1s
+Unit=quant-host-sample.service
+
+[Install]
+WantedBy=timers.target

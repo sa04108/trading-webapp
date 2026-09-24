@@ -9,6 +9,7 @@ import { registerSymbols } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 import { krxDailyBars } from '../../src/runtime/shared/db/schema.js';
 import { PreparationReferenceError } from '../../src/server/modules/backtest/application/preparation-reference-service.js';
+import { withDiagnostics } from '../../src/runtime/shared/diagnostics.js';
 
 const input: SubmissionValidationInput = {
   body: {
@@ -94,7 +95,10 @@ appTest('실제 읽기 전용 worker 결과는 같은 검증과 일치하고 변
   expect(direct, JSON.stringify(direct)).toMatchObject({ ok: true });
   const validator = new ForkedSubmissionValidator(c.config.databasePath, c.database.dataPath, { memoryBudget: () => 192 * 1024 * 1024 });
   try {
-    await expect(validator.validate(request)).resolves.toEqual(direct);
+    const diagnostics = vi.fn();
+    await expect(withDiagnostics({ reqId: 'submission-test' }, diagnostics, () => validator.validate(request))).resolves.toEqual(direct);
+    expect(diagnostics.mock.calls.map(([entry]) => entry.stage)).toContain('submission.coverage');
+    expect(diagnostics.mock.calls.every(([entry]) => entry.reqId === 'submission-test')).toBe(true);
     expect(datasetIdentity(c.database.sqlite)).toEqual(request.snapshot);
     c.database.sqlite.prepare("UPDATE krx_daily_bars SET close = 106 WHERE date = '2026-01-06'").run();
     await expect(validator.validate(request)).rejects.toBeInstanceOf(PreparationReferenceError);

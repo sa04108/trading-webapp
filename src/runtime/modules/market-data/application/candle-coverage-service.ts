@@ -1,3 +1,4 @@
+import { measureSync } from "../../../shared/diagnostics.js";
 import {
   and,
   asc,
@@ -39,7 +40,7 @@ export class CandleCoverageService {
   getCoverage(codes: readonly string[]): CandleCoverageRow[] {
     if (codes.length === 0) return [];
 
-    const rows = this.db
+    const rows = measureSync("db.candles.all_history", () => this.db
       .select({
         code: krxDailyBars.shortCode,
         firstDate: min(krxDailyBars.date),
@@ -49,7 +50,7 @@ export class CandleCoverageService {
       .from(krxDailyBars)
       .where(inArray(krxDailyBars.shortCode, [...codes]))
       .groupBy(krxDailyBars.shortCode)
-      .all();
+      .all());
 
     const byCode = new Map(rows.map((row) => [row.code, row]));
 
@@ -85,7 +86,7 @@ export class CandleCoverageService {
     if (codes.length === 0) return [];
     const from = new Date(fromTsMs).toISOString().slice(0, 10);
     const to = new Date(toTsMs).toISOString().slice(0, 10);
-    const rows = this.db
+    const rows = measureSync("db.candles.period", () => this.db
       .select({
         code: krxDailyBars.shortCode,
         firstDate: min(krxDailyBars.date),
@@ -102,7 +103,7 @@ export class CandleCoverageService {
         ),
       )
       .groupBy(krxDailyBars.shortCode)
-      .all();
+      .all());
     const byCode = new Map(rows.map((row) => [row.code, row]));
     return codes.map((code) => {
       const row = byCode.get(code);
@@ -131,7 +132,7 @@ export class CandleCoverageService {
     const result = new Map<string, string[]>();
     for (const code of codes) result.set(code, []);
     if (codes.length === 0) return result;
-    const rows = this.db
+    const rows = measureSync("db.candles.dates_by_symbol", () => this.db
       .select({ code: krxDailyBars.shortCode, date: krxDailyBars.date })
       .from(krxDailyBars)
       .where(
@@ -143,7 +144,7 @@ export class CandleCoverageService {
         ),
       )
       .orderBy(asc(krxDailyBars.shortCode), asc(krxDailyBars.date))
-      .all();
+      .all());
     for (const row of rows) result.get(row.code)?.push(row.date);
     return result;
   }
@@ -185,7 +186,7 @@ export class CandleCoverageService {
         ),
       );
       if (windowClause === undefined) continue;
-      const rows = this.db
+      const rows = measureSync("db.candles.execution_windows", () => this.db
         .select({
           code: krxDailyBars.shortCode,
           lastDate: max(krxDailyBars.date),
@@ -198,7 +199,7 @@ export class CandleCoverageService {
           ),
         )
         .groupBy(krxDailyBars.shortCode)
-        .all();
+        .all());
       for (const row of rows) {
         if (row.lastDate === null) continue;
         const tsMs = dateToTsMs(row.lastDate);
@@ -222,7 +223,7 @@ export class CandleCoverageService {
     if (codes.length === 0) return [];
     const from = new Date(fromTsMs).toISOString().slice(0, 10);
     const to = new Date(toTsMs).toISOString().slice(0, 10);
-    return this.db
+    return measureSync("db.candles.timeline", () => this.db
       .select({ date: krxDailyBars.date })
       .from(krxDailyBars)
       .where(
@@ -237,6 +238,6 @@ export class CandleCoverageService {
       .orderBy(asc(krxDailyBars.date))
       .all()
       .map((row) => dateToTsMs(row.date))
-      .filter((tsMs) => Number.isFinite(tsMs) && tsMs > 0);
+      .filter((tsMs) => Number.isFinite(tsMs) && tsMs > 0));
   }
 }

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { measureAsync } from "../../../../runtime/shared/diagnostics.js";
 import { periodToTsRange, type BacktestRequest } from "../../../../shared/schemas/backtest-request.js";
 import type { ProvenancePin } from "../../../../shared/schemas/provenance-pin.js";
 import type { Clock } from "../../../../runtime/shared/clock.js";
@@ -554,9 +555,9 @@ export function createSubmissionValidator(deps: SubmissionValidationDeps) {
       // 캐시는 한 요청의 검증 안에서만 공유한다. DB 변경 뒤 재사용하지 않는다.
       coverageCache.clear();
       const snapshot = datasetIdentity(deps.database.sqlite);
-      const result = await validateSubmission(body, preview);
+      const result = await measureAsync("submission.coverage", () => validateSubmission(body, preview), { logStart: true, itemCount: preview.unionSymbols.length });
       if (!result.ok) return result;
-      const fundamentalsIssue = await checkFundamentalsRequirement(body, result.resolved.unionSymbols, result.resolved.schedule);
+      const fundamentalsIssue = await measureAsync("submission.fundamentals", () => checkFundamentalsRequirement(body, result.resolved.unionSymbols, result.resolved.schedule), { logStart: true, itemCount: result.resolved.unionSymbols.length });
       return { ...result, fundamentalsIssue, snapshot };
     },
   };

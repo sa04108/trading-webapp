@@ -15,6 +15,7 @@ import { StrategyRegistry } from "../runtime/modules/strategy/application/strate
 import { createSubmissionValidator, type SubmissionValidationInput } from "../server/modules/backtest/application/submission-validation.js";
 import { assertSubmissionSnapshot } from "../server/modules/backtest/application/submission-snapshot.js";
 import { PreparationReferenceError } from "../server/modules/backtest/application/preparation-reference-service.js";
+import { withDiagnostics } from "../runtime/shared/diagnostics.js";
 
 // 부모가 사라지면 동기 SQL 실행도 OS 기본 종료 처리로 중단한다.
 process.on("disconnect", () => process.exit(1));
@@ -44,7 +45,7 @@ process.once("message", async (input: SubmissionValidationInput) => {
         fetchIssueBaseInfo: async () => { throw new Error("제출 검증 중 수집은 허용되지 않습니다"); },
       },
     });
-    const output = await createSubmissionValidator({
+    const validator = createSubmissionValidator({
       database, clock, symbolMaster,
       strategies: new StrategyRegistry(),
       symbolService: new SymbolService(database.db, clock, audit),
@@ -53,7 +54,10 @@ process.once("message", async (input: SubmissionValidationInput) => {
       financialFacts: new FinancialFactAvailabilityService(database.db),
       facts: new SqliteFactRepository(database.db),
       maxBacktestBars: () => input.maxBars,
-    }).validate(input.body, input.preview);
+    });
+    const output = await withDiagnostics({}, (diagnostic) => {
+      process.send?.({ type: "diagnostic", diagnostic }, () => {});
+    }, () => validator.validate(input.body, input.preview));
     sqlite.exec("ROLLBACK");
     database.close();
     database = undefined;

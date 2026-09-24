@@ -1,4 +1,5 @@
 import { datasetIdentity } from "../../../../runtime/shared/db/database-layout.js";
+import { withDiagnostics, measureAsync } from "../../../../runtime/shared/diagnostics.js";
 import { MAX_BACKTEST_BARS } from "../domain/bar-estimate.js";
 import { createSubmissionValidator, preparedPreviewToResolved, pinnedScheduleIdentityError, validateStaticSubmission as validateStatic, type FundamentalsRequirementIssue, type SubmissionValidator } from "../application/submission-validation.js";
 import type { PeriodValidationDto } from "../../../../shared/schemas/period-validation.js";
@@ -465,10 +466,15 @@ export function registerBacktestRoutes(
     http?.reply.raw.once("close", onClose);
     if (http?.reply.raw.destroyed) abort.abort();
     try {
-      return await deps.submissionValidator.validate({
+      return await withDiagnostics({ reqId: http?.request.id, preparationJobId: preview.preparationJobId },
+        (fields) => {
+          const logger = http?.request.log ?? app.log;
+          if (fields.outcome === "FAILED") logger.warn(fields, "제출 검증 단계 실패");
+          else logger.info(fields, "제출 검증 단계");
+        }, () => measureAsync("submission.validation", () => deps.submissionValidator!.validate({
         body, preview, maxBars: deps.maxBacktestBars?.() ?? MAX_BACKTEST_BARS,
         nowMs: clock.now(), snapshot: datasetIdentity(deps.database.sqlite),
-      }, abort.signal);
+      }, abort.signal), { logStart: true, itemCount: preview.unionSymbols.length }));
     } finally {
       http?.reply.raw.off("close", onClose);
     }

@@ -1,4 +1,6 @@
 import { ProviderRequestBlockedError } from "../shared/provider-request-policy.js";
+import { registerRequestObservability } from "../shared/request-observability.js";
+import { startRuntimeObserver } from "../shared/runtime-observer.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -54,6 +56,7 @@ export async function buildServer(
     trustProxy: config.trustProxyLoopback ? "127.0.0.1" : false,
     bodyLimit: 10 * 1024 * 1024,
   });
+  registerRequestObservability(app);
 
   app.addHook("preClose", async () => {
     await container.submissionValidator?.stop();
@@ -244,6 +247,9 @@ export async function buildServer(
   // 첫 요청 전에 로그인 타이밍 균등화용 더미 해시를 준비한다 (콜드스타트 타이밍 노출 차단).
   // buildServer 를 거치는 모든 진입점(main, E2E, 테스트)이 자동으로 포함된다.
   await container.authService.ready();
+
+  const runtimeObserver = startRuntimeObserver(app.log);
+  app.addHook("onClose", async () => { runtimeObserver.stop(); });
 
   return app;
 }

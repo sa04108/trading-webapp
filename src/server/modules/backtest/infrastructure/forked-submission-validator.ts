@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { availableServerResources, processRss } from "../../../../agent/resources.js";
 import type { SubmissionValidationInput, SubmissionValidationResult, SubmissionValidator } from "../application/submission-validation.js";
 import { PreparationReferenceError } from "../application/preparation-reference-service.js";
+import { recordDiagnostic, type StageDiagnostic } from "../../../../runtime/shared/diagnostics.js";
 
 export class SubmissionValidationUnavailableError extends Error {
   constructor(message: string, readonly statusCode: number = 503) { super(message); }
@@ -54,6 +55,8 @@ export class ForkedSubmissionValidator implements SubmissionValidator {
     const budget = Math.min(192 * 1024 * 1024, this.options.memoryBudget?.() ?? resources!.budgetBytes);
     if (budget < 128 * 1024 * 1024) throw new SubmissionValidationUnavailableError("제출 검증을 위한 메모리 여유가 부족합니다. 실행 중 작업이 끝난 뒤 다시 시도하세요.", 507);
     const isTs = import.meta.url.endsWith(".ts");
+    const started = performance.now();
+    recordDiagnostic({ event: "diagnostic.stage.started", stage: "submission.worker" });
     return new Promise((resolve, reject) => {
       const child: ChildProcess = (this.options.forkProcess ?? fork)(fileURLToPath(new URL(`../../../../workers/submission-validation-child.${isTs ? "ts" : "js"}`, import.meta.url)), [], {
         env: { NODE_ENV: process.env.NODE_ENV ?? "production", DATABASE_PATH: this.databasePath, DATA_DATABASE_PATH: this.dataPath,
@@ -64,6 +67,7 @@ export class ForkedSubmissionValidator implements SubmissionValidator {
       });
       let output: SubmissionValidationResult | undefined;
       let error: Error | undefined;
+      let lastPhase = "BOOTSTRAP";
       let killTimer: NodeJS.Timeout | undefined;
       const terminate = (reason: Error) => {
         if (killTimer) return;
@@ -80,8 +84,12 @@ export class ForkedSubmissionValidator implements SubmissionValidator {
           terminate(new SubmissionValidationUnavailableError("제출 검증의 메모리 상한을 넘었습니다.", 507));
       }, 500);
       memory.unref();
-      child.on("message", (message: { type: string; output?: SubmissionValidationResult; error?: string }) => {
+      child.on("message", (message: { type: string; output?: SubmissionValidationResult; error?: string; diagnostic?: StageDiagnostic }) => {
         if (message.type === "completed") output = message.output;
+        else if (message.type === "diagnostic" && message.diagnostic) {
+          lastPhase = message.diagnostic.stage;
+          recordDiagnostic(message.diagnostic);
+        }
         else if (message.type === "stale") error = new PreparationReferenceError();
         else if (message.type === "failed") error = new Error(message.error ?? "제출 검증 실패");
       });
@@ -89,6 +97,8 @@ export class ForkedSubmissionValidator implements SubmissionValidator {
       child.once("close", (code) => {
         clearTimeout(timeout); clearTimeout(killTimer); clearInterval(memory);
         signal.removeEventListener("abort", abort);
+        recordDiagnostic({ event: "diagnostic.stage.finished", stage: "submission.worker", lastPhase,
+          elapsedMs: performance.now() - started, outcome: !error && code === 0 && output ? "COMPLETED" : "FAILED" });
         if (error) reject(error);
         else if (code === 0 && output) resolve(output);
         else reject(new SubmissionValidationUnavailableError("제출 검증 프로세스가 종료되었습니다."));

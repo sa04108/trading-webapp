@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { Clock } from "../../../../runtime/shared/clock.js";
 import type { Logger } from "../../../shared/logger.js";
+import { measureAsync, measureSync } from "../../../../runtime/shared/diagnostics.js";
 import {
   kstDateOf,
 } from "../../../../runtime/modules/market-data/domain/kst-date.js";
@@ -494,7 +495,11 @@ export class FactSyncService {
             rawSnapshotPolicy,
           };
           const { financialFacts, actionFacts, financialGaps, actionGaps } =
-            await strategy.fetch(scoped, sourceHooks);
+            await measureAsync(
+              "fact_sync.fetch_source",
+              () => strategy.fetch(scoped, sourceHooks),
+              { itemCount: 1 },
+            );
           assertFetchedFactScopes(
             symbol,
             shareYears,
@@ -533,19 +538,22 @@ export class FactSyncService {
 
           // work unit마다 저장·커버리지를 닫는다 — 다음 연도 전에 quota로 멈춰도 이
           // 연도는 증분 재실행에서 건너뛸 수 있다.
-          const fingerprintBefore = await this.storedFactsFingerprint(symbol);
+          const fingerprintBefore = await measureAsync(
+            "fact_sync.fingerprint_before",
+            () => this.storedFactsFingerprint(symbol),
+          );
           if (strategy.includeFinancials) {
-            await this.repository.replaceSymbolFinancialFactsForYear(
+            await measureAsync("fact_sync.replace_financial", () => this.repository.replaceSymbolFinancialFactsForYear(
               symbol,
               year,
               financialSnapshot,
-            );
+            ), { itemCount: financialSnapshot.length });
           }
-          await this.repository.replaceSymbolCorporateActionFactsForYear(
+          await measureAsync("fact_sync.replace_actions", () => this.repository.replaceSymbolCorporateActionFactsForYear(
             symbol,
             year,
             actionSnapshot,
-          );
+          ), { itemCount: actionSnapshot.length });
 
           // 저장 성공이 리포트의 확정 경계다. 뒤의 coverage나 버전 갱신이 실패해도
           // repository에는 이미 팩트가 남았으므로, 이 수치를 먼저 반영해야 보고서가
@@ -566,17 +574,17 @@ export class FactSyncService {
               });
             }
           }
-          await this.bumpVersionIfChanged(symbol, fingerprintBefore);
+          await measureAsync("fact_sync.version_update", () => this.bumpVersionIfChanged(symbol, fingerprintBefore));
 
           // 파서 재생은 공시 확인이 아니다. 일일 목록 checkpoint를 앞당기지 않는다.
           const coverageTimestamp = coverageWatermarks.get(symbol) ?? 0;
-          strategy.recordCoverage(
+          measureSync("fact_sync.record_coverage", () => strategy.recordCoverage(
             symbol,
             [year],
             currentFinancialGaps,
             currentActionGapDetails,
             coverageTimestamp,
-          );
+          ), { itemCount: 1 });
           // 연도 저장·버전·coverage를 마친 뒤에만 다른 요청에 실행을 양보한다.
           await yieldToEventLoop();
         }

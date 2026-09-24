@@ -9,6 +9,7 @@ import {
   type AgentLease,
 } from "../../../../shared/agent-protocol.js";
 import type { DatasetSnapshots } from "./dataset-snapshots.js";
+import { measureAsync, withDiagnostics } from "../../../../runtime/shared/diagnostics.js";
 import type {
   ExecutionActivity,
   ExecutionProgress,
@@ -209,6 +210,10 @@ export class AgentDataQueue {
       VALUES (?, ?, ?, ?) ON CONFLICT(kind, job_id) DO UPDATE SET request_id = excluded.request_id, requested_version = excluded.requested_version`,
       )
       .run(kind, jobId, id, requestedVersion);
+    this.logger.info(
+      { event: "agent.data_request.mapped", jobId, dataRequestId: id, requestKind: request.kind },
+      "작업과 공유 데이터 요청을 연결했습니다",
+    );
   }
 
   tick(): void {
@@ -237,11 +242,23 @@ export class AgentDataQueue {
       .run(Date.now(), Date.now(), row.id);
     this.notifyWaiters(row.id);
     let lastSavedAt = 0;
+    let lastPhase = "CHECKING_INPUT";
+    let phaseStarted = performance.now();
     try {
-      await this.collect(
-        agentDataRequestSchema.parse(JSON.parse(row.request_json)),
-        () => this.stopped,
-        (progress) => {
+      await withDiagnostics(
+        { dataRequestId: row.id, retryCount: row.attempts },
+        (fields) => fields.outcome === "FAILED" ? this.logger.warn(fields, "데이터 수집 단계 실패") : this.logger.info(fields, "데이터 수집 단계"),
+        () => measureAsync("agent_data.collect", () => this.collect(
+          agentDataRequestSchema.parse(JSON.parse(row.request_json)),
+          () => this.stopped,
+          (progress) => {
+          if (lastPhase !== progress.activity) {
+            this.logger.info({ event: "collection.phase", dataRequestId: row.id,
+              phase: progress.activity, previousPhase: lastPhase, previousPhaseElapsedMs: performance.now() - phaseStarted,
+              completed: progress.completed, total: progress.total }, "데이터 수집 단계 변경");
+            lastPhase = progress.activity;
+            phaseStarted = performance.now();
+          }
           const now = Date.now();
           if (now - lastSavedAt < 1000 && progress.completed < progress.total)
             return;
@@ -266,7 +283,8 @@ export class AgentDataQueue {
               row.id,
             );
           this.notifyWaiters(row.id);
-        },
+          },
+        ), { logStart: true }),
       );
       if (this.stopped) return;
       this.database.sqlite
@@ -275,7 +293,12 @@ export class AgentDataQueue {
         )
         .run(Date.now(), Date.now(), row.id);
       this.notifyWaiters(row.id);
-      const manifest = await this.snapshots.ensureLatest();
+      const manifest = await withDiagnostics({ dataRequestId: row.id, retryCount: row.attempts },
+        (fields) => fields.outcome === "FAILED" ? this.logger.warn(fields, "데이터 게시 단계 실패") : this.logger.info(fields, "데이터 게시 단계"), () => measureAsync(
+        "agent_data.publish_snapshot",
+        () => this.snapshots.ensureLatest(),
+        { logStart: true },
+      ));
       this.database.sqlite
         .prepare(
           "UPDATE agent_data_requests SET status = 'COMPLETED', available_version = ?, error = NULL, updated_at_ms = ? WHERE id = ?",
@@ -301,6 +324,15 @@ export class AgentDataQueue {
           : quota
             ? nextMidnight
             : Date.now() + 5000 * 2 ** attempts;
+      this.logger.warn(
+        {
+          event: "agent.data_request.deferred", dataRequestId: row.id,
+          retryCount: attempts, lastPhase,
+          disposition: scheduledRetry ? "RETRY" : blocked ? "BLOCKED" : quota ? "QUOTA" : attempts >= 3 ? "FAILED" : "RETRY",
+          nextAttemptAtMs: next,
+        },
+        "데이터 수집 요청을 다시 예약했습니다",
+      );
       this.database.sqlite
         .prepare(
           "UPDATE agent_data_requests SET status = ?, attempts = ?, next_attempt_at_ms = ?, error = ?, updated_at_ms = ? WHERE id = ?",
