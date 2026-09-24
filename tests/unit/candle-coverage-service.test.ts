@@ -1,3 +1,4 @@
+import { and, eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { test as base } from '../helpers/test-fixtures.js';
 import { krxDailyBars } from '../../src/server/shared/db/schema.js';
@@ -60,6 +61,44 @@ describe('CandleCoverageService', () => {
         barCount: 1,
       },
     ]);
+  });
+
+  it('유효 일봉 집계는 부분 인덱스를 쓰고, 유효성 변경을 즉시 반영한다', ({ ctx, service }) => {
+    const sqlite = ctx.container.database.sqlite;
+    const plan = sqlite.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT short_code, min(date), max(date), count(*)
+      FROM data.krx_daily_bars
+      WHERE short_code IN (?)
+        AND date >= ? AND date <= ?
+        AND market IN ('KOSPI', 'KOSDAQ')
+        AND open > 0 AND high > 0 AND low > 0 AND close > 0 AND volume >= 0
+        AND high >= low AND high >= open AND high >= close
+        AND low <= open AND low <= close
+      GROUP BY short_code
+    `).all('005930', '2026-08-05', '2026-08-07') as Array<{ detail: string }>;
+
+    expect(plan.map((row) => row.detail).join('\n')).toContain(
+      'idx_krx_daily_bars_valid_code_date',
+    );
+
+    ctx.container.database.db.insert(krxDailyBars).values({
+      shortCode: '035420', date: '2026-08-06', market: 'KOSPI',
+      open: 100, high: 90, low: 80, close: 85, volume: 100,
+    }).run();
+    const coverage = () => service.getCoverageBetween(
+      ['035420'], midnight('2026-08-06'), midnight('2026-08-06'),
+    );
+
+    expect(coverage()[0]?.barCount).toBe(0);
+    ctx.container.database.db.update(krxDailyBars).set({ high: 110 })
+      .where(and(eq(krxDailyBars.shortCode, '035420'), eq(krxDailyBars.date, '2026-08-06')))
+      .run();
+    expect(coverage()[0]?.barCount).toBe(1);
+    ctx.container.database.db.update(krxDailyBars).set({ market: 'KONEX' })
+      .where(and(eq(krxDailyBars.shortCode, '035420'), eq(krxDailyBars.date, '2026-08-06')))
+      .run();
+    expect(coverage()[0]?.barCount).toBe(0);
   });
 
   it('기간 경계를 포함해 여러 종목의 날짜를 DISTINCT 타임라인으로 준다', ({ ctx, service }) => {

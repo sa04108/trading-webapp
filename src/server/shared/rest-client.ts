@@ -1,4 +1,5 @@
 import type { Logger } from "./logger.js";
+import { measureAsync } from "../../runtime/shared/diagnostics.js";
 
 /**
  * 공통 REST 클라이언트 (스펙 §13):
@@ -102,14 +103,14 @@ export class RestClient {
 
     for (;;) {
       init.signal?.throwIfAborted();
-      await this.respectRateLimit(group);
+      await measureAsync("rest.rate_limit_wait", () => this.respectRateLimit(group));
       const token = await this.getToken();
       init.signal?.throwIfAborted();
       hooks.beforeAttempt?.();
 
       let response: Response;
       try {
-        response = await this.fetchImpl(`${this.options.baseUrl}${path}`, {
+        response = await measureAsync("rest.fetch_headers", () => this.fetchImpl(`${this.options.baseUrl}${path}`, {
           ...(init.signal ? { signal: init.signal } : {}),
           method: init.method ?? "GET",
           headers: {
@@ -120,7 +121,7 @@ export class RestClient {
             ...init.headers,
           },
           ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-        });
+        }));
       } catch (error) {
         init.signal?.throwIfAborted();
         hooks.onTransientFailure?.();
@@ -129,7 +130,10 @@ export class RestClient {
 
       if (response.ok) {
         try {
-          return (await response.json()) as T;
+          return await measureAsync(
+            "rest.response_body_and_json",
+            async () => (await response.json()) as T,
+          );
         } catch (error) {
           init.signal?.throwIfAborted();
           // 응답 본문을 받는 도중 끊긴 연결도 재시도하되 JSON 형식 오류는 그대로 보고한다.

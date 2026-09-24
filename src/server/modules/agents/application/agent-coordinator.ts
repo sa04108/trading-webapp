@@ -71,6 +71,8 @@ export class AgentCoordinator {
   private readonly resultAbort = new AbortController();
   private readonly progressEpoch = randomUUID();
   private readonly progressRevisions = new Map<string, { signature: string; revision: number }>();
+  private lastQueueDiagnosticAt = Number.NEGATIVE_INFINITY;
+  private readonly preparationPhases = new Map<string, { phase: string; pass: number; started: number }>();
 
   constructor(
     private readonly database: DatabaseHandle,
@@ -206,15 +208,27 @@ export class AgentCoordinator {
     };
     if (message.type === "HEARTBEAT") {
       if (message.kind === "PREPARATION") {
+        const result = this.preparations.heartbeat(clientId, identity, message.preparationProgress);
+        if (result.accepted && message.preparationProgress) {
+          const progress = message.preparationProgress;
+          const key = `${message.jobId}:${message.attempt}`;
+          const previous = this.preparationPhases.get(key);
+          if (!previous || previous.phase !== progress.phase || previous.pass !== progress.resolutionPass) {
+            this.logger.info({ event: "preparation.phase", jobId: message.jobId, attempt: message.attempt,
+              clientId, phase: progress.phase, resolutionPass: progress.resolutionPass,
+              previousPhase: previous?.phase, previousPhaseElapsedMs: previous ? performance.now() - previous.started : undefined,
+              doneSymbols: progress.doneSymbols, totalSymbols: progress.totalSymbols,
+            }, "미리보기 계산 단계 변경");
+            // 이전 임대의 마지막 메시지가 유실돼도 진단 상태가 무한히 남지 않는다.
+            if (this.preparationPhases.size >= 256) this.preparationPhases.delete(this.preparationPhases.keys().next().value!);
+            this.preparationPhases.set(key, { phase: progress.phase, pass: progress.resolutionPass, started: performance.now() });
+          }
+        }
         this.send(connection, {
           type: "LEASE",
           kind: message.kind,
           ...identity,
-          ...this.preparations.heartbeat(
-            clientId,
-            identity,
-            message.preparationProgress,
-          ),
+          ...result,
         });
       } else {
         if (!this.ownsBacktest(clientId, message.jobId)) {
@@ -306,6 +320,7 @@ export class AgentCoordinator {
         runnerVersion: this.runnerVersion, diagnostics: message.result?.diagnostics,
       }, createAuditLogService(this.database.db, systemClock, this.logger), this.logger);
     }
+    if (accepted) this.preparationPhases.delete(`${message.jobId}:${message.attempt}`);
     this.send(connection, {
       type: "ACK",
       kind: message.kind,
@@ -564,8 +579,10 @@ export class AgentCoordinator {
         this.localConnection &&
         this.available(LOCAL_AGENT_ID, this.localConnection)
       )
-    )
+    ) {
+      this.logQueueWait();
       return;
+    }
     const dataset = await this.snapshots.ensureLatest();
     if (this.stopped) return;
     // 게시를 기다리는 동안 연결된 장치까지 다시 확인한 뒤 서버의 계산 슬롯을 사용한다.
@@ -574,6 +591,32 @@ export class AgentCoordinator {
     if (this.localClient && this.localConnection) {
       this.refreshLocalCapacity();
       this.assign(LOCAL_AGENT_ID, this.localConnection, dataset);
+    }
+    this.logQueueWait();
+  }
+
+  /** 큐 대기를 실행 실패와 구분하고, 같은 상태는 분당 한 번만 기록한다. */
+  private logQueueWait(): void {
+    const now = Date.now();
+    if (now - this.lastQueueDiagnosticAt < 60_000) return;
+    this.lastQueueDiagnosticAt = now;
+    const jobs = this.database.sqlite.prepare(`SELECT id, estimated_bars AS estimatedBars, created_at_ms AS createdAtMs
+      FROM backtest_jobs WHERE status = 'QUEUED' ORDER BY created_at_ms LIMIT 20`).all() as Array<{ id: string; estimatedBars: number; createdAtMs: number }>;
+    const connected = [...this.connections, ...(this.localConnection ? [[LOCAL_AGENT_ID, this.localConnection] as const] : [])]
+      .filter(([id, connection]) => connection.ready && connection.socket.readyState === 1 &&
+        (id === LOCAL_AGENT_ID || (now - connection.lastMessageAt <= 60_000 && this.registry.active(id))));
+    for (const job of jobs) {
+      const capable = connected.filter(([, connection]) => connection.maxBars >= job.estimatedBars);
+      const reason = connected.length === 0 ? "NO_CONNECTED_EXECUTOR"
+        : capable.length === 0 ? "CAPACITY_TOO_SMALL"
+        : !capable.some(([id, connection]) => this.available(id, connection)) ? "SLOTS_BUSY"
+        : "DATASET_OR_DISPATCH_PENDING";
+      const fields = { event: "backtest.queue.waiting", jobId: job.id, reason,
+        queuedMs: Math.max(0, now - job.createdAtMs), estimatedBars: job.estimatedBars,
+        maxConnectedBars: Math.max(0, ...connected.map(([, connection]) => connection.maxBars)),
+        connectedExecutors: connected.length, capableExecutors: capable.length };
+      if (reason === "CAPACITY_TOO_SMALL") this.logger.warn(fields, "작업 크기를 수용할 에이전트 대기");
+      else this.logger.info(fields, "백테스트 실행 대기");
     }
   }
 

@@ -1,3 +1,4 @@
+import { assertSubmissionSnapshot, type SubmissionSnapshot } from "./submission-snapshot.js";
 import { EventEmitter } from "node:events";
 import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type {
@@ -31,6 +32,7 @@ export type BacktestJobStatus =
 export type BacktestJobRow = typeof backtestJobs.$inferSelect;
 
 export interface EnqueueMetadata {
+  readonly submissionSnapshot?: SubmissionSnapshot;
   readonly estimatedBars?: number;
   readonly preparationJobId?: string | null;
   readonly wizardOwner?: {
@@ -120,6 +122,7 @@ export class JobQueue {
   ): BacktestJobRow {
     const job = this.handle.sqlite
       .transaction(() => {
+        assertSubmissionSnapshot(this.handle, metadata.submissionSnapshot);
         const references = new PreparationReferenceService(this.handle);
         const preparationJobId =
           metadata.preparationJobId ??

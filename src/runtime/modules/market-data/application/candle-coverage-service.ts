@@ -1,9 +1,9 @@
+import { measureSync } from "../../../shared/diagnostics.js";
 import {
   and,
   asc,
   count,
   eq,
-  gt,
   gte,
   inArray,
   lte,
@@ -13,6 +13,7 @@ import {
 } from "drizzle-orm";
 import type { AppDatabase } from "../../../shared/db/database.js";
 import { krxDailyBars } from "../../../shared/db/schema.js";
+import { validDailyBar } from "../../../shared/db/valid-daily-bar.js";
 
 export interface CandleCoverageRow {
   readonly code: string;
@@ -39,7 +40,7 @@ export class CandleCoverageService {
   getCoverage(codes: readonly string[]): CandleCoverageRow[] {
     if (codes.length === 0) return [];
 
-    const rows = this.db
+    const rows = measureSync("db.candles.all_history", () => this.db
       .select({
         code: krxDailyBars.shortCode,
         firstDate: min(krxDailyBars.date),
@@ -49,7 +50,7 @@ export class CandleCoverageService {
       .from(krxDailyBars)
       .where(inArray(krxDailyBars.shortCode, [...codes]))
       .groupBy(krxDailyBars.shortCode)
-      .all();
+      .all());
 
     const byCode = new Map(rows.map((row) => [row.code, row]));
 
@@ -85,7 +86,7 @@ export class CandleCoverageService {
     if (codes.length === 0) return [];
     const from = new Date(fromTsMs).toISOString().slice(0, 10);
     const to = new Date(toTsMs).toISOString().slice(0, 10);
-    const rows = this.db
+    const rows = measureSync("db.candles.period", () => this.db
       .select({
         code: krxDailyBars.shortCode,
         firstDate: min(krxDailyBars.date),
@@ -98,21 +99,11 @@ export class CandleCoverageService {
           inArray(krxDailyBars.shortCode, [...codes]),
           gte(krxDailyBars.date, from),
           lte(krxDailyBars.date, to),
-          inArray(krxDailyBars.market, ["KOSPI", "KOSDAQ"]),
-          gt(krxDailyBars.open, 0),
-          gt(krxDailyBars.high, 0),
-          gt(krxDailyBars.low, 0),
-          gt(krxDailyBars.close, 0),
-          gte(krxDailyBars.volume, 0),
-          gte(krxDailyBars.high, krxDailyBars.low),
-          gte(krxDailyBars.high, krxDailyBars.open),
-          gte(krxDailyBars.high, krxDailyBars.close),
-          lte(krxDailyBars.low, krxDailyBars.open),
-          lte(krxDailyBars.low, krxDailyBars.close),
+          validDailyBar(krxDailyBars),
         ),
       )
       .groupBy(krxDailyBars.shortCode)
-      .all();
+      .all());
     const byCode = new Map(rows.map((row) => [row.code, row]));
     return codes.map((code) => {
       const row = byCode.get(code);
@@ -141,7 +132,7 @@ export class CandleCoverageService {
     const result = new Map<string, string[]>();
     for (const code of codes) result.set(code, []);
     if (codes.length === 0) return result;
-    const rows = this.db
+    const rows = measureSync("db.candles.dates_by_symbol", () => this.db
       .select({ code: krxDailyBars.shortCode, date: krxDailyBars.date })
       .from(krxDailyBars)
       .where(
@@ -149,21 +140,11 @@ export class CandleCoverageService {
           inArray(krxDailyBars.shortCode, [...codes]),
           gte(krxDailyBars.date, from),
           lte(krxDailyBars.date, to),
-          inArray(krxDailyBars.market, ["KOSPI", "KOSDAQ"]),
-          gt(krxDailyBars.open, 0),
-          gt(krxDailyBars.high, 0),
-          gt(krxDailyBars.low, 0),
-          gt(krxDailyBars.close, 0),
-          gte(krxDailyBars.volume, 0),
-          gte(krxDailyBars.high, krxDailyBars.low),
-          gte(krxDailyBars.high, krxDailyBars.open),
-          gte(krxDailyBars.high, krxDailyBars.close),
-          lte(krxDailyBars.low, krxDailyBars.open),
-          lte(krxDailyBars.low, krxDailyBars.close),
+          validDailyBar(krxDailyBars),
         ),
       )
       .orderBy(asc(krxDailyBars.shortCode), asc(krxDailyBars.date))
-      .all();
+      .all());
     for (const row of rows) result.get(row.code)?.push(row.date);
     return result;
   }
@@ -205,7 +186,7 @@ export class CandleCoverageService {
         ),
       );
       if (windowClause === undefined) continue;
-      const rows = this.db
+      const rows = measureSync("db.candles.execution_windows", () => this.db
         .select({
           code: krxDailyBars.shortCode,
           lastDate: max(krxDailyBars.date),
@@ -214,21 +195,11 @@ export class CandleCoverageService {
         .where(
           and(
             windowClause,
-            inArray(krxDailyBars.market, ["KOSPI", "KOSDAQ"]),
-            gt(krxDailyBars.open, 0),
-            gt(krxDailyBars.high, 0),
-            gt(krxDailyBars.low, 0),
-            gt(krxDailyBars.close, 0),
-            gte(krxDailyBars.volume, 0),
-            gte(krxDailyBars.high, krxDailyBars.low),
-            gte(krxDailyBars.high, krxDailyBars.open),
-            gte(krxDailyBars.high, krxDailyBars.close),
-            lte(krxDailyBars.low, krxDailyBars.open),
-            lte(krxDailyBars.low, krxDailyBars.close),
+            validDailyBar(krxDailyBars),
           ),
         )
         .groupBy(krxDailyBars.shortCode)
-        .all();
+        .all());
       for (const row of rows) {
         if (row.lastDate === null) continue;
         const tsMs = dateToTsMs(row.lastDate);
@@ -252,7 +223,7 @@ export class CandleCoverageService {
     if (codes.length === 0) return [];
     const from = new Date(fromTsMs).toISOString().slice(0, 10);
     const to = new Date(toTsMs).toISOString().slice(0, 10);
-    return this.db
+    return measureSync("db.candles.timeline", () => this.db
       .select({ date: krxDailyBars.date })
       .from(krxDailyBars)
       .where(
@@ -260,23 +231,13 @@ export class CandleCoverageService {
           inArray(krxDailyBars.shortCode, [...codes]),
           gte(krxDailyBars.date, from),
           lte(krxDailyBars.date, to),
-          inArray(krxDailyBars.market, ["KOSPI", "KOSDAQ"]),
-          gt(krxDailyBars.open, 0),
-          gt(krxDailyBars.high, 0),
-          gt(krxDailyBars.low, 0),
-          gt(krxDailyBars.close, 0),
-          gte(krxDailyBars.volume, 0),
-          gte(krxDailyBars.high, krxDailyBars.low),
-          gte(krxDailyBars.high, krxDailyBars.open),
-          gte(krxDailyBars.high, krxDailyBars.close),
-          lte(krxDailyBars.low, krxDailyBars.open),
-          lte(krxDailyBars.low, krxDailyBars.close),
+          validDailyBar(krxDailyBars),
         ),
       )
       .groupBy(krxDailyBars.date)
       .orderBy(asc(krxDailyBars.date))
       .all()
       .map((row) => dateToTsMs(row.date))
-      .filter((tsMs) => Number.isFinite(tsMs) && tsMs > 0);
+      .filter((tsMs) => Number.isFinite(tsMs) && tsMs > 0));
   }
 }

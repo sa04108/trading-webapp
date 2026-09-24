@@ -7,6 +7,7 @@ import type { Clock } from "../../../../../runtime/shared/clock.js";
 import type { Logger } from "../../../../shared/logger.js";
 import type { ExternalApiUsage } from "../../../../shared/db/external-api-usage.js";
 import { RestClient } from "../../../../shared/rest-client.js";
+import { measureSync } from "../../../../../runtime/shared/diagnostics.js";
 import { kstDateOf } from "../../../../../runtime/modules/market-data/domain/kst-date.js";
 import {
   DartQuotaError,
@@ -506,7 +507,7 @@ export function createDartFactSource(
         evidence: `원문 부재: ${cacheKey}`,
       };
       try {
-        const snapshot = options.rawSnapshots?.get(key);
+        const snapshot = measureSync("dart.raw_snapshot_get", () => options.rawSnapshots?.get(key));
         if (snapshot !== null && snapshot !== undefined) {
           cachedRows = rowsFromSnapshot<T>(snapshot.payload);
           if (cachedRows !== null) {
@@ -566,7 +567,11 @@ export function createDartFactSource(
       // 목록은 재조회 계기일 뿐이다. 본문 접수번호가 같으면 저장 원문을 유지하고,
       // 달라지면 번호의 대소와 무관하게 API 응답으로 교체한다. 013은 빈 결과다.
       const unchanged = cachedRows !== null && sameReceipts(cachedRows, liveRows);
-      if (!unchanged) options.rawSnapshots?.put(key, envelope, clock.now());
+      if (!unchanged) measureSync(
+        "dart.raw_snapshot_put",
+        () => options.rawSnapshots?.put(key, envelope, clock.now()),
+        { itemCount: liveRows.length },
+      );
       if (filing != null) options.pendingFilings?.markChecked(key, filing);
       permit?.complete();
       return unchanged ? cachedRows! : liveRows;
@@ -788,7 +793,11 @@ export function createDartFactSource(
           }
 
           if (rowsByReport.size > 0) {
-            const parsed = parseFinancialRows(symbol, rowsByReport);
+            const parsed = measureSync(
+              "dart.parse_financial_rows",
+              () => parseFinancialRows(symbol, rowsByReport),
+              { itemCount: [...rowsByReport.values()].reduce((count, rows) => count + rows.length, 0) },
+            );
             facts.push(...parsed.facts);
             gaps.push(...parsed.gaps);
           }
@@ -1057,7 +1066,7 @@ export function createDartFactSource(
               severity: "BLOCKING",
             });
           }
-          const parsed = parseIssuanceRows(
+          const parsed = measureSync("dart.parse_issuance_rows", () => parseIssuanceRows(
             symbol,
             issuanceRows.filter((row) => !contradictedSplitRows.has(row)),
             sharesBefore,
@@ -1065,7 +1074,7 @@ export function createDartFactSource(
               directionForRow: (row) =>
                 decreasingSplitRows.has(row) ? "DECREASE" : undefined,
             },
-          );
+          ), { itemCount: issuanceRows.length });
           for (const fact of parsed.facts) {
             // irdsSttus 는 자본변동 이력을 연도별로 누적 제공한다 — 같은 분할이 해마다
             // 다른 rcept_no 로 반복되고, asOfTsMs 가 다르면 저장소 dedupe 를 통과한다.
