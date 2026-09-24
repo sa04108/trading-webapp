@@ -21,6 +21,7 @@ export async function createTestApp(
   env: Record<string, string> = {},
   configure?: (app: FastifyInstance) => void,
   agentPreparation = false,
+  isolatedSubmissionValidation = false,
 ): Promise<TestApp> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-test-'));
   let container: Container | null = null;
@@ -37,7 +38,7 @@ export async function createTestApp(
       LOG_LEVEL: 'error',
       ...env,
     });
-    container = createContainer(config, { inlinePreparation: !agentPreparation });
+    container = createContainer(config, { inlinePreparation: !agentPreparation, inlineSubmissionValidation: !isolatedSubmissionValidation });
     app = await buildServer(container);
     configure?.(app); // 테스트 전용 라우트 등록 등 — ready() 전에만 가능
     await app.ready();

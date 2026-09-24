@@ -1,4 +1,5 @@
 import { sql } from "drizzle-orm";
+import { validDailyBar } from "./valid-daily-bar.js";
 import {
   check,
   index,
@@ -351,6 +352,10 @@ export const krxDailyBars = sqliteTable(
     primaryKey({ columns: [table.shortCode, table.date] }),
     // 날짜 단위 삭제·점검용 인덱스
     index("idx_krx_daily_bars_date").on(table.date),
+    // 검증은 유효한 날짜만 읽어 OHLCV 본문의 무작위 디스크 접근을 피한다.
+    index("idx_krx_daily_bars_valid_code_date")
+      .on(table.shortCode, table.date)
+      .where(validDailyBar(table)),
   ],
 );
 

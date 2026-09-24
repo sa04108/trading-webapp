@@ -1,3 +1,4 @@
+import { assertSubmissionSnapshot, type SubmissionSnapshot } from "./submission-snapshot.js";
 import { PreparationReferenceService } from "./preparation-reference-service.js";
 import { randomInt } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -29,6 +30,7 @@ export type SeedCloneBatchRow = typeof backtestCloneBatches.$inferSelect;
 export type SeedCloneBatchItemRow = typeof backtestCloneBatchItems.$inferSelect;
 
 export interface SeedCloneBatchSnapshot {
+  readonly submissionSnapshot?: SubmissionSnapshot;
   readonly preparationJobId?: string | null;
   readonly request: BacktestRequest;
   readonly schedule: readonly LegacyUniverseScheduleEntry[];
@@ -98,6 +100,7 @@ export class SeedCloneBatchService {
     const seeds = uniqueSeeds(count, snapshot.request.randomSeed);
     this.database.sqlite
       .transaction(() => {
+        assertSubmissionSnapshot(this.database, snapshot.submissionSnapshot);
         const tx = this.database.db;
         const preparationJobId =
           snapshot.preparationJobId ??

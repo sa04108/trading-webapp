@@ -3,7 +3,6 @@ import {
   asc,
   count,
   eq,
-  gt,
   gte,
   inArray,
   lte,
@@ -13,6 +12,7 @@ import {
 } from "drizzle-orm";
 import type { AppDatabase } from "../../../shared/db/database.js";
 import { krxDailyBars } from "../../../shared/db/schema.js";
+import { validDailyBar } from "../../../shared/db/valid-daily-bar.js";
 
 export interface CandleCoverageRow {
   readonly code: string;
@@ -98,17 +98,7 @@ export class CandleCoverageService {
           inArray(krxDailyBars.shortCode, [...codes]),
           gte(krxDailyBars.date, from),
           lte(krxDailyBars.date, to),
-          inArray(krxDailyBars.market, ["KOSPI", "KOSDAQ"]),
-          gt(krxDailyBars.open, 0),
-          gt(krxDailyBars.high, 0),
-          gt(krxDailyBars.low, 0),
-          gt(krxDailyBars.close, 0),
-          gte(krxDailyBars.volume, 0),
-          gte(krxDailyBars.high, krxDailyBars.low),
-          gte(krxDailyBars.high, krxDailyBars.open),
-          gte(krxDailyBars.high, krxDailyBars.close),
-          lte(krxDailyBars.low, krxDailyBars.open),
-          lte(krxDailyBars.low, krxDailyBars.close),
+          validDailyBar(krxDailyBars),
         ),
       )
       .groupBy(krxDailyBars.shortCode)
@@ -149,17 +139,7 @@ export class CandleCoverageService {
           inArray(krxDailyBars.shortCode, [...codes]),
           gte(krxDailyBars.date, from),
           lte(krxDailyBars.date, to),
-          inArray(krxDailyBars.market, ["KOSPI", "KOSDAQ"]),
-          gt(krxDailyBars.open, 0),
-          gt(krxDailyBars.high, 0),
-          gt(krxDailyBars.low, 0),
-          gt(krxDailyBars.close, 0),
-          gte(krxDailyBars.volume, 0),
-          gte(krxDailyBars.high, krxDailyBars.low),
-          gte(krxDailyBars.high, krxDailyBars.open),
-          gte(krxDailyBars.high, krxDailyBars.close),
-          lte(krxDailyBars.low, krxDailyBars.open),
-          lte(krxDailyBars.low, krxDailyBars.close),
+          validDailyBar(krxDailyBars),
         ),
       )
       .orderBy(asc(krxDailyBars.shortCode), asc(krxDailyBars.date))
@@ -214,17 +194,7 @@ export class CandleCoverageService {
         .where(
           and(
             windowClause,
-            inArray(krxDailyBars.market, ["KOSPI", "KOSDAQ"]),
-            gt(krxDailyBars.open, 0),
-            gt(krxDailyBars.high, 0),
-            gt(krxDailyBars.low, 0),
-            gt(krxDailyBars.close, 0),
-            gte(krxDailyBars.volume, 0),
-            gte(krxDailyBars.high, krxDailyBars.low),
-            gte(krxDailyBars.high, krxDailyBars.open),
-            gte(krxDailyBars.high, krxDailyBars.close),
-            lte(krxDailyBars.low, krxDailyBars.open),
-            lte(krxDailyBars.low, krxDailyBars.close),
+            validDailyBar(krxDailyBars),
           ),
         )
         .groupBy(krxDailyBars.shortCode)
@@ -260,17 +230,7 @@ export class CandleCoverageService {
           inArray(krxDailyBars.shortCode, [...codes]),
           gte(krxDailyBars.date, from),
           lte(krxDailyBars.date, to),
-          inArray(krxDailyBars.market, ["KOSPI", "KOSDAQ"]),
-          gt(krxDailyBars.open, 0),
-          gt(krxDailyBars.high, 0),
-          gt(krxDailyBars.low, 0),
-          gt(krxDailyBars.close, 0),
-          gte(krxDailyBars.volume, 0),
-          gte(krxDailyBars.high, krxDailyBars.low),
-          gte(krxDailyBars.high, krxDailyBars.open),
-          gte(krxDailyBars.high, krxDailyBars.close),
-          lte(krxDailyBars.low, krxDailyBars.open),
-          lte(krxDailyBars.low, krxDailyBars.close),
+          validDailyBar(krxDailyBars),
         ),
       )
       .groupBy(krxDailyBars.date)

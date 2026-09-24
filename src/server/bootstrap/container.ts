@@ -1,3 +1,4 @@
+import { ForkedSubmissionValidator } from "../modules/backtest/infrastructure/forked-submission-validator.js";
 import type { DartFilingDiscovery } from "../modules/facts/application/dart-filing-discovery.js";
 import { AgentRegistry } from "../modules/agents/application/agent-registry.js";
 import { DatasetSnapshots } from "../modules/agents/application/dataset-snapshots.js";
@@ -106,6 +107,7 @@ export interface SystemStatusProviders {
 }
 
 export interface Container {
+  readonly submissionValidator?: ForkedSubmissionValidator;
   readonly filingDiscovery: DartFilingDiscovery;
   readonly refreshProviderFilings: () => Promise<void>;
   readonly config: AppConfig;
@@ -173,6 +175,8 @@ function readAppVersion(): string {
 export interface CreateContainerOptions {
   /** 계산 규칙 단위 테스트만 같은 프로세스에 의존성을 주입한다. */
   readonly inlinePreparation?: boolean;
+  /** 의존성을 바꾸는 규칙 테스트에만 사용한다. 운영 기본값은 프로세스 격리다. */
+  readonly inlineSubmissionValidation?: boolean;
 }
 
 export function createContainer(
@@ -194,6 +198,7 @@ export function createContainer(
   const database = openDatabase(config.databasePath);
   new PreparationReferenceService(database).collect();
   const clock = systemClock;
+  const submissionValidator = options.inlineSubmissionValidation ? undefined : new ForkedSubmissionValidator(config.databasePath, database.dataPath);
 
   // 무한 증가 방지: 만료 세션·오래된 로그인 시도·보존 기간 지난 감사 로그 정리.
   // 부팅 시 1회 + 6시간 주기. 정리는 정확성에 필요한 작업이 아니므로 어느 쪽도
@@ -678,11 +683,13 @@ export function createContainer(
     universeRuleResolver,
     actionCoverageStore,
     backtestPreparationOrchestrator,
+    submissionValidator,
     close: () => {
       if (closing !== null) return closing;
       closing = (async () => {
         clearInterval(pruneTimer);
         await collection.filingDiscovery.stop();
+        await submissionValidator?.stop();
         await agentCoordinator.stop();
         // FactSync는 symbol 단위 저장이 끝난 뒤 멈춘다. 이 경계를 기다리기 전에
         // SQLite를 닫으면 저장 callback이 닫힌 자원을 다시 건드린다.

@@ -29,6 +29,13 @@
       "when": 1789890000000,
       "tag": "0003_provider_input_issues",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1790224603614,
+      "tag": "0004_valid_daily_bar_lookup",
+      "breakpoints": true
     }
   ]
 }

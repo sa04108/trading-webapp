@@ -56,6 +56,7 @@ export async function buildServer(
   });
 
   app.addHook("preClose", async () => {
+    await container.submissionValidator?.stop();
     await container.agentCoordinator.stop();
   });
   registerSecurity(app);
@@ -116,6 +117,7 @@ export async function buildServer(
       registerBacktestRoutes(
         api,
         {
+          submissionValidator: container.submissionValidator,
           queue: container.jobQueue,
           orchestrator: container.jobOrchestrator,
           jobEvents: [
