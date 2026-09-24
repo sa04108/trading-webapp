@@ -670,7 +670,8 @@ export class AgentCoordinator {
             "SELECT estimated_bars AS bars FROM backtest_jobs WHERE status = 'QUEUED' ORDER BY created_at_ms LIMIT 1",
           )
           .get() as { bars: number } | undefined;
-        if (waiting && waiting.bars > connection.maxBars)
+        // 로컬은 단일 슬롯·메모리 예산이 고정되어 큰 작업의 수요를 반영해도 용량이 늘지 않는다.
+        if (clientId !== LOCAL_AGENT_ID && waiting && waiting.bars > connection.maxBars)
           this.send(connection, {
             type: "DEMAND",
             estimatedBars: waiting.bars,
