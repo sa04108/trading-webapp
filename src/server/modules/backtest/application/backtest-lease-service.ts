@@ -100,6 +100,7 @@ export class BacktestLeaseService {
     agentId: string,
     runnerVersion: string,
     maxBars = Number.MAX_SAFE_INTEGER,
+    jobId?: string,
   ): BacktestClaimResult {
     if (runnerVersion !== this.expectedRunnerVersion) {
       return {
@@ -117,6 +118,7 @@ export class BacktestLeaseService {
       runnerVersion,
       maxAttempts: AGENT_MAX_ATTEMPTS,
       maxBars,
+      jobId,
     });
     if (job === null) return { status: "EMPTY" };
 
@@ -270,6 +272,36 @@ export class BacktestLeaseService {
       ...(input.telemetry?.outcome === outcome
         ? { executionTelemetry: input.telemetry }
         : {}),
+    });
+    this.emitJob({ jobId: input.jobId, kind: "status" });
+    return "ACCEPTED";
+  }
+
+  defer(input: {
+    readonly jobId: string;
+    readonly attempt: number;
+    readonly leaseToken: string;
+    readonly reason: string;
+  }): BacktestFinishResult {
+    const job = this.queue.getJob(input.jobId);
+    const deferredAtMs = this.clock.now();
+    const status = this.queue.deferLease({
+      jobId: input.jobId,
+      attempt: input.attempt,
+      leaseTokenHash: tokenHash(input.leaseToken),
+      nowMs: deferredAtMs,
+      reason: input.reason,
+    });
+    if (status === null) return "STALE_LEASE";
+
+    this.recordAudit("backtest.deferred", {
+      jobId: input.jobId,
+      status,
+      reason: input.reason,
+      durationMs:
+        deferredAtMs - (job?.startedAtMs ?? job?.createdAtMs ?? deferredAtMs),
+      executionMode: job?.agentId === LOCAL_AGENT_ID ? "local" : "remote",
+      attempt: input.attempt,
     });
     this.emitJob({ jobId: input.jobId, kind: "status" });
     return "ACCEPTED";

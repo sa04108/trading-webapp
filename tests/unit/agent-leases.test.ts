@@ -160,6 +160,147 @@ describe('에이전트 리스와 데이터 대기', () => {
     }
     expect(queue.getJob('small')?.status).toBe('FAILED');
   });
+
+  it('지정 jobId만 claim하고 defer 후 새 attempt만 유효하게 만든다', () => {
+    const insert = database.sqlite.prepare("INSERT INTO backtest_jobs (id, status, request_json, strategy_id, universe_rule_json, universe_schedule_json, created_at_ms, estimated_bars) VALUES (?, 'QUEUED', '{}', 'test', '{}', '[]', ?, ?)");
+    insert.run('earlier', 1, 1000);
+    insert.run('target', 2, 1000);
+    const queue = new JobQueue(database, { now: () => 100 });
+    const options = {
+      agentId: clientId,
+      leaseTokenHash: 'a'.repeat(64),
+      leaseExpiresAtMs: 10_000,
+      runnerVersion: 'test',
+      maxAttempts: 3,
+      maxBars: 2000,
+      jobId: 'target',
+    };
+
+    const first = queue.claimNextLease(options)!;
+    expect(first.id).toBe('target');
+    expect(first.attempt).toBe(1);
+    expect(queue.deferLease({
+      jobId: first.id,
+      attempt: first.attempt,
+      leaseTokenHash: options.leaseTokenHash,
+      nowMs: 101,
+      reason: '일시적인 메모리 부족',
+    })).toBe('QUEUED');
+
+    expect(queue.finishLease({
+      jobId: first.id,
+      attempt: first.attempt,
+      leaseTokenHash: options.leaseTokenHash,
+      nowMs: 102,
+      status: 'FAILED',
+      error: '늦게 도착한 이전 실패',
+    })).toBeNull();
+
+    for (let expectedAttempt = 2; expectedAttempt <= 4; expectedAttempt++) {
+      const hash = String(expectedAttempt).repeat(64);
+      const lease = queue.claimNextLease({
+        ...options,
+        leaseTokenHash: hash,
+        jobId: 'target',
+      })!;
+      expect(lease.id).toBe('target');
+      expect(lease.attempt).toBe(expectedAttempt);
+      if (expectedAttempt === 2) {
+        expect(queue.finishLease({
+          jobId: first.id,
+          attempt: first.attempt,
+          leaseTokenHash: options.leaseTokenHash,
+          nowMs: 103,
+          status: 'FAILED',
+          error: 'reclaim 뒤 도착한 이전 실패',
+        })).toBeNull();
+        expect(queue.getJob(lease.id)?.status).toBe('STARTING');
+      }
+      expect(queue.deferLease({
+        jobId: lease.id,
+        attempt: lease.attempt,
+        leaseTokenHash: hash,
+        nowMs: 102 + expectedAttempt,
+        reason: '자원 재측정 대기',
+      })).toBe('QUEUED');
+    }
+
+    expect(database.sqlite.prepare('SELECT status, attempt, lease_failures, error, agent_id, pid, lease_token_hash, lease_expires_at_ms, runner_version, started_at_ms, completed_at_ms FROM backtest_jobs WHERE id = ?').get('target')).toEqual({
+      status: 'QUEUED',
+      attempt: 4,
+      lease_failures: 0,
+      error: '자원 재측정 대기',
+      agent_id: null,
+      pid: null,
+      lease_token_hash: null,
+      lease_expires_at_ms: null,
+      runner_version: null,
+      started_at_ms: null,
+      completed_at_ms: null,
+    });
+    expect(queue.claimNextLease({ ...options, jobId: 'missing' })).toBeNull();
+  });
+
+  it('defer는 stale·만료·RUNNING 리스를 거부하고 취소 경합에서는 취소를 유지한다', () => {
+    database.sqlite.prepare("INSERT INTO backtest_jobs (id, status, request_json, strategy_id, universe_rule_json, universe_schedule_json, created_at_ms, estimated_bars) VALUES ('defer-race', 'QUEUED', '{}', 'test', '{}', '[]', 1, 1000)").run();
+    const nowMs = 100;
+    const queue = new JobQueue(database, { now: () => nowMs });
+    const hash = 'b'.repeat(64);
+    const lease = queue.claimNextLease({
+      agentId: clientId,
+      leaseTokenHash: hash,
+      leaseExpiresAtMs: 1000,
+      runnerVersion: 'test',
+      maxAttempts: 3,
+    })!;
+
+    expect(queue.deferLease({
+      jobId: lease.id,
+      attempt: lease.attempt,
+      leaseTokenHash: 'c'.repeat(64),
+      nowMs,
+      reason: 'wrong token',
+    })).toBeNull();
+    expect(queue.deferLease({
+      jobId: lease.id,
+      attempt: lease.attempt + 1,
+      leaseTokenHash: hash,
+      nowMs,
+      reason: 'wrong attempt',
+    })).toBeNull();
+    expect(queue.deferLease({
+      jobId: lease.id,
+      attempt: lease.attempt,
+      leaseTokenHash: hash,
+      nowMs: 1001,
+      reason: 'expired',
+    })).toBeNull();
+
+    database.sqlite.prepare("UPDATE backtest_jobs SET status = 'RUNNING' WHERE id = ?").run(lease.id);
+    expect(queue.deferLease({
+      jobId: lease.id,
+      attempt: lease.attempt,
+      leaseTokenHash: hash,
+      nowMs,
+      reason: 'already running',
+    })).toBeNull();
+    database.sqlite.prepare("UPDATE backtest_jobs SET status = 'CANCELLING' WHERE id = ?").run(lease.id);
+    expect(queue.deferLease({
+      jobId: lease.id,
+      attempt: lease.attempt,
+      leaseTokenHash: hash,
+      nowMs,
+      reason: 'cancel raced with defer',
+    })).toBe('CANCELLED');
+    expect(queue.getJob(lease.id)).toMatchObject({
+      status: 'CANCELLED',
+      error: null,
+      leaseFailures: 0,
+      leaseTokenHash: null,
+      leaseExpiresAtMs: null,
+      completedAtMs: nowMs,
+    });
+  });
 });
 
 function validPreparationResult(dataRevision: number) {

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type {
   BacktestResultCompleter,
@@ -26,6 +27,7 @@ function harness() {
     stop: vi.fn(async () => undefined),
   };
   const queue = {
+    claimNextLease: vi.fn(() => null),
     getJob: vi.fn(() => ({
       id: 'job-one',
       status: 'RUNNING',
@@ -34,6 +36,7 @@ function harness() {
       startedAtMs: 1,
       createdAtMs: 1,
     })),
+    deferLease: vi.fn<() => 'QUEUED' | 'CANCELLED' | null>(() => 'QUEUED'),
   };
   const audit = { record: vi.fn() };
   const logger = { warn: vi.fn() };
@@ -53,10 +56,24 @@ function harness() {
     artifactPath: '/tmp/result.sqlite',
     checksum: 'checksum',
   };
-  return { service, completion, completer, audit, input };
+  return { service, completion, completer, audit, input, queue };
 }
 
 describe('BacktestLeaseService lifecycle', () => {
+  it('선택된 작업 id만 claim하도록 큐에 전달한다', () => {
+    const ctx = harness();
+
+    expect(ctx.service.claim('agent-one', 'runner', 20_000, 'job-one')).toEqual({
+      status: 'EMPTY',
+    });
+    expect(ctx.queue.claimNextLease).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: 'agent-one',
+      runnerVersion: 'runner',
+      maxBars: 20_000,
+      jobId: 'job-one',
+    }));
+  });
+
   it('result child 뒤의 감사 기록과 이벤트까지 완료한 다음 stop을 반환한다', async () => {
     const ctx = harness();
     const events = vi.fn();
@@ -89,5 +106,53 @@ describe('BacktestLeaseService lifecycle', () => {
     expect(ctx.completer.stop).toHaveBeenCalledTimes(1);
     await expect(ctx.service.complete(ctx.input)).rejects.toThrow('서버가 종료 중');
     expect(ctx.completer.complete).not.toHaveBeenCalled();
+  });
+
+  it('자원 대기 defer는 lease identity를 해시해 큐에 반환하고 감사·상태 이벤트를 남긴다', () => {
+    const ctx = harness();
+    const events = vi.fn();
+    ctx.service.events.on('job', events);
+
+    expect(ctx.service.defer({
+      jobId: ctx.input.jobId,
+      attempt: ctx.input.attempt,
+      leaseToken: ctx.input.leaseToken,
+      reason: '일시적인 메모리 부족',
+    })).toBe('ACCEPTED');
+
+    expect(ctx.queue.deferLease).toHaveBeenCalledWith({
+      jobId: ctx.input.jobId,
+      attempt: ctx.input.attempt,
+      leaseTokenHash: createHash('sha256').update(ctx.input.leaseToken).digest('hex'),
+      nowMs: 10,
+      reason: '일시적인 메모리 부족',
+    });
+    expect(ctx.audit.record).toHaveBeenCalledWith(
+      'system',
+      'backtest.deferred',
+      expect.objectContaining({
+        jobId: ctx.input.jobId,
+        status: 'QUEUED',
+        reason: '일시적인 메모리 부족',
+        attempt: ctx.input.attempt,
+      }),
+    );
+    expect(events).toHaveBeenCalledWith({ jobId: ctx.input.jobId, kind: 'status' });
+  });
+
+  it('이미 회수된 defer는 stale로 돌려 감사와 이벤트를 남기지 않는다', () => {
+    const ctx = harness();
+    ctx.queue.deferLease.mockReturnValue(null);
+    const events = vi.fn();
+    ctx.service.events.on('job', events);
+
+    expect(ctx.service.defer({
+      jobId: ctx.input.jobId,
+      attempt: ctx.input.attempt,
+      leaseToken: ctx.input.leaseToken,
+      reason: '일시적인 메모리 부족',
+    })).toBe('STALE_LEASE');
+    expect(ctx.audit.record).not.toHaveBeenCalled();
+    expect(events).not.toHaveBeenCalled();
   });
 });

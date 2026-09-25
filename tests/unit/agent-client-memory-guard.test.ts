@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentClient, type AgentRuntimeAdapter } from "../../src/agent/client.js";
-import type { AgentLease } from "../../src/shared/agent-protocol.js";
+import type { AgentLease, ServerAgentMessage } from "../../src/shared/agent-protocol.js";
 
 interface MemoryGuardRunning {
   cancellation: boolean;
@@ -31,6 +31,9 @@ type ClientInternals = {
   readonly running: Map<string, MemoryGuardRunning>;
   sample(): void;
   spawn(lease: AgentLease): void;
+  ready: boolean;
+  capacity(): void;
+  message(message: ServerAgentMessage): void;
 };
 
 type SetupFailureClient = {
@@ -119,7 +122,7 @@ function harness(local: boolean, memoryPressure: boolean, cancelling = false) {
   };
   const internals = client as unknown as ClientInternals;
   internals.running.set("memory-guard-1", running);
-  return { client, internals, running, kill, send };
+  return { client, internals, running, kill, send, runtime };
 }
 
 afterEach(async () => {
@@ -128,6 +131,36 @@ afterEach(async () => {
 });
 
 describe("AgentClient 메모리 보호", () => {
+  it("시작 직전 부족한 백테스트는 반환을 영속화하고 ACK 뒤에도 재배정 간격을 지킨다", () => {
+    const h = harness(true, true);
+    h.internals.running.clear();
+    h.internals.ready = true;
+    const send = vi.fn();
+    h.runtime!.send = send;
+    const job: AgentLease = { ...lease(), kind: "BACKTEST",
+      memoryPlan: { requiredBytes: 192 * 1024 ** 2, minimumBatchBars: 256 } };
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      h.internals.spawn(job);
+      expect(send.mock.calls[0]?.[0]).toMatchObject({ type: "CAPACITY", slots: 0 });
+      expect(send.mock.calls.some(([message]) => message.type === "DEFER" &&
+        message.requiredBytes === 192 * 1024 ** 2)).toBe(true);
+      const directory = path.join(h.client.directory, "jobs", "memory-guard-1");
+      expect(fs.existsSync(path.join(directory, "job.sqlite"))).toBe(false);
+      expect(JSON.parse(fs.readFileSync(path.join(directory, "outbox.json"), "utf8"))).toMatchObject({
+        message: { type: "DEFER", reason: "RESOURCE_UNAVAILABLE" },
+      });
+      h.runtime!.resources = () => ({ ...resources(false)(0), budgetBytes: 256 * 1024 ** 2 });
+      h.internals.message({ type: "ACK", kind: "BACKTEST", jobId: job.jobId, attempt: 1, accepted: true });
+      expect(fs.existsSync(directory)).toBe(false);
+      expect(send.mock.calls.at(-1)?.[0]).toMatchObject({ type: "CAPACITY", slots: 0 });
+      clock.mockReturnValue(now + 15_001);
+      h.internals.capacity();
+      expect(send.mock.calls.at(-1)?.[0]).toMatchObject({ type: "CAPACITY", slots: 1, maxBars: 2_000_000 });
+    } finally { clock.mockRestore(); }
+  });
+
   it("로컬 API 메모리 압력은 이미 취소 중인 워커도 즉시 종료한다", () => {
     const h = harness(true, true, true);
     h.internals.sample();

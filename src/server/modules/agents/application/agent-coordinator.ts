@@ -1,8 +1,11 @@
 import path from "node:path";
 import fs from "node:fs";
+import Database from "better-sqlite3";
+import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import { AgentClient } from "../../../../agent/client.js";
 import { availableServerResources } from "../../../../agent/resources.js";
+import { backtestMemoryPlan, type BacktestMemoryPlan } from "../../../../runtime/modules/backtest/application/backtest-memory-plan.js";
 import { BacktestResultArtifactRejectedError } from "../../../../runtime/modules/backtest/application/backtest-result-artifact.js";
 import { InvalidBacktestResultArtifactError } from "../../backtest/infrastructure/sqlite-backtest-result-artifact-importer.js";
 import { backtestExecutionTelemetrySchema } from "../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js";
@@ -14,6 +17,7 @@ import type { BacktestLeaseService } from "../../backtest/application/backtest-l
 import type { JobQueue } from "../../backtest/application/job-queue.js";
 import {
   LOCAL_AGENT_ID,
+  AGENT_MAX_ATTEMPTS,
   agentMessageSchema,
   type AgentMessage,
   type AgentLease,
@@ -73,6 +77,7 @@ export class AgentCoordinator {
   private readonly progressRevisions = new Map<string, { signature: string; revision: number }>();
   private lastQueueDiagnosticAt = Number.NEGATIVE_INFINITY;
   private readonly preparationPhases = new Map<string, { phase: string; pass: number; started: number }>();
+  private readonly localMemoryPlans = new Map<string, BacktestMemoryPlan>();
 
   constructor(
     private readonly database: DatabaseHandle,
@@ -260,7 +265,15 @@ export class AgentCoordinator {
       return;
     }
     let accepted = false;
-    if (message.type === "NEEDS_DATA") {
+    if (message.type === "DEFER") {
+      // 새 메시지는 내부 실행기의 시작 전 반환에만 허용한다. 기존 원격 완료 계약은 그대로다.
+      if (clientId === LOCAL_AGENT_ID && this.ownsBacktest(clientId, message.jobId)) {
+        accepted = this.backtests.defer({
+          ...identity,
+          reason: `로컬 메모리 여유 대기 (필요 ${message.requiredBytes}, 가용 ${message.availableBytes} bytes)`,
+        }) === "ACCEPTED";
+      }
+    } else if (message.type === "NEEDS_DATA") {
       if (message.kind === "PREPARATION") {
         try {
           accepted = this.preparations.waitForData(clientId, identity, () => {
@@ -587,10 +600,10 @@ export class AgentCoordinator {
     if (this.stopped) return;
     // 게시를 기다리는 동안 연결된 장치까지 다시 확인한 뒤 서버의 계산 슬롯을 사용한다.
     for (const [id, connection] of this.connections)
-      this.assign(id, connection, dataset);
+      await this.assign(id, connection, dataset);
     if (this.localClient && this.localConnection) {
       this.refreshLocalCapacity();
-      this.assign(LOCAL_AGENT_ID, this.localConnection, dataset);
+      await this.assign(LOCAL_AGENT_ID, this.localConnection, dataset);
     }
     this.logQueueWait();
   }
@@ -606,13 +619,18 @@ export class AgentCoordinator {
       .filter(([id, connection]) => connection.ready && connection.socket.readyState === 1 &&
         (id === LOCAL_AGENT_ID || (now - connection.lastMessageAt <= 60_000 && this.registry.active(id))));
     for (const job of jobs) {
-      const capable = connected.filter(([, connection]) => connection.maxBars >= job.estimatedBars);
+      const requiredBytes = this.localMemoryPlans.get(`${this.localConnection?.datasetVersion}:${job.id}`)?.requiredBytes ?? null;
+      const localBudgetBytes = this.localClient?.localMemoryBudget() ?? 0;
+      const capable = connected.filter(([id, connection]) => connection.maxBars >= job.estimatedBars &&
+        (id !== LOCAL_AGENT_ID || requiredBytes === null || requiredBytes <= localBudgetBytes));
       const reason = connected.length === 0 ? "NO_CONNECTED_EXECUTOR"
-        : capable.length === 0 ? "CAPACITY_TOO_SMALL"
+        : capable.length === 0 ? (requiredBytes !== null && requiredBytes > localBudgetBytes
+          ? "MEMORY_UNAVAILABLE" : "CAPACITY_TOO_SMALL")
         : !capable.some(([id, connection]) => this.available(id, connection)) ? "SLOTS_BUSY"
         : "DATASET_OR_DISPATCH_PENDING";
       const fields = { event: "backtest.queue.waiting", jobId: job.id, reason,
         queuedMs: Math.max(0, now - job.createdAtMs), estimatedBars: job.estimatedBars,
+        requiredBytes, localBudgetBytes,
         maxConnectedBars: Math.max(0, ...connected.map(([, connection]) => connection.maxBars)),
         connectedExecutors: connected.length, capableExecutors: capable.length };
       if (reason === "CAPACITY_TOO_SMALL") this.logger.warn(fields, "작업 크기를 수용할 에이전트 대기");
@@ -629,11 +647,11 @@ export class AgentCoordinator {
     }
   }
 
-  private assign(
+  private async assign(
     clientId: string,
     connection: Connection,
     dataset: DatasetManifest,
-  ): void {
+  ): Promise<void> {
     if (!this.available(clientId, connection) || this.stopped) return;
     if (connection.datasetVersion !== dataset.version) {
       this.send(connection, { type: "DATASET", dataset });
@@ -642,13 +660,29 @@ export class AgentCoordinator {
     let active = this.activeLeaseCount(clientId);
     while (connection.slots > active) {
       let lease: AgentLease | null;
-      const claim = this.backtests.claim(
+      const local = clientId === LOCAL_AGENT_ID;
+      const candidate = local ? await this.localBacktestCandidate(connection.maxBars, dataset) : null;
+      // 집계 중 새 원격 슬롯이 생겼으면 로컬 claim 전에 우선 배정한다.
+      if (local)
+        for (const [id, remote] of this.connections) await this.assign(id, remote, dataset);
+      // 팩트 집계 사이에 취소·종료·다른 배정이 진행될 수 있다.
+      if (this.stopped || !this.available(clientId, connection)) return;
+      if (candidate && candidate.plan.requiredBytes > (this.localClient?.localMemoryBudget() ?? 0)) return;
+      const claim = local && !candidate ? { status: "EMPTY" as const } : this.backtests.claim(
         clientId,
         this.executionVersion,
         connection.maxBars,
+        candidate?.jobId,
       );
       if (claim.status === "CLAIMED") {
         const job = claim.lease.job;
+        if (candidate?.inputError) {
+          this.backtests.finish({
+            jobId: job.id, attempt: claim.lease.attempt, leaseToken: claim.lease.leaseToken,
+            outcome: "FAILED", error: `[JOB_SETUP_FAILED] ${candidate.inputError}`,
+          });
+          continue;
+        }
         this.database.sqlite
           .prepare(
             "INSERT INTO agent_backtest_datasets (job_id, dataset_version) VALUES (?, ?) ON CONFLICT(job_id) DO UPDATE SET dataset_version = excluded.dataset_version",
@@ -661,6 +695,7 @@ export class AgentCoordinator {
           leaseToken: claim.lease.leaseToken,
           leaseExpiresAtMs: claim.lease.leaseExpiresAtMs,
           dataset,
+          ...(candidate ? { memoryPlan: candidate.plan } : {}),
           payload: { ...job, preparationJobId: null },
         };
       } else lease = this.preparations.claim(clientId, dataset);
@@ -681,6 +716,68 @@ export class AgentCoordinator {
       active += 1;
       this.send(connection, { type: "JOB", lease });
     }
+  }
+
+  /** 큰 작업이 기다리는 동안 실행 가능한 작은 작업과 준비 작업까지 막지 않는다. */
+  private async localBacktestCandidate(maxBars: number, dataset: DatasetManifest): Promise<{
+    jobId: string; plan: BacktestMemoryPlan; inputError?: string;
+  } | null> {
+    const budgetBytes = this.localClient?.localMemoryBudget() ?? 0;
+    const candidates = this.database.sqlite.prepare(`SELECT id FROM backtest_jobs
+      WHERE status = 'QUEUED' AND lease_failures < ? AND estimated_bars <= ?
+      ORDER BY created_at_ms, id`).all(AGENT_MAX_ATTEMPTS, maxBars) as Array<{ id: string }>;
+    let snapshot: Database.Database | undefined;
+    try {
+      for (const candidate of candidates) {
+        const key = `${dataset.version}:${candidate.id}`;
+        let plan = this.localMemoryPlans.get(key);
+        if (!plan) {
+          const job = this.queue.getJob(candidate.id);
+          if (!job) continue;
+          let factQuery: { symbols: readonly string[]; throughTsMs: number } | undefined;
+          plan = backtestMemoryPlan(job, (symbols, throughTsMs) => {
+            factQuery = { symbols, throughTsMs };
+            return 0;
+          });
+          if (plan.requiredBytes > budgetBytes) {
+            await yieldImmediate();
+            if (this.stopped) return null;
+            continue;
+          }
+          if (factQuery) {
+            try {
+              snapshot ??= new Database(this.snapshots.file(dataset), { readonly: true, fileMustExist: true });
+              // 종목 키 인덱스로 집계하고 16종목마다 API 이벤트 루프에 양보한다.
+              const count = snapshot.prepare(`SELECT count(*) AS count FROM facts
+                WHERE scope = 'SYMBOL' AND key = ?
+                  AND (as_of_ts_ms <= ? OR field = 'SPLIT_RATIO')`);
+              let rows = 0;
+              for (let index = 0; index < factQuery.symbols.length; index++) {
+                rows += (count.get(factQuery.symbols[index], factQuery.throughTsMs) as { count: number }).count;
+                if (index % 16 === 15) {
+                  await yieldImmediate();
+                  if (this.stopped) return null;
+                }
+              }
+              plan = backtestMemoryPlan(job, () => rows);
+            } catch (error) {
+              // 입력 파일 손상·누락을 메모리 대기에 가두지 않는다. claim 후 해당 작업만 실패시킨다.
+              return { jobId: candidate.id, plan,
+                inputError: `게시 스냅샷을 확인할 수 없습니다: ${error instanceof Error ? error.message : String(error)}` };
+            }
+          }
+          if (this.localMemoryPlans.size >= 256)
+            this.localMemoryPlans.delete(this.localMemoryPlans.keys().next().value!);
+          this.localMemoryPlans.set(key, plan);
+        }
+        if (plan.requiredBytes <= budgetBytes) return { jobId: candidate.id, plan };
+        await yieldImmediate();
+        if (this.stopped) return null;
+      }
+    } finally {
+      snapshot?.close();
+    }
+    return null;
   }
 
   private startLocal(): void {

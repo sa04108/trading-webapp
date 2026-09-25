@@ -207,6 +207,7 @@ export class JobQueue {
     readonly runnerVersion: string;
     readonly maxAttempts: number;
     readonly maxBars?: number;
+    readonly jobId?: string;
   }): BacktestJobRow | null {
     const stmt = this.handle.sqlite.prepare(
       `UPDATE backtest_jobs
@@ -231,6 +232,7 @@ export class JobQueue {
        WHERE id = (
          SELECT id FROM backtest_jobs
          WHERE status = 'QUEUED' AND lease_failures < ? AND estimated_bars <= ?
+           AND (? IS NULL OR id = ?)
          ORDER BY created_at_ms ASC
          LIMIT 1
        )
@@ -246,6 +248,8 @@ export class JobQueue {
         this.clock.now(),
         options.maxAttempts,
         options.maxBars ?? Number.MAX_SAFE_INTEGER,
+        options.jobId ?? null,
+        options.jobId ?? null,
       ) as { id: string } | undefined;
       return row?.id ?? null;
     });
@@ -366,6 +370,53 @@ export class JobQueue {
         input.nowMs,
       ) as { status: "FAILED" | "CANCELLED" } | undefined;
     return row?.status ?? null;
+  }
+
+  /** 실행 시작 전 자원 부족은 실패 횟수를 쓰지 않고 유효한 리스를 대기열로 돌린다. */
+  deferLease(input: {
+    readonly jobId: string;
+    readonly attempt: number;
+    readonly leaseTokenHash: string;
+    readonly nowMs: number;
+    readonly reason: string;
+  }): "QUEUED" | "CANCELLED" | null {
+    const deferred = this.handle.sqlite
+      .prepare(
+        `UPDATE backtest_jobs
+         SET status = CASE WHEN status = 'CANCELLING' THEN 'CANCELLED' ELSE 'QUEUED' END,
+             agent_id = NULL,
+             pid = NULL,
+             lease_token_hash = NULL,
+             lease_expires_at_ms = NULL,
+             runner_version = NULL,
+             progress_bars = NULL,
+             total_bars = NULL,
+             progress_label = NULL,
+             execution_activity = NULL,
+             activity_started_at_ms = NULL,
+             last_progress_at_ms = NULL,
+             last_received_at_ms = NULL,
+             result_transfer_bytes = NULL,
+             result_transfer_total_bytes = NULL,
+             error = CASE WHEN status = 'CANCELLING' THEN NULL ELSE ? END,
+             started_at_ms = CASE WHEN status = 'CANCELLING' THEN started_at_ms ELSE NULL END,
+             completed_at_ms = CASE WHEN status = 'CANCELLING' THEN ? ELSE NULL END
+         WHERE id = ?
+           AND attempt = ?
+           AND lease_token_hash = ?
+           AND lease_expires_at_ms >= ?
+           AND status IN ('STARTING', 'CANCELLING')
+         RETURNING status`,
+      )
+      .get(
+        input.reason,
+        input.nowMs,
+        input.jobId,
+        input.attempt,
+        input.leaseTokenHash,
+        input.nowMs,
+      ) as { status: "QUEUED" | "CANCELLED" } | undefined;
+    return deferred?.status ?? null;
   }
 
   /** 결과 import와 COMPLETED 전이를 같은 SQLite transaction으로 묶는다. */

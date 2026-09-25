@@ -24,10 +24,11 @@ import { openDatabase } from "../runtime/shared/db/database.js";
 import { backtestJobs } from "../runtime/shared/db/schema.js";
 import {
   availableResources,
-  localBacktestMaxBars,
   processRss,
   type AgentResources,
 } from "./resources.js";
+import { MAX_BACKTEST_BARS } from "../shared/backtest-limits.js";
+import { backtestMemoryPlan } from "../runtime/modules/backtest/application/backtest-memory-plan.js";
 import { AgentDatasetCache, durableJson } from "./dataset-cache.js";
 import type { AgentSettings } from "./config.js";
 import { parseWorkerDiagnostics, type WorkerDiagnostics } from "../shared/agent-diagnostics.js";
@@ -62,7 +63,7 @@ export interface AgentRuntimeAdapter {
 interface Outbox {
   lease: AgentLease;
   diagnostics?: WorkerDiagnostics;
-  message?: FinishMessage;
+  message?: FinishMessage | Extract<AgentMessage, { type: "DEFER" }>;
   artifactPath?: string;
   sha256?: string;
   telemetry?: BacktestExecutionTelemetry;
@@ -113,6 +114,7 @@ export class AgentClient {
   private updating = false;
   private runnerVersion: string | null = null;
   private lastDiagnosticsPruneAt = 0;
+  private resourceRetryAt = 0;
 
   constructor(
     readonly settings: AgentSettings,
@@ -340,6 +342,11 @@ export class AgentClient {
     this.capacity();
   }
 
+  /** 배정기도 자식 시작 직전과 같은 워커 예산을 사용한다. */
+  localMemoryBudget(): number {
+    return this.admission.budgetBytes;
+  }
+
   private capacity(): void {
     if (!this.ready) return;
     this.admission = (this.runtime?.resources ?? availableResources)(
@@ -351,7 +358,7 @@ export class AgentClient {
     const slots = this.admission.slots;
     this.send({
       type: "CAPACITY",
-      slots: this.cache.syncing || this.updating ? 0 : slots,
+      slots: this.cache.syncing || this.updating || Date.now() < this.resourceRetryAt ? 0 : slots,
       datasetVersion: this.cache.current?.version ?? 0,
       maxBars: this.maxBars(),
     });
@@ -359,7 +366,7 @@ export class AgentClient {
 
   private maxBars(): number {
     return this.runtime
-      ? localBacktestMaxBars(this.admission.budgetBytes, this.admission.maxBars)
+      ? MAX_BACKTEST_BARS
       : this.admission.maxBars;
   }
 
@@ -431,7 +438,22 @@ export class AgentClient {
       this.admission = this.runtime.resources(
         this.running.size, this.observedRss, this.profiled, this.requestedBars,
       );
-      if (this.running.size >= 1 || this.admission.slots < 1 || this.admission.memoryPressure) {
+      const memoryPlan = lease.kind === "BACKTEST"
+        ? lease.memoryPlan ?? backtestMemoryPlan(lease.payload) : null;
+      if (this.running.size >= 1 || this.admission.slots < 1 || this.admission.memoryPressure ||
+          (memoryPlan && this.admission.budgetBytes < memoryPlan.requiredBytes)) {
+        if (lease.kind === "BACKTEST" && memoryPlan) {
+          // 반환 통지 전에 새 배정을 막는다. 재시작·ACK 재전송도 기존 outbox가 보장한다.
+          this.resourceRetryAt = Date.now() + AGENT_HEARTBEAT_MS;
+          const availableBytes = Math.max(0, Math.floor(this.admission.budgetBytes));
+          this.capacity();
+          this.queueOutbox({ lease, message: {
+            type: "DEFER", ...this.identity(lease), kind: "BACKTEST",
+            reason: "RESOURCE_UNAVAILABLE", requiredBytes: memoryPlan.requiredBytes,
+            availableBytes,
+          } });
+          return;
+        }
         this.failSetup(lease, new Error("운영 API를 보호할 로컬 계산 여유가 없습니다"),
           "RESOURCE_BUDGET_EXCEEDED");
         return;

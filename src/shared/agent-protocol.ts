@@ -99,6 +99,11 @@ export const agentLeaseSchema = z.object({
   leaseToken: z.string().min(32).max(256),
   leaseExpiresAtMs: z.number().int().positive(),
   dataset: datasetManifestSchema,
+  /** 로컬 분할 실행의 시작 필요량과 하루 전체 종목을 보존할 최소 묶음이다. */
+  memoryPlan: z.object({
+    requiredBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    minimumBatchBars: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  }).optional(),
   payload: z.record(z.string(), z.unknown()),
 });
 export type AgentLease = z.infer<typeof agentLeaseSchema>;
@@ -160,6 +165,14 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("NEEDS_DATA"),
     ...identity,
     request: agentDataRequestSchema,
+  }),
+  z.object({
+    type: z.literal("DEFER"),
+    ...identity,
+    kind: z.literal("BACKTEST"),
+    reason: z.literal("RESOURCE_UNAVAILABLE"),
+    requiredBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    availableBytes: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   }),
   z.object({
     type: z.literal("FINISH"),

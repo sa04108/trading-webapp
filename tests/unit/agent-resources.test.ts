@@ -1,14 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { calculateResources, localBacktestMaxBars } from '../../src/agent/resources.js';
+import { calculateResources } from '../../src/agent/resources.js';
 import { agentSettingsSchema } from '../../src/agent/config.js';
 const GIB = 1024 ** 3;
 
 describe('에이전트 자동 자원 배정', () => {
-  it('로컬 작업 예산이 256 MiB보다 작으면 기존 봉 상한을 유지한다', () => {
-    const MIB = 1024 ** 2;
-    expect(localBacktestMaxBars(255 * MIB, 200_000)).toBe(200_000);
-    expect(localBacktestMaxBars(256 * MIB, 200_000)).toBe(2_000_000);
-  });
   it('첫 작업은 하나만 관찰하고 큰 장치에서는 기존 200만 봉보다 큰 작업을 수용한다', () => {
     const result = calculateResources({ cpus: 32, total: 64 * GIB, available: 55 * GIB, load: 0 }, 0, 0, false);
     expect(result.slots).toBe(1);
@@ -58,9 +53,9 @@ describe('에이전트 자동 자원 배정', () => {
     expect(first.heapMb).toBe(166);
     // 종료 유예 중인 기존 작업도 slot에서 빼지 않는다.
     expect(calculateResources(sample, 1, 184 * MIB, true, 0, true).slots).toBe(1);
-    // 과거 RSS는 재사용하지 않아도 현재 요청의 봉 수는 admission에 반영한다.
+    // 로컬 분할 입력은 총 봉 수 대신 작업별 상주 메모리를 배정 시 검사한다.
     const largeRequest = calculateResources(sample, 0, 184 * MIB, true, 300_000, true);
-    expect(largeRequest.slots).toBe(0);
+    expect(largeRequest.slots).toBe(1);
     expect(largeRequest.budgetBytes).toBe(256 * MIB);
   });
   it('1 GiB 서버는 부모 절반을 보전하고 CPU 수와 무관하게 로컬 워커 하나만 허용한다', () => {

@@ -5,6 +5,7 @@
  */
 import { and, asc, desc, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
 import { pino } from "pino";
+import { backtestBatchBars } from "../modules/backtest/application/backtest-memory-plan.js";
 import {
   agentLeaseSchema,
   type AgentLease,
@@ -135,7 +136,9 @@ async function main(input: { lease: AgentLease }): Promise<void> {
   const workerBudgetBytes = Number(process.env.WORKER_BUDGET_BYTES);
   // 날짜 묶음의 입력 객체가 작업 메모리 예산의 작은 일부만 차지하게 한다.
   const targetBarsPerBatch = Number.isFinite(workerBudgetBytes) && workerBudgetBytes > 0
-    ? Math.max(256, Math.min(8192, Math.floor(workerBudgetBytes / 32768)))
+    ? streamCandles && lease.memoryPlan
+      ? backtestBatchBars(workerBudgetBytes, lease.memoryPlan)
+      : Math.max(256, Math.min(8192, Math.floor(workerBudgetBytes / 32768)))
     : 8192;
   if (
     !jobId ||
@@ -521,8 +524,8 @@ async function main(input: { lease: AgentLease }): Promise<void> {
           symbolsWithBars.add(candle.symbol);
         }
       }
-      // 제출 검증의 추정 상한을 실측으로 다시 지킨다 — 제출 후 import 로 봉이 는 경우의 방어선
-      if (candleCount > maxBars) {
+      // 로컬 분할 입력은 준비 봉을 보관하지 않는다. 전체 적재 경로는 총량을 지킨다.
+      if ((streamCandles ? tradeCandleCount : candleCount) > maxBars) {
         throw new Error(
           `봉 수가 상한(${maxBars.toLocaleString()})을 넘습니다. 기간이나 종목 수를 줄이세요.`,
         );

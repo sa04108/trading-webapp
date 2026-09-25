@@ -1,14 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MAX_BACKTEST_BARS } from "../shared/backtest-limits.js";
 
 const MIB = 1024 * 1024;
 
-/** 검증된 로컬 작업 예산에서만 날짜 분할 백테스트의 논리 봉 상한을 연다. */
-export function localBacktestMaxBars(budgetBytes: number, fallbackMaxBars: number): number {
-  return budgetBytes >= 256 * MIB ? MAX_BACKTEST_BARS : fallbackMaxBars;
-}
 function read(file: string): string | null {
   try {
     return fs.readFileSync(file, "utf8").trim();
@@ -71,7 +66,8 @@ export function calculateResources(
     ? Math.min(availableBytes, sample.total * 0.5)
     : availableBytes;
   const estimated = Math.max(
-    requestedBars * 1280,
+    // 로컬 분할 입력의 작업별 필요량은 배정과 시작 직전에 별도로 검사한다.
+    server ? 0 : requestedBars * 1280,
     // 한 개만 실행하는 서버에서 과거 큰 작업의 RSS가 다음 작은 작업까지 막지 않는다.
     // 개별 작업은 시작 때 고정한 예산과 실행 중 RSS 감시로 제한한다.
     server ? 0 : observedJobRss * 1.35,
