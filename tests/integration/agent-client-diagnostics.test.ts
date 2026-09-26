@@ -37,7 +37,7 @@ async function scenario(run: (h: {
   receive(message: ServerAgentMessage): void;
   finish(diagnostics?: WorkerDiagnostics, cancellationReason?: string): Promise<void>;
   retry(): void;
-}) => Promise<void>): Promise<void> {
+}) => Promise<void>, budgetBytes = 128 * 1024 ** 2): Promise<void> {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "agent-client-diagnostics-"));
   const lease: AgentLease = {
     kind: "BACKTEST", jobId: "diagnostic-job", attempt: 1,
@@ -55,7 +55,7 @@ async function scenario(run: (h: {
     connect: (listener) => { receive = listener; },
     send: (message) => { sent.push(message); }, close: () => {},
     upload: async (input) => { uploads.push(input); return 200; },
-    resources: () => ({ cpus: 1, availableBytes: 128 * 1024 ** 2, reserveBytes: 0, slots: 1, heapMb: 64, maxBars: 1, budgetBytes: 128 * 1024 ** 2 }),
+    resources: () => ({ cpus: 1, availableBytes: budgetBytes, reserveBytes: 0, slots: 1, heapMb: 64, maxBars: 1, budgetBytes }),
   };
   const client = new AgentClient({ serverUrl: "http://localhost", token: "agent-secret" }, directory, undefined, () => {}, runtime);
   const finalizer = client as unknown as Finalizer;
@@ -175,10 +175,27 @@ describe("AgentClient 종료 결과 전달", () => {
     assert.equal(persisted.message.result.diagnostics.code, "JOB_DB_MISSING");
   }));
 
+  it("시작 예산이 부족하면 DB 준비 전에 FINISH 대신 DEFER를 전달", async () => scenario(async (h) => {
+    h.receive({ type: "JOB", lease: h.lease });
+    const message = h.sent.find((value) => value.type === "DEFER");
+    assert.ok(message && message.type === "DEFER");
+    assert.equal(message.reason, "RESOURCE_UNAVAILABLE");
+    assert.equal(message.availableBytes, 128 * 1024 ** 2);
+    assert.ok(message.requiredBytes > message.availableBytes);
+    assert.equal(h.sent.some((value) => value.type === "FINISH"), false);
+    assert.equal(fs.existsSync(path.join(h.jobDirectory, "job.sqlite")), false);
+    const persisted = JSON.parse(fs.readFileSync(path.join(h.jobDirectory, "outbox.json"), "utf8"));
+    assert.deepEqual(persisted.message, message);
+  }));
+
+  // DB 준비 실패 경로까지 도달하도록 시작 예산을 확보한다. 부족한 예산은 위에서 별도로 검증한다.
   it("프로세스 시작 전 DB 준비 실패도 JOB 처리에서 FINISH로 전달", async () => scenario(async (h) => {
     h.receive({ type: "JOB", lease: h.lease });
     const message = finishMessage(h.sent);
     assert.equal(message.outcome, "FAILED");
     assert.match(message.error ?? "", /JOB_SETUP_FAILED/);
-  }));
+    assert.match(message.error ?? "", /ENOENT/);
+    assert.match(message.error ?? "", /missing-snapshot\.sqlite/);
+    assert.equal(h.sent.some((value) => value.type === "DEFER"), false);
+  }, 256 * 1024 ** 2));
 });
