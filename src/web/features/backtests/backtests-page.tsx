@@ -20,6 +20,10 @@ import {
 import { groupJobsByStrategy } from "./job-groups";
 import { resolveJobTimeframe } from "./job-timeframe";
 import { StatusBadge } from "./status-badge";
+import {
+  ExecutionProgressSummary,
+  executionProgressPercent,
+} from "./execution-progress-display";
 import { formatUniverseRuleSummary } from "./universe-summary";
 import {
   isTerminal,
@@ -88,10 +92,12 @@ export function BacktestJobCard({
   onToggle: () => void;
 }) {
   const running = !isTerminal(job.status);
-  const progress =
+  const barsProgress =
     job.progressBars !== null && job.totalBars !== null && job.totalBars > 0
       ? Math.round((job.progressBars / job.totalBars) * 100)
       : null;
+  const activity = job.progress;
+  const progress = activity ? executionProgressPercent(activity) : barsProgress;
 
   const card = (
     <Card className="transition-colors hover:bg-muted/40">
@@ -107,10 +113,15 @@ export function BacktestJobCard({
           {job.request.period.from} ~ {job.request.period.to}
           {timeframe ? ` · ${timeframeLabel(timeframe)}` : ""}
         </div>
-        {running && progress !== null ? (
+        {running && (progress !== null || activity) ? (
           <div className="space-y-1">
-            <Progress value={progress} aria-label={`진행률 ${progress}%`} />
-            <p className="text-xs text-muted-foreground">{progress}%</p>
+            {progress !== null ? (
+              <>
+                <Progress value={progress} aria-label={`진행률 ${progress}%`} />
+                <p className="text-xs text-muted-foreground">{progress}%</p>
+              </>
+            ) : null}
+            {activity ? <ExecutionProgressSummary progress={activity} compact /> : null}
           </div>
         ) : null}
         {job.status === "COMPLETED" && job.metrics ? (

@@ -62,6 +62,70 @@ describe('PreparationProgress', () => {
     expect(html).toContain('브라우저를 닫아도 계속됩니다');
   });
 
+  it('실행 자원 대기 상세와 종목 단위를 표시한다', () => {
+    const html = renderToStaticMarkup(
+      <PreparationProgress
+        job={job({
+          status: 'RUNNING',
+          progress: {
+            activity: 'WAITING_FOR_MEMORY', detail: '필요 1,024 MiB · 사용 가능 512 MiB',
+            actorKind: 'SERVER', actorId: null, actorName: '운영 서버',
+            unit: 'SYMBOLS', completed: 4, total: 9, currentItem: null,
+            attempt: null, retryCount: 0, startedAtMs: 1, lastProgressAtMs: 2,
+            lastReceivedAtMs: 2, nextResumeAtMs: null,
+          },
+        })}
+        onCancel={() => undefined}
+      />,
+    );
+    expect(html).toContain('메모리 여유 대기');
+    expect(html).toContain('필요 1,024 MiB · 사용 가능 512 MiB');
+    expect(html).toContain('4 / 9 종목');
+    expect(html).toContain('aria-valuenow="44"');
+  });
+
+  it('QUEUED 상태에서도 메모리 산정 활동과 중복 currentItem을 한 번만 보여준다', () => {
+    const html = renderToStaticMarkup(
+      <PreparationProgress
+        job={job({
+          status: 'QUEUED',
+          progress: {
+            activity: 'ESTIMATING_JOB_MEMORY', detail: '배정 대상 계산 작업 3개 · 예상 메모리 확인',
+            actorKind: 'SERVER', actorId: null, actorName: '운영 서버 배정기',
+            unit: 'SYMBOLS', completed: 2, total: 4,
+            currentItem: '배정 대상 계산 작업 3개 · 예상 메모리 확인',
+            attempt: null, retryCount: 0, startedAtMs: 1, lastProgressAtMs: 2,
+            lastReceivedAtMs: 2, nextResumeAtMs: null,
+          },
+        })}
+        onCancel={() => undefined}
+      />,
+    );
+    expect(html).toContain('작업 메모리 산정');
+    expect(html.match(/배정 대상 계산 작업 3개 · 예상 메모리 확인/g)).toHaveLength(1);
+  });
+
+  it('실행 자원 대기에서 분모가 없으면 퍼센트 진행률을 표시하지 않는다', () => {
+    const html = renderToStaticMarkup(
+      <PreparationProgress
+        job={job({
+          status: 'RUNNING',
+          progress: {
+            activity: 'WAITING_FOR_SLOT', detail: '계산 슬롯을 기다리는 중',
+            actorKind: 'SERVER', actorId: null, actorName: '운영 서버',
+            unit: 'SYMBOLS', completed: null, total: null, currentItem: null,
+            attempt: null, retryCount: 0, startedAtMs: 1, lastProgressAtMs: 2,
+            lastReceivedAtMs: 2, nextResumeAtMs: null,
+          },
+        })}
+        onCancel={() => undefined}
+      />,
+    );
+    expect(html).toContain('계산 슬롯 대기');
+    expect(html).not.toContain('role="progressbar"');
+    expect(html).not.toContain('%');
+  });
+
   it.each([
     ['RESOLVING_STAGES', '유니버스 선정 계산'],
     ['VALIDATING_RESULT', '미리보기 결과 검증'],

@@ -1,4 +1,8 @@
 import { PeriodValidationSection } from "./period-validation-section";
+import {
+  ExecutionProgressSummary,
+  executionProgressPercent,
+} from "./execution-progress-display";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDown,
@@ -856,28 +860,14 @@ export function BacktestDetailPage() {
   const resolvedTimeframe = resolveJobTimeframe(job);
 
   const running = !isTerminal(job.status);
-  const progress =
+  const barsProgress =
     job.progressBars !== null && job.totalBars !== null && job.totalBars > 0
       ? Math.round((job.progressBars / job.totalBars) * 100)
       : null;
   const activity = job.progress;
-  const activityLabels: Record<string, string> = {
-    WAITING_FOR_EXECUTOR: "실행 자원 대기",
-    LOADING_BACKTEST_INPUT: "백테스트 입력 적재",
-    CALCULATING_BACKTEST: "백테스트 계산",
-    WRITING_RESULT: "결과 파일 작성",
-    UPLOADING_RESULT: "결과 전송",
-    VALIDATING_RESULT: "결과 검증",
-    IMPORTING_RESULT: "결과 DB 반영",
-  };
-  const displayedProgress =
-    activity !== null &&
-    activity !== undefined &&
-    activity.completed !== null &&
-    activity.total !== null &&
-    activity.total > 0
-      ? Math.round((activity.completed / activity.total) * 100)
-      : progress;
+  const displayedProgress = activity
+    ? executionProgressPercent(activity)
+    : barsProgress;
 
   return (
     <div className="space-y-4">
@@ -977,20 +967,12 @@ export function BacktestDetailPage() {
               <span>진행률</span>
               <span className="tabular-nums" aria-live="polite">
                 {displayedProgress !== null ? `${displayedProgress}%` : "진행 중"}
-                {activity !== null && activity !== undefined && activity.completed !== null && activity.total !== null
-                  ? ` (${activity.completed.toLocaleString()} / ${activity.total.toLocaleString()} ${activity.unit === "BYTES" ? "bytes" : "봉"})`
-                  : ""}
               </span>
             </div>
             {displayedProgress !== null ? (
               <Progress value={displayedProgress} aria-label="백테스트 현재 단계 진행률" />
             ) : null}
-            {activity ? (
-              <p className="text-xs text-muted-foreground">
-                {activityLabels[activity.activity] ?? activity.activity} · 수행: {activity.actorName}
-                {activity.currentItem ? ` · 현재 ${activity.currentItem}` : ""}
-              </p>
-            ) : null}
+            {activity ? <ExecutionProgressSummary progress={activity} /> : null}
           </CardContent>
         </Card>
       ) : null}

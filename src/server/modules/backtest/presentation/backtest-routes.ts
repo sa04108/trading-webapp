@@ -64,6 +64,7 @@ import type {
   JobEvent,
 } from "../application/job-orchestrator.js";
 import type { BacktestJobRow, JobQueue } from "../application/job-queue.js";
+import type { ExecutionProgress } from "../../../../shared/execution-progress.js";
 import type { ResultsService } from "../application/results-service.js";
 import { rebaseStoredRequest } from "../application/stored-request.js";
 import { summarizeUniverseRebalancing } from "../application/universe-rebalancing.js";
@@ -120,6 +121,7 @@ export interface BacktestRouteDeps {
   readonly dataRoot: string;
   readonly maxQueuedBacktests: number;
   readonly maxBacktestBars?: () => number;
+  readonly executionProgress?: (job: BacktestJobRow) => ExecutionProgress | null;
   readonly clock: Clock;
   readonly benchmarks: BenchmarkService;
   readonly seedCloneBatches: SeedCloneBatchService;
@@ -151,7 +153,7 @@ const BACKTEST_PROGRESS_REVISIONS = new Map<
   { signature: string; revision: number }
 >();
 
-function serializeJob(job: BacktestJobRow, database?: DatabaseHandle) {
+function serializeJob(job: BacktestJobRow, database?: DatabaseHandle, queuedProgress?: ExecutionProgress | null) {
   const agentName =
     job.agentId && job.agentId !== "server-local" && database
       ? (database.sqlite
@@ -161,7 +163,9 @@ function serializeJob(job: BacktestJobRow, database?: DatabaseHandle) {
   const actorKind =
     job.agentId === "server-local" ? "SERVER_AGENT" : "REMOTE_AGENT";
   const activity =
-    job.executionActivity ??
+    (job.agentId && (job.status === "STARTING" || job.status === "RUNNING") && job.lastProgressAtMs === null
+      ? "STARTING_WORKER"
+      : job.executionActivity) ??
     (job.status === "QUEUED"
       ? "WAITING_FOR_EXECUTOR"
       : job.status === "STARTING"
@@ -177,6 +181,7 @@ function serializeJob(job: BacktestJobRow, database?: DatabaseHandle) {
     job.resultTransferTotalBytes,
     job.lastProgressAtMs,
     job.lastReceivedAtMs,
+    queuedProgress,
   ]);
   const previous = BACKTEST_PROGRESS_REVISIONS.get(job.id);
   const progressRevision =
@@ -206,7 +211,7 @@ function serializeJob(job: BacktestJobRow, database?: DatabaseHandle) {
     cloneSourceJobId: job.cloneSourceJobId,
     progressEpoch: BACKTEST_PROGRESS_EPOCH,
     progressRevision,
-    progress:
+    progress: queuedProgress ?? (
       activity === null
         ? null
         : {
@@ -214,7 +219,9 @@ function serializeJob(job: BacktestJobRow, database?: DatabaseHandle) {
             detail:
               job.status === "QUEUED"
                 ? "배정 가능한 계산 슬롯을 기다리는 중"
-                : job.progressLabel,
+                : activity === "STARTING_WORKER"
+                  ? "실행기를 배정했습니다. 계산 프로세스를 시작하고 첫 진행 보고를 기다립니다"
+                  : job.progressLabel,
             actorKind: job.status === "QUEUED" ? "SERVER" : actorKind,
             actorId: job.status === "QUEUED" ? null : job.agentId,
             actorName:
@@ -248,7 +255,7 @@ function serializeJob(job: BacktestJobRow, database?: DatabaseHandle) {
             lastProgressAtMs: job.lastProgressAtMs,
             lastReceivedAtMs: job.lastReceivedAtMs,
             nextResumeAtMs: null,
-          },
+          }),
   };
 }
 
@@ -396,7 +403,7 @@ export function registerBacktestRoutes(
   } = deps;
 
   const serializeJobSummary = (job: BacktestJobRow) => ({
-    ...serializeJob(job, deps.database),
+    ...serializeJob(job, deps.database, deps.executionProgress?.(job)),
     metrics: job.status === "COMPLETED" ? results.getMetrics(job.id) : null,
   });
 
@@ -874,7 +881,7 @@ export function registerBacktestRoutes(
       });
       return reply
         .code(201)
-        .send({ job: serializeJob(job, deps.database), warnings: validated.warnings });
+        .send({ job: serializeJob(job, deps.database, deps.executionProgress?.(job)), warnings: validated.warnings });
     },
   );
 
@@ -906,7 +913,7 @@ export function registerBacktestRoutes(
       if (!job)
         return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
       return {
-        job: serializeJob(job, deps.database),
+        job: serializeJob(job, deps.database, deps.executionProgress?.(job)),
         run: results.getRun(id),
         metrics: results.getMetrics(id),
         benchmark: results.getBenchmark(id),
@@ -1053,7 +1060,7 @@ export function registerBacktestRoutes(
       });
       return reply
         .code(201)
-        .send({ job: serializeJob(cloned, deps.database), warnings: cloneWarnings });
+        .send({ job: serializeJob(cloned, deps.database, deps.executionProgress?.(cloned)), warnings: cloneWarnings });
     },
   );
 
@@ -1174,7 +1181,7 @@ export function registerBacktestRoutes(
       );
       return reply
         .code(201)
-        .send({ job: serializeJob(cloned, deps.database), warnings: cloneWarnings });
+        .send({ job: serializeJob(cloned, deps.database, deps.executionProgress?.(cloned)), warnings: cloneWarnings });
     },
   );
 
@@ -1508,7 +1515,7 @@ export function registerBacktestRoutes(
         `attachment; filename="backtest-${id}.json"`,
       );
       const fullExport = results.getFullExport(id);
-      return { job: serializeJob(job, deps.database), ...fullExport };
+      return { job: serializeJob(job, deps.database, deps.executionProgress?.(job)), ...fullExport };
     },
   );
 
@@ -1536,7 +1543,7 @@ export function registerBacktestRoutes(
         const current = queue.getJob(id);
         if (current) {
           reply.raw.write(
-            `data: ${JSON.stringify(serializeJob(current, deps.database))}\n\n`,
+            `data: ${JSON.stringify(serializeJob(current, deps.database, deps.executionProgress?.(current)))}\n\n`,
           );
         }
         return current;

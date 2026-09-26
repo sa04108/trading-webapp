@@ -122,6 +122,36 @@ describe('백테스트 목록', () => {
     expect(html).toContain('매도 체결 3건');
   });
 
+  it('실행 대기 상세와 종목 단위를 표시하고 미확정 분모에서 막대 진행률을 쓰지 않는다', () => {
+    const waitingJob: JobSummary = {
+      ...job('waiting', 'RUNNING'),
+      progressBars: 50,
+      totalBars: 100,
+      progress: {
+        activity: 'WAITING_FOR_CAPACITY', detail: '필요 2,048 MiB · 사용 가능 768 MiB',
+        actorKind: 'SERVER', actorId: null, actorName: '운영 서버', unit: 'SYMBOLS',
+        completed: 5, total: null, currentItem: null, attempt: null, retryCount: 0,
+        startedAtMs: 1, lastProgressAtMs: 2, lastReceivedAtMs: 2, nextResumeAtMs: null,
+      },
+    };
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <BacktestJobCard
+          job={waitingJob}
+          timeframe="1d"
+          editing={false}
+          selected={false}
+          onToggle={() => {}}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(html).toContain('작업 용량 대기');
+    expect(html).toContain('필요 2,048 MiB · 사용 가능 768 MiB');
+    expect(html).not.toContain('50%');
+    expect(html).not.toContain('role="progressbar"');
+  });
+
   it('편집 시 종료된 항목만 전체 선택하고, 다시 누르면 선택을 해제한다', () => {
     const ids = deletableBacktestIds([
       job('completed', 'COMPLETED'),

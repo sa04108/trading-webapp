@@ -143,6 +143,46 @@ describe('연결과 리스 수명 분리', () => {
     });
   });
 
+  it('미리보기 배정부터 첫 진행 보고까지 시작 상태를 유지하고 구독자에게 즉시 전환을 알린다', async ({ scenario }) => {
+    const { ctx, connect } = scenario;
+    const coordinator = ctx.container.agentCoordinator;
+    ctx.container.database.sqlite.prepare(
+      "INSERT INTO backtest_preparation_jobs (id, request_hash, request_json, status, phase, created_at_ms, updated_at_ms) VALUES ('prep-start', 'hash-start', '{}', 'QUEUED', 'MARKET_DATA', 1, 1)",
+    ).run();
+    const peer = await connect();
+    capacity(peer);
+    await vi.waitFor(() => expect(peer.job()?.jobId).toBe('prep-start'));
+    const lease = peer.job()!;
+    const progress = () => coordinator.preparationView(ctx.container.backtestPreparationOrchestrator.get('prep-start')!).progress;
+    expect(progress()).toMatchObject({ activity: 'STARTING_WORKER', completed: null, total: null });
+    const observed: string[] = [];
+    const unsubscribe = ctx.container.backtestPreparationOrchestrator.subscribe('prep-start', (job) => {
+      const value = coordinator.preparationView(job).progress;
+      if (value) observed.push(value.activity);
+    });
+    try {
+      peer.submit({ type: 'HEARTBEAT', kind: 'PREPARATION', jobId: lease.jobId, attempt: lease.attempt, leaseToken: lease.leaseToken,
+        preparationProgress: { phase: 'RESOLVING_STAGES', overallProgress: 30, doneSymbols: 1, totalSymbols: 4, savedFacts: 0, gapCount: 0, resolutionPass: 1 } });
+      await vi.waitFor(() => expect(observed).toContain('RESOLVING_UNIVERSE'));
+      expect(progress()).toMatchObject({ activity: 'RESOLVING_UNIVERSE', completed: 1, total: 4 });
+    } finally { unsubscribe(); }
+  });
+
+  it('입력 용량 부족과 계산 슬롯 대기를 구분하고 끊어진 장치는 제외한다', async ({ scenario }) => {
+    const { ctx, enqueue, connect } = scenario;
+    const peer = await connect();
+    peer.submit({ type: 'CAPACITY', slots: 0, datasetVersion: 1, maxBars: 100 });
+    enqueue();
+    ctx.container.database.sqlite.prepare("UPDATE backtest_jobs SET estimated_bars = 200 WHERE id = 'job-one'").run();
+    const progress = () => ctx.container.agentCoordinator.backtestProgress(ctx.container.jobQueue.getJob('job-one')!);
+    await vi.waitFor(() => expect(progress()?.activity).toBe('WAITING_FOR_CAPACITY'));
+    expect(progress()?.detail).toContain('200봉');
+    peer.submit({ type: 'CAPACITY', slots: 0, datasetVersion: 1, maxBars: 500 });
+    await vi.waitFor(() => expect(progress()?.activity).toBe('WAITING_FOR_SLOT'));
+    peer.close();
+    expect(progress()?.activity).toBe('WAITING_FOR_EXECUTOR');
+  });
+
   it('재접속과 중복 capacity 통지가 이미 배정한 작업을 중복 실행하지 않는다', async ({ scenario }) => {
     const { ctx, enqueue, connect } = scenario;
     enqueue();

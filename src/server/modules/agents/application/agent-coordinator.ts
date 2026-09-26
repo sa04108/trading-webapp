@@ -14,7 +14,7 @@ import { MAX_BACKTEST_BARS } from "../../../shared/backtest-limits.js";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import type { Logger } from "../../../shared/logger.js";
 import type { BacktestLeaseService } from "../../backtest/application/backtest-lease-service.js";
-import type { JobQueue } from "../../backtest/application/job-queue.js";
+import type { BacktestJobRow, JobQueue } from "../../backtest/application/job-queue.js";
 import {
   LOCAL_AGENT_ID,
   AGENT_MAX_ATTEMPTS,
@@ -77,7 +77,10 @@ export class AgentCoordinator {
   private readonly progressRevisions = new Map<string, { signature: string; revision: number }>();
   private lastQueueDiagnosticAt = Number.NEGATIVE_INFINITY;
   private readonly preparationPhases = new Map<string, { phase: string; pass: number; started: number }>();
-  private readonly localMemoryPlans = new Map<string, BacktestMemoryPlan>();
+  private readonly localMemoryPlans = new Map<string, { plan: BacktestMemoryPlan; complete: boolean }>();
+  private memorySampling: { jobId: string; progress: ExecutionProgress } | null = null;
+  private lastSamplingNotificationAt = 0;
+  private readonly startingPreparations = new Map<string, number>();
 
   constructor(
     private readonly database: DatabaseHandle,
@@ -203,7 +206,7 @@ export class AgentCoordinator {
     }
     if (message.type === "DEVICE_ACTIVITY") {
       connection.deviceProgress = message.progress;
-      this.preparations.notifyQueued();
+      this.notifyQueuedProgress();
       return;
     }
     const identity = {
@@ -215,6 +218,8 @@ export class AgentCoordinator {
       if (message.kind === "PREPARATION") {
         const result = this.preparations.heartbeat(clientId, identity, message.preparationProgress);
         if (result.accepted && message.preparationProgress) {
+          if (this.startingPreparations.delete(`${message.jobId}:${message.attempt}`))
+            this.preparations.notify(message.jobId, true);
           const progress = message.preparationProgress;
           const key = `${message.jobId}:${message.attempt}`;
           const previous = this.preparationPhases.get(key);
@@ -445,6 +450,7 @@ export class AgentCoordinator {
          WHERE l.job_id = ?`,
       ).get(job.id) as { client_id: string; attempt: number; last_received_at_ms: number | null; name: string | null } | undefined;
       const actorKind = lease?.client_id === LOCAL_AGENT_ID ? "SERVER_AGENT" : "REMOTE_AGENT";
+      const startingAt = this.startingPreparations.get(`${job.id}:${lease?.attempt}`);
       const activities = {
         FILING_DISCOVERY: "FILING_DISCOVERY",
         MARKET_DATA: "CHECKING_INPUT",
@@ -454,18 +460,42 @@ export class AgentCoordinator {
         FINALIZING: "SAVING_PREVIEW",
       } as const;
       return {
-        activity: activities[job.phase], detail: null, actorKind,
+        activity: startingAt === undefined ? activities[job.phase] : "STARTING_WORKER",
+        detail: startingAt === undefined ? null : "실행기를 배정했습니다. 계산 프로세스를 시작하고 첫 진행 보고를 기다립니다", actorKind,
         actorId: lease?.client_id ?? null,
         actorName: actorKind === "SERVER_AGENT" ? "운영 서버 내부 agent" : (lease?.name ?? "원격 agent"),
-        unit: job.totalSymbols > 0 ? "SYMBOLS" : null,
-        completed: job.totalSymbols > 0 ? job.doneSymbols : null,
-        total: job.totalSymbols > 0 ? job.totalSymbols : null,
+        unit: startingAt === undefined && job.totalSymbols > 0 ? "SYMBOLS" : null,
+        completed: startingAt === undefined && job.totalSymbols > 0 ? job.doneSymbols : null,
+        total: startingAt === undefined && job.totalSymbols > 0 ? job.totalSymbols : null,
         currentItem: null, attempt: lease?.attempt ?? null, retryCount: 0,
-        startedAtMs: times?.created_at_ms ?? activityAt, lastProgressAtMs: activityAt,
+        startedAtMs: startingAt ?? times?.created_at_ms ?? activityAt, lastProgressAtMs: startingAt === undefined ? activityAt : null,
         lastReceivedAtMs: lease?.last_received_at_ms ?? null, nextResumeAtMs: null,
       };
     }
     if (job.status !== "QUEUED") return null;
+    return this.queuedProgress(job.id, activityAt);
+  }
+
+  /** 배정 전 관측값도 GET과 SSE에서 같은 내용과 단위를 사용한다. */
+  backtestProgress(job: BacktestJobRow): ExecutionProgress | null {
+    return job.status === "QUEUED"
+      ? { ...this.queuedProgress(job.id, job.createdAtMs, job.estimatedBars),
+          attempt: job.attempt || null, retryCount: job.leaseFailures }
+      : null;
+  }
+
+  private queuedProgress(jobId: string, activityAt: number, estimatedBars?: number): ExecutionProgress {
+    const base: ExecutionProgress = {
+      activity: "WAITING_FOR_EXECUTOR", detail: null,
+      actorKind: "SERVER", actorId: null, actorName: "운영 서버 배정기",
+      unit: null, completed: null, total: null, currentItem: null,
+      attempt: null, retryCount: 0, startedAtMs: activityAt,
+      lastProgressAtMs: null, lastReceivedAtMs: null, nextResumeAtMs: null,
+    };
+    if (this.memorySampling) return this.memorySampling.jobId === jobId
+      ? this.memorySampling.progress
+      : { ...base, activity: "ASSIGNING_EXECUTOR",
+          detail: "배정기가 먼저 대기 중인 백테스트의 입력 크기와 메모리를 확인하고 있습니다. 확인 후 이 작업의 배정을 이어갑니다" };
     const publishing = this.snapshots.publishProgress();
     if (publishing)
       return {
@@ -475,10 +505,19 @@ export class AgentCoordinator {
         startedAtMs: publishing.startedAtMs, lastProgressAtMs: publishing.updatedAtMs,
         lastReceivedAtMs: publishing.updatedAtMs, nextResumeAtMs: null,
       };
-    const syncing = [...this.connections.entries()]
+    const connected = [...this.connections, ...(this.localConnection ? [[LOCAL_AGENT_ID, this.localConnection] as const] : [])]
+      .filter(([id, connection]) => connection.ready && connection.socket.readyState === 1 &&
+        (id === LOCAL_AGENT_ID || (Date.now() - connection.lastMessageAt <= 60_000 && this.registry.active(id))));
+    const memory = this.localMemoryPlans.get(`${this.localConnection?.datasetVersion}:${jobId}`);
+    const budget = this.localClient?.localMemoryBudget() ?? 0;
+    const capable = connected.filter(([id, connection]) => estimatedBars === undefined ||
+      (connection.maxBars >= estimatedBars &&
+        (id !== LOCAL_AGENT_ID || !memory || memory.plan.requiredBytes <= budget)));
+    const free = capable.filter(([id, connection]) => this.available(id, connection));
+    const syncing = capable
       .map(([id, connection]) => ({ id, progress: connection.deviceProgress }))
       .find(({ progress }) => progress !== undefined);
-    if (syncing?.progress) {
+    if (syncing?.progress && free.length === 0) {
       const name = (this.database.sqlite.prepare("SELECT name FROM agent_clients WHERE id = ?").get(syncing.id) as { name: string } | undefined)?.name;
       return {
         activity: syncing.progress.activity, detail: syncing.progress.detail,
@@ -492,16 +531,47 @@ export class AgentCoordinator {
         nextResumeAtMs: null,
       };
     }
-    const ready = [...this.connections.values()].filter((connection) => connection.ready).length;
-    const free = [...this.connections.entries()].some(([id, connection]) => this.available(id, connection));
-    return {
-      activity: "WAITING_FOR_EXECUTOR",
-      detail: ready === 0 ? "연결된 원격 agent가 없습니다" : free ? "입력 동기화 또는 작업 배정 중" : "연결된 agent의 계산 슬롯이 사용 중입니다",
-      actorKind: "SERVER", actorId: null, actorName: "운영 서버 배정기",
-      unit: null, completed: null, total: null, currentItem: null,
-      attempt: null, retryCount: 0, startedAtMs: activityAt,
-      lastProgressAtMs: null, lastReceivedAtMs: activityAt, nextResumeAtMs: null,
+    if (connected.length === 0) return { ...base,
+      detail: "연결된 실행기가 없습니다. 운영 서버 내부 실행기 또는 원격 agent 연결을 기다립니다" };
+    if (free.length > 0) return { ...base, activity: "ASSIGNING_EXECUTOR",
+      detail: `사용 가능한 실행기 ${free.length}개에서 입력 데이터와 배정 순서를 확인합니다${memory?.complete ? ` · 예상 필요 메모리 ${Math.ceil(memory.plan.requiredBytes / 1024 ** 2)} MiB` : ""}` };
+    const local = connected.find(([id]) => id === LOCAL_AGENT_ID);
+    if (local && (estimatedBars === undefined || local[1].maxBars >= estimatedBars) &&
+      this.activeLeaseCount(LOCAL_AGENT_ID) === 0 &&
+      ((memory && memory.plan.requiredBytes > budget) || budget < 128 * 1024 ** 2)) return {
+      ...base, activity: "WAITING_FOR_MEMORY",
+      detail: `운영 서버의 메모리 여유를 기다립니다 · ${memory ? `${memory.complete ? "예상" : "최소"} 필요 ${Math.ceil(memory.plan.requiredBytes / 1024 ** 2)} MiB · ` : ""}현재 가용 ${Math.floor(budget / 1024 ** 2)} MiB · 자원이 확보되면 자동으로 다시 배정합니다`,
     };
+    if (capable.length === 0) return { ...base, activity: "WAITING_FOR_CAPACITY",
+      detail: `입력 ${estimatedBars?.toLocaleString("ko-KR")}봉을 수용할 실행기를 기다립니다 · 연결된 실행기의 최대 용량 ${Math.max(...connected.map(([, connection]) => connection.maxBars)).toLocaleString("ko-KR")}봉` };
+    const active = capable.reduce((count, [id]) => count + this.activeLeaseCount(id), 0);
+    return { ...base, activity: "WAITING_FOR_SLOT",
+      detail: `실행 가능한 계산 슬롯을 기다립니다 · 연결된 실행기 ${capable.length}개 · 배정된 작업 ${active}개${local ? " · 운영 서버는 CPU·메모리 여유를 확보한 뒤 한 작업씩 실행합니다" : ""}` };
+  }
+
+  /** 진행 알림만으로 배정 루프를 다시 깨우지 않는다. */
+  notifyQueuedProgress(): void {
+    this.preparations.notifyQueued(true);
+    const jobs = this.database.sqlite.prepare("SELECT id FROM backtest_jobs WHERE status = 'QUEUED'").all() as Array<{ id: string }>;
+    for (const job of jobs) this.queue.events.emit("job", { jobId: job.id, kind: "progress" });
+  }
+
+  private reportMemorySampling(jobId: string, completed: number | null, total: number | null, budgetBytes: number): void {
+    const now = Date.now();
+    const previous = this.memorySampling;
+    this.memorySampling = { jobId, progress: {
+      activity: "ESTIMATING_JOB_MEMORY",
+      detail: `종목별 재무 데이터 크기, 전략 이력, 결과 저장 공간과 최소 입력 묶음의 메모리를 계산합니다 · 현재 가용 ${Math.floor(budgetBytes / 1024 ** 2)} MiB`,
+      actorKind: "SERVER", actorId: null, actorName: "운영 서버 배정기",
+      unit: total === null ? null : "SYMBOLS", completed, total, currentItem: null,
+      attempt: null, retryCount: 0, startedAtMs: previous?.jobId === jobId ? previous.progress.startedAtMs : now,
+      lastProgressAtMs: now, lastReceivedAtMs: now, nextResumeAtMs: null,
+    } };
+    // 종목 집계가 빠른 경우 SSE 직렬화가 계산보다 무거워지지 않게 제한한다.
+    if (previous?.jobId !== jobId || now - this.lastSamplingNotificationAt >= 250 || completed === total) {
+      this.lastSamplingNotificationAt = now;
+      this.notifyQueuedProgress();
+    }
   }
 
   ownsBacktest(clientId: string, jobId: string): boolean {
@@ -558,6 +628,7 @@ export class AgentCoordinator {
       )
       .finally(() => {
         this.dispatching = null;
+        if (!this.stopped) this.notifyQueuedProgress();
         if (this.dispatchRequested && !this.stopped) this.wake();
       });
   };
@@ -619,7 +690,7 @@ export class AgentCoordinator {
       .filter(([id, connection]) => connection.ready && connection.socket.readyState === 1 &&
         (id === LOCAL_AGENT_ID || (now - connection.lastMessageAt <= 60_000 && this.registry.active(id))));
     for (const job of jobs) {
-      const requiredBytes = this.localMemoryPlans.get(`${this.localConnection?.datasetVersion}:${job.id}`)?.requiredBytes ?? null;
+      const requiredBytes = this.localMemoryPlans.get(`${this.localConnection?.datasetVersion}:${job.id}`)?.plan.requiredBytes ?? null;
       const localBudgetBytes = this.localClient?.localMemoryBudget() ?? 0;
       const capable = connected.filter(([id, connection]) => connection.maxBars >= job.estimatedBars &&
         (id !== LOCAL_AGENT_ID || requiredBytes === null || requiredBytes <= localBudgetBytes));
@@ -714,6 +785,10 @@ export class AgentCoordinator {
         break;
       }
       active += 1;
+      if (lease.kind === "PREPARATION") {
+        this.startingPreparations.set(`${lease.jobId}:${lease.attempt}`, Date.now());
+        this.preparations.notify(lease.jobId, true);
+      }
       this.send(connection, { type: "JOB", lease });
     }
   }
@@ -730,22 +805,28 @@ export class AgentCoordinator {
     try {
       for (const candidate of candidates) {
         const key = `${dataset.version}:${candidate.id}`;
-        let plan = this.localMemoryPlans.get(key);
+        const cached = this.localMemoryPlans.get(key);
+        let plan = cached?.complete ? cached.plan : undefined;
         if (!plan) {
           const job = this.queue.getJob(candidate.id);
           if (!job) continue;
+          this.reportMemorySampling(candidate.id, null, null, budgetBytes);
           let factQuery: { symbols: readonly string[]; throughTsMs: number } | undefined;
           plan = backtestMemoryPlan(job, (symbols, throughTsMs) => {
             factQuery = { symbols, throughTsMs };
             return 0;
           });
           if (plan.requiredBytes > budgetBytes) {
+            this.rememberMemoryPlan(key, plan, false);
+            this.memorySampling = null;
+            this.notifyQueuedProgress();
             await yieldImmediate();
             if (this.stopped) return null;
             continue;
           }
           if (factQuery) {
             try {
+              this.reportMemorySampling(candidate.id, 0, factQuery.symbols.length, budgetBytes);
               snapshot ??= new Database(this.snapshots.file(dataset), { readonly: true, fileMustExist: true });
               // 종목 키 인덱스로 집계하고 16종목마다 API 이벤트 루프에 양보한다.
               const count = snapshot.prepare(`SELECT count(*) AS count FROM facts
@@ -755,10 +836,12 @@ export class AgentCoordinator {
               for (let index = 0; index < factQuery.symbols.length; index++) {
                 rows += (count.get(factQuery.symbols[index], factQuery.throughTsMs) as { count: number }).count;
                 if (index % 16 === 15) {
+                  this.reportMemorySampling(candidate.id, index + 1, factQuery.symbols.length, budgetBytes);
                   await yieldImmediate();
                   if (this.stopped) return null;
                 }
               }
+              this.reportMemorySampling(candidate.id, factQuery.symbols.length, factQuery.symbols.length, budgetBytes);
               plan = backtestMemoryPlan(job, () => rows);
             } catch (error) {
               // 입력 파일 손상·누락을 메모리 대기에 가두지 않는다. claim 후 해당 작업만 실패시킨다.
@@ -766,18 +849,24 @@ export class AgentCoordinator {
                 inputError: `게시 스냅샷을 확인할 수 없습니다: ${error instanceof Error ? error.message : String(error)}` };
             }
           }
-          if (this.localMemoryPlans.size >= 256)
-            this.localMemoryPlans.delete(this.localMemoryPlans.keys().next().value!);
-          this.localMemoryPlans.set(key, plan);
+          this.rememberMemoryPlan(key, plan, true);
         }
+        this.memorySampling = null;
         if (plan.requiredBytes <= budgetBytes) return { jobId: candidate.id, plan };
         await yieldImmediate();
         if (this.stopped) return null;
       }
     } finally {
+      this.memorySampling = null;
       snapshot?.close();
     }
     return null;
+  }
+
+  private rememberMemoryPlan(key: string, plan: BacktestMemoryPlan, complete: boolean): void {
+    if (!this.localMemoryPlans.has(key) && this.localMemoryPlans.size >= 256)
+      this.localMemoryPlans.delete(this.localMemoryPlans.keys().next().value!);
+    this.localMemoryPlans.set(key, { plan, complete });
   }
 
   private startLocal(): void {
@@ -901,6 +990,13 @@ export class AgentCoordinator {
   private tick(): void {
     if (this.stopped) return;
     try {
+      for (const key of this.startingPreparations.keys()) {
+        const separator = key.lastIndexOf(":");
+        const row = this.database.sqlite.prepare(`SELECT l.attempt FROM agent_preparation_leases l
+          JOIN backtest_preparation_jobs j ON j.id = l.job_id WHERE j.id = ? AND j.status = 'RUNNING'`)
+          .get(key.slice(0, separator)) as { attempt: number } | undefined;
+        if (row?.attempt !== Number(key.slice(separator + 1))) this.startingPreparations.delete(key);
+      }
       this.preparations.sweep();
       this.dataQueue.tick();
       if (Date.now() - this.lastPrunedAt > 60_000) {

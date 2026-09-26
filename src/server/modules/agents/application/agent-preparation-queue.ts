@@ -61,20 +61,20 @@ const resultSchema = z.object({
 export class AgentPreparationQueue {
   constructor(
     private readonly database: DatabaseHandle,
-    private readonly changed: (jobId: string) => void,
+    private readonly changed: (jobId: string, progressOnly?: boolean) => void,
   ) {}
 
-  notify(jobId: string): void {
-    this.changed(jobId);
+  notify(jobId: string, progressOnly = false): void {
+    this.changed(jobId, progressOnly);
   }
 
-  notifyQueued(): void {
+  notifyQueued(progressOnly = false): void {
     const rows = this.database.sqlite
       .prepare(
         "SELECT id FROM backtest_preparation_jobs WHERE status IN ('QUEUED', 'WAITING_DATA')",
       )
       .all() as Array<{ id: string }>;
-    for (const row of rows) this.changed(row.id);
+    for (const row of rows) this.changed(row.id, progressOnly);
   }
 
   claim(clientId: string, dataset: DatasetManifest): AgentLease | null {

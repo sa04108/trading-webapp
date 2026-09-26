@@ -442,9 +442,9 @@ export function createContainer(
     database,
     path.join(path.dirname(config.databasePath), "datasets"),
   );
-  const preparations = new AgentPreparationQueue(database, (jobId) => {
+  const preparations = new AgentPreparationQueue(database, (jobId, progressOnly) => {
     backtestPreparationOrchestrator.agentJobUpdated(jobId);
-    agentCoordinator.wake();
+    if (!progressOnly) agentCoordinator.wake();
   });
   const dataQueue = new AgentDataQueue(
     database,
@@ -472,7 +472,10 @@ export function createContainer(
     logger,
     readRuntimeVersions().executionVersion,
   );
-  snapshots.subscribe(() => preparations.notifyQueued());
+  snapshots.subscribe(() => {
+    agentCoordinator.notifyQueuedProgress();
+    agentCoordinator.wake();
+  });
   const remoteResultUploadManager = new RemoteResultUploadManager(
     config.tempRoot,
   );

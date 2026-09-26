@@ -141,6 +141,7 @@ export async function buildServer(
           dataRoot: container.config.dataRoot,
           maxQueuedBacktests: container.config.maxQueuedBacktests,
           maxBacktestBars: () => container.agentCoordinator.maxBacktestBars(),
+          executionProgress: (job) => container.agentCoordinator.backtestProgress(job),
           clock: container.clock,
           benchmarks: container.benchmarkService,
           seedCloneBatches: container.seedCloneBatchService,

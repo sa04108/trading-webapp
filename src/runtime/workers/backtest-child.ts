@@ -200,7 +200,9 @@ async function main(input: { lease: AgentLease }): Promise<void> {
       type: "progress",
       processedBars: 0,
       totalBars: 0,
-      progressLabel: null,
+      progressLabel: streamCandles
+        ? `입력을 목표 ${targetBarsPerBatch.toLocaleString("ko-KR")}봉씩 나누어 읽습니다 · 같은 날짜의 종목은 함께 처리합니다${Number.isFinite(workerBudgetBytes) && workerBudgetBytes > 0 ? ` · 작업 메모리 예산 ${Math.floor(workerBudgetBytes / 1024 ** 2)} MiB` : ""}`
+        : "계산 프로세스가 시작되어 가격·재무 입력을 읽고 있습니다",
       activity: "LOADING_BACKTEST_INPUT",
     });
     const job = db
