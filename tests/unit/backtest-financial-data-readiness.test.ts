@@ -82,7 +82,7 @@ function coverageFromDates(datesBySymbol: ReadonlyMap<string, readonly string[]>
 }
 
 describe('findIncompleteFundamentalCheckpointsFromCoverage', () => {
-  it('휴장일·편출 경계·거래정지·재편입·정정 공시에서 기존 PIT 판정과 같다', async () => {
+  it.each([32, 1])('%i종목 묶음에서 휴장일·편출·거래정지·재편입·정정 공시의 PIT 판정을 보존한다', async (factSymbolBatchSize) => {
     const dates = new Map([
       ['LATER', ['2025-01-03', '2025-02-03', '2025-02-03', '2025-03-03']],
       ['NEVER', ['2025-01-03', '2025-02-03', '2025-03-03']],
@@ -112,6 +112,7 @@ describe('findIncompleteFundamentalCheckpointsFromCoverage', () => {
       schedule: localSchedule,
       candles: coverageFromDates(dates),
       facts: { getFacts },
+      factSymbolBatchSize,
     });
     expect(actual).toEqual([{ symbol: 'NEVER', date: '2025-01-03' }]);
     expect(actual).toEqual(findIncompleteFundamentalCheckpoints({
@@ -119,6 +120,8 @@ describe('findIncompleteFundamentalCheckpointsFromCoverage', () => {
     }));
     expect(getFacts.mock.calls.flatMap(([query]) => query.keys ?? [])).not.toContain('SUSPENDED');
     expect(getFacts.mock.calls.flatMap(([query]) => query.keys ?? [])).not.toContain('NEXT_ONLY');
+    for (const [query] of getFacts.mock.calls)
+      expect(query.keys!.length).toBeLessThanOrEqual(factSymbolBatchSize);
   });
 
   it('기간 밖 봉과 실행 봉이 없는 일정은 facts를 조회하지 않는다', async () => {

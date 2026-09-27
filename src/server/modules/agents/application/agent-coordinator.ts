@@ -811,9 +811,9 @@ export class AgentCoordinator {
           const job = this.queue.getJob(candidate.id);
           if (!job) continue;
           this.reportMemorySampling(candidate.id, null, null, budgetBytes);
-          let factQuery: { symbols: readonly string[]; throughTsMs: number } | undefined;
-          plan = backtestMemoryPlan(job, (symbols, throughTsMs) => {
-            factQuery = { symbols, throughTsMs };
+          let factQuery: { symbols: readonly string[]; throughTsMs: number; includeFinancialFacts: boolean } | undefined;
+          plan = backtestMemoryPlan(job, (symbols, throughTsMs, includeFinancialFacts) => {
+            factQuery = { symbols, throughTsMs, includeFinancialFacts };
             return 0;
           });
           if (plan.requiredBytes > budgetBytes) {
@@ -829,12 +829,21 @@ export class AgentCoordinator {
               this.reportMemorySampling(candidate.id, 0, factQuery.symbols.length, budgetBytes);
               snapshot ??= new Database(this.snapshots.file(dataset), { readonly: true, fileMustExist: true });
               // 종목 키 인덱스로 집계하고 16종목마다 API 이벤트 루프에 양보한다.
-              const count = snapshot.prepare(`SELECT count(*) AS count FROM facts
-                WHERE scope = 'SYMBOL' AND key = ?
-                  AND (as_of_ts_ms <= ? OR field = 'SPLIT_RATIO')`);
+              // 가격 전략은 재무를 적재하지 않는다. 자본변동은 늦게 접수되어도 보정에 필요하다.
+              const count = snapshot.prepare(`SELECT
+                coalesce(sum(field = 'SPLIT_RATIO'), 0) AS actionRows,
+                coalesce(sum(field != 'SPLIT_RATIO'), 0) AS financialRows FROM facts
+                WHERE scope = 'SYMBOL' AND key = @symbol AND ${factQuery.includeFinancialFacts
+                  ? "(as_of_ts_ms <= @throughTsMs OR field = 'SPLIT_RATIO')"
+                  : "field = 'SPLIT_RATIO'"}`);
               let rows = 0;
+              let largestFinancialRows = 0;
               for (let index = 0; index < factQuery.symbols.length; index++) {
-                rows += (count.get(factQuery.symbols[index], factQuery.throughTsMs) as { count: number }).count;
+                const sample = count.get({ symbol: factQuery.symbols[index],
+                  ...(factQuery.includeFinancialFacts ? { throughTsMs: factQuery.throughTsMs } : {}),
+                }) as { actionRows: number; financialRows: number };
+                rows += sample.actionRows;
+                largestFinancialRows = Math.max(largestFinancialRows, sample.financialRows);
                 if (index % 16 === 15) {
                   this.reportMemorySampling(candidate.id, index + 1, factQuery.symbols.length, budgetBytes);
                   await yieldImmediate();
@@ -842,7 +851,7 @@ export class AgentCoordinator {
                 }
               }
               this.reportMemorySampling(candidate.id, factQuery.symbols.length, factQuery.symbols.length, budgetBytes);
-              plan = backtestMemoryPlan(job, () => rows);
+              plan = backtestMemoryPlan(job, () => rows + largestFinancialRows);
             } catch (error) {
               // 입력 파일 손상·누락을 메모리 대기에 가두지 않는다. claim 후 해당 작업만 실패시킨다.
               return { jobId: candidate.id, plan,

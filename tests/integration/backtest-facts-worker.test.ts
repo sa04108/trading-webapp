@@ -1,4 +1,5 @@
-import { describe, expect } from 'vitest';
+import { afterEach, describe, expect, vi } from 'vitest';
+import * as resources from '../../src/agent/resources.js';
 import { and, eq, gt, inArray } from 'drizzle-orm';
 import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
 import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
@@ -19,6 +20,19 @@ import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2025, 0, 2);
+
+afterEach(() => vi.restoreAllMocks());
+
+function startLocalAgent(ctx: TestApp): void {
+  const measure = resources.availableServerResources;
+  // 팩트 배선 검사는 CPU 슬롯이 있는 실행기를 가정한다. 호스트의 빌드 부하와 분리하되
+  // 실제 메모리 예산·압력과 워커 RSS 제한은 유지한다. 자원 정책은 별도 테스트가 검증한다.
+  vi.spyOn(resources, 'availableServerResources').mockImplementation((...args) => {
+    const measured = measure(...args);
+    return { ...measured, slots: measured.memoryPressure || measured.budgetBytes < 128 * 1024 ** 2 ? 0 : 1 };
+  });
+  ctx.container.agentCoordinator.start();
+}
 
 /**
  * Task 11 인접 위험 점검: `tests/integration/backtest-facts.test.ts` 의
@@ -204,7 +218,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;
 
-      await ctx.startAgent();
+      startLocalAgent(ctx);
       await waitFor(() => {
         const job = ctx.container.jobQueue.getJob(jobId);
         return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -523,7 +537,7 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
         asOfTsMs: SPLIT_RECEIPT_TS,
         value: 2,
         unit: 'RATIO',
-      }]);
+      }, ...factsFor('SPLIT', 50_000), ...factsFor('FLAT', 5_000)]);
       try {
         await use({
           ctx,
@@ -542,7 +556,7 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
   });
 
   it(
-    '기간 종료 이후 접수된 분할도 로드해 모멘텀 신호를 보정한다 (실제 큐·자식 프로세스)',
+    '가격 전략은 재무를 적재하지 않고 기간 종료 뒤 접수된 분할로 신호를 보정한다 (실제 큐·자식 프로세스)',
     { timeout: 90_000 },
     async ({ scenario }) => {
       const { ctx, cookie } = scenario;
@@ -603,6 +617,16 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
       expect(warnings.some((w) => w.includes('액면분할도 이 실행에서는 보정되지 않았습니다'))).toBe(
         false,
       );
+      // 재무 행은 제외하고 늦게 접수된 분할과 coverage 픽스처의 중립 자본변동 두 행만 읽는다.
+      const loadedFactCount = (): number | undefined => (
+        ctx.container.database.sqlite
+          .prepare("SELECT detail_json FROM audit_logs WHERE event = 'backtest.finished'")
+          .all() as Array<{ detail_json: string }>
+      ).map((row) => JSON.parse(row.detail_json) as {
+        jobId: string; executionTelemetry?: { input: { factCount: number } | null };
+      }).find((detail) => detail.jobId === jobId)?.executionTelemetry?.input?.factCount;
+      await waitFor(() => loadedFactCount() !== undefined, 15_000);
+      expect(loadedFactCount()).toBe(3);
     },
   );
 });
@@ -761,7 +785,7 @@ describe('이익 가속·가격 확인 순위 워커 배선 — PIT 공시 경�
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
 
-    await ctx.startAgent();
+    startLocalAgent(ctx);
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);
@@ -880,7 +904,7 @@ describe('저PER·고ROE 순위 워커 배선 — PIT 공시 경계 (Task 12)', 
     expect(created.statusCode).toBe(201);
     const jobId = (created.json().job as { id: string }).id;
 
-    await ctx.startAgent();
+    startLocalAgent(ctx);
     await waitFor(() => {
       const job = ctx.container.jobQueue.getJob(jobId);
       return job !== null && ctx.container.jobQueue.isTerminal(job.status);

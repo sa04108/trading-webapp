@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, like, lte, ne, sql } from "drizzle-orm";
+import type { Statement } from "better-sqlite3";
 import type { NativeAppDatabase } from "../../../shared/db/database.js";
 import { facts as factRows } from "../../../shared/db/schema.js";
 import { SYMBOL_PATTERN } from "../../market-data/domain/candle.js";
@@ -11,6 +12,11 @@ const READ_KEY_BATCH_SIZE = 500;
 
 /** SQLite의 복합 PK와 UPSERT를 그대로 쓰는 FactRepository. */
 export class SqliteFactRepository implements FactRepository {
+  private lastReadStatement: {
+    sql: string;
+    statement: Statement;
+  } | undefined;
+
   constructor(private readonly db: NativeAppDatabase) {}
 
   async saveFacts(facts: readonly Fact[]): Promise<void> {
@@ -127,6 +133,11 @@ export class SqliteFactRepository implements FactRepository {
   }
 
   async getFacts(query: FactQuery): Promise<Fact[]> {
+    return this.getFactsSync(query);
+  }
+
+  /** 동기 엔진은 한 종목의 PIT 입력만 읽고 다음 종목 전에 해제한다. */
+  getFactsSync(query: FactQuery): Fact[] {
     const keys =
       query.keys && query.keys.length > 0 ? [...new Set(query.keys)] : null;
     const batches: Array<readonly string[] | null> =
@@ -174,8 +185,14 @@ export class SqliteFactRepository implements FactRepository {
           asc(factRows.asOfTsMs),
         )
         .toSQL();
-      const selectedRows = this.db.$client
-        .prepare(selected.sql)
+      // 종목·시점만 바뀌는 반복 조회는 준비문을 재사용한다. 캐시는 쿼리 한 개로 제한한다.
+      if (this.lastReadStatement?.sql !== selected.sql) {
+        this.lastReadStatement = {
+          sql: selected.sql,
+          statement: this.db.$client.prepare(selected.sql),
+        };
+      }
+      const selectedRows = this.lastReadStatement.statement
         .iterate(...selected.params) as Iterable<typeof factRows.$inferSelect>;
       for (const row of selectedRows) {
         const {

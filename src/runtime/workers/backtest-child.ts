@@ -6,6 +6,7 @@
 import { and, asc, desc, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
 import { pino } from "pino";
 import { backtestBatchBars } from "../modules/backtest/application/backtest-memory-plan.js";
+import { BacktestFundamentalView } from "../modules/backtest/application/backtest-fundamental-view.js";
 import {
   agentLeaseSchema,
   type AgentLease,
@@ -196,6 +197,15 @@ async function main(input: { lease: AgentLease }): Promise<void> {
   };
 
   try {
+    if (streamCandles) {
+      // SQLite 기본 캐시는 DB마다 약 16 MiB다. 작은 로컬 예산에서는 native 캐시도 나눈다.
+      // 음수 cache_size의 단위는 KiB이며 이 연결에만 적용되어 스냅샷 파일은 바뀌지 않는다.
+      const cacheKiB = Number.isFinite(workerBudgetBytes) && workerBudgetBytes > 0
+        ? Math.max(2048, Math.min(16 * 1024, Math.floor(workerBudgetBytes / 128 / 1024)))
+        : 2048;
+      handle.sqlite.pragma(`main.cache_size = -${cacheKiB}`);
+      handle.sqlite.pragma(`data.cache_size = -${cacheKiB}`);
+    }
     send({
       type: "progress",
       processedBars: 0,
@@ -616,7 +626,13 @@ async function main(input: { lease: AgentLease }): Promise<void> {
       );
     }
     const lastExecutionTsMs = Math.max(...financialCutoffBySymbol.values());
-    const financialFacts: Fact[] = (
+    // 가격 전략은 고정된 유니버스와 봉만 사용하므로 재무 이력을 상주시킬 필요가 없다.
+    // 자본변동은 아래 별도 질의로 계속 읽어 가격·수량 보정을 보존한다.
+    const requiresFinancialFacts = strategyRequiresFinancialData(strategy);
+    const financialView = streamCandles && requiresFinancialFacts
+      ? new BacktestFundamentalView((query) => factRepository.getFactsSync(query), financialCutoffBySymbol)
+      : undefined;
+    const financialFacts: Fact[] = !streamCandles && requiresFinancialFacts ? (
       await factRepository.getFacts({
         scope: "SYMBOL",
         keys: unionSymbols,
@@ -627,7 +643,24 @@ async function main(input: { lease: AgentLease }): Promise<void> {
         fact.field !== CORPORATE_ACTION_FIELD &&
         fact.asOfTsMs <=
           (financialCutoffBySymbol.get(fact.key) ?? Number.NEGATIVE_INFINITY),
-    );
+    ) : [];
+    let financialFactCount = financialFacts.length;
+    const symbolsWithFinancialFacts = new Set(financialFacts.map((fact) => fact.key));
+    if (financialView) {
+      // 전체 행을 적재하지 않고 기존 입력 건수 계측과 재무 존재 검사를 유지한다.
+      const count = handle.sqlite.prepare(`SELECT count(*) AS count FROM data.facts
+        WHERE scope = 'SYMBOL' AND key = ? AND field != 'SPLIT_RATIO' AND as_of_ts_ms <= ?`);
+      let sampled = 0;
+      for (const [symbol, cutoff] of financialCutoffBySymbol) {
+        const rows = (count.get(symbol, cutoff) as { count: number }).count;
+        financialFactCount += rows;
+        if (rows > 0) symbolsWithFinancialFacts.add(symbol);
+        if (++sampled % 16 === 0) {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          if (cancellation.isRequested()) throw new Error("백테스트가 취소되었습니다");
+        }
+      }
+    }
     if (streamCandles && strategy.dataRequirements?.fundamentalsReady !== undefined) {
       const incomplete = await findIncompleteFundamentalCheckpointsFromCoverage({
         strategy,
@@ -636,6 +669,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
         schedule,
         candles: coverage,
         facts: factRepository,
+        factSymbolBatchSize: 1,
         throwIfStopped: () => {
           if (cancellation.isRequested()) throw new Error("백테스트가 취소되었습니다");
         },
@@ -818,9 +852,8 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     const facts: Fact[] = [...financialFacts, ...corporateActionFacts];
     // 준비 뒤 fact가 사라진 종목 판정은 **재무** 팩트만 본다 — 분할만 기록된 종목은
     // 재무가 없는 종목이다. 이 시점의 schedule은 이미 고정돼 재순위할 수 없다.
-    if (strategyRequiresFinancialData(strategy)) {
-      const symbolsWithFacts = new Set(financialFacts.map((fact) => fact.key));
-      const withoutFacts = unionSymbols.filter((s) => !symbolsWithFacts.has(s));
+    if (requiresFinancialFacts) {
+      const withoutFacts = unionSymbols.filter((s) => !symbolsWithFinancialFacts.has(s));
       if (withoutFacts.length > 0) {
         throw new Error(
           "준비 완료 후 마지막 실행 봉까지 사용 가능한 재무 데이터가 사라진 종목이 있습니다: " +
@@ -839,7 +872,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
 
     inputSize = {
       candleCount,
-      factCount: facts.length,
+      factCount: financialFactCount + corporateActionFacts.length,
       symbolCount: unionSymbols.length,
     };
     loadCompletedAtMs = Date.now();
@@ -873,6 +906,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
         randomSeed: request.randomSeed,
         maxPositions: request.risk.maxPositions,
         facts,
+        ...(financialView ? { fundamentals: (symbol: string, tsMs: number) => financialView.fundamentals(symbol, tsMs) } : {}),
         tradeFromTsMs,
         // 조회 구간의 toTsMs는 23:59:59.999라 일봉 날짜와 중복된다. 성과 기간은
         // Candle.tsMs와 같은 UTC 자정 날짜로 넘겨 실제 point가 경계에 있으면 재사용한다.

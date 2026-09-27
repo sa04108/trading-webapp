@@ -188,12 +188,16 @@ describe('KrxDailyCandleRepository', () => {
   });
 
   it('501종목 입력도 날짜 창별로 읽어 전체 기간을 한 번에 조회하지 않는다', () => {
-    let selectCalls = 0;
+    let prepareCalls = 0;
+    let executionCalls = 0;
     const fakeDb = {
       select: () => ({
         from: () => ({
           where: () => ({
-            orderBy: () => ({ all: () => { selectCalls += 1; return []; } }),
+            orderBy: () => ({ prepare: () => {
+              prepareCalls += 1;
+              return { all: () => { executionCalls += 1; return []; } };
+            } }),
           }),
         }),
       }),
@@ -206,7 +210,8 @@ describe('KrxDailyCandleRepository', () => {
     }, 501)];
 
     expect(batches).toEqual([]);
-    expect(selectCalls).toBe(9);
+    expect(prepareCalls).toBe(3);
+    expect(executionCalls).toBe(9);
   });
 
   it('종가 전용 bulk 조회는 유효 봉의 시간·종가만 종목별로 돌려준다', async ({ repository }) => {

@@ -69,6 +69,8 @@ export interface BacktestRunInput {
    * 재무를 쓰지 않는 전략(range-breakout 등)은 넘길 필요가 없다.
    */
   readonly facts?: readonly Fact[];
+  /** 로컬 분할 실행은 현재 시점의 재무를 종목별로 조회하고 전체 이력을 보관하지 않는다. */
+  readonly fundamentals?: (symbol: string, tsMs: number) => ReturnType<StrategyBarContext["fundamentals"]>;
   /**
    * 멤버십 일정(스펙 2026-08-05, §9.5) — `fromTsMs` 오름차순일 필요는 없다(엔진이 정렬한다).
    * 각 시점에는 `fromTsMs <= 현재 ts` 인 항목 중 가장 늦은 것이 활성 유니버스다.
@@ -1138,7 +1140,7 @@ function* runBacktestSteps(
         fundamentals: (symbol) =>
           contextRetiredSymbols.has(symbol)
             ? null
-            : factView.fundamentals(symbol),
+            : input.fundamentals ? input.fundamentals(symbol, tsMs) : factView.fundamentals(symbol),
         corporateActions: (symbol) =>
           contextRetiredSymbols.has(symbol)
             ? []
@@ -1188,7 +1190,7 @@ function* runBacktestSteps(
       fundamentals: (symbol) =>
         contextRetiredSymbols.has(symbol)
           ? null
-          : factView.fundamentals(symbol),
+          : input.fundamentals ? input.fundamentals(symbol, tsMs) : factView.fundamentals(symbol),
       corporateActions: (symbol) =>
         contextRetiredSymbols.has(symbol)
           ? []

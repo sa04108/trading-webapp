@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
 import { SqliteFactRepository } from '../../src/runtime/modules/facts/infrastructure/sqlite-fact-repository.js';
 import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
@@ -30,11 +30,37 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   database.close();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe('SqliteFactRepository', () => {
+  it('반복 PIT 조회는 준비문을 재사용하면서 종목·시점과 저장 변경을 반영한다', async () => {
+    const first = fact({ key: '005930', asOfTsMs: 100, value: 1 });
+    const correction = fact({ key: '005930', asOfTsMs: 200, value: 2 });
+    const other = fact({ key: '000660', asOfTsMs: 100, value: 3 });
+    await repository.saveFacts([first, correction, other]);
+    const prepare = vi.spyOn(database.sqlite, 'prepare');
+    const read = (symbol: string, cutoff: number) => repository.getFactsSync({
+      scope: 'SYMBOL', keys: [symbol], asOfMaxTsMs: cutoff,
+    });
+
+    expect(read('005930', 100)).toEqual([first]);
+    expect(read('000660', 200)).toEqual([other]);
+    expect(read('005930', 200)).toEqual([first, correction]);
+    expect(read('005930', 99)).toEqual([]);
+    expect(prepare).toHaveBeenCalledTimes(1);
+
+    await repository.saveFacts([{ ...first, value: 4 }]);
+    prepare.mockClear();
+    expect(read('005930', 100)).toEqual([{ ...first, value: 4 }]);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(await repository.getFacts({ scope: 'SYMBOL', fields: ['NET_INCOME'] })).toEqual([]);
+    expect(read('000660', 100)).toEqual([other]);
+    expect(prepare).toHaveBeenCalledTimes(2);
+  });
+
   it('동일한 연도별 재무·자본변동 snapshot은 행 순서와 무관하게 DB를 다시 쓰지 않는다', async () => {
     const financials = [fact(), fact({ field: 'NET_INCOME', value: 10 })];
     const actions = [fact({ field: 'SPLIT_RATIO', periodKey: '2025-04-01', value: 2, unit: 'RATIO',

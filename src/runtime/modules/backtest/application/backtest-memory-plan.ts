@@ -1,4 +1,5 @@
 import { StrategyRegistry } from "../../strategy/application/strategy-registry.js";
+import { strategyRequiresFinancialData } from "../../strategy/domain/strategy.js";
 import { backtestRequestSchema } from "../../../../shared/schemas/backtest-request.js";
 
 const MIB = 1024 ** 2;
@@ -13,7 +14,7 @@ export interface BacktestMemoryPlan {
 /** 봉 총량 대신 상주 입력·전략 이력·결과의 크기로 분할 실행의 시작 예산을 추정한다. */
 export function backtestMemoryPlan(
   payload: Record<string, unknown>,
-  countFacts?: (symbols: readonly string[], throughTsMs: number) => number,
+  countFacts?: (symbols: readonly string[], throughTsMs: number, includeFinancialFacts: boolean) => number,
 ): BacktestMemoryPlan {
   const minimumBatchBars = 256;
   // 런타임·SQLite의 기본 몫과 GC/네이티브 할당 여유다. 추정과 별도로 실행 중 RSS를 감시한다.
@@ -40,13 +41,17 @@ export function backtestMemoryPlan(
     const pinnedBytes = ["requestJson", "universeScheduleJson", "universeJson", "benchmarkJson"]
       .reduce((bytes, key) => bytes + Buffer.byteLength(String(payload[key] ?? "")), 0);
     // 최근 이력은 typed array, 결과는 날짜별 평가와 포지션별 거래가 누적된다.
-    // 가격 전략도 현재 워커에서는 재무 팩트를 읽는다. 게시 스냅샷의 행 수로 몫을 잡는다.
+    // 재무는 한 종목씩 읽으므로 최대 종목의 행 수만, 자본변동은 전체 행 수를 더한다.
     const historyBytes = symbols.size * lookback * 64;
     const resultBytes = days * (512 + request.risk.maxPositions * 256);
     let factsBytes = symbols.size * years * 8 * 1024;
     if (countFacts) {
       try {
-        const rows = countFacts([...symbols], Date.parse(request.period.to) + 86_400_000 - 1);
+        const rows = countFacts(
+          [...symbols],
+          Date.parse(request.period.to) + 86_400_000 - 1,
+          strategyRequiresFinancialData(strategy),
+        );
         if (!Number.isSafeInteger(rows) || rows < 0) throw new Error("잘못된 팩트 행 수");
         factsBytes = rows * 512;
       } catch (error) {

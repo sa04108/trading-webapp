@@ -46,13 +46,27 @@ describe('로컬 백테스트 상주 메모리 계획', () => {
   it('가격 전략에서도 실제 게시 팩트 수를 반영하고 집계 실패를 작은 작업으로 바꾸지 않는다', () => {
     const input = payload();
     const empty = backtestMemoryPlan(input, () => 0);
-    const populated = backtestMemoryPlan(input, (symbols, throughTsMs) => {
+    let priceIncludesFinancialFacts: boolean | undefined;
+    const populated = backtestMemoryPlan(input, (symbols, throughTsMs, includeFinancialFacts) => {
       expect(symbols).toHaveLength(377);
       expect(throughTsMs).toBe(Date.parse('2026-09-13') - 1);
+      priceIncludesFinancialFacts = includeFinancialFacts;
       return 100_000;
     });
+    expect(priceIncludesFinancialFacts).toBe(false);
     expect(populated.requiredBytes - empty.requiredBytes).toBeGreaterThanOrEqual(48 * MIB);
     expect(() => backtestMemoryPlan(input, () => { throw new Error('snapshot unreadable'); }))
       .toThrow('게시 스냅샷의 입력 메모리를 확인하지 못했습니다');
+  });
+
+  it('재무 전략의 실제 게시 팩트 집계에는 재무 행이 포함된다', () => {
+    let includeFinancialFacts: boolean | undefined;
+    const empty = backtestMemoryPlan(payload(377, 'value-quality-rank'), () => 0);
+    const plan = backtestMemoryPlan(payload(377, 'value-quality-rank'), (_symbols, _throughTsMs, include) => {
+      includeFinancialFacts = include;
+      return 100_000;
+    });
+    expect(includeFinancialFacts).toBe(true);
+    expect(plan.requiredBytes).toBeGreaterThan(empty.requiredBytes);
   });
 });

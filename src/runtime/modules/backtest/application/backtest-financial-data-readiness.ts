@@ -32,6 +32,8 @@ interface CoverageReadinessInput {
   readonly schedule: readonly FinancialReadinessScheduleEntry[];
   readonly candles: Pick<CandleCoverageService, "getCoverageBetween">;
   readonly throwIfStopped?: () => void;
+  /** 로컬 백테스트는 시작 예산과 맞춰 한 종목씩 검증한다. */
+  readonly factSymbolBatchSize?: number;
 }
 
 interface ReadinessBatch {
@@ -148,13 +150,16 @@ function* readinessBatches(
   }
 
   const symbols = [...checkpointsBySymbol.keys()].sort();
+  const batchSize = input.factSymbolBatchSize ?? FACT_SYMBOL_BATCH_SIZE;
+  if (!Number.isSafeInteger(batchSize) || batchSize < 1)
+    throw new Error("재무 검증의 종목 묶음 크기가 올바르지 않습니다");
   for (
     let offset = 0;
     offset < symbols.length;
-    offset += FACT_SYMBOL_BATCH_SIZE
+    offset += batchSize
   ) {
     input.throwIfStopped?.();
-    const keys = symbols.slice(offset, offset + FACT_SYMBOL_BATCH_SIZE);
+    const keys = symbols.slice(offset, offset + batchSize);
     const checkpoints = keys.flatMap((symbol) =>
       checkpointsBySymbol.get(symbol)!,
     );

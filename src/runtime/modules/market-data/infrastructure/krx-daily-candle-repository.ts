@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, gte, inArray, lte } from "drizzle-orm";
+import { and, asc, eq, gt, gte, inArray, lte, placeholder } from "drizzle-orm";
 import type { AppDatabase } from "../../../shared/db/database.js";
 import { krxDailyBars } from "../../../shared/db/schema.js";
 import {
@@ -196,28 +196,52 @@ export class KrxDailyCandleRepository implements CandleRepository {
       1,
       Math.floor(targetBarsPerBatch / query.symbols.length),
     );
+    // 반복 날짜 창에서 native SQLite statement를 다시 만들지 않도록 심볼 묶음마다 한 번 준비한다.
+    const preparedChunks = [];
+    for (
+      let index = 0;
+      index < query.symbols.length;
+      index += READ_SYMBOL_BATCH_SIZE
+    ) {
+      const requestedSymbols = query.symbols.slice(
+        index,
+        index + READ_SYMBOL_BATCH_SIZE,
+      );
+      const uniqueSymbols = [...new Set(requestedSymbols)];
+      const statement = this.db
+        .select()
+        .from(krxDailyBars)
+        .where(and(
+          inArray(krxDailyBars.shortCode, uniqueSymbols),
+          gte(krxDailyBars.date, placeholder("fromDate")),
+          lte(krxDailyBars.date, placeholder("toDate")),
+        ))
+        .orderBy(asc(krxDailyBars.shortCode), asc(krxDailyBars.date))
+        .prepare();
+      preparedChunks.push({ requestedSymbols, statement });
+    }
     while (firstDateTsMs <= lastDateTsMs) {
       const endDateTsMs = Math.min(
         lastDateTsMs,
         firstDateTsMs + (calendarDaysPerBatch - 1) * MS_PER_DAY,
       );
-      const windowQuery = {
-        ...query,
-        fromTsMs: firstDateTsMs,
-        toTsMs: endDateTsMs,
-      };
       const batch: Candle[] = [];
-      for (
-        let index = 0;
-        index < windowQuery.symbols.length;
-        index += READ_SYMBOL_BATCH_SIZE
-      ) {
-        const symbols = windowQuery.symbols.slice(
-          index,
-          index + READ_SYMBOL_BATCH_SIZE,
-        );
-        for (const candle of this.candlesForSymbols(windowQuery, symbols))
-          batch.push(candle);
+      const fromDate = tsMsToDate(firstDateTsMs);
+      const toDate = tsMsToDate(endDateTsMs);
+      for (const { requestedSymbols, statement } of preparedChunks) {
+        const rows = statement.all({ fromDate, toDate });
+        const grouped = new Map<string, (typeof krxDailyBars.$inferSelect)[]>();
+        for (const row of rows) {
+          const values = grouped.get(row.shortCode) ?? [];
+          values.push(row);
+          grouped.set(row.shortCode, values);
+        }
+        for (const symbol of requestedSymbols) {
+          for (const row of grouped.get(symbol) ?? []) {
+            const candle = toCandle(row, symbol, query.market, query.timeframe);
+            if (isValidCandle(candle)) batch.push(candle);
+          }
+        }
       }
       batch.sort((left, right) =>
         left.tsMs === right.tsMs

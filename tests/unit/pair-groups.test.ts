@@ -116,7 +116,100 @@ function oscillate(bars: number): number[] {
   return Array.from({ length: bars }, (_, index) => 1_000 + (index % 2 === 0 ? 10 : -10));
 }
 
+/** 최적화 전 pair 계산을 재현해 그룹 결과의 결정적 동등성을 확인한다. */
+function referenceOldTryBuildGroups(
+  warmup: ReturnType<typeof newCorrelationWarmup>,
+  symbols: readonly string[],
+  correlationBars: number,
+  threshold: number,
+): Map<string, string> | null {
+  if (symbols.length === 0) return new Map();
+  if (!symbols.some((symbol) => (warmup.closesBySymbol.get(symbol)?.size ?? 0) >= correlationBars)) {
+    return null;
+  }
+  const sorted = [...symbols].sort();
+  const parent = new Map(sorted.map((symbol) => [symbol, symbol]));
+  const find = (symbol: string): string => {
+    let root = symbol;
+    while (parent.get(root) !== root) root = parent.get(root) as string;
+    return root;
+  };
+  const union = (left: string, right: string): void => {
+    const rootLeft = find(left);
+    const rootRight = find(right);
+    if (rootLeft === rootRight) return;
+    if (rootLeft < rootRight) parent.set(rootRight, rootLeft);
+    else parent.set(rootLeft, rootRight);
+  };
+  const oldLogReturns = (closes: readonly number[]): number[] => {
+    const returns: number[] = [];
+    for (let index = 1; index < closes.length; index += 1) {
+      const previous = closes[index - 1] as number;
+      const current = closes[index] as number;
+      if (previous > 0 && current > 0) returns.push(Math.log(current / previous));
+    }
+    return returns;
+  };
+
+  for (let leftIndex = 0; leftIndex < sorted.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < sorted.length; rightIndex += 1) {
+      const left = warmup.closesBySymbol.get(sorted[leftIndex] as string);
+      const right = warmup.closesBySymbol.get(sorted[rightIndex] as string);
+      if (left === undefined || right === undefined) continue;
+      const commonTs = [...left.keys()]
+        .filter((tsMs) => right.has(tsMs))
+        .sort((a, b) => a - b)
+        .slice(-correlationBars);
+      if (commonTs.length < correlationBars) continue;
+      const correlation = pearsonCorrelation(
+        oldLogReturns(commonTs.map((tsMs) => left.get(tsMs) as number)),
+        oldLogReturns(commonTs.map((tsMs) => right.get(tsMs) as number)),
+      );
+      if (correlation !== null && correlation <= -threshold) {
+        union(sorted[leftIndex] as string, sorted[rightIndex] as string);
+      }
+    }
+  }
+  return new Map(sorted.map((symbol) => [symbol, find(symbol)]));
+}
+
 describe('tryBuildGroups', () => {
+  it('scratch 배열 계산이 이전 알고리즘과 정확히 같은 그룹을 낸다', () => {
+    const base = [100, 103, 101, 106, 104, 110, 108, 115, 112, 120];
+    const rows = new Map<string, Map<number, number>>();
+    const add = (symbol: string, tsMs: number, close: number): void => {
+      let closes = rows.get(symbol);
+      if (closes === undefined) {
+        closes = new Map();
+        rows.set(symbol, closes);
+      }
+      closes.set(tsMs, close);
+    };
+    for (let index = 0; index < 40; index += 1) {
+      const price = base[index % base.length] as number;
+      const invalid = index === 6 ? 0 : index === 14 ? Number.NaN : index === 23 ? Number.POSITIVE_INFINITY : price;
+      if (index % 2 === 0) add('A', T0 + index * DAY, invalid);
+      if (index % 3 !== 1) add('B', T0 + index * DAY, invalid > 0 ? 1_000_000 / invalid : -1);
+      if (index % 4 !== 2) add('C', T0 + index * DAY, price * 17);
+      if (index % 5 !== 3) add('CONST', T0 + index * DAY, 55);
+      if (index % 3 !== 0) add('SPARSE', T0 + index * DAY, index % 7 === 0 ? 0 : 200 + index * 3);
+    }
+    // Map insertion 순서도 시간 역순인 입력을 넣어도 timestamp 정렬 결과가 같아야 한다.
+    const closesBySymbol = new Map(
+      [...rows.entries()].map(([symbol, closes]) => [symbol, new Map([...closes.entries()].reverse())] as const),
+    );
+    const warmup = { closesBySymbol };
+    const symbols = ['SPARSE', 'CONST', 'C', 'B', 'A'];
+
+    for (const correlationBars of [0, 0.5, 1, 2, 2.5, 7, 7.5, 15, -2]) {
+      for (const threshold of [-0.5, 0, 0.25, 0.5, 0.9, 1, 1.5]) {
+        expect(tryBuildGroups(warmup, symbols, correlationBars, threshold)).toEqual(
+          referenceOldTryBuildGroups(warmup, symbols, correlationBars, threshold),
+        );
+      }
+    }
+  });
+
   it('중간 상장(5봉 늦게 시작)이어도 공통 봉이 차면 역상관 쌍을 병합한다', () => {
     const path = oscillate(30);
     const warmup = newCorrelationWarmup();

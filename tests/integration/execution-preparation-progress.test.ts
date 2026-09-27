@@ -4,6 +4,7 @@ import { authenticatedTest } from '../helpers/test-fixtures.js';
 import * as resources from '../../src/agent/resources.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import type { ExecutionProgress } from '../../src/shared/execution-progress.js';
+import { backtestMemoryPlan } from '../../src/runtime/modules/backtest/application/backtest-memory-plan.js';
 
 const it = authenticatedTest.extend({ appOptions: { agentPreparation: true } });
 const MIB = 1024 ** 2;
@@ -23,7 +24,88 @@ function localResources(budgetBytes: number, slots = 1) {
     slots, heapMb: 128, maxBars: 2_000_000, budgetBytes, memoryPressure: false };
 }
 
+function memoryFacts(symbolCount: number, financialRows: readonly number[], actionRows: number) {
+  const facts = [];
+  for (let symbolIndex = 0; symbolIndex < symbolCount; symbolIndex += 1) {
+    const key = String(symbolIndex).padStart(6, '0');
+    for (let row = 0; row < (financialRows[symbolIndex] ?? 0); row += 1) {
+      facts.push({ scope: 'SYMBOL' as const, key, field: 'NET_INCOME', periodKey: `income-${row}`,
+        asOfTsMs: Date.parse('2025-01-01') + row, value: 1, unit: 'KRW' });
+    }
+    for (let row = 0; row < actionRows; row += 1) {
+      facts.push({ scope: 'SYMBOL' as const, key, field: 'SPLIT_RATIO', periodKey: `action-${row}`,
+        // 접수일은 백테스트 종료 뒤여도 가격 보정에 필요한 자본변동 행이다.
+        asOfTsMs: Date.parse('2027-01-01') + row, value: 1, unit: 'RATIO' });
+    }
+  }
+  return facts;
+}
+
+function planFor(job: unknown, factRows: number) {
+  return backtestMemoryPlan(job as Record<string, unknown>, () => factRows);
+}
+
 describe('배정 준비 진행 정보', () => {
+  it('가격 전략은 늦게 접수된 자본변동만 메모리에 반영하고 재무 팩트 묶음은 제외한다', async ({ ctx }) => {
+    const coordinator = ctx.container.agentCoordinator;
+    const splitRowsPerSymbol = 512;
+    const symbolCount = schedule[0]!.symbols.length;
+    const financialRows = Array.from({ length: symbolCount }, () => 512);
+    await ctx.container.factRepository.saveFacts(memoryFacts(symbolCount, financialRows, splitRowsPerSymbol));
+    await coordinator.snapshots.ensureLatest();
+    vi.spyOn(coordinator.backtests, 'claim').mockReturnValue({ status: 'EMPTY' });
+    const job = ctx.container.jobQueue.enqueue(request, schedule);
+    const basePlan = planFor(job, 0);
+    const actionPlan = planFor(job, symbolCount * splitRowsPerSymbol);
+    const allFactsPlan = planFor(job, symbolCount * (splitRowsPerSymbol + 512));
+    expect(actionPlan.requiredBytes).toBeGreaterThan(basePlan.requiredBytes);
+    expect(allFactsPlan.requiredBytes).toBeGreaterThan(actionPlan.requiredBytes);
+    let budget = basePlan.requiredBytes;
+    vi.spyOn(resources, 'availableServerResources').mockImplementation(() => localResources(budget));
+    try {
+      coordinator.start();
+      await vi.waitFor(() => expect(coordinator.backtestProgress(ctx.container.jobQueue.getJob(job.id)!)?.activity).toBe('WAITING_FOR_MEMORY'));
+      budget = actionPlan.requiredBytes;
+      coordinator.wake();
+      await vi.waitFor(() => expect(coordinator.backtestProgress(ctx.container.jobQueue.getJob(job.id)!)?.activity).toBe('ASSIGNING_EXECUTOR'));
+    } finally {
+      await coordinator.stop();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('재무 전략은 종목별 가장 큰 재무 입력과 모든 자본변동을 세고 합산 팩트보다 작게 계획한다', async ({ ctx }) => {
+    const coordinator = ctx.container.agentCoordinator;
+    const symbolCount = schedule[0]!.symbols.length;
+    const largestFinancialRows = 512 + 4096;
+    const financialRows = Array.from({ length: symbolCount }, (_, index) => index === 0 ? largestFinancialRows : 512);
+    const actionRowsPerSymbol = 256;
+    await ctx.container.factRepository.saveFacts(memoryFacts(symbolCount, financialRows, actionRowsPerSymbol));
+    await coordinator.snapshots.ensureLatest();
+    vi.spyOn(coordinator.backtests, 'claim').mockReturnValue({ status: 'EMPTY' });
+    const financialRequest = { ...request, strategyId: 'value-quality-rank' };
+    const job = ctx.container.jobQueue.enqueue(financialRequest, schedule);
+    const basePlan = planFor(job, 0);
+    const maxResidentRows = largestFinancialRows + symbolCount * actionRowsPerSymbol;
+    const summedRows = financialRows.reduce((sum, rows) => sum + rows, 0) + symbolCount * actionRowsPerSymbol;
+    const residentPlan = planFor(job, maxResidentRows);
+    const summedPlan = planFor(job, summedRows);
+    expect(residentPlan.requiredBytes).toBeGreaterThan(basePlan.requiredBytes);
+    expect(summedPlan.requiredBytes).toBeGreaterThan(residentPlan.requiredBytes);
+    let budget = residentPlan.requiredBytes;
+    vi.spyOn(resources, 'availableServerResources').mockImplementation(() => localResources(budget));
+    try {
+      coordinator.start();
+      await vi.waitFor(() => expect(coordinator.backtestProgress(ctx.container.jobQueue.getJob(job.id)!)?.activity).toBe('ASSIGNING_EXECUTOR'));
+      budget = basePlan.requiredBytes;
+      coordinator.wake();
+      await vi.waitFor(() => expect(coordinator.backtestProgress(ctx.container.jobQueue.getJob(job.id)!)?.activity).toBe('WAITING_FOR_MEMORY'));
+    } finally {
+      await coordinator.stop();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('연결된 실행기가 없으면 실제 대기 사유를 API에 보내고 진행률은 만들지 않는다', async ({ ctx, cookie }) => {
     const job = ctx.container.jobQueue.enqueue(request, schedule);
     const response = await ctx.app.inject({ method: 'GET', url: `/api/v1/backtests/${job.id}`, cookies: { session: cookie } });

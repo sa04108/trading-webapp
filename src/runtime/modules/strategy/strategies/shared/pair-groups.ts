@@ -9,13 +9,21 @@ import type { Rng } from "../../../backtest/domain/seeded-rng.js";
  */
 
 /** 로그수익률. 0 이하 가격이 끼면 그 구간은 건너뛴다 — NaN 이 상관을 오염시키지 않게 */
-function logReturns(closes: readonly number[]): number[] {
-  const returns: number[] = [];
+function logReturns(
+  closes: readonly number[],
+  output?: number[],
+): number[] {
+  const returns = output ?? [];
+  let count = 0;
   for (let index = 1; index < closes.length; index += 1) {
     const prev = closes[index - 1] as number;
     const current = closes[index] as number;
-    if (prev > 0 && current > 0) returns.push(Math.log(current / prev));
+    if (prev > 0 && current > 0) {
+      returns[count] = Math.log(current / prev);
+      count += 1;
+    }
   }
+  returns.length = count;
   return returns;
 }
 
@@ -351,20 +359,48 @@ export function tryBuildGroups(
   );
   if (!ready) return null;
 
+  // 모든 pair가 같은 임시 배열을 순차 사용한다. 종목 쌍마다 배열을 만들면 큰
+  // 유니버스의 재그룹화에서 공통 시각·종가·수익률 배열이 수만 개씩 생긴다.
+  const commonTs: number[] = [];
+  const leftCloses: number[] = [];
+  const rightCloses: number[] = [];
+  const leftReturns: number[] = [];
+  const rightReturns: number[] = [];
+
   return buildGroups(symbols, (leftSymbol, rightSymbol) => {
     const left = warmup.closesBySymbol.get(leftSymbol);
     const right = warmup.closesBySymbol.get(rightSymbol);
     if (left === undefined || right === undefined) return false;
 
-    const commonTs = [...left.keys()]
-      .filter((tsMs) => right.has(tsMs))
-      .sort((a, b) => a - b)
-      .slice(-correlationBars);
-    if (commonTs.length < correlationBars) return false;
+    let commonCount = 0;
+    for (const tsMs of left.keys()) {
+      if (!right.has(tsMs)) continue;
+      commonTs[commonCount] = tsMs;
+      commonCount += 1;
+    }
+    commonTs.length = commonCount;
+    commonTs.sort((a, b) => a - b);
+    if (commonCount < correlationBars) return false;
+
+    // Array.prototype.slice 는 음수·소수·0 입력을 ToIntegerOrInfinity 규칙으로
+    // 정규화한다. 배열을 새로 slice 하지 않고 같은 시작 인덱스를 계산한다.
+    const normalizedStart = Math.trunc(-correlationBars) || 0;
+    const windowStart = normalizedStart < 0
+      ? Math.max(commonCount + normalizedStart, 0)
+      : Math.min(normalizedStart, commonCount);
+    const windowCount = commonCount - windowStart;
+    if (windowCount < correlationBars) return false;
+    for (let index = 0; index < windowCount; index += 1) {
+      const tsMs = commonTs[windowStart + index] as number;
+      leftCloses[index] = left.get(tsMs) as number;
+      rightCloses[index] = right.get(tsMs) as number;
+    }
+    leftCloses.length = windowCount;
+    rightCloses.length = windowCount;
 
     const correlation = pearsonCorrelation(
-      logReturns(commonTs.map((tsMs) => left.get(tsMs) as number)),
-      logReturns(commonTs.map((tsMs) => right.get(tsMs) as number)),
+      logReturns(leftCloses, leftReturns),
+      logReturns(rightCloses, rightReturns),
     );
     return correlation !== null && correlation <= -threshold;
   });
