@@ -199,6 +199,7 @@ export const valueQualityRankStrategy: TradingStrategy<
   historyLookbackBars: () => 1,
   requiredRebalanceGapBars: 1,
   dataRequirements: {
+    fundamentalFields: CONSULTED_FIELDS,
     fundamentalLookbackQuarters: 4,
     fundamentalsReady: (snapshot, tsMs, parameters) =>
       snapshot.ttm("OPERATING_INCOME") !== null &&

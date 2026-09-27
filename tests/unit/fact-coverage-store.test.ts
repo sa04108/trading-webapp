@@ -239,9 +239,61 @@ describe('SqliteFactCoverageStore', () => {
     expect(store.getCoverageState(['005930']).get('005930')).toEqual({
       verifiedYears: [2024, 2025],
       blockingGapYears: [2024],
-      blockingGapDetails: [{ year: 2024, examples: ['2024Q1: 금액 파싱 실패'] }],
+      blockingGapDetails: [{
+        year: 2024,
+        examples: ['2024Q1: 금액 파싱 실패'],
+        gaps: [{
+          symbol: '005930', periodKey: '2024Q1', reason: '금액 파싱 실패', severity: 'BLOCKING', kind: 'INVALID',
+        }],
+      }],
     });
     database.close();
+  });
+
+  it('typed blocking gap을 manifest에 보존하고 hash가 바뀌면 coverage 검증을 거부한다', () => {
+    const { store, database } = setup();
+    try {
+      store.addCoverageResult('005930', [2025], [{
+        symbol: '005930', periodKey: '2025Q1', reason: '순이익 파싱 실패', severity: 'BLOCKING',
+        kind: 'INVALID', field: 'NET_INCOME', asOfTsMs: 100,
+      }], 100);
+      const row = database.db.select().from(symbolFactsState).get()!;
+      const protocol = JSON.parse(row.financialCoverageProtocolJson!) as {
+        manifests: Array<{ blockingGaps?: Array<{ reason: string }> }>;
+      };
+      expect(protocol.manifests[0]?.blockingGaps).toEqual([expect.objectContaining({
+        symbol: '005930', periodKey: '2025Q1', kind: 'INVALID', field: 'NET_INCOME', asOfTsMs: 100,
+      })]);
+
+      protocol.manifests[0]!.blockingGaps![0]!.reason = '임의 변조';
+      database.sqlite.prepare('UPDATE symbol_facts_state SET financial_coverage_protocol_json = ? WHERE code = ?')
+        .run(JSON.stringify(protocol), '005930');
+      expect(store.getCoverageState(['005930']).get('005930')?.verifiedYears).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it('구형 blocking detail 없는 manifest는 재생 대상으로 두고 정상 legacy manifest는 재사용한다', () => {
+    const { store, database } = setup();
+    try {
+      store.addCoverageResult('005930', [2024, 2025], [{
+        symbol: '005930', periodKey: '2024Q1', reason: '구형 원인', severity: 'BLOCKING', kind: 'INVALID',
+      }], 100);
+      const row = database.db.select().from(symbolFactsState).get()!;
+      const protocol = JSON.parse(row.financialCoverageProtocolJson!) as {
+        manifests: Array<{ year: number; blockingGaps?: unknown }>;
+      };
+      protocol.manifests.forEach((manifest) => { delete manifest.blockingGaps; });
+      database.sqlite.prepare('UPDATE symbol_facts_state SET financial_coverage_protocol_json = ? WHERE code = ?')
+        .run(JSON.stringify(protocol), '005930');
+
+      expect(store.getCoverageState(['005930']).get('005930')).toEqual({
+        verifiedYears: [2025], blockingGapYears: [], blockingGapDetails: [],
+      });
+    } finally {
+      database.close();
+    }
   });
 
   it('다시 기록하면 현재 snapshot manifest를 만들고 해결된 gap을 지운다', () => {

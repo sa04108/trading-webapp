@@ -531,6 +531,7 @@ export function createContainer(
         strategy,
         symbols,
         coverage: factCoverageStore,
+        schedule,
       });
       if (financialCoverageGap !== null) {
         throw new Error(financialCoverageGapMessage(financialCoverageGap));
@@ -556,6 +557,8 @@ export function createContainer(
             "일봉과 유니버스 데이터를 다시 준비한 뒤 난수 시드 실험을 다시 시작하세요.",
         );
       }
+      // 공시 결측은 원본 실행과 같은 시점별 전략 판정으로 처리한다.
+      if (strategy.dataRequirements?.fundamentalFields !== undefined) return;
       const incomplete =
         strategy.dataRequirements?.fundamentalsReady === undefined
           ? (() => {

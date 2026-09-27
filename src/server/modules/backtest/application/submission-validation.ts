@@ -481,14 +481,14 @@ export function createSubmissionValidator(deps: SubmissionValidationDeps) {
     const strategy = strategies.get(body.strategyId);
     if (strategy === null || !strategyRequiresFinancialData(strategy))
       return null;
-    // 일부 종목만 준비되지 않은 상태를 허용하면 그 종목이 랭킹 후보에서 조용히 빠져
-    // 성과가 낙관적으로 치우친다. coverage뿐 아니라 전략이 실제 읽는 계정·연속 분기·
-    // 신선도를 같은 PIT 시점으로 다시 확인한다.
+    // 수집 완료 근거와 실제 snapshot의 무결성을 먼저 검증한다. 공시가 없거나
+    // 필수 계정이 부족한 정상 상태는 전략의 시점별 PIT 후보 판정으로 보낸다.
     const gap = findFinancialCoverageGap({
       request: body,
       strategy,
       symbols: unionSymbols,
       coverage: factCoverage,
+      schedule,
     });
     if (gap !== null) {
       return {
@@ -518,6 +518,9 @@ export function createSubmissionValidator(deps: SubmissionValidationDeps) {
           "일봉과 유니버스 데이터를 다시 준비하세요.",
       };
     }
+    // 재무 결측을 건너뛰는 전략은 고정 KRX 멤버십을 유지한다. 실제 삭제·손상은
+    // 위의 manifest 검사와 제출 때 고정한 데이터 revision이 확인한다.
+    if (strategy.dataRequirements?.fundamentalFields !== undefined) return null;
     const readiness = strategy.dataRequirements?.fundamentalsReady;
     const missingFacts =
       readiness === undefined

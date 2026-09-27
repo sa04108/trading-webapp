@@ -642,7 +642,8 @@ export function registerBacktestRoutes(
     const codesWithFundamentals =
       financialFacts.symbolsWithFinancialFacts(factCutoffs);
     const sourceStrategy = strategies.get(sourceRequest.strategyId);
-    if (sourceStrategy && strategyRequiresFinancialData(sourceStrategy)) {
+    if (sourceStrategy && strategyRequiresFinancialData(sourceStrategy) &&
+      sourceStrategy.dataRequirements?.fundamentalFields === undefined) {
       const incomplete =
         sourceStrategy.dataRequirements?.fundamentalsReady === undefined
           ? resolved.unionSymbols.filter(

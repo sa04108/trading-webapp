@@ -970,6 +970,30 @@ describe('createDartFactSource — 요청 구성', () => {
     expect(shares[0]?.periodKey).toBe('2025Q1');
   });
 
+  it.each([
+    [{ se: '보통주', istc_totqy: '-' }, 'MISSING'],
+    [{ se: '보통주', istc_totqy: '' }, 'MISSING'],
+    [{ se: '보통주' }, 'INVALID'],
+    [{ se: '보통주', istc_totqy: 100 }, 'INVALID'],
+    [{ istc_totqy: '100' }, 'INVALID'],
+  ] as const)('주식 수의 공란과 필드 형식 오류를 구분한다 (%j)', async (row, kind) => {
+    const source = createDartFactSource(
+      { baseUrl: 'https://dart.test', apiKey: 'K' }, LOGGER, {
+        fetchImpl: (async (url: string | URL) => String(url).includes('stockTotqySttus') && String(url).includes('reprt_code=11013')
+          ? jsonResponse({ status: '000', list: [{ rcept_no: '20250515000001', ...row }] })
+          : jsonResponse({ status: '013' })) as typeof fetch,
+        sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER,
+      },
+    );
+    const result = await source.fetchFinancials({ symbols: ['005930'], years: [2025], shareYears: [2025], consolidated: true });
+    expect(result.facts).toEqual([]);
+    expect(result.gaps).toHaveLength(1);
+    expect(result.gaps[0]).toMatchObject({
+      field: 'SHARES_OUTSTANDING', kind, severity: 'BLOCKING',
+      asOfTsMs: Date.parse('2025-05-15T09:00:00Z'),
+    });
+  });
+
   it('보고서 네 개가 각각 다른 발행주식수를 주면 분기별로 네 개의 팩트가 된다', async () => {
     // stockTotqySttus 는 사업보고서뿐 아니라 분기·반기보고서에도 '주식의 총수 현황'
     // 섹션을 담고 있다 — 네 보고서 모두 조회하고 각자의 분기에 붙인다(연 1회로 줄이면

@@ -21,20 +21,13 @@ export interface Fact {
 }
 
 /** 전략이 참조하는 재무 계정. 문자열 리터럴 유니온이라 오타가 컴파일에서 잡힌다. */
-export type FundamentalField =
-  | "OPERATING_INCOME"
-  | "NET_INCOME"
-  | "CURRENT_ASSETS"
-  | "CURRENT_LIABILITIES"
-  | "TANGIBLE_ASSETS"
-  | "CASH_AND_EQUIVALENTS"
-  | "SHORT_TERM_INVESTMENTS"
-  | "SHORT_TERM_BORROWINGS"
-  | "CURRENT_LONG_TERM_DEBT"
-  | "BONDS"
-  | "LONG_TERM_BORROWINGS"
-  | "TOTAL_EQUITY"
-  | "SHARES_OUTSTANDING";
+export const FUNDAMENTAL_FIELDS = [
+  "OPERATING_INCOME", "NET_INCOME", "CURRENT_ASSETS", "CURRENT_LIABILITIES",
+  "TANGIBLE_ASSETS", "CASH_AND_EQUIVALENTS", "SHORT_TERM_INVESTMENTS",
+  "SHORT_TERM_BORROWINGS", "CURRENT_LONG_TERM_DEBT", "BONDS",
+  "LONG_TERM_BORROWINGS", "TOTAL_EQUITY", "SHARES_OUTSTANDING",
+] as const;
+export type FundamentalField = (typeof FUNDAMENTAL_FIELDS)[number];
 
 /** 손익 계정 — 분기 단독값이며 TTM 합산 대상 */
 export const FLOW_FIELDS = ["OPERATING_INCOME", "NET_INCOME"] as const;

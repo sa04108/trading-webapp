@@ -240,6 +240,7 @@ export function parseFinancialRows(
           periodKey,
           reason: `보고서 코드가 일치하지 않습니다: ${row.reprt_code} (기대값 ${report})`,
           severity: "BLOCKING",
+          kind: "INVALID",
         });
         continue;
       }
@@ -252,6 +253,7 @@ export function parseFinancialRows(
           periodKey,
           reason: `행의 사업연도가 버킷 기준 연도와 다릅니다: ${row.bsns_year} vs ${year}, ${readString(row, "account_nm") ?? "계정명 없음"}`,
           severity: "BLOCKING",
+          kind: "INVALID",
         });
         continue;
       }
@@ -270,6 +272,7 @@ export function parseFinancialRows(
           periodKey,
           reason: "응답 필드를 읽을 수 없습니다: rcept_no",
           severity: "BLOCKING",
+          kind: "INVALID",
         });
         continue;
       }
@@ -280,6 +283,7 @@ export function parseFinancialRows(
           periodKey,
           reason: `접수번호를 읽을 수 없습니다: ${rceptNo}`,
           severity: "BLOCKING",
+          kind: "INVALID",
         });
         continue;
       }
@@ -293,7 +297,9 @@ export function parseFinancialRows(
           symbol,
           periodKey,
           reason: `응답 필드를 읽을 수 없습니다: ${accountId === null ? "account_id" : "account_nm"}`,
+          asOfTsMs: asOf,
           severity: "BLOCKING",
+          kind: "INVALID",
         });
         continue;
       }
@@ -317,8 +323,11 @@ export function parseFinancialRows(
         gaps.push({
           symbol,
           periodKey,
+          field: rule.field,
+          asOfTsMs: asOf,
           reason: `계정 유형이 일치하지 않습니다: ${accountName} (sj_div=${row.sj_div}, 기대값=${rule.statement})`,
           severity: "BLOCKING",
+          kind: "INVALID",
         });
         continue;
       }
@@ -330,10 +339,13 @@ export function parseFinancialRows(
           gaps.push({
             symbol,
             periodKey,
+            field: rule.field,
+            asOfTsMs: asOf,
             reason:
               `금액을 읽을 수 없습니다: ${accountName}` +
               (rawAmount === null ? " (thstrm_amount 필드 확인)" : ""),
             severity: "BLOCKING",
+            kind: rawAmount !== null && ["", "-"].includes(rawAmount.trim()) ? "MISSING" : "INVALID",
           });
           continue;
         }
@@ -343,8 +355,11 @@ export function parseFinancialRows(
             gaps.push({
               symbol,
               periodKey,
+              field: rule.field,
+              asOfTsMs: asOf,
               reason: `같은 보고서 안에서 ${rule.field} 값이 서로 다릅니다 (${previouslySeen} vs ${amount})`,
               severity: "BLOCKING",
+              kind: "CONFLICT",
             });
           }
           continue;
@@ -373,10 +388,13 @@ export function parseFinancialRows(
         gaps.push({
           symbol,
           periodKey,
+          field: rule.field,
+          asOfTsMs: asOf,
           reason:
             `금액을 읽을 수 없습니다: ${accountName}` +
             (cumulativeRaw === null ? " (thstrm_amount 필드 확인)" : ""),
           severity: "BLOCKING",
+          kind: cumulativeRaw !== null && ["", "-"].includes(cumulativeRaw.trim()) ? "MISSING" : "INVALID",
         });
         continue;
       }
@@ -388,8 +406,11 @@ export function parseFinancialRows(
           gaps.push({
             symbol,
             periodKey,
+            field: rule.field,
+            asOfTsMs: asOf,
             reason: `같은 보고서 안에서 ${rule.field} 누적값이 서로 다릅니다 (${existing.value} vs ${amount})`,
             severity: "BLOCKING",
+            kind: "CONFLICT",
           });
         }
         continue;
@@ -426,8 +447,11 @@ export function parseFinancialRows(
         gaps.push({
           symbol,
           periodKey,
+          field,
+          asOfTsMs: current.asOfTsMs,
           reason: `직전 분기 누적값이 없어 ${field} 단독값을 만들 수 없습니다`,
           severity: "BLOCKING",
+          kind: "MISSING",
         });
         continue;
       }
@@ -442,8 +466,11 @@ export function parseFinancialRows(
         gaps.push({
           symbol,
           periodKey,
+          field,
+          asOfTsMs: current.asOfTsMs,
           reason: `직전 분기가 다른 사업연도입니다 (${previousYear ?? "알수없음"} → ${year}) — ${field} 단독값을 만들 수 없습니다`,
           severity: "BLOCKING",
+          kind: "INVALID",
         });
         continue;
       }

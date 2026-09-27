@@ -1191,8 +1191,8 @@ describe('POST /backtests/universe-preview — 3단계 파이프라인 진단 (T
       rebalanceDate: EFFECTIVE_DATE,
       effectiveDate: EFFECTIVE_DATE,
       stages: [
-        { criterion: 'MARKET_CAP', direction: 'HIGH', inputCount: 2, eligibleCount: 2, selectedCount: 2, excludedMissingCount: 0 },
-        { criterion: 'PER', direction: 'LOW', inputCount: 2, eligibleCount: 2, selectedCount: 2, excludedMissingCount: 0 },
+        { criterion: 'MARKET_CAP', direction: 'HIGH', inputCount: 3, eligibleCount: 3, selectedCount: 3, excludedMissingCount: 0 },
+        { criterion: 'PER', direction: 'LOW', inputCount: 3, eligibleCount: 2, selectedCount: 2, excludedMissingCount: 1 },
         { criterion: 'DECLINE', direction: 'LOW', inputCount: 2, eligibleCount: 2, selectedCount: 1, excludedMissingCount: 0 },
       ],
     });

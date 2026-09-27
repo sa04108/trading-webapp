@@ -582,6 +582,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
       strategy,
       symbols: unionSymbols,
       coverage: new SqliteFactCoverageStore(db, { collectionVersion }),
+      schedule,
     });
     if (financialCoverageGap !== null) {
       throw new Error(financialCoverageGapMessage(financialCoverageGap));
@@ -661,7 +662,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
         }
       }
     }
-    if (streamCandles && strategy.dataRequirements?.fundamentalsReady !== undefined) {
+    if (streamCandles && strategy.dataRequirements?.fundamentalFields === undefined && strategy.dataRequirements?.fundamentalsReady !== undefined) {
       const incomplete = await findIncompleteFundamentalCheckpointsFromCoverage({
         strategy,
         parameters,
@@ -681,7 +682,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
             "실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.",
         );
       }
-    } else if (strategy.dataRequirements?.fundamentalsReady !== undefined) {
+    } else if (strategy.dataRequirements?.fundamentalFields === undefined && strategy.dataRequirements?.fundamentalsReady !== undefined) {
       const validDatesBySymbol = new Map<string, string[]>();
       for (const candle of tradeCandles) {
         const dates = validDatesBySymbol.get(candle.symbol) ?? [];
@@ -850,17 +851,20 @@ async function main(input: { lease: AgentLease }): Promise<void> {
 
     const corporateActionFacts = aligned.facts;
     const facts: Fact[] = [...financialFacts, ...corporateActionFacts];
-    // 준비 뒤 fact가 사라진 종목 판정은 **재무** 팩트만 본다 — 분할만 기록된 종목은
-    // 재무가 없는 종목이다. 이 시점의 schedule은 이미 고정돼 재순위할 수 없다.
+    // 필수 계정을 선언한 전략은 공시가 없는 종목을 각 평가 시점에 건너뛴다.
+    // 실제 데이터 삭제·손상은 위의 manifest 검사와 데이터 revision pin이 확인한다.
     if (requiresFinancialFacts) {
       const withoutFacts = unionSymbols.filter((s) => !symbolsWithFinancialFacts.has(s));
-      if (withoutFacts.length > 0) {
+      if (withoutFacts.length > 0 && strategy.dataRequirements?.fundamentalFields === undefined) {
         throw new Error(
           "준비 완료 후 마지막 실행 봉까지 사용 가능한 재무 데이터가 사라진 종목이 있습니다: " +
             `${withoutFacts.join(", ")} — 실행 유니버스는 이미 고정되어 재순위할 수 없습니다. ` +
             "유니버스 미리보기를 다시 준비하세요.",
         );
       }
+      if (withoutFacts.length > 0) datasetWarnings.push(
+        `실제 실행 시점까지 공시된 재무 데이터가 없는 종목은 해당 시점의 전략 후보에서 건너뜁니다: ${withoutFacts.join(", ")}`,
+      );
       datasetWarnings.push(
         "재무 데이터는 공시 시점 기준입니다. 계정이 일부만 공시된 종목도 랭킹에서 빠질 수 있습니다.",
       );

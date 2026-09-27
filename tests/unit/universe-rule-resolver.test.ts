@@ -10,7 +10,7 @@ import {
 import { UniverseRuleResolver } from '../../src/runtime/modules/backtest/application/universe-rule-resolver.js';
 import type { UniverseRule } from '../../src/shared/schemas/universe-rule.js';
 import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
-import type { FactQuery } from '../../src/runtime/modules/facts/application/ports.js';
+import type { FactIngestionGap, FactQuery } from '../../src/runtime/modules/facts/application/ports.js';
 import type { SharesChange } from '../../src/runtime/modules/facts/domain/corporate-action-effective-date.js';
 import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
 import type { CandleQuery } from '../../src/runtime/modules/market-data/application/ports.js';
@@ -322,6 +322,7 @@ function makePipelineResolver(options: {
   facts?: readonly Fact[];
   financiallyCoveredSymbols?: readonly string[];
   financialCoverage?: ReadonlyMap<string, readonly number[]>;
+  financialGaps?: ReadonlyMap<string, readonly FactIngestionGap[]>;
   candles?: readonly Candle[];
   actionCoverage?: ReadonlyMap<string, readonly number[]>;
   actionGaps?: ReadonlyMap<string, readonly number[]>;
@@ -500,8 +501,11 @@ function makePipelineResolver(options: {
           .filter(([code]) => codes === undefined || codes.includes(code))
           .map(([code, years]) => [code, {
             verifiedYears: years,
-            blockingGapYears: [],
-            blockingGapDetails: [],
+            blockingGapYears: [...new Set((options.financialGaps?.get(code) ?? []).map((gap) => Number.parseInt(gap.periodKey.slice(0, 4), 10)))],
+            blockingGapDetails: [...new Set((options.financialGaps?.get(code) ?? []).map((gap) => Number.parseInt(gap.periodKey.slice(0, 4), 10)))].map((year) => {
+              const gaps = (options.financialGaps?.get(code) ?? []).filter((gap) => Number.parseInt(gap.periodKey.slice(0, 4), 10) === year);
+              return { year, examples: gaps.map((gap) => `${gap.periodKey}: ${gap.reason}`), gaps };
+            }),
           }]),
       ),
       getUpdatedAtMs: () => new Map<string, number>(),
@@ -899,6 +903,42 @@ describe('UniverseRuleResolver.resolveOrDescribeNeeds', () => {
     expect(high.diagnostics[0]?.stages[0]).toMatchObject({
       criterion: 'ROE', direction: 'HIGH', eligibleCount: 2, excludedMissingCount: 1,
     });
+    expect(high.dataExclusions).toEqual([]);
+    expect(low.dataExclusions).toEqual([]);
+  });
+
+  it('PER은 미사용 필드 오류와 선정 시점 이후 오류를 무시한다', async () => {
+    const resolver = makePipelineResolver({
+      financialGaps: new Map([['000001', [
+        { symbol:'000001', periodKey:'2025Q1', reason:'공시 누적값 부족', severity:'BLOCKING', kind:'MISSING', field:'NET_INCOME' },
+        { symbol:'000001', periodKey:'2025Q1', reason:'자본총계 오류', severity:'BLOCKING', kind:'INVALID', field:'TOTAL_EQUITY', asOfTsMs:PIPELINE_TS },
+        { symbol:'000001', periodKey:'2025Q2', reason:'미래 순이익 충돌', severity:'BLOCKING', kind:'CONFLICT', field:'NET_INCOME', asOfTsMs:PIPELINE_TS + 86_400_000 },
+      ]]]),
+    });
+
+    const result = await resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'PER', direction: 'LOW', limit: 2 }]),
+      period,
+    );
+
+    expect(result.kind).toBe('READY');
+    if (result.kind !== 'READY') throw new Error('무관하거나 미래인 gap은 PER 후보를 막지 않아야 합니다.');
+    expect(result.diagnostics[0]?.stages[0]).toMatchObject({ eligibleCount: 2, excludedMissingCount: 1 });
+    expect(result.dataExclusions).toEqual([]);
+  });
+
+  it('PER이 소비하는 순이익의 형식 오류는 선정 결과를 차단한다', async () => {
+    const resolver = makePipelineResolver({
+      financialGaps: new Map([['000001', [{
+        symbol:'000001', periodKey:'2025Q1', reason:'순이익 금액 파싱 실패', severity:'BLOCKING',
+        kind:'INVALID', field:'NET_INCOME', asOfTsMs:PIPELINE_TS,
+      }]]]),
+    });
+
+    await expect(resolver.resolveOrDescribeNeeds(
+      pipelineRule([{ criterion: 'PER', direction: 'LOW', limit: 2 }]),
+      period,
+    )).rejects.toThrow('PER 계산에 사용할 재무 입력 오류');
   });
 
   it('master 날짜를 아직 수집하지 않았으면 빈 후보 Map을 실제 빈 scope로 확정하지 않는다', async () => {

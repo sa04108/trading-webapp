@@ -33,6 +33,7 @@ import {
 import { CORPORATE_ACTION_FIELD, type Fact } from "../../facts/domain/fact.js";
 import { PitFactView } from "../../facts/domain/pit-fact-view.js";
 import { splitAdjustedClose } from "../../strategy/strategies/shared/adjusted-price.js";
+import { blockingFinancialGapExamples } from "./backtest-financial-coverage.js";
 import { assertSafeIdentitySelections } from "./backtest-symbol-identity.js";
 import {
   backtestDataExclusionKey,
@@ -743,17 +744,23 @@ export class UniverseRuleResolver {
           const missingCoverageCodes = new Set(
             missing.map((entry) => entry.shortCode),
           );
-          const blockedFinancialCodes = new Set(
-            candidates.flatMap((entry) => {
-              if (missingCoverageCodes.has(entry.shortCode)) return [];
-              const blocking = new Set(
-                coverageBySymbol.get(entry.shortCode)?.blockingGapYears ?? [],
-              );
-              return requiredYears.some((year) => blocking.has(year))
-                ? [entry.shortCode]
-                : [];
-            }),
-          );
+          // 결측은 선정일의 후보에서만 빠진다. 사용 계정의 형식 오류·충돌은
+          // 임의의 값을 거래에 쓰지 않도록 해당 선정 계산을 중단한다.
+          for (const entry of candidates) {
+            if (missingCoverageCodes.has(entry.shortCode)) continue;
+            const state = coverageBySymbol.get(entry.shortCode);
+            const examples = blockingFinancialGapExamples(state?.blockingGapDetails ?? [], {
+              fields: stage.criterion === "PER" ? ["NET_INCOME"] : ["NET_INCOME", "TOTAL_EQUITY"],
+              asOfMaxTsMs: kstEndOfDayMs(effectiveDate),
+              fromYear: Math.min(...requiredYears),
+              toYear: Math.max(...requiredYears),
+            });
+            const unclassified = (state?.blockingGapYears ?? []).some((year) =>
+              requiredYears.includes(year) && !state?.blockingGapDetails.some((detail) => detail.year === year));
+            if (examples.length > 0 || unclassified) {
+              throw new Error(`${effectiveDate} ${stage.criterion} 계산에 사용할 재무 입력 오류 (${entry.shortCode}): ${examples.slice(0, 3).join(" / ") || "상세 원인 없음"}`);
+            }
+          }
 
           const financialValues = await loadFinancialRankingValues(
             facts,
@@ -772,7 +779,6 @@ export class UniverseRuleResolver {
               stageReady = false;
             }
             rows = exactRatioRankingRows(candidates, (entry) => {
-              if (blockedFinancialCodes.has(entry.shortCode)) return null;
               const cap =
                 stageMetrics.get(entry.standardCode)?.marketCapKrw ?? null;
               const income = positiveNumberFraction(
@@ -799,7 +805,6 @@ export class UniverseRuleResolver {
             }
           } else {
             rows = exactRatioRankingRows(candidates, (entry) => {
-              if (blockedFinancialCodes.has(entry.shortCode)) return null;
               const values = financialValues.get(entry.shortCode);
               const income = positiveNumberFraction(
                 values?.netIncomeTtm ?? null,
@@ -815,48 +820,7 @@ export class UniverseRuleResolver {
                   };
             });
           }
-          if (stageReady && !hasUnresolvedStage) {
-            for (const entry of candidates) {
-              const state = coverageBySymbol.get(entry.shortCode);
-              if (blockedFinancialCodes.has(entry.shortCode)) {
-                const details = (state?.blockingGapDetails ?? []).filter(
-                  (detail) => requiredYears.includes(detail.year),
-                );
-                if (details.length === 0) {
-                  recordDataExclusion({
-                    symbol: entry.shortCode,
-                    category: "DART_FINANCIAL",
-                    periodKey: requiredYears.join(","),
-                    reason: "필수 연도에 blocking 원천·파서 gap 존재",
-                  });
-                }
-                for (const detail of details) {
-                  recordDataExclusion({
-                    symbol: entry.shortCode,
-                    category: "DART_FINANCIAL",
-                    periodKey: String(detail.year),
-                    reason:
-                      detail.examples.length > 0
-                        ? detail.examples.join(" / ")
-                        : "blocking 원천·파서 gap 존재",
-                  });
-                }
-                continue;
-              }
-              const values = financialValues.get(entry.shortCode);
-              const missingRequiredValue =
-                stage.criterion === "PER"
-                  ? values?.netIncomeTtm == null
-                  : values?.netIncomeTtm == null || values?.totalEquity == null;
-              if (!missingRequiredValue) continue;
-              recordDataExclusion({
-                symbol: entry.shortCode,
-                category: "DART_FINANCIAL",
-                periodKey: effectiveDate,
-                reason: `${stage.criterion} 계산에 필요한 PIT 재무 값 누락`,
-              });
-            }
-          }
+
         } else {
           // DECLINE은 일봉·자본변동을 shortCode로 읽는다. 과거 issuer의 봉이나 공시가
           // 섞인 뒤 순위를 계산하지 않도록 첫 저장소 접근보다 먼저 검사한다.

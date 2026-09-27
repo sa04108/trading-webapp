@@ -55,7 +55,7 @@ import {
   readCorporateActionGapDetails,
   type RelevantCorporateActionGap,
 } from "./backtest-corporate-action-gaps.js";
-import { findFinancialCoverageGap } from "./backtest-financial-coverage.js";
+import { financialCoverageGapMessage, findFinancialCoverageGap } from "./backtest-financial-coverage.js";
 import { findCandleDataExclusions } from "./backtest-candle-data-exclusions.js";
 import {
   backtestPreparationRequestHash,
@@ -505,7 +505,7 @@ export class BacktestPreparationOrchestrator {
     const preview = this.getPreview(completedId);
     if (
       !preview ||
-      this.financialCoverageGap(input, strategy, preview.unionSymbols) !==
+      this.financialCoverageGap(input, strategy, preview.unionSymbols, preview.schedule) !==
         null ||
       this.corporateActionCoverageFailure(
         input,
@@ -579,7 +579,7 @@ export class BacktestPreparationOrchestrator {
         strategy,
         storedPreview.unionSymbols,
       ) !== null ||
-      this.financialCoverageGap(input, strategy, storedPreview.unionSymbols) !==
+      this.financialCoverageGap(input, strategy, storedPreview.unionSymbols, storedPreview.schedule) !==
         null
     ) {
       return null;
@@ -608,6 +608,7 @@ export class BacktestPreparationOrchestrator {
         input,
         strategy,
         currentPreview.unionSymbols,
+        currentPreview.schedule,
       ) !== null
     )
       return null;
@@ -1143,7 +1144,7 @@ export class BacktestPreparationOrchestrator {
           );
           this.registerUniverse(current.attempt);
           if (
-            this.financialCoverageGap(input, strategy, preview.unionSymbols) ===
+            this.financialCoverageGap(input, strategy, preview.unionSymbols, preview.schedule) ===
               null &&
             this.corporateActionCoverageFailure(
               input,
@@ -1661,12 +1662,17 @@ export class BacktestPreparationOrchestrator {
     input: PreparationInput,
     strategy: AnyTradingStrategy,
     symbols: readonly string[],
+    schedule?: readonly UniverseScheduleEntry[],
   ): ReturnType<typeof findFinancialCoverageGap> {
     return findFinancialCoverageGap({
       request: input,
       strategy,
       symbols,
       coverage: this.deps.factCoverage,
+      schedule: schedule?.map((entry) => ({
+        rebalanceDate: entry.rebalanceDate,
+        symbols: entry.members.map((member) => member.symbol),
+      })),
     });
   }
 
@@ -1677,7 +1683,13 @@ export class BacktestPreparationOrchestrator {
     shouldStop?: () => boolean,
   ): Promise<BacktestDataExclusion[]> {
     const symbols = unionSymbols(schedule);
-    const gap = this.financialCoverageGap(input, strategy, symbols);
+    const gap = this.financialCoverageGap(input, strategy, symbols, schedule);
+    // 필수 계정을 선언한 전략은 각 봉의 PIT 결측을 직접 건너뛴다. 수집·무결성 오류는
+    // 준비 실패로 남기며, 재무 결손을 이유로 KRX 멤버십 전체를 다시 선정하지 않는다.
+    if (strategy.dataRequirements?.fundamentalFields !== undefined) {
+      if (gap !== null) throw new Error(financialCoverageGapMessage(gap));
+      return [];
+    }
     const exclusions: BacktestDataExclusion[] =
       gap?.kind === "BLOCKING_INGESTION_GAP"
         ? gap.affected.map(({ symbol, years, examples }) => ({

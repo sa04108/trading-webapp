@@ -6,6 +6,7 @@ import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
 import {
   facts as factRows,
   krxDailyBars,
+  krxNonTradingDays,
   symbolFactsState,
   symbolMasterVersions,
 } from '../../src/runtime/shared/db/schema.js';
@@ -169,11 +170,11 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
   });
 
   it(
-    '저장된 팩트로 예상 종목을 매수하고 재무 없는 종목을 제외·경고한다 (실제 큐·자식 프로세스)',
+    '저장된 팩트로 예상 종목을 매수하고 재무 없는 종목의 멤버십을 유지·경고한다 (실제 큐·자식 프로세스)',
     { timeout: 90_000 },
     async ({ scenario }) => {
       const { ctx, cookie } = scenario;
-      // 재무 행이 없는 후보도 같은 실행에 넣어 준비 제외와 결과 경고를 함께 확인한다.
+      // 재무 행이 없는 후보도 멤버십에 남겨 시점별 건너뛰기와 결과 경고를 확인한다.
       registerSymbols(ctx.container, 'KR', ['NOFACTS']);
       await seedCorporateActionCoverage(ctx.container, ['NOFACTS'], yearRange(2024, 2025));
       seedFinancialCoverage(ctx.container, ['NOFACTS'], yearRange(2024, 2025));
@@ -217,6 +218,8 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       });
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;
+      const pinnedSchedule = JSON.parse(ctx.container.jobQueue.getJob(jobId)!.universeScheduleJson) as Array<{ symbols: string[] }>;
+      expect(pinnedSchedule.every((entry) => entry.symbols.includes('NOFACTS'))).toBe(true);
 
       startLocalAgent(ctx);
       await waitFor(() => {
@@ -244,11 +247,25 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
 
       const warnings = JSON.parse(run.warningsJson ?? '[]') as string[];
       expect(warnings.some((warning) => warning.includes('재무 데이터가 하나도 없어'))).toBe(false);
-      const factWarning = warnings.find((warning) => warning.includes('재무 정보를 온전히 확보할 수 없어'));
+      const factWarning = warnings.find((warning) => warning.includes('공시된 재무 데이터가 없는 종목'));
       expect(factWarning).toBeDefined();
       expect(factWarning).toContain('NOFACTS');
       expect(factWarning).not.toContain('CHEAP');
       expect(factWarning).not.toContain('RICH');
+
+      // 같은 정상 결측 멤버십을 재사용하는 난수 실험도 전체 종목을 다시 제외하지 않는다.
+      const cloned = await ctx.app.inject({
+        method: 'POST', url: `/api/v1/backtests/${jobId}/clone-random-seeds`,
+        cookies: { session: cookie }, payload: { count: 2 },
+      });
+      expect(cloned.statusCode).toBe(201);
+      const batch = ctx.container.seedCloneBatchService.get(cloned.json().batch.id)!;
+      expect(batch.batch.status).toBe('ACTIVE');
+      expect(batch.items).toHaveLength(2);
+      for (const { job: child } of batch.items) {
+        const childSchedule = JSON.parse(child!.universeScheduleJson) as Array<{ symbols: string[] }>;
+        expect(childSchedule.every((entry) => entry.symbols.includes('NOFACTS'))).toBe(true);
+      }
     },
   );
 
@@ -297,7 +314,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
   );
 
   it(
-    '다른 종목의 늦은 봉이 있어도 해당 종목 마지막 봉 뒤 공시만으로 worker 재무 게이트를 통과하지 않는다',
+    '마지막 실행 봉 뒤 공시를 매매에 쓰지 않고 재무 결측 상태로 완료한다',
     { timeout: 90_000 },
     async ({ scenario }) => {
       const { ctx, cookie } = scenario;
@@ -338,10 +355,16 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
           gt(krxDailyBars.date, '2025-01-11'),
         ))
         .run();
-      await ctx.container.factRepository.saveFacts([{
-        scope: 'SYMBOL', key: 'CHEAP', field: 'NET_INCOME', periodKey: '2024Q4',
-        asOfTsMs: Date.parse('2025-01-22T00:00:00Z'), value: 1, unit: 'KRW',
-      }]);
+      // 실제 거래정지로 마지막 실행 봉이 일찍 끝난 상태를 만든다. 일봉 손상을
+      // 정상 결측으로 허용하지 않으므로 나머지 날짜의 거래불가 근거도 함께 기록한다.
+      ctx.container.database.db.insert(krxNonTradingDays).values(
+        Array.from({ length: 40 }, (_, index) => new Date(START + index * DAY).toISOString().slice(0, 10))
+          .filter((date) => date > '2025-01-11')
+          .map((date) => ({ date, shortCode: 'CHEAP', market: 'KOSPI', lastClose: 1_000 })),
+      ).run();
+      await ctx.container.factRepository.saveFacts(factsFor('CHEAP', 50_000).map((fact) => ({
+        ...fact, asOfTsMs: Date.parse('2025-01-22T00:00:00Z'),
+      })));
       // snapshot 자체는 검증된 수집 결과로 다시 닫아, 이 테스트가 manifest 훼손이
       // 아니라 종목별 마지막 실행 봉 PIT 관문을 검증하게 한다.
       seedFinancialCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2024, 2025));
@@ -353,14 +376,16 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       }, 60_000);
 
       const job = ctx.container.jobQueue.getJob(jobId)!;
-      expect(job.status).toBe('FAILED');
-      expect(job.error).toMatch(/준비 완료 후.*PIT 재무.*CHEAP/);
-      expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
+      expect(job.error).toBeNull();
+      expect(job.status).toBe('COMPLETED');
+      const run = ctx.container.resultsService.getRun(jobId)!;
+      expect(JSON.parse(run.openPositionsJson ?? '[]')).toEqual([]);
+      expect(ctx.container.resultsService.getTrades(jobId, { limit: 100, offset: 0 }).trades).toEqual([]);
     },
   );
 
   it(
-    '동적 유니버스 편출 뒤의 고아 봉·공시만으로 worker 재무 게이트를 통과하지 않는다',
+    '동적 유니버스 편출 뒤의 고아 봉·공시를 매매에 쓰지 않고 완료한다',
     { timeout: 90_000 },
     async ({ scenario }) => {
       const { ctx } = scenario;
@@ -384,12 +409,14 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
           rebalanceDate: '2025-01-02',
           effectiveTradingDate: '2025-01-02',
           symbols: ['CHEAP'],
+          members: [{ symbol: 'CHEAP', standardCode: 'KR7000001000', marketCapKrw: '300000000000', volume: null, tradingValueKrw: null }],
           excludedNonTradingCount: 0,
         },
         {
           rebalanceDate: '2025-01-20',
           effectiveTradingDate: '2025-01-20',
           symbols: ['RICH'],
+          members: [{ symbol: 'RICH', standardCode: 'KR7000002000', marketCapKrw: '200000000000', volume: null, tradingValueKrw: null }],
           excludedNonTradingCount: 0,
         },
       ]);
@@ -402,10 +429,9 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
           inArray(factRows.key, ['CHEAP', 'RICH']),
         ))
         .run();
-      await ctx.container.factRepository.saveFacts([{
-        scope: 'SYMBOL', key: 'CHEAP', field: 'NET_INCOME', periodKey: '2024Q4',
-        asOfTsMs: Date.parse('2025-01-22T00:00:00Z'), value: 1, unit: 'KRW',
-      }]);
+      await ctx.container.factRepository.saveFacts(factsFor('CHEAP', 50_000).map((fact) => ({
+        ...fact, asOfTsMs: Date.parse('2025-01-22T00:00:00Z'),
+      })));
       seedFinancialCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2024, 2025));
 
       await ctx.startAgent();
@@ -415,9 +441,11 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       }, 60_000);
 
       const job = ctx.container.jobQueue.getJob(queued.id)!;
-      expect(job.status).toBe('FAILED');
-      expect(job.error).toMatch(/준비 완료 후.*PIT 재무.*CHEAP.*RICH/);
-      expect(ctx.container.resultsService.getRun(queued.id)).toBeNull();
+      expect(job.error).toBeNull();
+      expect(job.status).toBe('COMPLETED');
+      const run = ctx.container.resultsService.getRun(queued.id)!;
+      expect(JSON.parse(run.openPositionsJson ?? '[]')).toEqual([]);
+      expect(ctx.container.resultsService.getTrades(queued.id, { limit: 100, offset: 0 }).trades).toEqual([]);
     },
   );
 

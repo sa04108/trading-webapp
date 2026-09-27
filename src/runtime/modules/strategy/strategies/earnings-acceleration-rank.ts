@@ -107,6 +107,7 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
   historyLookbackBars: (parameters) => parameters.priceMomentumDays + 1,
   requiredRebalanceGapBars: 1,
   dataRequirements: {
+    fundamentalFields: ["OPERATING_INCOME"],
     fundamentalLookbackQuarters: 8,
     fundamentalsReady: (snapshot, tsMs, parameters) => {
       const quarters = Array.from({ length: 8 }, (_, offset) =>

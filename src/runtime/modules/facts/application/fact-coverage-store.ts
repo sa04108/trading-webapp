@@ -8,10 +8,10 @@ import {
   facts as factRows,
   symbolFactsState,
 } from "../../../shared/db/schema.js";
-import { CORPORATE_ACTION_FIELD } from "../domain/fact.js";
+import { CORPORATE_ACTION_FIELD, FUNDAMENTAL_FIELDS } from "../domain/fact.js";
 import type { FactIngestionGap } from "./ports.js";
 
-export const FINANCIAL_COVERAGE_PROTOCOL_VERSION = 2;
+export const FINANCIAL_COVERAGE_PROTOCOL_VERSION = 3;
 const GAP_EXAMPLE_LIMIT = 10;
 const GAP_EXAMPLE_MAX_CHARS = 240;
 
@@ -24,6 +24,7 @@ export interface FinancialCoverageState {
   readonly blockingGapDetails: readonly {
     readonly year: number;
     readonly examples: readonly string[];
+    readonly gaps?: readonly FactIngestionGap[];
   }[];
 }
 
@@ -34,6 +35,7 @@ interface FinancialYearManifest {
   readonly blockingGapCount: number;
   readonly blockingGapHash: string;
   readonly blockingGapExamples: readonly string[];
+  readonly blockingGaps?: readonly FactIngestionGap[];
   readonly informationalGapCount: number;
   readonly informationalGapHash: string;
 }
@@ -157,6 +159,7 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
         parseFinancialCoverageProtocol(
           row.financialCoverageProtocolJson,
           this.collectionVersion,
+          row.code,
         ),
       ]),
     );
@@ -188,6 +191,7 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
       const blockingDetails: Array<{
         year: number;
         examples: readonly string[];
+        gaps?: readonly FactIngestionGap[];
       }> = [];
       // 기존 컬럼도 운영·복구 도구가 coverage를 열 때 쓰는 공개 상태다. protocol만
       // 신뢰해 둘이 갈라진 상태를 승인하면 coveredYearsJson에서 연도를 제거해도 제출이
@@ -204,12 +208,15 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
         )
           continue;
         if (protocol == null && manifest.factCount <= 0) continue;
+        // 옛 연도별 합계로는 사용 계정과 공시 시점을 구분할 수 없어 원문을 한 번 재생한다.
+        if ("blockingGapCount" in manifest && manifest.blockingGapCount > 0 && manifest.blockingGaps === undefined) continue;
         verified.push(manifest.year);
         if ("blockingGapCount" in manifest && manifest.blockingGapCount > 0) {
           blocking.push(manifest.year);
           blockingDetails.push({
             year: manifest.year,
             examples: manifest.blockingGapExamples,
+            gaps: manifest.blockingGaps,
           });
         }
       }
@@ -332,6 +339,7 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
       const existingProtocol = parseFinancialCoverageProtocol(
         existing?.financialCoverageProtocolJson ?? null,
         this.collectionVersion,
+        symbol,
       );
       const byYear = new Map(
         (existingProtocol?.manifests ?? []).map((manifest) => [
@@ -349,7 +357,8 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
       for (const year of normalizedYears) {
         const current = actual.get(`${symbol}:${year}`) ?? emptyFactManifest();
         const yearGaps = gaps.filter((gap) => gapAppliesToYear(gap, year));
-        const blocking = yearGaps.filter((gap) => gap.severity === "BLOCKING");
+        const blocking = yearGaps.filter((gap) => gap.severity === "BLOCKING")
+          .map((gap) => ({ ...gap, kind: gap.kind ?? "INVALID" as const }));
         const informational = yearGaps.filter(
           (gap) => gap.severity === "INFORMATIONAL",
         );
@@ -359,6 +368,7 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
           blockingGapCount: blocking.length,
           blockingGapHash: gapHash(blocking),
           blockingGapExamples: gapExamples(blocking),
+          blockingGaps: blocking,
           informationalGapCount: informational.length,
           informationalGapHash: gapHash(informational),
         });
@@ -476,6 +486,7 @@ export class SqliteFactCoverageStore implements FactCoverageStore {
 function parseFinancialCoverageProtocol(
   raw: string | null,
   collectionVersion: string,
+  symbol: string,
 ): FinancialCoverageProtocol | null {
   if (raw === null) return null;
   try {
@@ -487,6 +498,8 @@ function parseFinancialCoverageProtocol(
       return null;
     const manifests = parsed.manifests.filter(isFinancialYearManifest);
     if (manifests.length !== parsed.manifests.length) return null;
+    if (manifests.some((manifest) => manifest.blockingGaps?.some((gap) =>
+      gap.symbol !== symbol || !gapAppliesToYear(gap, manifest.year)))) return null;
     if (
       new Set(manifests.map((manifest) => manifest.year)).size !==
       manifests.length
@@ -523,9 +536,25 @@ function isFinancialYearManifest(
     ) &&
     Number.isInteger(manifest.informationalGapCount) &&
     manifest.informationalGapCount! >= 0 &&
+    (manifest.blockingGaps === undefined || (
+      Array.isArray(manifest.blockingGaps) &&
+      manifest.blockingGaps.length === manifest.blockingGapCount &&
+      manifest.blockingGaps.every(isBlockingGap) &&
+      gapHash(manifest.blockingGaps) === manifest.blockingGapHash
+    )) &&
     typeof manifest.informationalGapHash === "string" &&
     /^[a-f0-9]{64}$/.test(manifest.informationalGapHash)
   );
+}
+
+function isBlockingGap(value: unknown): value is FactIngestionGap {
+  if (value === null || typeof value !== "object") return false;
+  const gap = value as Partial<FactIngestionGap>;
+  return typeof gap.symbol === "string" && typeof gap.periodKey === "string" &&
+    typeof gap.reason === "string" && gap.severity === "BLOCKING" &&
+    ["MISSING", "INVALID", "CONFLICT"].includes(gap.kind ?? "") &&
+    (gap.field === undefined || FUNDAMENTAL_FIELDS.includes(gap.field)) &&
+    (gap.asOfTsMs === undefined || (typeof gap.asOfTsMs === "number" && Number.isFinite(gap.asOfTsMs)));
 }
 
 function validYear(value: unknown): value is number {
@@ -549,13 +578,12 @@ function gapAppliesToYear(gap: FactIngestionGap, year: number): boolean {
 function gapHash(gaps: readonly FactIngestionGap[]): string {
   return createHash("sha256")
     .update(
-      [...gaps]
-        .sort(
-          (left, right) =>
-            left.periodKey.localeCompare(right.periodKey) ||
-            left.reason.localeCompare(right.reason),
-        )
-        .map((gap) => JSON.stringify([gap.severity, gap.periodKey, gap.reason]))
+      gaps
+        .map((gap) => JSON.stringify([
+          gap.symbol, gap.severity, gap.periodKey, gap.reason,
+          gap.field ?? null, gap.asOfTsMs ?? null, gap.kind ?? null,
+        ]))
+        .sort()
         .join("\n"),
     )
     .digest("hex");

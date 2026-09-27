@@ -1,4 +1,4 @@
-import type { Fact, FactScope } from "../domain/fact.js";
+import type { Fact, FactScope, FundamentalField } from "../domain/fact.js";
 
 export interface FactQuery {
   readonly scope: FactScope;
@@ -39,6 +39,11 @@ export interface FactIngestionGap {
   readonly reason: string;
   /** BLOCKING은 결과를 왜곡할 수 있어 실행을 막고, INFORMATIONAL은 미사용 계정 등이다. */
   readonly severity: "BLOCKING" | "INFORMATIONAL";
+  /** 계정·공시 시점이 확인된 결손은 해당 소비자가 실제 사용하는 범위만 판정한다. */
+  readonly field?: FundamentalField;
+  readonly asOfTsMs?: number;
+  /** 미공시·누적값 부족은 정상적인 PIT 결측이며, 형식 오류·충돌과 구분한다. */
+  readonly kind?: "MISSING" | "INVALID" | "CONFLICT";
 }
 
 export interface FactIngestionResult {

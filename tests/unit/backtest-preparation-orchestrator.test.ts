@@ -675,7 +675,7 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
 });
 
 describe('BacktestPreparationOrchestrator 종목별 외부 데이터 결손 제외', () => {
-  it('재무 전략의 PIT 재무가 0건인 종목을 제외하고 차순위를 준비한다', async () => {
+  it('재무 전략의 PIT 재무가 0건이어도 KRX 멤버십을 보존한다', async () => {
     const ctx = makeDeps({
       resolver: {
         resolveOrDescribeNeeds: async (
@@ -730,10 +730,8 @@ describe('BacktestPreparationOrchestrator 종목별 외부 데이터 결손 제�
     await waitFor(() => ['COMPLETED', 'FAILED'].includes(orchestrator.get(job.id)?.status ?? ''));
 
     expect(orchestrator.get(job.id)).toMatchObject({ status: 'COMPLETED', error: null });
-    expect(orchestrator.getPreview(job.id)?.unionSymbols).toEqual(['000660']);
-    expect(orchestrator.getPreview(job.id)?.warnings).toEqual([
-      expect.stringMatching(/DART 재무.*종목 005930을 매매 대상에서 제외.*PIT 재무 계정/),
-    ]);
+    expect(orchestrator.getPreview(job.id)?.unionSymbols).toEqual(['005930']);
+    expect(orchestrator.getPreview(job.id)?.warnings).toEqual([]);
     await orchestrator.stop();
     ctx.handle.close();
   });
@@ -821,7 +819,7 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
     const job = orchestrator.start(valueInput);
     await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
 
-    expect(orchestrator.get(job.id)?.error).toMatch(/선정된 종목이 없어 유니버스를 만들 수 없습니다/);
+    expect(orchestrator.get(job.id)?.error).toMatch(/coverage.*2025~2026년.*005930/);
     expect(orchestrator.getPreview(job.id)).toBeNull();
     await orchestrator.stop();
     ctx.handle.close();

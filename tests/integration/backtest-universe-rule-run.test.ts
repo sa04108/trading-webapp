@@ -1208,9 +1208,8 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
  * 급하락(20) 2` 3단계 규칙(매월 rule)을 실제 durable preparation job(202)부터
  * 완주까지 한 번에 태운다.
  *
- * 후보 7종목으로 단계별 배제를 실제로 겪는다. D·E의 재무가 없으면 전 기간 후보에서
- * 제외하고 순위를 다시 채우므로 처음 순위 밖 F·G도 DART로 확인한 뒤 같은 이유로
- * 제외한다. 급하락(20일) stage는 A·B·C 세 종목의 가격 추이를 서로 다르게
+ * 후보 7종목으로 단계별 배제를 실제로 겪는다. D·E의 재무가 없으면 PER 선정일 후보에서
+ * 제외한다. 시총 단계의 원래 limit을 다시 채우지 않으므로 순위 밖 F·G는 조회하지 않는다. 급하락(20일) stage는 A·B·C 세 종목의 가격 추이를 서로 다르게
  * 둬 리밸런스 1(1월)엔 {A,B}, 리밸런스 2(2월)엔 {B,C}가 선정되도록 만든다 — A는
  * 멤버십을 잃고, C는 새로 들어온다.
  *
@@ -1380,8 +1379,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
         { standardCode: 'KR7000003000', shortCode: 'C', name: 'C', market: 'KOSPI', marketCapKrw: '300' },
         { standardCode: 'KR7000004000', shortCode: 'D', name: 'D', market: 'KOSPI', marketCapKrw: '200' },
         { standardCode: 'KR7000005000', shortCode: 'E', name: 'E', market: 'KOSPI', marketCapKrw: '100' },
-        // F·G는 최초 시가총액 5위 밖이지만 D·E가 데이터 결손으로 제외되면 차순위로
-        // 올라오므로 다음 안정화 phase에서 재무를 확인한다.
+        // F·G는 최초 시총 5위 밖이다. D·E의 PER 결측 때문에 시총 단계를 다시 채우지 않는다.
         { standardCode: 'KR7000006000', shortCode: 'F', name: 'F', market: 'KOSPI', marketCapKrw: '50' },
         { standardCode: 'KR7000007000', shortCode: 'G', name: 'G', market: 'KOSPI', marketCapKrw: '40' },
       ],
@@ -1434,13 +1432,11 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
       const completed = await waitForPreparation(ctx, jobId);
       expect(completed).toBe('COMPLETED');
 
-      // 3. DART(재무)는 세 phase로 좁혀진다. ① 최초 PER 후보 A~E ② 재무가 없는
-      // D·E를 제외하고 순위를 다시 채우는 F·G ③ 최종 유니버스 A~C의 전략 재무.
-      // 결손 종목을 빼고도 원래 limit을 채우려면 처음 순위 밖 후보도 확인해야 한다.
-      expect(dartCalls).toHaveLength(3);
+      // 재무 결측은 PER 선정일의 후보만 줄이며 앞선 시총 멤버십을 재선정하지 않는다.
+      // 최초 PER 후보 A~E 다음으로 최종 유니버스 A~C의 전략 재무만 확인한다.
+      expect(dartCalls).toHaveLength(2);
       expect([...dartCalls[0]!].sort()).toEqual(['A', 'B', 'C', 'D', 'E']);
-      expect([...dartCalls[1]!].sort()).toEqual(['F', 'G']);
-      expect([...dartCalls[2]!].sort()).toEqual(['A', 'B', 'C']);
+      expect([...dartCalls[1]!].sort()).toEqual(['A', 'B', 'C']);
       const callsAfterFirstPreparation = dartCalls.length;
 
       const ready = await ctx.app.inject({
@@ -1486,15 +1482,11 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
         members: [{ symbol: 'C' }, { symbol: 'B' }],
       });
       expect(preview.unionSymbols.slice().sort()).toEqual(['A', 'B', 'C']);
-      for (const symbol of ['D', 'E', 'F', 'G']) {
-        expect(preview.warnings.join(' ')).toMatch(
-          new RegExp(`DART 재무.*종목 ${symbol}을 매매 대상에서 제외`),
-        );
-      }
+      expect(preview.warnings.some((warning) => warning.includes('DART 재무'))).toBe(false);
       for (const entry of preview.diagnostics) {
         const [marketCap, per, decline] = entry.stages;
-        expect(marketCap).toMatchObject({ criterion: 'MARKET_CAP', direction: 'HIGH', inputCount: 3, selectedCount: 3, excludedMissingCount: 0 });
-        expect(per).toMatchObject({ criterion: 'PER', direction: 'LOW', inputCount: 3, eligibleCount: 3, selectedCount: 3, excludedMissingCount: 0 });
+        expect(marketCap).toMatchObject({ criterion: 'MARKET_CAP', direction: 'HIGH', inputCount: 7, selectedCount: 5, excludedMissingCount: 0 });
+        expect(per).toMatchObject({ criterion: 'PER', direction: 'LOW', inputCount: 5, eligibleCount: 3, selectedCount: 3, excludedMissingCount: 2 });
         expect(decline).toMatchObject({ criterion: 'DECLINE', direction: 'LOW', inputCount: 3, selectedCount: 2 });
       }
 

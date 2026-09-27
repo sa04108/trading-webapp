@@ -48,6 +48,7 @@ export const lowPerHighRoeRankStrategy: TradingStrategy<
   historyLookbackBars: () => 1,
   requiredRebalanceGapBars: 1,
   dataRequirements: {
+    fundamentalFields: ["NET_INCOME", "TOTAL_EQUITY"],
     fundamentalLookbackQuarters: 4,
     fundamentalsReady: (snapshot, tsMs, parameters) =>
       snapshot.ttm("NET_INCOME") !== null &&

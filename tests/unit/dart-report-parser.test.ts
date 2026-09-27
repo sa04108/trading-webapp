@@ -208,7 +208,10 @@ describe('parseFinancialRows — 누적값 차분', () => {
     const { facts, gaps } = parseFinancialRows('005930', rows);
     const periods = facts.filter((f) => f.field === 'OPERATING_INCOME').map((f) => f.periodKey);
     expect(periods).toEqual(['2025Q1']);
-    expect(gaps.some((gap) => gap.periodKey === '2025Q3')).toBe(true);
+    expect(gaps).toContainEqual(expect.objectContaining({
+      periodKey: '2025Q3', field: 'OPERATING_INCOME', kind: 'MISSING',
+      asOfTsMs: receiptDateToAsOfTsMs(RECEIPTS['11014']),
+    }));
   });
 
   it('재무상태표 계정은 차분하지 않고 시점값을 그대로 쓴다', () => {
@@ -289,7 +292,24 @@ describe('parseFinancialRows — 누적값 차분', () => {
     const { facts, gaps } = parseFinancialRows('005930', rows);
     expect(facts).toEqual([]);
     expect(gaps).toHaveLength(1);
-    expect(gaps[0]?.severity).toBe('BLOCKING');
+    expect(gaps[0]).toMatchObject({
+      severity: 'BLOCKING', field: 'CURRENT_ASSETS', kind: 'INVALID',
+      asOfTsMs: receiptDateToAsOfTsMs(RECEIPTS['11013']),
+    });
+  });
+
+  it.each(['', '-'])('빈 금액 %j는 형식 오류와 구분하여 계정별 결측으로 남긴다', (amount) => {
+    const { facts, gaps } = parseFinancialRows('005930', new Map([
+      ['11013', [
+        { ...balanceRow('11013', 0), thstrm_amount: amount },
+        { ...incomeRow('11013', 0), thstrm_add_amount: amount, thstrm_amount: amount },
+      ]],
+    ]));
+    expect(facts).toEqual([]);
+    expect(gaps.map(({ field, kind, asOfTsMs }) => ({ field, kind, asOfTsMs }))).toEqual([
+      { field: 'CURRENT_ASSETS', kind: 'MISSING', asOfTsMs: receiptDateToAsOfTsMs(RECEIPTS['11013']) },
+      { field: 'OPERATING_INCOME', kind: 'MISSING', asOfTsMs: receiptDateToAsOfTsMs(RECEIPTS['11013']) },
+    ]);
   });
 
   it('손익 계정의 누적값이 파싱되지 않으면(IS 쪽도) gap 으로 남긴다', () => {
@@ -434,7 +454,10 @@ describe('parseFinancialRows — 누적값 차분', () => {
     const assetFacts = facts.filter((f) => f.field === 'CURRENT_ASSETS');
     expect(assetFacts).toHaveLength(1);
     expect(assetFacts[0]?.value).toBe(500);
-    expect(gaps.some((g) => g.reason.includes('서로 다릅니다'))).toBe(true);
+    expect(gaps).toContainEqual(expect.objectContaining({
+      kind: 'CONFLICT', asOfTsMs: receiptDateToAsOfTsMs(RECEIPTS['11013']),
+      reason: expect.stringContaining('서로 다릅니다'),
+    }));
   });
 
   it('같은 보고서 안에서 같은 손익 계정이 서로 다른 누적값으로 중복되면(IS·CIS) gap 으로 남기고 처음 값만 쓴다', () => {
@@ -444,7 +467,10 @@ describe('parseFinancialRows — 누적값 차분', () => {
     const { facts, gaps } = parseFinancialRows('005930', rows);
     const q1 = facts.find((f) => f.periodKey === '2025Q1' && f.field === 'OPERATING_INCOME');
     expect(q1?.value).toBe(100);
-    expect(gaps.some((g) => g.reason.includes('서로 다릅니다'))).toBe(true);
+    expect(gaps).toContainEqual(expect.objectContaining({
+      kind: 'CONFLICT', asOfTsMs: receiptDateToAsOfTsMs(RECEIPTS['11013']),
+      reason: expect.stringContaining('서로 다릅니다'),
+    }));
   });
 
   it('버킷 연도 불일치 gap 의 묶음 라벨은 값이 섞이지 않아 안정적이다 (CLI 사유별 집계)', () => {
@@ -514,6 +540,10 @@ describe('parseFinancialRows — 필드 이름이 바뀐 응답 (bare TypeError 
       }).not.toThrow();
       expect(result!.facts).toEqual([]);
       expect(result!.gaps.some((gap) => gap.reason.includes(named))).toBe(true);
+      expect(result!.gaps[0]?.kind).toBe('INVALID');
+      if (field !== 'rcept_no') {
+        expect(result!.gaps[0]?.asOfTsMs).toBe(receiptDateToAsOfTsMs(base.rcept_no));
+      }
     });
   }
 

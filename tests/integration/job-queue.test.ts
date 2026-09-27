@@ -1420,7 +1420,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(preview?.uncoveredDates).toEqual([]);
   });
 
-  it('복제 초안은 현재 PIT fact와 재무 coverage drift를 함께 반영한다', async ({ scenario }) => {
+  it('복제 초안은 정상 PIT 결측의 멤버십을 유지하고 재무 coverage drift는 거부한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     const request: BacktestRequest = {
       ...buildRequest(),
@@ -1455,7 +1455,9 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       method: 'GET', url: `/api/v1/backtests/${sourceId}/clone-draft`, cookies: { session: cookie },
     });
     expect(after.statusCode).toBe(200);
-    expect(after.json().reusablePreview).toBeNull();
+    expect(after.json().reusablePreview).toMatchObject({
+      unionSymbols: ['005930'], fundamentalSymbols: [],
+    });
 
     ctx.container.database.db.update(symbolFactsState)
       .set({ coveredYearsJson: JSON.stringify([2026]) })
@@ -2000,7 +2002,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     }
   });
 
-  it('재무 전략 난수 복제 대기 중 마지막 PIT 재무 행이 사라지면 추가 승격을 막는다', async ({ scenario }) => {
+  it('재무 전략 난수 복제 대기 중 manifest의 재무 행이 사라지면 추가 승격을 막는다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     const request: BacktestRequest = {
       ...buildRequest(),
@@ -2032,15 +2034,13 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     ctx.container.database.db.delete(facts)
       .where(eq(facts.key, '005930'))
       .run();
-    // coverage 무결성 단계는 다시 닫아 두고, 그 다음의 실제 PIT fact 관문이 비어 있는
-    // snapshot을 막는지 확인한다.
-    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
+    // 정상적인 공시 결측과 구분하여 완료 manifest의 실제 fact 삭제를 차단한다.
     expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
     ctx.container.seedCloneBatchService.pump();
 
     const failed = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(failed.batch.status).toBe('FAILED');
-    expect(failed.batch.error).toMatch(/준비 완료 후.*PIT 재무.*005930/);
+    expect(failed.batch.error).toMatch(/coverage.*005930/);
     expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });

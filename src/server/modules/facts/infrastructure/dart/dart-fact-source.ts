@@ -825,6 +825,7 @@ export function createDartFactSource(
             const periodKey = `${year}Q${REPORT_CODE_TO_QUARTER[reportCode]}`;
             if (common) {
               const value = readShareAmount(common);
+              const rawAmount = readDartString(common, "istc_totqy");
               const asOf = receiptDateToAsOfTsMs(
                 readDartString(common, "rcept_no") ?? "",
               );
@@ -832,6 +833,10 @@ export function createDartFactSource(
                 gaps.push({
                   symbol,
                   periodKey,
+                  field: "SHARES_OUTSTANDING",
+                  ...(asOf === null ? {} : { asOfTsMs: asOf }),
+                  kind: asOf !== null && rawAmount !== null && ["", "-"].includes(rawAmount.trim())
+                    ? "MISSING" : "INVALID",
                   reason: `발행주식수를 읽을 수 없습니다: ${readDartString(common, "istc_totqy") ?? "(없음)"}`,
                   severity: "BLOCKING",
                 });
@@ -850,9 +855,16 @@ export function createDartFactSource(
               // 응답에 행은 있는데 '보통주' 로 매칭되는 행이 없다 — se 표기가 예상과 다를 수
               // 있으므로 조용히 넘기지 않고 gap 으로 남긴다 (그렇지 않으면 시가총액이 조용히
               // 계산 불가 상태가 되어도 수집 리포트에는 드러나지 않는다)
+              const malformed = shareRows.find((row) => readDartString(row, "se") === null);
+              const asOf = malformed === undefined ? null : receiptDateToAsOfTsMs(
+                readDartString(malformed, "rcept_no") ?? "",
+              );
               gaps.push({
                 symbol,
                 periodKey,
+                field: "SHARES_OUTSTANDING",
+                ...(asOf === null ? {} : { asOfTsMs: asOf }),
+                kind: malformed === undefined ? "MISSING" : "INVALID",
                 reason: `'보통주' 행을 찾을 수 없습니다 (se 값: ${shareRows.map((row) => readDartString(row, "se") ?? "(없음)").join(", ")})`,
                 severity: "BLOCKING",
               });
@@ -878,6 +890,7 @@ export function createDartFactSource(
               ? "DART corp_code 매핑에 없는 종목코드입니다"
               : error.message,
           severity: "BLOCKING",
+          kind: "INVALID",
         });
       }
     }
