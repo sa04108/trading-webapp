@@ -30,6 +30,7 @@ These instructions apply repository-wide.
 
 ## Verification and Reporting
 
+- Before writing new test code, inspect existing tests and identify a contract they do not already protect. Add or extend tests only to cover such a contract, using the smallest sufficient verification scope; do not add broader or duplicate tests when narrower coverage is sufficient. A code change alone is not a reason to add tests.
 - Define required checks before implementation. Run focused checks while iterating, then required integration/regression gates on the final integrated snapshot. Do not weaken tests, assertions, fixtures, or resource limits merely to obtain a pass.
 - The root reviews the integrated diff and critical evidence, not just worker summaries. Reuse passing checks only while their tested inputs and relevant environment remain valid; rerun invalidated checks. Record the command, tested snapshot, exit status, and limitations concisely. Serialize builds and package checks that share output directories.
 - Keep tool output and intermediate updates concise. Completion reports contain only changes/findings, affected files, material decisions, actual verification, and unresolved risks. Never report unrun checks as passed. When evaluating delegation, distinguish requested from observed model/effort and include usage across the root, workers, and retries when available; otherwise mark it unknown. Do not infer savings from diff size or a successful spawn.
@@ -40,6 +41,7 @@ These instructions apply repository-wide.
 - Before editing, inspect `git status --short --branch`, `git worktree list`, and recent commits. Preserve pre-existing changes, including staged changes; never overwrite them or include them in your commits.
 - Before the first edit, create a descriptive task branch if on `main`, an unrelated branch, or a detached HEAD. Use a separate branch and worktree for concurrent editing tasks or when the existing checkout must be preserved.
 - Base new independent tasks on freshly fetched remote `main`; if unavailable, use local `main` and report the limitation. Related subagent work must use the root's agreed task snapshot, including required parent changes.
-- Commit each complete unit with related tests and documentation only after required verification passes. If verification fails or is blocked, do not commit; report the cause.
+- Commit each complete unit with related tests only after required verification passes. If verification fails or is blocked, do not commit; report the cause.
 - Stage only task-owned changes by explicit path or hunk, and inspect the entire staged diff before committing.
+- Exclude code created solely for one-off verification, such as temporary scripts and fixtures, from commits unless it is intentionally adopted as part of the maintained test suite.
 - After committing, push when the remote and authentication are available, setting upstream for new branches. If pushing is unavailable or fails, preserve the commit and report why.
