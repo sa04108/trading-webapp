@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Fact } from '../../src/runtime/modules/facts/domain/fact.js';
 import { SqliteFactRepository } from '../../src/runtime/modules/facts/infrastructure/sqlite-fact-repository.js';
 import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
+import { datasetIdentity } from '../../src/runtime/shared/db/database-layout.js';
 
 let root: string;
 let database: DatabaseHandle;
@@ -36,6 +37,65 @@ afterEach(() => {
 });
 
 describe('SqliteFactRepository', () => {
+  it('동일 payload upsert는 revision을 유지하고 실제 payload 변경은 반영한다', async () => {
+    const initial = fact({
+      field: 'SPLIT_RATIO',
+      periodKey: '2025-04-01',
+      value: 2,
+      unit: 'RATIO',
+      corporateActionBeforeShares: null,
+      corporateActionAfterShares: null,
+    });
+    await repository.saveFacts([initial]);
+    const initialRevision = datasetIdentity(database.sqlite).revision;
+    const initialChanges = database.sqlite.prepare('SELECT total_changes() AS n').get();
+
+    await repository.saveFacts([{ ...initial }]);
+
+    expect(datasetIdentity(database.sqlite).revision).toBe(initialRevision);
+    expect(database.sqlite.prepare('SELECT total_changes() AS n').get()).toEqual(initialChanges);
+
+    await repository.saveFacts([
+      { ...initial, key: '000660' },
+      { ...initial, asOfTsMs: initial.asOfTsMs + 1 },
+    ]);
+    expect(datasetIdentity(database.sqlite).revision).toBe(initialRevision + 2);
+    expect(await repository.getFacts({
+      scope: 'SYMBOL',
+      fields: [initial.field],
+    })).toHaveLength(3);
+
+    const changedPayloads: Fact[] = [
+      { ...initial, value: 3 },
+      { ...initial, value: 2, unit: 'SHARES' },
+      { ...initial, corporateActionBeforeShares: 100, corporateActionAfterShares: 200 },
+      { ...initial, corporateActionBeforeShares: 150, corporateActionAfterShares: 200 },
+      { ...initial, corporateActionBeforeShares: 150, corporateActionAfterShares: 250 },
+      { ...initial, corporateActionBeforeShares: null, corporateActionAfterShares: null },
+    ];
+    let expectedRevision = initialRevision + 2;
+    for (const payload of changedPayloads) {
+      await repository.saveFacts([payload]);
+      expectedRevision += 1;
+      expect(datasetIdentity(database.sqlite).revision).toBe(expectedRevision);
+      expect(await repository.getFacts({
+        scope: 'SYMBOL',
+        keys: [payload.key],
+        fields: [payload.field],
+        asOfMaxTsMs: payload.asOfTsMs,
+      })).toMatchObject([{ value: payload.value, unit: payload.unit }]);
+      expect(database.sqlite.prepare(
+        `SELECT corporate_action_before_shares AS beforeShares,
+                corporate_action_after_shares AS afterShares
+         FROM data.facts WHERE scope = ? AND key = ? AND field = ?
+           AND period_key = ? AND as_of_ts_ms = ?`,
+      ).get(payload.scope, payload.key, payload.field, payload.periodKey, payload.asOfTsMs)).toEqual({
+        beforeShares: payload.corporateActionBeforeShares ?? null,
+        afterShares: payload.corporateActionAfterShares ?? null,
+      });
+    }
+  });
+
   it('반복 PIT 조회는 준비문을 재사용하면서 종목·시점과 저장 변경을 반영한다', async () => {
     const first = fact({ key: '005930', asOfTsMs: 100, value: 1 });
     const correction = fact({ key: '005930', asOfTsMs: 200, value: 2 });

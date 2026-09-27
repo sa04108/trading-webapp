@@ -116,6 +116,7 @@ describe('배정 준비 진행 정보', () => {
 
   it('종목별 메모리 집계를 알리고 같은 API 행에서도 진행 revision을 갱신한다', async ({ ctx, cookie }) => {
     const coordinator = ctx.container.agentCoordinator;
+    await coordinator.snapshots.ensureLatest();
     vi.spyOn(resources, 'availableServerResources').mockReturnValue(localResources(256 * MIB));
     // 실제 집계까지 실행하되 자식 실행은 이 관측 검사 범위에서 제외한다.
     vi.spyOn(coordinator.backtests, 'claim').mockReturnValue({ status: 'EMPTY' });
@@ -181,6 +182,7 @@ describe('배정 준비 진행 정보', () => {
 
   it('최소 메모리 부족을 수치로 표시하고 예산 회복 뒤 팩트 집계를 생략하지 않는다', async ({ ctx }) => {
     const coordinator = ctx.container.agentCoordinator;
+    await coordinator.snapshots.ensureLatest();
     const sample = vi.spyOn(resources, 'availableServerResources').mockReturnValue(localResources(180 * MIB));
     vi.spyOn(coordinator.backtests, 'claim').mockReturnValue({ status: 'EMPTY' });
     const job = ctx.container.jobQueue.enqueue(request, schedule);

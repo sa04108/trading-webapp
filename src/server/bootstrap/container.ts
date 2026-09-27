@@ -441,6 +441,11 @@ export function createContainer(
   const snapshots = new DatasetSnapshots(
     database,
     path.join(path.dirname(config.databasePath), "datasets"),
+    {
+      onDiagnostic: (diagnostic) => diagnostic.outcome === "FAILED"
+        ? logger.warn(diagnostic, "계산 스냅샷 게시 단계 실패")
+        : logger.info(diagnostic, "계산 스냅샷 게시 단계"),
+    },
   );
   const preparations = new AgentPreparationQueue(database, (jobId, progressOnly) => {
     backtestPreparationOrchestrator.agentJobUpdated(jobId);

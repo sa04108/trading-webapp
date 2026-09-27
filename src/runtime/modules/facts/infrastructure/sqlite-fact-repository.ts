@@ -35,6 +35,12 @@ export class SqliteFactRepository implements FactRepository {
               factRows.periodKey,
               factRows.asOfTsMs,
             ],
+            setWhere: sql`
+              ${factRows.value} IS NOT excluded.value
+              OR ${factRows.unit} IS NOT excluded.unit
+              OR ${factRows.corporateActionBeforeShares} IS NOT excluded.corporate_action_before_shares
+              OR ${factRows.corporateActionAfterShares} IS NOT excluded.corporate_action_after_shares
+            `,
             set: {
               value: sql`excluded.value`,
               unit: sql`excluded.unit`,

@@ -13,6 +13,11 @@ import {
   type DatasetManifest,
 } from "../../../../shared/agent-protocol.js";
 import type { ExecutionActivity } from "../../../../shared/execution-progress.js";
+import {
+  datasetPublishDiagnosticMessageSchema,
+  datasetPublishProgressMessageSchema,
+  type DatasetPublishDiagnostic,
+} from "../../../../shared/dataset-publish-protocol.js";
 
 export interface DatasetPublishProgress {
   readonly activity: Extract<
@@ -50,6 +55,10 @@ export class DatasetSnapshots {
     private readonly options?: {
       readonly collectionVersion?: string;
       readonly now?: () => number;
+      readonly onDiagnostic?: (diagnostic: DatasetPublishDiagnostic & {
+        readonly datasetVersion: number;
+        readonly childPid?: number;
+      }) => void;
     },
   ) {
     this.collectionVersion =
@@ -185,17 +194,26 @@ export class DatasetSnapshots {
         if (error.length < 4000) error += chunk.toString();
       });
       child.on("message", (message: unknown) => {
-        if (
-          typeof message === "object" &&
-          message !== null &&
-          "type" in message &&
-          message.type === "progress" &&
-          "activity" in message
-        ) {
-          this.setProgress(message.activity as DatasetPublishProgress["activity"]);
+        const progress = datasetPublishProgressMessageSchema.safeParse(message);
+        if (progress.success) {
+          this.setProgress(progress.data.activity);
           return;
         }
-        result = datasetManifestSchema.parse(message);
+        const diagnostic = datasetPublishDiagnosticMessageSchema.safeParse(message);
+        if (diagnostic.success) {
+          try {
+            this.options?.onDiagnostic?.({ ...diagnostic.data.diagnostic, datasetVersion: version, childPid: child.pid });
+          } catch {
+            // 진단 수신자의 오류가 정상 게시를 실패시키지 않는다.
+          }
+          return;
+        }
+        const manifest = datasetManifestSchema.safeParse(message);
+        if (manifest.success) result = manifest.data;
+        else {
+          error = "계산 DB 게시 응답 형식이 올바르지 않습니다";
+          child.kill("SIGTERM");
+        }
       });
       child.once("error", reject);
       child.once("exit", (code) => {

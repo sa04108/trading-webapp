@@ -217,6 +217,12 @@ API와 자식은 같은 cgroup에 있으므로 위 정책은 커널의 프로세
 계산 DB 게시 시 복사 전에 허용 테이블을 확인하고 복사본에서도 무결성 검사를 유지한다.
 동일한 dataset/revision/수집 버전 게시 실패는 30초 동안 재시도를 보류하며, revision이
 변경되면 즉시 다시 시도한다. 측정 조건과 한계는 [메모리 개선 검증](preview-memory-verification.md)을 따른다.
+게시 검증 연결은 페이지 캐시 16,000KiB와 최대 2GiB의 `mmap_size`를 사용한다. 매핑 상한은
+상주 메모리 제한이 아니며 SQLite가 지원하지 않거나 상한을 넘는 구간도 전체 검사한다.
+`dataset_publish.*` 단계별 시간·CPU·RSS·Linux I/O 지표는 기존 Pino·journald 로그에서
+확인한다. `/proc` 읽기나 진단 전달 실패가 게시를 막지 않는다. 동일한 fact payload는
+UPSERT를 생략하지만 수집 watermark 완료 시각은 계속 갱신한다.
+실측과 재현 방법은 [계산 스냅샷 게시 I/O 검증](snapshot-publish-performance.md)을 따른다.
 
 ## 연결 중단과 재시도
 
