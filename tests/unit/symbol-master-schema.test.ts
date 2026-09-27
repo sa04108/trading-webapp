@@ -1,6 +1,6 @@
 import { and, asc, eq, gt, isNull, lte, or } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
-import { symbolMasterVersions } from '../../src/server/shared/db/schema.js';
+import { symbolMasterVersions } from '../../src/runtime/shared/db/schema.js';
 import { test as it } from '../helpers/test-fixtures.js';
 
 const SAMSUNG = {

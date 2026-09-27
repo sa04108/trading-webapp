@@ -5,7 +5,8 @@ import {
 } from '../../src/server/modules/facts/infrastructure/dart/dart-raw-snapshot-store.js';
 import { SqliteDartRawSnapshotStore } from '../../src/server/modules/facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
-import { dartRawApiSnapshots, symbols } from '../../src/server/shared/db/schema.js';
+import { dartRawApiSnapshots } from '../../src/server/shared/db/operations-schema.js';
+import { symbols } from '../../src/runtime/shared/db/schema.js';
 
 const KEY: DartRawSnapshotKey = {
   symbol: '005930',

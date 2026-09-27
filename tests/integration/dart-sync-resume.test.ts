@@ -12,7 +12,7 @@ import { createDartFactSource } from '../../src/server/modules/facts/infrastruct
 import { SqliteDartRawSnapshotStore } from '../../src/server/modules/facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
 import { SqliteFactRepository } from '../../src/runtime/modules/facts/infrastructure/sqlite-fact-repository.js';
 import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
-import { symbols } from '../../src/server/shared/db/schema.js';
+import { symbols } from '../../src/runtime/shared/db/schema.js';
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
 const START = Date.UTC(2026, 8, 12);

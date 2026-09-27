@@ -7,7 +7,7 @@ import {
   symbolMasterCoverage,
   symbolMasterTradingDays,
   symbolMasterVersions,
-} from '../../src/server/shared/db/schema.js';
+} from '../../src/runtime/shared/db/schema.js';
 import type { KrxHistoricalUniverseSource } from '../../src/runtime/modules/market-data/application/ports.js';
 import {
   SymbolMasterService,

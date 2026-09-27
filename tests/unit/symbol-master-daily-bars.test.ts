@@ -4,7 +4,7 @@ import {
   SymbolMasterService,
   type SymbolMasterServiceDeps,
 } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
-import { krxDailyBars } from '../../src/server/shared/db/schema.js';
+import { krxDailyBars } from '../../src/runtime/shared/db/schema.js';
 import type { TestApp } from '../helpers/test-app.js';
 import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
 import {

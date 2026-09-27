@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { openDatabase } from "../../src/runtime/shared/db/database.js";
 import { SqliteFactCoverageStore } from "../../src/runtime/modules/facts/application/fact-coverage-store.js";
 import { SqliteCorporateActionCoverageStore } from "../../src/runtime/modules/facts/application/corporate-action-coverage.js";
-import { facts, providerInputIssues, symbolFactsState, symbols } from "../../src/server/shared/db/schema.js";
+import { facts, providerInputIssues, symbolFactsState, symbols } from "../../src/runtime/shared/db/schema.js";
 
 describe("기존 수집 자료 재사용", () => {
   it("정상 legacy 재무 fact와 자본변동 coverage는 수집 버전 차이에도 재사용하고 PENDING_FILING 연도만 연다", () => {

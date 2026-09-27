@@ -7,7 +7,7 @@ import {
   facts,
   symbolFactsState,
   symbols as symbolsTable,
-} from '../../src/server/shared/db/schema.js';
+} from '../../src/runtime/shared/db/schema.js';
 
 function setup() {
   const database = openDatabase(':memory:');

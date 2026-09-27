@@ -7,7 +7,7 @@ import {
   dailySelectionMetricCoverage,
   dailySelectionMetrics,
   symbolFactsState,
-} from '../../src/server/shared/db/schema.js';
+} from '../../src/runtime/shared/db/schema.js';
 import { createTestAdmin, type TestApp } from '../helpers/test-app.js';
 import { authenticatedTest as it, test } from '../helpers/test-fixtures.js';
 import {

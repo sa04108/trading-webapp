@@ -14,7 +14,7 @@ import {
   symbolFactsState,
   symbolMasterTradingDays,
   symbolMasterVersions,
-} from '../../src/server/shared/db/schema.js';
+} from '../../src/runtime/shared/db/schema.js';
 import {
   getCostProfile,
   getKrxExecutionRules,

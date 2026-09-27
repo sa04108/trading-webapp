@@ -7,7 +7,7 @@ import type { BacktestDataExclusion } from '../../src/runtime/modules/backtest/a
 import { UniverseResolutionCancelledError } from '../../src/runtime/modules/backtest/application/universe-rule-resolver.js';
 import { CandleCoverageService } from '../../src/runtime/modules/market-data/application/candle-coverage-service.js';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
-import { krxDailyBars } from '../../src/server/shared/db/schema.js';
+import { krxDailyBars } from '../../src/runtime/shared/db/schema.js';
 
 const ts = (date: string): number => Date.parse(`${date}T00:00:00Z`);
 const members = (...symbols: string[]) => symbols.map((symbol) => ({ symbol }));

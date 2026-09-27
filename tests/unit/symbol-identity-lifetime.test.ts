@@ -4,7 +4,7 @@ import {
   krxDailyBars,
   symbolMasterVersions,
   symbols,
-} from '../../src/server/shared/db/schema.js';
+} from '../../src/runtime/shared/db/schema.js';
 import { inferUniqueSymbolIdentities, validateSymbolIdentityLifetime, type SymbolIdentitySelection } from '../../src/runtime/modules/market-data/domain/symbol-identity-lifetime.js';
 import { type TestApp } from '../helpers/test-app.js';
 import { test as it } from '../helpers/test-fixtures.js';

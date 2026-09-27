@@ -5,7 +5,7 @@ import { Worker } from 'node:worker_threads';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
-import { backtestPreparationJobs } from '../../src/server/shared/db/schema.js';
+import { backtestPreparationJobs } from '../../src/runtime/shared/db/schema.js';
 import {
   BacktestPreparationOrchestrator,
   type PreparationInput,

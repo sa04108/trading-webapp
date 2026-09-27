@@ -8,7 +8,7 @@ import {
   krxDailyBars,
   symbolFactsState,
   symbolMasterVersions,
-} from '../../src/server/shared/db/schema.js';
+} from '../../src/runtime/shared/db/schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import type { TestApp } from '../helpers/test-app.js';
 import { authenticatedTest as base } from '../helpers/test-fixtures.js';

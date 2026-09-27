@@ -2,7 +2,7 @@ import { describe, expect } from 'vitest';
 import {
   backtestMonthlyReturns,
   backtestTrades,
-} from '../../src/server/shared/db/schema.js';
+} from '../../src/server/shared/db/operations-schema.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { test as it } from '../helpers/test-fixtures.js';
 
