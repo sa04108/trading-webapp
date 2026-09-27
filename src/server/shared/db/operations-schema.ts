@@ -3,7 +3,6 @@ export * from "../../../runtime/shared/db/operations-schema.js";
 export * from "./auth-schema.js";
 export * from "./notification-schema.js";
 export * from "./collection-schema.js";
-export * from "./legacy-schema.js";
 export * from "./preparation-owner-schema.js";
 export * from "./backtest-batch-schema.js";
 export * from "./backtest-validation-schema.js";

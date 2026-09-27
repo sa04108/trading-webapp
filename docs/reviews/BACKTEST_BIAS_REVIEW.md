@@ -401,7 +401,7 @@ warm-up N일을 잠식하던 경로를 제거했다.
 <details>
 <summary><strong>개발자용 근거</strong></summary>
 
-- `src/server/shared/db/schema.ts:235-258` — `backtest_runs`에는
+- `src/server/shared/db/backtest-result-schema.ts` — `backtest_runs`에는
   `parameterJson`, `strategyId`, `strategyVersion`, `strategySourceHash`,
   `datasetId`, `datasetHash`, `randomSeed`, `gitCommitSha` 등이 저장된다.
 - 기간과 유니버스 등 일부 실행 조건은 별도 컬럼이 아니라 작업의 `requestJson`에

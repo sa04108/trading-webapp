@@ -9,7 +9,7 @@ import {
   symbolMasterCoverage,
   symbolMasterTradingDays,
   symbolMasterVersions,
-} from '../../src/server/shared/db/schema.js';
+} from '../../src/runtime/shared/db/schema.js';
 import type { TestApp } from '../helpers/test-app.js';
 import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
 import {

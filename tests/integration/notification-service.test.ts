@@ -1,5 +1,5 @@
 import { describe, expect } from 'vitest';
-import { notifications } from '../../src/server/shared/db/schema.js';
+import { notifications } from '../../src/server/shared/db/operations-schema.js';
 import type { NotificationRow } from '../../src/server/modules/notification/application/notification-service.js';
 import { test as it } from '../helpers/test-fixtures.js';
 

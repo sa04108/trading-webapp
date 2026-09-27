@@ -3,7 +3,7 @@ import { createPreparationNotificationListener } from '../../src/server/bootstra
 import type { BacktestPreparationJobDto } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import type { NotificationInput } from '../../src/server/modules/notification/application/notification-service.js';
 import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
-import { backtestPreparationJobs } from '../../src/server/shared/db/schema.js';
+import { backtestPreparationJobs } from '../../src/runtime/shared/db/schema.js';
 import type { Logger } from '../../src/server/shared/logger.js';
 
 const warn = vi.fn();

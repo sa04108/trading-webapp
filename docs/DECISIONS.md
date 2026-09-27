@@ -819,7 +819,8 @@
   `factsPhase` 였고 그 잡이 사라졌다. `pnpm cli facts:sync` 가 같은 유스케이스를 그대로
   부른다 — 기능이 없어진 것이 아니라 진입점이 하나로 줄었다.
 - **영향:** `symbol_slices`·`symbol_coverage`·`data_sync_jobs` 가 쓰이지 않게 됐다.
-  실제 스키마 정리와 parquet·DuckDB 제거는 후속 계획에서 한다.
+  운영 스키마 선언을 제거하고 `migrations/operations/0011_remove_retired_collection_tables.sql`
+  삭제 마이그레이션을 추가했다. parquet·DuckDB 제거는 후속 계획에서 한다.
 
 ## D-042: 백테스트 취소가 실행 도중에도 걸리게 한다 — 동기 루프에 양보 지점을 심는다
 

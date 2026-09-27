@@ -1,6 +1,6 @@
 import { describe, expect } from 'vitest';
 import { pruneExpiredRows } from '../../src/server/shared/db/maintenance.js';
-import { auditLogs, loginAttempts, notifications, sessions, users } from '../../src/server/shared/db/schema.js';
+import { auditLogs, loginAttempts, notifications, sessions, users } from '../../src/server/shared/db/operations-schema.js';
 import { test as it } from '../helpers/test-fixtures.js';
 
 const HOUR = 3_600_000;

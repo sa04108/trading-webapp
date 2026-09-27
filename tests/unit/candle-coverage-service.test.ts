@@ -1,7 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { test as base } from '../helpers/test-fixtures.js';
-import { krxDailyBars } from '../../src/server/shared/db/schema.js';
+import { krxDailyBars } from '../../src/runtime/shared/db/schema.js';
 import { CandleCoverageService } from '../../src/runtime/modules/market-data/application/candle-coverage-service.js';
 
 const midnight = (date: string): number => Date.parse(`${date}T00:00:00Z`);

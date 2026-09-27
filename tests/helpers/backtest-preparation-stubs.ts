@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
-import { symbolMasterCoverage } from '../../src/server/shared/db/schema.js';
+import { symbolMasterCoverage } from '../../src/runtime/shared/db/schema.js';
 import type { TestApp } from './test-app.js';
 
 export type RestorePreparationStub = () => void;

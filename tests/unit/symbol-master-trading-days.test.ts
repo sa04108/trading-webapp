@@ -10,7 +10,7 @@ import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js
 import {
   symbolMasterCoverage,
   symbolMasterTradingDays,
-} from '../../src/server/shared/db/schema.js';
+} from '../../src/runtime/shared/db/schema.js';
 import {
   baseInfoFixture,
   dailyFixture,

@@ -75,8 +75,8 @@
 - `src/server/modules/market-data/application/symbol-metrics-service.ts`의 시가총액은
   현재 발행주식수와 현재가를 곱해 만든 **현재 값**이다.
 - 거래대금·거래량 지표도 현재 랭킹 응답이며, 과거 시점 재현용으로 저장하지 않는다.
-- `src/server/shared/db/schema.ts`의 `dataset_symbols`는 데이터셋과 종목의 참조만
-  보유한다. 그 종목을 **어느 날짜·어느 출처·어느 기준으로 골랐는지**는 남지 않는다.
+- 기준 커밋 `aeb4064`의 `dataset_symbols`는 데이터셋과 종목의 참조만 보유했다.
+  그 종목을 **어느 날짜·어느 출처·어느 기준으로 골랐는지**는 남지 않았다.
 - `src/shared/schemas/backtest-request.ts`의 유니버스는 최대 200개의 명시적 종목
   목록이며, 그 목록의 시점 적합성을 판정할 정보가 없다.
 - 실행 시에는 명시적 종목과 종목별 데이터 버전을 고정하지만, 종목 목록을 고른
@@ -692,5 +692,4 @@ KRX 실서비스를 CI에서 직접 호출하지 않는다. 고정 fixture와 �
 - [DECISIONS.md](../DECISIONS.md)의 D-034 및 D-038
 - `src/server/modules/market-data/application/symbol-metrics-service.ts`
 - `src/server/modules/market-data/application/dataset-service.ts`
-- `src/server/shared/db/schema.ts`
 - `src/shared/schemas/backtest-request.ts`

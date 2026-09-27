@@ -1,5 +1,5 @@
 import { describe, expect } from 'vitest';
-import { notifications } from '../../src/server/shared/db/schema.js';
+import { notifications } from '../../src/server/shared/db/operations-schema.js';
 import { authenticatedTest as it } from '../helpers/test-fixtures.js';
 
 describe('notification routes', () => {

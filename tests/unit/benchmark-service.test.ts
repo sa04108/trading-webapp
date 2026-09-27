@@ -7,12 +7,11 @@ import type {
 } from '../../src/runtime/modules/market-data/application/ports.js';
 import { ResultsService } from '../../src/server/modules/backtest/application/results-service.js';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
+import { backtestJobs, backtestMetrics } from '../../src/server/shared/db/operations-schema.js';
 import {
-  backtestJobs,
-  backtestMetrics,
   symbolMasterCoverage,
   symbolMasterTradingDays,
-} from '../../src/server/shared/db/schema.js';
+} from '../../src/runtime/shared/db/schema.js';
 import type { Logger } from '../../src/server/shared/logger.js';
 
 const logger = {

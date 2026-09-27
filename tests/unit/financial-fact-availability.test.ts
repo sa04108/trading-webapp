@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FinancialFactAvailabilityService } from '../../src/runtime/modules/facts/application/financial-fact-availability.js';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
-import { facts } from '../../src/server/shared/db/schema.js';
+import { facts } from '../../src/runtime/shared/db/schema.js';
 
 describe('FinancialFactAvailabilityService', () => {
   it('종목별 PIT cutoff까지 실제 재무 fact가 있는 요청 종목만 돌려준다', () => {

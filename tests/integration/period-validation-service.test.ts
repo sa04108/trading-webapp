@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
 import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/database.js';
-import { backtestMetrics, backtestPreparationJobs, backtestRuns, backtestValidations } from '../../src/server/shared/db/schema.js';
+import { backtestMetrics, backtestPreparationJobs, backtestRuns, backtestValidations } from '../../src/server/shared/db/operations-schema.js';
 import { readGitCommitSha } from '../../src/runtime/shared/build-info.js';
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { JobQueue } from '../../src/server/modules/backtest/application/job-queue.js';

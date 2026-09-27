@@ -2,7 +2,7 @@ import { asc, eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { SymbolMasterService, type SymbolMasterServiceDeps } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
-import { symbolMasterVersions } from '../../src/server/shared/db/schema.js';
+import { symbolMasterVersions } from '../../src/runtime/shared/db/schema.js';
 import type { TestApp } from '../helpers/test-app.js';
 import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
 import {

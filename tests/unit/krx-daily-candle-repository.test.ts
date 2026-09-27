@@ -1,6 +1,6 @@
 import { describe, expect } from 'vitest';
 import { test as base } from '../helpers/test-fixtures.js';
-import { krxDailyBars } from '../../src/server/shared/db/schema.js';
+import { krxDailyBars } from '../../src/runtime/shared/db/schema.js';
 import type { AppDatabase } from '../../src/runtime/shared/db/database.js';
 import {
   KrxDailyCandleRepository,

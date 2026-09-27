@@ -3,7 +3,7 @@ import type { TestApp } from '../helpers/test-app.js';
 import { test as it } from '../helpers/test-fixtures.js';
 import { SqliteCorporateActionCoverageStore } from '../../src/runtime/modules/facts/application/corporate-action-coverage.js';
 import { SqliteFactCoverageStore } from '../../src/runtime/modules/facts/application/fact-coverage-store.js';
-import { symbolFactsState, symbols as symbolsTable } from '../../src/server/shared/db/schema.js';
+import { symbolFactsState, symbols as symbolsTable } from '../../src/runtime/shared/db/schema.js';
 
 async function setup(t: TestApp) {
   const db = t.container.database.db;

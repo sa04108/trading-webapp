@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import type { Container } from '../../src/server/bootstrap/container.js';
 import type { AppDatabase } from '../../src/runtime/shared/db/database.js';
 import type { Candle, Market } from '../../src/runtime/modules/market-data/domain/candle.js';
-import { krxDailyBars, symbolMasterVersions } from '../../src/server/shared/db/schema.js';
+import { krxDailyBars, symbolMasterVersions } from '../../src/runtime/shared/db/schema.js';
 
 /**
  * 종목 등록 — 테스트에서 종목을 먼저 만들고 사용하는 헬퍼.

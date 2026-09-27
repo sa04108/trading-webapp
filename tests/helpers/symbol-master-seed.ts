@@ -9,7 +9,7 @@ import {
   symbolMasterTradingDays,
   symbolMasterVersions,
   symbols,
-} from '../../src/server/shared/db/schema.js';
+} from '../../src/runtime/shared/db/schema.js';
 
 /** `UniverseRuleResolver` 테스트 픽스처 — 실제 KRX 마스터가 갖는 필드의 최소 부분집합 */
 export interface SymbolMasterFixtureEntry {

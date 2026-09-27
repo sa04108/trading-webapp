@@ -1,6 +1,6 @@
 import { describe, expect } from 'vitest';
 import { test as it } from '../helpers/test-fixtures.js';
-import { krxDailyBars } from '../../src/server/shared/db/schema.js';
+import { krxDailyBars } from '../../src/runtime/shared/db/schema.js';
 
 describe('krx_daily_bars 스키마', () => {
   it('삽입·조회가 왕복한다', async ({ ctx: t }) => {

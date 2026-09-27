@@ -14,7 +14,7 @@ import {
   symbolMasterTradingDays,
   symbolMasterVersions,
   symbols as symbolsTable,
-} from '../../src/server/shared/db/schema.js';
+} from '../../src/runtime/shared/db/schema.js';
 import type { TestApp } from '../helpers/test-app.js';
 import { authenticatedTest as base } from '../helpers/test-fixtures.js';
 import { installPreviewShapeStubs } from '../helpers/backtest-preparation-stubs.js';
