@@ -89,7 +89,8 @@ const previewResultSchema = z.object({
     .array(z.string().min(1).max(32))
     .max(20_000)
     .readonly(),
-  warnings: z.array(z.string().max(2_000)).max(1_000).readonly(),
+  // 서버가 생성한 경고 원문의 개수·길이가 입력 초안의 저장·복원을 막지 않게 한다.
+  warnings: z.array(z.string()).readonly(),
 });
 
 export const backtestWizardUniverseDraftSchema = z.object({

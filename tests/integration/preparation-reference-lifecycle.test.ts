@@ -236,6 +236,75 @@ describe('preparation reference lifecycle', () => {
     ).get(preparationId)).toBeUndefined();
   });
 
+  async function expectPreviewWarningsRoundTrip(
+    scenario: Scenario,
+    warnings: readonly string[],
+  ): Promise<void> {
+    const { ctx, cookie, userId } = scenario;
+    const started = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/backtests/universe-preview',
+      cookies: { session: cookie },
+      payload: {
+        universeRule: request.universeRule,
+        period: request.period,
+        strategyId: request.strategyId,
+        parameters: request.parameters,
+      },
+    });
+    expect(started.statusCode).toBe(202);
+    const preparationId = started.json<{ job: { id: string } }>().job.id;
+    await waitForPreparation(ctx, preparationId);
+
+    const preparation = ctx.container.database.sqlite.prepare(
+      'SELECT preview_json FROM backtest_preparation_jobs WHERE id = ?',
+    ).get(preparationId) as { preview_json: string };
+    const preview = JSON.parse(preparation.preview_json) as Record<string, unknown>;
+    ctx.container.database.sqlite.prepare(
+      'UPDATE backtest_preparation_jobs SET preview_json = ? WHERE id = ?',
+    ).run(JSON.stringify({ ...preview, warnings }), preparationId);
+
+    // 요청에는 큰 경고 본문 대신 완료된 서버 준비 작업 ID만 보낸다.
+    const saved = await ctx.app.inject({
+      method: 'PUT',
+      url: '/api/v1/backtests/wizard-draft/universe',
+      cookies: { session: cookie },
+      payload: {
+        universeRule: request.universeRule,
+        lastPreview: { preparationJobId: preparationId },
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().draft.payload.lastPreview.result.warnings).toEqual(warnings);
+
+    const rawDraft = ctx.container.database.sqlite.prepare(
+      'SELECT payload_json FROM backtest_wizard_drafts WHERE user_id = ? AND context = ?',
+    ).get(userId, '') as { payload_json: string };
+    expect(JSON.parse(rawDraft.payload_json)).toEqual({ universeRule: request.universeRule });
+
+    const loaded = await ctx.app.inject({
+      method: 'GET',
+      url: '/api/v1/backtests/wizard-draft/universe',
+      cookies: { session: cookie },
+    });
+    expect(loaded.statusCode).toBe(200);
+    expect(loaded.json().draft.payload.lastPreview.result.warnings).toEqual(warnings);
+  }
+
+  it('경고가 1,000개를 넘어도 유니버스 초안을 저장하고 원문 순서와 중복을 복원한다', async ({ scenario }) => {
+    const warnings = Array.from({ length: 1_100 }, (_, index) => `경고 ${index}`);
+    warnings[317] = '중복 경고';
+    warnings[318] = '중복 경고';
+
+    await expectPreviewWarningsRoundTrip(scenario, warnings);
+  });
+
+  it('경고 원문이 2,000자를 넘어도 유니버스 초안을 저장하고 복원한다', async ({ scenario }) => {
+    const warnings = [`원문 시작 ${'x'.repeat(4_200)} 원문 끝`];
+
+    await expectPreviewWarningsRoundTrip(scenario, warnings);
+  });
+
   it('같은 hash의 최신 준비가 있어도 원본 clone은 고정된 preparation을 재사용한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     const previewRequest = {
