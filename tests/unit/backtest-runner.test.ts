@@ -125,7 +125,7 @@ describe('measureBacktestArtifact', () => {
     };
 
     expect(measureBacktestArtifact(artifact)).toEqual(expect.objectContaining({
-      rowCount: 6,
+      rowCount: 7,
       equityPointCount: 1,
       drawdownPointCount: 1,
       tradeCount: 1,

@@ -1,5 +1,10 @@
 import { Buffer } from "node:buffer";
 import { z } from "zod";
+import {
+  summarizeBacktestWarnings,
+  MAX_BACKTEST_SUMMARY_WARNINGS,
+  MAX_BACKTEST_SUMMARY_WARNING_LENGTH,
+} from "./backtest-warning-summary.js";
 import type { BacktestRunResult } from "../domain/engine.js";
 
 /**
@@ -115,7 +120,7 @@ export const backtestResultSummarySchema = z.object({
         }),
     )
     .max(1_000),
-  warnings: z.array(z.string().max(4_000)).max(1_000),
+  warnings: z.array(z.string().max(MAX_BACKTEST_SUMMARY_WARNING_LENGTH)).max(MAX_BACKTEST_SUMMARY_WARNINGS),
   processedBars: nonNegativeInteger,
 });
 
@@ -222,6 +227,7 @@ export function measureBacktestArtifact(
   let estimatedPayloadBytes =
     jsonBytes(artifact.metrics) +
     jsonBytes(artifact.warnings) +
+    jsonBytes(summarizeBacktestWarnings(artifact.warnings)) +
     jsonBytes(artifact.openPositions);
 
   // equity/drawdown은 각각 숫자 두 개, monthly return은 숫자 세 개를 저장한다.
@@ -242,7 +248,8 @@ export function measureBacktestArtifact(
       artifact.equityPoints.length +
       artifact.drawdownPoints.length +
       artifact.trades.length +
-      artifact.monthlyReturns.length,
+      artifact.monthlyReturns.length +
+      artifact.warnings.length,
     estimatedPayloadBytes,
     equityPointCount: artifact.equityPoints.length,
     drawdownPointCount: artifact.drawdownPoints.length,

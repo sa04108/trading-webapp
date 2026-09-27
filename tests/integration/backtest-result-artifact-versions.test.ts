@@ -23,6 +23,7 @@ import {
 import { SqliteBacktestResultArtifactImporter } from '../../src/server/modules/backtest/infrastructure/sqlite-backtest-result-artifact-importer.js';
 import { ForkedBacktestResultCompleter } from '../../src/server/modules/backtest/infrastructure/forked-backtest-result-completer.js';
 import { JobQueue } from '../../src/server/modules/backtest/application/job-queue.js';
+import { summarizeBacktestWarnings } from '../../src/runtime/modules/backtest/application/backtest-warning-summary.js';
 import { ResultsService } from '../../src/server/modules/backtest/application/results-service.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 
@@ -102,12 +103,12 @@ describe('결과 artifact 실행 버전 계약', () => {
 
   it('배포 SHA가 달라도 같은 실행 버전 결과를 저장하고 출처를 보존한다', async () => {
     new SqliteBacktestResultArtifactWriter(artifactPath).write(context, artifact);
-    await expect(complete()).resolves.toMatchObject({ status: 'ACCEPTED', schemaVersion: 2 });
+    await expect(complete()).resolves.toMatchObject({ status: 'ACCEPTED', schemaVersion: 3 });
     expect(new ResultsService(database.db).getRun(context.jobId)).toMatchObject({
       executionVersion: context.executionVersion, gitCommitSha: 'different-deployment-sha',
     });
     expect(artifact.schemaVersion).toBe(1);
-    expect(BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION).toBe(2);
+    expect(BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION).toBe(3);
   });
 
   it('실행 버전이 다른 결과를 중앙 저장 전에 거절한다', async () => {
@@ -137,4 +138,53 @@ describe('결과 artifact 실행 버전 계약', () => {
     const importer = new SqliteBacktestResultArtifactImporter(database);
     expect(() => importer.validate(artifactPath, context.jobId)).toThrow('context');
   });
+
+  it('1,093개·4,162자 경고도 계산 결과를 수락하고 순서와 원문을 보존한다', async () => {
+    const warnings = Array.from({ length: 1093 }, (_, index) => `준비 경고 ${index}`);
+    warnings[317] = '자'.repeat(4162);
+    warnings[1092] = '마지막 실행 경고';
+    new SqliteBacktestResultArtifactWriter(artifactPath).write(context, { ...artifact, warnings });
+    await expect(complete()).resolves.toMatchObject({ status: 'ACCEPTED', schemaVersion: 3 });
+    const results = new ResultsService(database.db);
+    expect([...results.iterateWarningDetails(context.jobId)]).toEqual(warnings);
+    const summaries = JSON.parse(results.getRun(context.jobId)!.warningsJson!);
+    expect(summaries).toEqual(summarizeBacktestWarnings(warnings));
+    expect(summaries.length).toBeLessThanOrEqual(1000);
+    expect(summaries.every((warning: string) => warning.length <= 4000)).toBe(true);
+    expect(summaries).toContain('마지막 실행 경고');
+    expect(summaries[0]).toContain('전체 경고 원문');
+    database.sqlite.prepare('DELETE FROM backtest_jobs WHERE id = ?').run(context.jobId);
+    expect(database.sqlite.prepare('SELECT count(*) AS count FROM backtest_warning_details').get()).toEqual({ count: 0 });
+  });
+
+  it('중복·줄바꿈·유니코드 경고는 원문 그대로 저장하고 짧은 경고는 요약하지 않는다', async () => {
+    const warnings = ['중복 경고', '중복 경고', '줄바꿈\n따옴표 "원문" 😀'];
+    new SqliteBacktestResultArtifactWriter(artifactPath).write(context, { ...artifact, warnings });
+    await expect(complete()).resolves.toMatchObject({ status: 'ACCEPTED' });
+    const results = new ResultsService(database.db);
+    expect(JSON.parse(results.getRun(context.jobId)!.warningsJson!)).toEqual(warnings);
+    expect([...results.iterateWarningDetails(context.jobId)]).toEqual(warnings);
+  });
+
+  it('서버는 원문과 달라진 경고 요약을 수락하지 않는다', () => {
+    new SqliteBacktestResultArtifactWriter(artifactPath).write(context, { ...artifact, warnings: ['원문'] });
+    const sqlite = new Database(artifactPath);
+    const manifest = sqlite.prepare('SELECT summary_json AS summary FROM artifact_manifest').get() as { summary: string };
+    sqlite.prepare('UPDATE artifact_manifest SET summary_json = ?')
+      .run(JSON.stringify({ ...JSON.parse(manifest.summary), warnings: ['다른 경고'] }));
+    sqlite.close();
+    expect(() => new SqliteBacktestResultArtifactImporter(database).validate(artifactPath, context.jobId))
+      .toThrow('경고 요약이 전체 원문과 일치하지 않습니다');
+  });
+
+  it('원문 행이 누락되거나 순서가 끊긴 파일은 저장 전에 거부한다', () => {
+    new SqliteBacktestResultArtifactWriter(artifactPath).write(context, { ...artifact, warnings: ['첫 경고', '두 번째 경고'] });
+    const sqlite = new Database(artifactPath);
+    sqlite.prepare('DELETE FROM warning_details WHERE sequence = 0').run();
+    sqlite.close();
+    expect(() => new SqliteBacktestResultArtifactImporter(database).validate(artifactPath, context.jobId))
+      .toThrow('경고 원문의 순서가 올바르지 않습니다');
+    expect(database.sqlite.prepare('SELECT count(*) AS count FROM backtest_warning_details').get()).toEqual({ count: 0 });
+  });
+
 });

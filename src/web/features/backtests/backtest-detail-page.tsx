@@ -701,7 +701,9 @@ function RunMetadataCard({
           ))}
         </CardContent>
       </Card>
-      {warnings.length > 0 ? <ResultWarnings warnings={warnings} /> : null}
+      {warnings.length > 0 ? (
+        <ResultWarnings warnings={warnings} jobId={job.id} />
+      ) : null}
       <UniverseRebalancingSection entries={universeRebalancing} />
     </div>
   );

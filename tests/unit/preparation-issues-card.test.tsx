@@ -55,6 +55,32 @@ describe('준비 확인사항 표', () => {
     expect(html).toContain('배당');
   });
 
+  it('준비 경고만 있어도 전체 원문 다운로드 링크를 표시한다', () => {
+    const html = renderToStaticMarkup(
+      <ResultWarnings warnings={[warnings[0]!]} jobId="job/one" />,
+    );
+    expect(html).toContain('전체 경고 원문 다운로드');
+    expect(html).toContain('href="/api/v1/backtests/job%2Fone/warnings"');
+    expect(html).toContain('download=""');
+  });
+
+  it('실행 경고가 있을 때도 전체 원문 다운로드 링크를 표시한다', () => {
+    const html = renderToStaticMarkup(
+      <ResultWarnings warnings={['일반 실행 경고']} jobId="job-1" />,
+    );
+    expect(html).toContain('실행 중 발생한 경고');
+    expect(html).toContain('href="/api/v1/backtests/job-1/warnings"');
+    expect(html).toContain('전체 경고 원문 다운로드');
+  });
+
+  it('경고가 비어 있으면 다운로드 링크도 표시하지 않는다', () => {
+    const html = renderToStaticMarkup(
+      <ResultWarnings warnings={[]} jobId="job-1" />,
+    );
+    expect(html).toBe('');
+    expect(html).not.toContain('전체 경고 원문 다운로드');
+  });
+
   it('빈 확인사항은 카드를 만들지 않고 미인식 확인사항은 상세 안내에 남긴다', () => {
     expect(renderToStaticMarkup(<PreparationIssuesCard warnings={[]} />)).toBe('');
     const html = renderToStaticMarkup(<PreparationIssuesCard warnings={['새 확인사항']} />);

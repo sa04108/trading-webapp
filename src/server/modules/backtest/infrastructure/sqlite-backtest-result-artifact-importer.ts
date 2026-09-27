@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { z } from "zod";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import { isRetryableSqliteError } from "../../../shared/db/sqlite-errors.js";
+import { summarizeBacktestWarnings } from "../../../../runtime/modules/backtest/application/backtest-warning-summary.js";
 import { newId } from "../../../../runtime/shared/ids.js";
 import {
   backtestResultSummarySchema,
@@ -18,6 +19,11 @@ const finiteNumber = z.number().finite();
 const positiveNumber = finiteNumber.positive();
 const nonNegativeNumber = finiteNumber.nonnegative();
 const nonNegativeInteger = z.number().int().nonnegative();
+
+const warningRowSchema = z.object({
+  sequence: nonNegativeInteger,
+  warning: z.string(),
+});
 
 const equityRowSchema = z.object({
   tsMs: nonNegativeInteger,
@@ -151,6 +157,7 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
         "table:equity_points",
         "table:monthly_returns",
         "table:trades",
+        "table:warning_details",
       ];
       const schemaObjects = (
         sqlite
@@ -180,6 +187,7 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
         "drawdown_points",
         "trades",
         "monthly_returns",
+        "warning_details",
       ]) {
         const table = tables.get(name);
         if (table?.type !== "table" || table.strict !== 1) {
@@ -222,19 +230,22 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
            (SELECT count(*) FROM equity_points) AS equityCount,
            (SELECT count(*) FROM drawdown_points) AS drawdownCount,
            (SELECT count(*) FROM trades) AS tradeCount,
-           (SELECT count(*) FROM monthly_returns) AS monthlyCount`,
+           (SELECT count(*) FROM monthly_returns) AS monthlyCount,
+           (SELECT count(*) FROM warning_details) AS warningCount`,
         )
         .get() as {
         equityCount: number;
         drawdownCount: number;
         tradeCount: number;
         monthlyCount: number;
+        warningCount: number;
       };
       const rowCount =
         counts.equityCount +
         counts.drawdownCount +
         counts.tradeCount +
-        counts.monthlyCount;
+        counts.monthlyCount +
+        counts.warningCount;
       if (rowCount > MAX_BACKTEST_RESULT_ROWS) {
         throw new InvalidBacktestResultArtifactError(
           `결과 행 수가 상한을 넘습니다: ${rowCount}`,
@@ -293,6 +304,22 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
           "결과 시계열 순서나 월별 키가 올바르지 않습니다",
         );
       }
+      // 원문과 요약을 같은 규칙으로 대조해 누락·순서 변조를 검증한다.
+      function* warningDetails(): Generator<string> {
+        let sequence = 0;
+        for (const raw of sqlite.prepare(
+          "SELECT sequence, warning FROM warning_details ORDER BY sequence",
+        ).iterate()) {
+          const row = warningRowSchema.parse(raw);
+          if (row.sequence !== sequence++) {
+            throw new InvalidBacktestResultArtifactError("경고 원문의 순서가 올바르지 않습니다");
+          }
+          yield row.warning;
+        }
+      }
+      if (JSON.stringify(summarizeBacktestWarnings(warningDetails())) !== JSON.stringify(summary.warnings)) {
+        throw new InvalidBacktestResultArtifactError("경고 요약이 전체 원문과 일치하지 않습니다");
+      }
       return { path: artifactPath, context, summary, schemaVersion, rowCount };
     } catch (error) {
       if (error instanceof InvalidBacktestResultArtifactError) throw error;
@@ -344,6 +371,15 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
           context.startedAtMs,
           context.completedAtMs,
         );
+      const insertWarning = target.prepare(
+        "INSERT INTO backtest_warning_details (job_id, sequence, warning) VALUES (?, ?, ?)",
+      );
+      for (const raw of source.prepare(
+        "SELECT sequence, warning FROM warning_details ORDER BY sequence",
+      ).iterate()) {
+        const row = warningRowSchema.parse(raw);
+        insertWarning.run(context.jobId, row.sequence, row.warning);
+      }
       target
         .prepare(
           `INSERT INTO backtest_metrics (

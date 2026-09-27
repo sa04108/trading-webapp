@@ -211,13 +211,20 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
       members: entry.members,
       excludedNonTradingCount: entry.excludedNonTradingCount,
     }));
-    const backtest = container.jobQueue.enqueue(request, schedule);
+    const submitWarnings = Array.from({ length: 1093 }, (_, index) => `준비 경고 ${index}`);
+    submitWarnings[317] = '자'.repeat(4162);
+    const backtest = container.jobQueue.enqueue(request, schedule, undefined, undefined, submitWarnings);
     backtestId = backtest.id;
     await waitFor(() => /^(COMPLETED|FAILED|CANCELLED)$/.test(container.jobQueue.getJob(backtest.id)?.status ?? ''), '백테스트');
     expect(container.jobQueue.getJob(backtest.id), output).toMatchObject({
       status: 'COMPLETED', error: null, agentId: credential.id, attempt: 1,
     });
     expect(container.resultsService.getRun(backtest.id)).toMatchObject({ executionVersion: versions.executionVersion });
+    const warningDetails = [...container.resultsService.iterateWarningDetails(backtest.id)];
+    expect(warningDetails.slice(0, submitWarnings.length)).toEqual(submitWarnings);
+    const warningSummary = JSON.parse(container.resultsService.getRun(backtest.id)!.warningsJson!) as string[];
+    expect(warningSummary.length).toBeLessThanOrEqual(1000);
+    expect(warningSummary.every((warning) => warning.length <= 4000)).toBe(true);
     expect(container.resultsService.getMetrics(backtest.id)).not.toBeNull();
     expect(container.resultsService.getFullExport(backtest.id).equityPoints.length).toBeGreaterThan(0);
     expect(sawPreparationStart).toBe(true);

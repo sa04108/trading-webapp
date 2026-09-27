@@ -71,6 +71,13 @@
       "when": 1789913259136,
       "tag": "0009_automatic_provider_collection",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1790488304414,
+      "tag": "0010_backtest_warning_details",
+      "breakpoints": true
     }
   ]
 }
