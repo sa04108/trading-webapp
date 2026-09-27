@@ -207,12 +207,14 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 | 명령 | 검증 범위 |
 | --- | --- |
 | `pnpm lint`·`pnpm typecheck` | 정적 규칙과 서버·웹 타입 검사 |
-| `pnpm test` | Vitest의 `tests/unit`, `tests/integration`, `tests/architecture` |
+| `pnpm test` | Vitest의 `unit`, `component`, `integration` 전체 project |
+| `pnpm test --project unit --project component` | 커밋·PR 전 계산·정책 및 하위 시스템 검증 |
+| `pnpm test --project integration` | 배포 시 실제 DB·파일·프로세스·통신 및 의존성 경계 검증 |
 | `pnpm test:e2e` | 빌드 후 Playwright 브라우저 검증. 기본 배포 스크립트와 별도로 실행한다. |
 | `pnpm test:agent-package` | 실제 패키지를 저장소 밖에서 실행해 구성·의존성·준비·계산·결과 저장 계약 검증 |
 
-자동 회귀 테스트는 운영 DB·실제 API 자격증명에 의존하지 않는다. 필요한 SQLite·자식 프로세스는 실제로 실행하되 외부 응답은 fixture·대체 서버로 제어한다. 앱·DB·가변 상태는 테스트별로 격리하고 실패해도 자원을 정리한다. 실서비스 API 점검은 별도다.
+자동 회귀 테스트는 운영 DB·실제 API 자격증명에 의존하지 않는다. 필요한 SQLite·자식 프로세스는 integration에서 실제로 실행하되 외부 응답은 fixture·대체 서버로 제어한다. Vitest의 앱·DB·가변 상태는 테스트별로 격리하고 실패해도 자원을 정리한다. Playwright E2E는 별도 배포 전 검증으로 기존 공유 테스트 서버·DB 구성을 유지한다. 실서비스 API 점검은 별도다.
 
-회귀 검증은 계산·시점 정합성, 준비 결과 보존·재사용, 버전 호환성, 임대·취소·복구·결과 반영, 인증·모듈 경계를 포함한다. 계약 변경 시 해당 테스트도 변경한다.
+회귀 검증은 계산·시점 정합성, 준비 결과 보존·재사용, 버전 호환성, 임대·취소·복구·결과 반영, 인증·모듈 경계를 포함한다. 기존 테스트가 보호하지 않는 새로운 계약에 대해 최소 충분한 범위에서 검증을 추가한다. unit으로 충분한 계약을 component·integration·E2E로 확장하지 않는다. 분류 및 실행 기준은 [테스트 아키텍처 계획](TEST_ARCHITECTURE_PLAN.md)을 따른다.
 
-현재 배포 게이트는 **설치 → lint → typecheck → 전체 Vitest → build → 에이전트 build → 패키지 검증**이다. 변경 영향별 테스트 선택 배포는 구현된 것으로 가정하지 않는다. 기준: [vitest.config.ts](../vitest.config.ts), [test-fixtures.ts](../tests/helpers/test-fixtures.ts)·[test-app.ts](../tests/helpers/test-app.ts), [build-release.sh](../scripts/build-release.sh).
+현재 배포 게이트는 **설치 → lint → typecheck → integration → build → build-info 작성 → 에이전트 build → 패키지 검증**이다. unit·component는 커밋·PR 전에, integration·패키지 검사는 배포 단계에서 실행하며 E2E는 별도로 실행한다. 기존 architecture 검사 2개 파일은 integration project 안에 보존한다. 기준: [vitest.config.ts](../vitest.config.ts), [test-fixtures.ts](../tests/helpers/test-fixtures.ts)·[test-app.ts](../tests/helpers/test-app.ts), [build-release.sh](../scripts/build-release.sh).

@@ -6,8 +6,7 @@ import { defineConfig } from 'vitest/config';
 process.env.QUANT_SOURCE_RUNTIME_VERSIONS = execFileSync(process.execPath, [path.resolve(import.meta.dirname, 'scripts/build-runtime-versions.mjs'), '--print'], { encoding: 'utf8' });
 
 export default defineConfig({
-  // Task 9 부터 웹 컴포넌트 markup 테스트(.test.tsx)가 생겨 vite.config.ts 와 같은 별칭이
-  // 필요하다 — vitest 는 vite.config.ts 를 읽지 않으므로 여기서 다시 선언한다.
+  // 웹 테스트도 제품과 같은 모듈 별칭을 사용한다.
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, 'src/web'),
@@ -15,16 +14,39 @@ export default defineConfig({
     },
   },
   test: {
+    environment: 'node',
     setupFiles: ['tests/setup/provider-network-guard.ts'],
-    include: [
-      'tests/unit/**/*.test.ts',
-      'tests/unit/**/*.test.tsx',
-      'tests/integration/**/*.test.ts',
-      'tests/architecture/**/*.test.ts',
-    ],
     // better-sqlite3 등 네이티브 모듈은 워커 스레드보다 포크가 안전하다
     pool: 'forks',
+    isolate: true,
+    retry: 0,
+    allowOnly: false,
+    passWithNoTests: false,
+    maxWorkers: 2,
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'unit',
+          include: ['tests/unit/**/*.test.{ts,tsx}'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'component',
+          include: ['tests/component/**/*.test.{ts,tsx}'],
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'integration',
+          include: ['tests/integration/**/*.test.{ts,tsx}'],
+        },
+      },
+    ],
   },
 });

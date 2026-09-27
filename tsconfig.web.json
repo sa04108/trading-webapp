@@ -21,7 +21,6 @@
       "@shared/*": ["./src/shared/*"]
     }
   },
-  // .tsx 테스트(웹 markup 검증, Task 9부터)는 여기서 검사한다 — jsx·DOM lib 이 필요해
-  // tsconfig.server.json(NodeNext, jsx 없음)은 대상에서 뺐다(위 exclude 참고).
-  "include": ["src/web", "src/shared", "tests/unit/**/*.test.tsx"]
+  // 테스트 계층을 이동해도 JSX 테스트가 타입 검사에서 빠지지 않게 한다.
+  "include": ["src/web", "src/shared", "tests/**/*.test.tsx"]
 }

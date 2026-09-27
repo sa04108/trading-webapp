@@ -414,39 +414,40 @@ WSL에 다시 들어온 뒤 `ps -p 1 -o comm=`과 `systemctl --user status`로 �
 
 ### 5.1 검증·빌드
 
-**개발·배포 PC — 저장소 루트:**
+**개발·배포 PC — 저장소 루트:** 일반 Vitest는 `unit`, `component`, `integration` 세 project로 나뉜다. `pnpm test`는 세 project 전체를 실행한다. 분류와 전환 기준은 [테스트 아키텍처 계획](docs/TEST_ARCHITECTURE_PLAN.md)을 참고한다. 개발 중 선택 검증과 배포 시점 검증은 다음 기준을 따른다.
+
+| 시점 | 명령 | 범위 |
+| --- | --- | --- |
+| 개발 반복 | `pnpm test --project unit --project component` | 빠른 unit·component 검증 |
+| 배포 검증 | `pnpm test --project integration` | 실제 경계와 파일시스템·의존성 구조 검증 |
+| 전체 Vitest | `pnpm test` | unit·component·integration 전체 |
+| 별도 배포 전 E2E 검증 | `pnpm test:e2e` | 로컬 테스트 서버와 테스트가 제공하는 fake 응답을 쓰는 Playwright 검증. `build-release`에는 자동 연결하지 않음 |
+| 릴리스 agent 산출물 검증 | `pnpm test:agent-package` | 릴리스 순서에서 생성한 agent 산출물 검사 |
+
+커밋·PR 전에는 unit과 component project를 실행한다. integration은 배포 시점 검증이며, 구현 중 실행하지 않았다는 이유만으로 커밋을 막지 않는다. 파일시스템과 의존성 그래프를 검사하는 architecture 테스트도 integration project 안에서 보존한다.
 
 ```bash
 pnpm lint
 pnpm typecheck
-pnpm test
-pnpm build
+pnpm test --project unit --project component
 ```
 
-UI 동작은 별도로 E2E를 실행한다. 브라우저와 OS 의존성 설치는 해당 환경에서 최초 1회 필요하다.
+`pnpm test`는 전체 Vitest를 실행한다. 배포 시 integration 검증에는 다음 명령을 사용한다.
+
+```bash
+pnpm test --project integration
+```
+
+릴리스는 integration 검증 뒤 기존 순서를 따른다: `pnpm build` → `dist/build-info.json` 작성 → `pnpm build:agent --prepared` → `pnpm test:agent-package`. 구현 중 integration은 수집 목록을 확인할 수 있으며, 실제 실행은 배포 시점에 한다.
+
+E2E는 운영 서버 검증이 아닌 별도의 수동 배포 전 검증이다. 테스트는 자체 로컬 서버 `127.0.0.1:3100`과 각 시나리오가 제공하는 fake API 응답을 사용한다. 브라우저와 OS 의존성 설치는 해당 환경에서 최초 1회 필요하며, 포트를 비워 둔다. 모바일·데스크톱 프로젝트를 함께 검사한다.
 
 ```bash
 pnpm exec playwright install --with-deps chromium
 pnpm test:e2e
 ```
 
-E2E는 자체 테스트 서버의 `127.0.0.1:3100`을 사용하므로 그 포트를 비워 둔다. 모바일·데스크톱 프로젝트를 함께 검사한다.
-
-에이전트 변경을 별도 검증할 때는 Linux에서 패키징과 패키지 검사를 실행한다.
-
-```bash
-pnpm build:agent
-pnpm test:agent-package
-```
-
-특정 테스트만 개발 중에 확인할 때는 Vitest에 디렉터리나 실제 파일 경로를 지정한다.
-
-```bash
-pnpm exec vitest run tests/architecture
-pnpm exec vitest run tests/integration/job-queue.test.ts
-```
-
-이는 **개발 중 선택 실행**이며 배포의 전체 검증을 대체하지 않는다. 현재 `pnpm run deploy`는 변경 영향별 테스트 선택 기능을 제공하지 않는다.
+agent 패키지 검사는 릴리스 순서 안에서 생성한 실제 산출물에 대해 실행한다. integration·agent 패키지 검사는 구현 중 실제 실행 대신 수집 목록과 설정을 확인할 수 있다.
 
 ### 5.2 스키마 변경
 
@@ -472,7 +473,7 @@ git log -1 --oneline
 pnpm run deploy
 ```
 
-명령 내부에서 **의존성 설치 → lint → typecheck → 전체 Vitest → 서버·웹 빌드 → 에이전트 패키징·검증 → SSH 배포**를 수행한다. E2E는 자동 포함되지 않는다. 완료 후 [정상 동작 확인](#36-정상-동작-확인과-첫-실행)을 반복하며, 기존 관리자를 다시 생성하지 않는다.
+명령 내부에서 **의존성 설치 → lint → typecheck → `pnpm test --project integration` → 서버·웹 빌드 → build-info 작성 → agent 패키징·검증 → SSH 배포**를 수행한다. 전체 Vitest 명령 `pnpm test`는 unit·component·integration project를 모두 실행하며, 배포 게이트에서는 정해진 단계에 따라 integration project를 선택 실행한다. E2E는 자동 포함되지 않는다. 완료 후 [정상 동작 확인](#36-정상-동작-확인과-첫-실행)을 반복하며, 기존 관리자를 다시 생성하지 않는다.
 
 실패 시 오류 출력을 먼저 확인한다. commit 단계 전 실패하면 코드·DB 복원을 시도하지만, **복원 실패나 finalize 실패까지 모두 이전 상태로 되돌아갔다고 가정하지 않는다.** 서비스·로그·실제 배포 버전을 확인한 뒤 후속 작업을 결정한다. 명령의 기준은 [build-release.sh](scripts/build-release.sh)와 [deploy.sh](scripts/deploy.sh)다.
 

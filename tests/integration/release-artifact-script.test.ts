@@ -75,7 +75,7 @@ fi
       'install --frozen-lockfile',
       'lint',
       'typecheck',
-      'test',
+      'test --project integration',
       'build',
       'build:agent --prepared',
       'test:agent-package',

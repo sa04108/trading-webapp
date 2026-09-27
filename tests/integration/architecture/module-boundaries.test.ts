@@ -6,7 +6,7 @@ const require = createRequire(import.meta.url);
 
 describe('module boundaries (스펙 §7)', () => {
   it('has no forbidden dependencies', async () => {
-    const ruleSet = require('../../.dependency-cruiser.cjs') as Record<string, unknown>;
+    const ruleSet = require('../../../.dependency-cruiser.cjs') as Record<string, unknown>;
     const result: IReporterOutput = await cruise(['src'], {
       ruleSet,
       validate: true,

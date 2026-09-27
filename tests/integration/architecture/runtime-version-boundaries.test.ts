@@ -2,9 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { generateRuntimeVersions } from '../../scripts/build-runtime-versions.mjs';
+import { generateRuntimeVersions } from '../../../scripts/build-runtime-versions.mjs';
 
-const repository = fileURLToPath(new URL('../../', import.meta.url));
+const repository = fileURLToPath(new URL('../../../', import.meta.url));
 const versionNames = [
   'agentVersion', 'collectionVersion', 'previewVersion', 'executionVersion', 'validationVersion',
 ] as const;

@@ -1272,8 +1272,8 @@ export class SymbolMasterService {
    * UniverseRuleResolver.resolve)는 이 메서드를 직접 쓰지 않는다 — 대신 커버 구간
    * 안으로 한정하는 effectiveTradingDateWithinCoverage() 를 쓴다(그 메서드 주석에
    * 두 버전을 가르는 버그 사례가 있다). 이 raw 버전은 그 자체의 계약을 검증하는
-   * 단위 테스트(tests/unit/symbol-master-trading-days.test.ts,
-   * tests/unit/universe-rule-resolver.test.ts 의 raw-값 단언)를 위해 남겨 뒀다 —
+   * 통합 테스트(tests/integration/symbol-master-trading-days.test.ts,
+   * tests/integration/universe-rule-resolver.test.ts 의 raw-값 단언)를 위해 남겨 뒀다 —
    * 새 프로덕션 호출부를 추가할 때는 정말 "전역"이 맞는지 먼저 의심하라.
    */
   effectiveTradingDate(date: string): string | undefined {
