@@ -9,6 +9,7 @@ import { PreparationReferenceService } from "../application/preparation-referenc
 import { createHash, randomUUID } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import os from "node:os";
+import { Readable } from "node:stream";
 import fs from "node:fs";
 import type {
   FastifyBaseLogger,
@@ -930,6 +931,32 @@ export function registerBacktestRoutes(
           request.log,
         ),
       };
+    },
+  );
+
+  app.get(
+    "/backtests/:id/warnings",
+    { preHandler: requireAuth },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      if (!queue.getJob(id)) {
+        return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
+      }
+      if (!results.getRun(id)) {
+        return reply.code(409).send({ error: "완료된 결과가 없습니다" });
+      }
+      async function* download(): AsyncGenerator<string> {
+        yield '{"warnings":[';
+        let separator = "";
+        for (const warning of results.iterateWarningDetails(id)) {
+          yield separator + JSON.stringify(warning);
+          separator = ",";
+        }
+        yield "]}";
+      }
+      return reply.type("application/json; charset=utf-8")
+        .header("content-disposition", `attachment; filename="backtest-${encodeURIComponent(id)}-warnings.json"`)
+        .send(Readable.from(download()));
     },
   );
 

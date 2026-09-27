@@ -1,14 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
+import { summarizeBacktestWarnings } from "../application/backtest-warning-summary.js";
 import type {
   BacktestResultArtifact,
   BacktestResultWriteContext,
   BacktestResultWriter,
 } from "../application/backtest-result-artifact.js";
 
-/** 필수 실행 버전이 추가된 저장 형식이며 엔진 결과의 schemaVersion과 별개다. */
-export const BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION = 2;
+/** 경고 요약과 전체 원문을 분리한 저장 형식이며 엔진 결과의 schemaVersion과 별개다. */
+export const BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION = 3;
 
 /** Worker가 서버 DB 대신 독립 SQLite artifact에 결과를 순차 기록하는 adapter. */
 export class SqliteBacktestResultArtifactWriter implements BacktestResultWriter {
@@ -66,6 +67,10 @@ export class SqliteBacktestResultArtifactWriter implements BacktestResultWriter 
           holding_time_ms INTEGER NOT NULL,
           exit_reason TEXT
         ) STRICT;
+        CREATE TABLE warning_details (
+          sequence INTEGER PRIMARY KEY,
+          warning TEXT NOT NULL
+        ) STRICT;
         CREATE TABLE monthly_returns (
           sequence INTEGER PRIMARY KEY,
           year INTEGER NOT NULL,
@@ -87,10 +92,17 @@ export class SqliteBacktestResultArtifactWriter implements BacktestResultWriter 
             JSON.stringify({
               metrics: artifact.metrics,
               openPositions: artifact.openPositions,
-              warnings: artifact.warnings,
+              warnings: summarizeBacktestWarnings(artifact.warnings),
               processedBars: artifact.processedBars,
             }),
           );
+
+        const warning = sqlite.prepare(
+          "INSERT INTO warning_details (sequence, warning) VALUES (?, ?)",
+        );
+        for (let index = 0; index < artifact.warnings.length; index += 1) {
+          warning.run(index, artifact.warnings[index]!);
+        }
 
         const equity = sqlite.prepare(
           "INSERT INTO equity_points (sequence, ts_ms, equity) VALUES (?, ?, ?)",

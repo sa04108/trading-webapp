@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import {
   summarizeExecutionWarnings,
   isExecutionLimitation,
@@ -9,8 +10,10 @@ import { PreparationIssuesCard } from "./preparation-issues-card";
 
 export function ResultWarnings({
   warnings,
+  jobId,
 }: {
   readonly warnings: readonly string[];
+  readonly jobId?: string;
 }) {
   const { preparationWarnings, executionWarnings, limitations } =
     useMemo(() => {
@@ -59,6 +62,18 @@ export function ResultWarnings({
             ) : null}
           </CardContent>
         </Card>
+      ) : null}
+      {jobId ? (
+        <div>
+          <Button variant="outline" asChild>
+            <a
+              href={`/api/v1/backtests/${encodeURIComponent(jobId)}/warnings`}
+              download
+            >
+              전체 경고 원문 다운로드
+            </a>
+          </Button>
+        </div>
       ) : null}
     </div>
   );

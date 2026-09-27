@@ -2,6 +2,7 @@ import {
   index,
   integer,
   real,
+  primaryKey,
   sqliteTable,
   text,
 } from "drizzle-orm/sqlite-core";
@@ -44,6 +45,19 @@ export const backtestRuns = sqliteTable("backtest_runs", {
   startedAtMs: integer("started_at_ms").notNull(),
   completedAtMs: integer("completed_at_ms"),
 });
+
+/** 경고 원문은 표시 요약과 분리해 순서·중복·전체 문자열을 보존한다. */
+export const backtestWarningDetails = sqliteTable(
+  "backtest_warning_details",
+  {
+    jobId: text("job_id")
+      .notNull()
+      .references(() => backtestJobs.id, { onDelete: "cascade" }),
+    sequence: integer("sequence").notNull(),
+    warning: text("warning").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.jobId, table.sequence] })],
+);
 
 export const backtestMetrics = sqliteTable("backtest_metrics", {
   jobId: text("job_id")

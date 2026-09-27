@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, sql } from "drizzle-orm";
 import {
   DEFAULT_TRADE_SORT_DIRECTION,
   DEFAULT_TRADE_SORT_KEY,
@@ -20,6 +20,7 @@ import {
   backtestMonthlyReturns,
   backtestRuns,
   backtestTrades,
+  backtestWarningDetails,
 } from "../../../shared/db/backtest-result-schema.js";
 import { downsampleLttb } from "./downsample.js";
 
@@ -53,6 +54,30 @@ export class ResultsService {
         .where(eq(backtestRuns.jobId, jobId))
         .get() ?? null
     );
+  }
+
+  /** 작은 묶음으로 읽어 다운로드 중 HTTP 서버의 DB 연결을 점유하지 않는다. */
+  *iterateWarningDetails(jobId: string): Generator<string> {
+    let sequence = -1;
+    for (;;) {
+      const rows = this.db.select({
+        sequence: backtestWarningDetails.sequence,
+        warning: backtestWarningDetails.warning,
+      }).from(backtestWarningDetails).where(and(
+        eq(backtestWarningDetails.jobId, jobId),
+        gt(backtestWarningDetails.sequence, sequence),
+      )).orderBy(asc(backtestWarningDetails.sequence)).limit(100).all();
+      if (rows.length === 0) break;
+      sequence = rows.at(-1)!.sequence;
+      for (const row of rows) yield row.warning;
+    }
+    // 이전 결과에는 별도 원문 테이블이 없으므로 보관된 기존 경고를 그대로 반환한다.
+    if (sequence === -1) {
+      const warnings: unknown = JSON.parse(this.getRun(jobId)?.warningsJson ?? "[]");
+      if (Array.isArray(warnings)) {
+        for (const warning of warnings) if (typeof warning === "string") yield warning;
+      }
+    }
   }
 
   getMetrics(jobId: string): Record<string, unknown> | null {
