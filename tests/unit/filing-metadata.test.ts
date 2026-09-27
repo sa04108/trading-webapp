@@ -42,6 +42,58 @@ it('반영 근거 없는 과거 자료는 원문을 채우지 않고 기존 DB�
   }finally{db.close();}
 });
 
+it.each([
+  ['FINANCIAL_STATEMENT', 'CFS'],
+  ['SHARE_STATUS', 'NONE'],
+  ['ISSUANCE_STATUS', 'NONE'],
+] as const)('%s의 013 조회와 같은 날짜 공시는 재조회하고 조회일 전 공시는 그대로 둔다', (endpoint, fsDiv) => {
+  const db = openDatabase(':memory:');
+  const sqlite = db.sqlite;
+  const raw = new SqliteDartRawSnapshotStore(db.db);
+  const store = new SqliteDartPendingFilingStore(sqlite);
+  const timestamp = Date.parse('2026-09-27T03:00:00.000Z');
+  try {
+    sqlite.exec("INSERT INTO symbols(code,market,created_at_ms) VALUES('005930','KR',1)");
+    sqlite.exec("INSERT INTO symbol_facts_state(code,covered_years_json,financial_updated_at_ms,action_updated_at_ms) VALUES('005930','[2026]',0,0)");
+    const key = { ...({symbol:'005930',businessYear:2026,reportCode:'11013'} as const), endpoint, fsDiv };
+    raw.put(key, { status: '013' }, timestamp);
+    const insert = sqlite.prepare(`INSERT INTO dart_discovered_filings
+      (identity,receipt_no,symbol,business_year,report_code,payload_json,discovered_at_ms,status)
+      VALUES(?,?,'005930',2026,'11013','{}',1,'PENDING')`);
+    insert.run('same-day', '20260927000001');
+    expect(store.observeFilings(['same-day'])).toEqual([{ symbol: '005930', year: 2026 }]);
+    expect(sqlite.prepare("SELECT reason FROM provider_input_issues WHERE id='dart-filing:same-day'").get())
+      .toEqual({ reason: 'PENDING_FILING' });
+
+    insert.run('prior-day', '20260926000001');
+    expect(store.observeFilings(['prior-day'])).toEqual([]);
+    expect(sqlite.prepare("SELECT status FROM dart_discovered_filings WHERE identity='prior-day'").get())
+      .toEqual({ status: 'BASELINE_UNKNOWN' });
+  } finally { db.close(); }
+});
+
+it('현재 보고서 원문이 없더라도 같은 연도의 다른 보고서 원문이 있으면 신규 분기를 다시 수집한다', () => {
+  const db = openDatabase(':memory:');
+  const sqlite = db.sqlite;
+  const store = new SqliteDartPendingFilingStore(sqlite);
+  try {
+    sqlite.exec("INSERT INTO symbols(code,market,created_at_ms) VALUES('005930','KR',1)");
+    sqlite.exec("INSERT INTO symbol_facts_state(code,covered_years_json,financial_updated_at_ms) VALUES('005930','[2026]',0)");
+    new SqliteDartRawSnapshotStore(db.db).put(
+      { symbol:'005930', endpoint:'FINANCIAL_STATEMENT', businessYear:2026, reportCode:'11012', fsDiv:'CFS' },
+      { status:'000', list:[{ rcept_no:'20260814000001' }] }, 1,
+    );
+    sqlite.exec(`INSERT INTO dart_discovered_filings
+      (identity,receipt_no,symbol,business_year,report_code,payload_json,discovered_at_ms,status)
+      VALUES('new-q3','20260927000001','005930',2026,'11013','{}',1,'PENDING')`);
+    expect(store.observeFilings(['new-q3'])).toEqual([{ symbol:'005930', year:2026 }]);
+    expect(sqlite.prepare("SELECT reason FROM provider_input_issues WHERE id='dart-filing:new-q3'").get())
+      .toEqual({ reason:'PENDING_FILING' });
+    expect(sqlite.prepare("SELECT financial_updated_at_ms FROM symbol_facts_state WHERE code='005930'").get())
+      .toEqual({ financial_updated_at_ms:0 });
+  } finally { db.close(); }
+});
+
 it('자본변동 두 원문과 정상화가 끝난 공시만 재무 미반영으로 좁히고 다시 발견해도 보존한다', () => {
   const db = openDatabase(':memory:');
   const sqlite = db.sqlite;

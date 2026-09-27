@@ -111,10 +111,13 @@ export class SqliteDartPendingFilingStore implements DartPendingFilingStore {
       const metadata = this.sqlite.prepare(`SELECT receipt_no, fetched_at_ms FROM dart_raw_api_snapshots
         WHERE code = ? AND business_year = ? AND report_code = ?`).all(filing.symbol, filing.business_year, filing.report_code) as
           {receipt_no:string|null;fetched_at_ms:number}[];
+      const otherReportExists = metadata.length === 0 && this.sqlite.prepare(`SELECT 1
+        FROM dart_raw_api_snapshots WHERE code = ? AND business_year = ? AND report_code != ? LIMIT 1`)
+        .get(filing.symbol, filing.business_year, filing.report_code) !== undefined;
       const after = (timestamp: number | null): boolean => timestamp !== null && timestamp > 0 &&
-        filing.receipt_no!.slice(0, 8) > kstDateOf(timestamp).replaceAll("-", "");
+        filing.receipt_no!.slice(0, 8) >= kstDateOf(timestamp).replaceAll("-", "");
       const changed = metadata.some((row) => row.receipt_no !== null ? row.receipt_no !== filing.receipt_no! : after(row.fetched_at_ms)) ||
-        (metadata.length === 0 && ((covered(state.covered_years_json) && after(state.financial_updated_at_ms)) ||
+        (metadata.length === 0 && (otherReportExists || (covered(state.covered_years_json) && after(state.financial_updated_at_ms)) ||
           (covered(state.action_covered_years_json) && after(state.action_updated_at_ms))));
       if (!issue && !changed) {
         // 과거 원문 메타데이터가 없어도 이미 수집된 값을 불신하거나 다시 파싱하지 않는다.
