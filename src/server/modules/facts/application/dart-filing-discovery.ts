@@ -186,7 +186,7 @@ export class DartFilingDiscovery {
                 (identity, receipt_no, symbol, business_year, report_code, payload_json, discovered_at_ms, status)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(identity, receipt, symbol, period ? Number(period[1]) : null,
                   reportCode ?? null, JSON.stringify(row), this.now(),
-                  receipt && /^\d{14}$/.test(receipt) && symbol && /^\d{6}$/.test(symbol) && reportCode ? "PENDING" : "UNRESOLVED");
+                  receipt && /^\d{14}$/.test(receipt) && symbol && /^[0-9A-Z]{6}$/.test(symbol) && reportCode ? "PENDING" : "UNRESOLVED");
               identities.push(identity);
             }
             this.options.onFilingsStored?.(identities);

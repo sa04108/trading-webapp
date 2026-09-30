@@ -84,6 +84,31 @@ describe('PreparationProgress', () => {
     expect(html).toContain('aria-valuenow="44"');
   });
 
+  it('차단된 수집은 마지막 현재 종목 대신 원인 상세를 표시한다', () => {
+    const html = renderToStaticMarkup(
+      <PreparationProgress
+        job={job({
+          status: 'WAITING_DATA',
+          phase: 'SYNCING_FACTS',
+          progress: {
+            activity: 'BLOCKED',
+            detail: 'UNRESOLVED_FILING: 0126Z0:FINANCIAL_STATEMENT',
+            actorKind: 'SERVER', actorId: null, actorName: '운영 서버',
+            unit: 'SYMBOLS', completed: 104, total: 271, currentItem: '012330',
+            attempt: null, retryCount: 0, startedAtMs: 1, lastProgressAtMs: 2,
+            lastReceivedAtMs: 2, nextResumeAtMs: null,
+          },
+        })}
+        onCancel={() => undefined}
+      />,
+    );
+    expect(html).toContain('데이터 수집 차단');
+    expect(html).not.toContain('데이터 갱신 승인 필요');
+    expect(html).toContain('104 / 271 종목');
+    expect(html).not.toContain('현재 012330');
+    expect(html).toContain('UNRESOLVED_FILING: 0126Z0:FINANCIAL_STATEMENT');
+  });
+
   it('QUEUED 상태에서도 메모리 산정 활동과 중복 currentItem을 한 번만 보여준다', () => {
     const html = renderToStaticMarkup(
       <PreparationProgress

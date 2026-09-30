@@ -4,7 +4,7 @@ const ACTIVITY_LABELS: Record<ExecutionActivity, string> = {
   LOCAL_REPLAY: "저장 원문 재처리",
   SOURCE_FETCH: "공급자 원문 수집",
   FILING_DISCOVERY: "최신 공시 확인",
-  BLOCKED: "데이터 갱신 승인 필요",
+  BLOCKED: "데이터 수집 차단",
   WAITING_FOR_EXECUTOR: "실행 자원 대기",
   ESTIMATING_JOB_MEMORY: "작업 메모리 산정",
   WAITING_FOR_MEMORY: "메모리 여유 대기",
@@ -81,7 +81,9 @@ export function ExecutionProgressSummary({
 }) {
   const count = executionProgressCount(progress);
   const distinctCurrentItem =
-    progress.currentItem && progress.currentItem !== progress.detail
+    progress.activity !== "BLOCKED" &&
+    progress.currentItem &&
+    progress.currentItem !== progress.detail
       ? progress.currentItem
       : null;
   return (

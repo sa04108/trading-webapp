@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDatabase } from "../../src/runtime/shared/db/database.js";
+import { SqliteDartPendingFilingStore } from "../../src/server/modules/facts/infrastructure/dart/dart-pending-filing-store.js";
 import {
   DartFilingDiscovery,
   FILING_CONTINUATION_DELAY_MS,
@@ -14,6 +15,31 @@ const tick = () => new Promise<void>((resolve) => setImmediate(resolve));
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("내부 공시 목록 연속 수집", () => {
+  it.each([
+    ["0126Z0", "PENDING"],
+    ["005930", "PENDING"],
+    ["0126Z", "UNRESOLVED"],
+    ["0126Z00", "UNRESOLVED"],
+    ["012-Z0", "UNRESOLVED"],
+    ["0126z0", "UNRESOLVED"],
+  ])("종목코드 %s의 공시를 %s 상태로 본문 조회에 전달한다", async (symbol, status) => {
+    const database = openDatabase(":memory:");
+    const receipt = "20260814002990";
+    const discovery = new DartFilingDiscovery({ sqlite: database.sqlite, logger, now: () => START,
+      fetchPage: async (_from, _to, _page, beforeAttempt) => {
+        beforeAttempt();
+        return { status: "000", total_page: 1, list: [{ ...filing(receipt), stock_code: symbol }] };
+      },
+    });
+    try {
+      await discovery.refresh();
+      const pending = new SqliteDartPendingFilingStore(database.sqlite);
+      expect(pending.get({
+        symbol, endpoint: "FINANCIAL_STATEMENT", businessYear: 2026, reportCode: "11012", fsDiv: "CFS",
+      })).toMatchObject({ receiptNo: receipt, status });
+    } finally { await discovery.stop(); database.close(); }
+  });
+
   it("미리보기는 목록만 두 번 확인하고 raw 전체 이력을 읽지 않으며, 남은 페이지는 내부에서 이어 수집한다", async () => {
     vi.useFakeTimers();
     const database = openDatabase(":memory:");
