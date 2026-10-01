@@ -1,0 +1,101 @@
+name: Deploy production
+run-name: Deploy production · ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quant-platform-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment: production
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout deployment commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Activate repository package manager
+        run: |
+          npm install --global corepack@0.34.6
+          corepack enable
+          node --version
+          pnpm --version
+
+      - name: Prepare SSH deployment settings
+        env:
+          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          if [[ ! "$DEPLOY_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
+            echo '::error::DEPLOY_HOST에 호스트 이름 또는 IPv4 주소를 설정하세요.'
+            exit 1
+          fi
+          if [[ ! "$DEPLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]]; then
+            echo '::error::DEPLOY_USER에 SSH 접속 계정을 설정하세요.'
+            exit 1
+          fi
+          if [[ ! "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]] || ((10#$DEPLOY_PORT < 1 || 10#$DEPLOY_PORT > 65535)); then
+            echo '::error::DEPLOY_PORT는 1부터 65535 사이여야 합니다.'
+            exit 1
+          fi
+          if [[ -z "$DEPLOY_SSH_KEY" || -z "$DEPLOY_KNOWN_HOSTS" ]]; then
+            echo '::error::production 환경에 DEPLOY_SSH_KEY와 DEPLOY_KNOWN_HOSTS Secret을 설정하세요.'
+            exit 1
+          fi
+
+          umask 077
+          ssh_dir="$RUNNER_TEMP/quant-platform-deploy-ssh"
+          mkdir -p "$ssh_dir"
+          printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > "$ssh_dir/id_deploy"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" | tr -d '\r' > "$ssh_dir/known_hosts"
+          chmod 600 "$ssh_dir/id_deploy" "$ssh_dir/known_hosts"
+          # 비대화형 배포에 사용할 수 있는 키인지, 대상 서버의 신원이 등록되어 있는지 확인한다.
+          ssh-keygen -y -P '' -f "$ssh_dir/id_deploy" > /dev/null
+          known_host="$DEPLOY_HOST"
+          if ((10#$DEPLOY_PORT != 22)); then
+            known_host="[$DEPLOY_HOST]:$((10#$DEPLOY_PORT))"
+          fi
+          if ! ssh-keygen -F "$known_host" -f "$ssh_dir/known_hosts" > /dev/null; then
+            echo '::error::DEPLOY_KNOWN_HOSTS에 배포 호스트와 포트에 맞는 서버 키가 없습니다.'
+            exit 1
+          fi
+
+          printf 'HOST=%s\nSSH_USER=%s\nSSH_KEY="%s"\nSSH_PORT=%s\nSSH_HOST_KEY=yes\nSSH_OPTS=-o UserKnownHostsFile="%s"\n' \
+            "$DEPLOY_HOST" "$DEPLOY_USER" "$ssh_dir/id_deploy" "$DEPLOY_PORT" "$ssh_dir/known_hosts" > deploy.env
+
+      - name: Verify, package and deploy
+        env:
+          LOG: ${{ runner.temp }}/quant-platform-deploy.log
+        run: pnpm run deploy
+
+      - name: Remove deployment credentials
+        if: ${{ always() }}
+        run: |
+          rm -f -- deploy.env \
+            "$RUNNER_TEMP/quant-platform-deploy-ssh/id_deploy" \
+            "$RUNNER_TEMP/quant-platform-deploy-ssh/known_hosts"
+          if [[ -d "$RUNNER_TEMP/quant-platform-deploy-ssh" ]]; then
+            rmdir -- "$RUNNER_TEMP/quant-platform-deploy-ssh"
+          fi

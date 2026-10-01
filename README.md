@@ -464,6 +464,8 @@ pnpm cli db:prepare
 
 ### 5.3 재배포
 
+GitHub-hosted Actions에서 `main` 배포를 수동 실행하려면 [GitHub Actions 배포 설정](docs/GITHUB_ACTIONS_DEPLOY.md)을 따른다.
+
 **개발·배포 PC — 저장소 루트:** 배포하려는 커밋을 체크아웃하고 `deploy.env`의 대상 서버를 확인한 뒤 실행한다.
 
 ```bash
