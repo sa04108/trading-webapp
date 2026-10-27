@@ -22,7 +22,7 @@
 | **운영 서버** | 프로비저닝된 서버에 SSH로 접속해 실행한다. 서버 CLI는 배포된 JavaScript를 `quant` 사용자·그룹과 운영 환경설정으로 실행한다. |
 | **에이전트 장치** | Linux/WSL2의 **일반 사용자**로 실행한다. `sudo ./quant-agent`나 `sudo systemctl --user`를 사용하지 않는다. |
 
-개발·배포 PC에는 **Node.js 24 (`>=24 <25`)**, Git, Bash, SSH/SCP, curl, tar가 필요하다. pnpm 버전은 [package.json](package.json)의 `packageManager`를 따른다. Node는 [공식 설치 안내](https://nodejs.org/en/download)에서 24 계열을 선택한다. 다운로드한 에이전트에는 Node와 의존성이 들어 있으므로 **계산 장치에는 Node·pnpm을 별도로 설치하지 않는다.**
+개발·배포 PC에는 **Node.js 24 (`>=24 <25`)**, Git, Bash, SSH/SCP, curl, tar가 필요하다. CI·Agent 이미지·서버 초기 설치는 [.node-version](.node-version)의 **24.22.1 LTS**로 맞춘다. pnpm 버전은 [package.json](package.json)의 `packageManager`를 따른다. Node는 [공식 설치 안내](https://nodejs.org/en/download)에서 24 계열을 선택한다. 다운로드한 에이전트에는 Node와 의존성이 들어 있으므로 **계산 장치에는 Node·pnpm을 별도로 설치하지 않는다.**
 
 예시의 `203.0.113.10`, `quant.example.com`, `ubuntu`, `~/.ssh/quant.pem`은 실제 서버 IP·도메인·SSH 계정·키 경로로 바꾼다. 앱 주소·포트·경로를 별도로 변경한 환경에서는 아래 기본 경로도 맞춰야 한다.
 
@@ -468,7 +468,7 @@ pnpm cli db:prepare
 
 ### 5.3 재배포
 
-GitHub-hosted Actions에서 `main` 배포를 수동 실행하려면 [GitHub Actions 배포 설정](docs/GITHUB_ACTIONS_DEPLOY.md)을 따른다.
+`devel`에서 작업한 변경을 `main`에 merge하면 GitHub Actions가 자동으로 운영 배포한다. `devel` push는 배포하지 않는다. 수동 재배포와 환경 설정은 [GitHub Actions 배포 설정](docs/GITHUB_ACTIONS_DEPLOY.md)을 따른다.
 
 **개발·배포 PC — 저장소 루트:** 배포하려는 커밋을 체크아웃하고 `deploy.env`의 대상 서버를 확인한 뒤 실행한다.
 

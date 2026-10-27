@@ -19,8 +19,8 @@ set -eu
 DOMAIN="${1:-}"
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# 붙여넣기 전에 nodejs.org 의 현재 24.x LTS patch 로 갱신한다. SHA 는 자동 검증.
-NODE_VERSION=v24.18.0
+# CI·Agent 이미지와 같은 24.x LTS patch를 사용한다. SHA는 자동 검증한다.
+NODE_VERSION=v24.22.1
 
 [ "$(id -u)" -eq 0 ] || { echo "root 로 실행해야 합니다 (sudo sh $0 <도메인>)" >&2; exit 1; }
 [ -n "${DOMAIN}" ] || {

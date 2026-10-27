@@ -1,10 +1,10 @@
 # GitHub Actions에서 운영 배포
 
-`.github/workflows/deploy.yml`은 GitHub-hosted Ubuntu 24.04 x64에서 `main`을 운영 환경에 배포한다. 배포는 수동으로만 시작하며, 기존 `pnpm run deploy` 전체 검증·패키징·SSH 배포 경로를 실행한다. PR이나 push는 배포를 시작하지 않는다. 실행을 요청한 커밋 SHA를 체크아웃하므로 대기 중 `main`에 새 커밋이 생겨도 배포 대상을 바꾸지 않는다.
+`.github/workflows/deploy.yml`은 GitHub-hosted Ubuntu 24.04 x64에서 `main`을 운영 환경에 배포한다. `devel`에서 작업한 변경을 `main`에 merge하면 main push 이벤트로 자동 실행하며, main 직접 push도 같은 배포를 시작한다. `devel` push나 PR 생성은 배포하지 않는다. 수동 실행도 지원한다. 기존 `pnpm run deploy` 전체 검증·패키징·SSH 배포 경로를 사용하며, 이벤트의 커밋 SHA를 체크아웃하므로 대기 중 `main`에 새 커밋이 생겨도 배포 대상을 바꾸지 않는다.
 
 ## 처음 한 번 설정하기
 
-먼저 이 워크플로와 문서를 `main`에 병합한다. GitHub는 `workflow_dispatch` 워크플로가 기본 브랜치에 올라온 뒤 수동 실행을 허용한다. 저장소의 **Settings → Environments**에서 `production` 환경을 만들고 배포 허용 브랜치를 `main`으로 제한한 뒤 다음 값을 등록한다.
+먼저 이 워크플로와 문서를 `main`에 병합한다. 이 병합의 main push부터 자동 배포가 시작된다. GitHub는 `workflow_dispatch` 워크플로가 기본 브랜치에 올라온 뒤 수동 실행을 허용한다. 저장소의 **Settings → Environments**에서 `env-for-deploy` 환경을 만들고 배포 허용 브랜치를 `main`으로 제한한 뒤 다음 값을 등록한다.
 
 | 종류 | 이름 | 값 |
 | --- | --- | --- |
@@ -18,13 +18,13 @@
 
 `DEPLOY_KNOWN_HOSTS`에는 실제 host key 행을 저장한다. 기본 포트는 `host.example.com ssh-ed25519 ...` 형식이며, 다른 포트는 `[host.example.com]:2222 ssh-ed25519 ...` 형식이다. 지문과 키는 서버 관리자나 별도의 신뢰된 채널을 통해 검증한다. 워크플로는 `ssh-keyscan` 결과를 확인 없이 신뢰하지 않으며 SSH host key 검사를 끄지 않는다.
 
-운영 서버는 GitHub-hosted runner에서 SSH로 접근 가능해야 한다. 첫 워크플로는 SSH jump host나 사설망 터널을 지원하지 않는다. 서버 방화벽이 고정 출발지 IP만 허용한다면 러너의 접속 경로를 먼저 준비한다. runner는 Ubuntu 24.04 x64, Node 24와 `package.json`의 `packageManager`에 지정된 pnpm을 사용한다. 따라서 게시하는 Agent도 Linux x64용이다. Agent 장치의 glibc는 패키지에 기록된 최소 버전과 호환되어야 한다.
+운영 서버는 GitHub-hosted runner에서 SSH로 접근 가능해야 한다. 워크플로는 SSH jump host나 사설망 터널을 지원하지 않는다. 서버 방화벽이 고정 출발지 IP만 허용한다면 러너의 접속 경로를 먼저 준비한다. runner는 Ubuntu 24.04 x64, `.node-version`의 Node 24.22.1 LTS와 `package.json`의 `packageManager`에 지정된 pnpm을 사용한다. Linux 다운로드 패키지는 x64용이고, GHCR 이미지는 amd64·arm64를 함께 게시한다. Linux 장치의 glibc는 패키지에 기록된 최소 버전과 호환되어야 한다. Docker Actions도 Node 24 실행을 선언하는 버전으로 고정한다.
 
 개인키와 `known_hosts`는 러너 임시 디렉터리에 권한 `600`으로 만들고, 키 경로만 저장한 `deploy.env`는 기존 Git 제외 규칙을 따른다. 성공·실패 후 정리 단계에서 이 파일들을 삭제하며 artifact로 업로드하지 않는다.
 
 ## 배포 실행
 
-GitHub의 **Actions → Deploy production → Run workflow**에서 브랜치를 `main`으로 선택하고 실행한다. 워크플로 job은 `refs/heads/main`에서만 배포 단계에 진입한다. 실행 로그는 Actions의 해당 run에서 확인한다. job의 실행 시간 제한은 60분이며, 초과하면 실행이 취소되므로 서버 상태를 확인해야 한다.
+일반 배포는 `devel` 변경을 `main`에 merge하면 자동 시작한다. 같은 main 커밋을 수동으로 다시 배포하려면 GitHub의 **Actions → Deploy production → Run workflow**에서 `main`을 선택한다. 워크플로 job은 `refs/heads/main`에서만 배포 단계에 진입한다. 실행 로그는 Actions의 해당 run에서 확인한다. job의 실행 시간 제한은 60분이며, 초과하면 실행이 취소되므로 서버 상태를 확인해야 한다.
 
 외부 자동화에서 시작하려면 `main`에 병합된 뒤 `workflow_dispatch` API를 호출한다.
 

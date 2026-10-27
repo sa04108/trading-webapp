@@ -64,7 +64,7 @@ UID 1000과 `unless-stopped` 재시작 정책을 사용한다. Windows 로그인
 최초 게시 후 GitHub Packages에서 이미지 패키지의 visibility를 **Public**으로 설정해야
 로그인 없이 설치할 수 있다. 연결된 저장소의 Actions에 패키지 관리 권한도 필요하다.
 
-수동 **Deploy production** workflow는 Windows PowerShell 설치 시나리오를 검증하고,
+main push 또는 수동 실행으로 시작하는 **Deploy production** workflow는 Windows PowerShell 설치 시나리오를 검증하고,
 `.node-version`과 같은 Node로 두 아키텍처 이미지를 빌드한다. 후보 이미지의 실제 실행을
 확인한 뒤 서버를 배포한다. 성공하면 기존 latest를 previous로 보존하고 후보를 latest로
 승격한다. 후보 태그는 `v-<agentVersion>`이며, 사용자 설치기는 latest만 선택한다.

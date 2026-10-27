@@ -1,11 +1,14 @@
 # syntax=docker/dockerfile:1
-ARG NODE_VERSION=24.19.0
-FROM node:${NODE_VERSION}-bookworm AS build
+ARG NODE_VERSION=24.22.1
+FROM node:${NODE_VERSION}-bookworm-slim AS build
 WORKDIR /build
 # 관리형 환경의 프록시 CA는 빌드에만 마운트하고 이미지에 보관하지 않는다.
 RUN --mount=type=secret,id=proxy_ca \
     if [ -f /run/secrets/proxy_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; fi; \
-    npm install --global corepack@0.34.6 && corepack enable
+    apt-get update \
+    && apt-get install --no-install-recommends -y python3 make g++ pkg-config \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install --global corepack@0.34.6 && corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN --mount=type=secret,id=proxy_ca \
     if [ -f /run/secrets/proxy_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; fi; \
