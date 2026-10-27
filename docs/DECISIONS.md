@@ -2380,3 +2380,19 @@
 - Docker에서는 자체 실행 파일 업데이트를 사용하지 않고 최신 이미지를 받아 재생성한다.
   기존 설치 파일을 재실행해 업데이트하며, 백업 복원은 서버의 agentVersion도 함께 맞춘다.
   D-093의 Docker 제외 결정은 이 Windows Agent 설치 경로에 한해 대체한다.
+
+## D-112: 외부 Agent 배포를 Windows Docker Desktop으로 한정한다
+
+**결정 (2026-10-27)**
+
+- 사용자용 Linux/WSL2 네이티브 런타임 archive, 다운로드 API와 CLI install/setup/update 경로를
+  제거한다. 외부 Agent는 Windows Docker Desktop에서 GHCR의 Linux 이미지로 실행한다.
+- 설정 화면에서 연결 토큰을 발급한 뒤 해당 토큰이 포함된 Windows CMD 설치 파일을 내려받는다.
+  같은 파일을 다시 실행해 latest 이미지를 pull하고 컨테이너를 교체한다. 캐시와 미전송 결과는
+  named volume에 보존한다.
+- Linux 런타임은 Docker 이미지 안에서 계속 사용한다. 내부 runtime archive와 manifest는
+  `dist/agent-runtime/`에 만들어 Docker 구성과 `pnpm test:agent-package` hermetic workload 검증에만
+  사용하며 서버 배포 archive와 사용자 다운로드에는 포함하지 않는다. 검증은 image version 준비
+  단계에서 Docker build/push 전에 실행한다. standalone 서버 배포는 native client를 만들지 않는다.
+- 이 결정은 D-093의 Linux 네이티브 설치·배포 경계와 D-111에서 전제로 삼은 Linux 사용자 서비스에
+  한해 이를 대체한다. 작업 프로토콜, 서버 내부 계산기, 데이터·결과 보존 계약은 유지한다.

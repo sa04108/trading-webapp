@@ -14,7 +14,7 @@ import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const repository = fileURLToPath(new URL('../../', import.meta.url));
 const archive = path.resolve(process.env.QUANT_AGENT_ARCHIVE
-  ?? path.join(repository, `dist/clients/quant-agent-linux-${process.arch}.tar.gz`));
+  ?? path.join(repository, `dist/agent-runtime/quant-agent-runtime-linux-${process.arch}.tar.gz`));
 const dependencies = ['better-sqlite3', 'drizzle-orm', 'pino', 'ulid', 'ws', 'zod'];
 const operationTables = [
   'audit_logs', 'backtest_jobs', 'backtest_preparation_jobs',
@@ -38,9 +38,9 @@ const request: BacktestRequest = {
   randomSeed: 1,
 };
 
-interface PublishedClients {
+interface RuntimeArchiveManifest {
   runnerVersion: string;
-  clients: Array<{ arch: string; file: string; sha256: string; bytes: number }>;
+  runtimes: Array<{ arch: string; file: string; sha256: string; bytes: number }>;
 }
 
 let temporary: string;
@@ -63,7 +63,7 @@ function packageFiles(directory: string, root: string): string[] {
 
 beforeAll(() => {
   if (!fs.existsSync(archive)) {
-    throw new Error(`검증할 클라이언트가 없습니다: ${archive}. 먼저 pnpm build:agent를 실행하세요.`);
+    throw new Error(`검증할 Docker 런타임이 없습니다: ${archive}. 먼저 pnpm build:agent를 실행하세요.`);
   }
   temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-packaged-agent-'));
   packageRoot = path.join(temporary, 'package');
@@ -78,10 +78,10 @@ afterAll(() => {
   if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
 });
 
-describe('다운로드용 Linux 에이전트 패키지', () => {
-  it('게시 checksum과 독립 실행 경계를 만족하고 서버·웹·수집 전용 코드를 포함하지 않는다', async () => {
-    const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(archive), 'manifest.json'), 'utf8')) as PublishedClients;
-    const published = manifest.clients.find((client) => client.arch === process.arch);
+describe('Docker 이미지 내부 Agent 런타임', () => {
+  it('내부 archive checksum과 독립 실행 경계를 만족하고 서버·웹·수집 전용 코드를 포함하지 않는다', async () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(archive), 'manifest.json'), 'utf8')) as RuntimeArchiveManifest;
+    const published = manifest.runtimes.find((runtime) => runtime.arch === process.arch);
     expect(published).toBeDefined();
     const hash = createHash('sha256');
     for await (const chunk of fs.createReadStream(archive)) hash.update(chunk);
@@ -97,6 +97,7 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
       'backtest-child.js', 'cancellation.js', 'preparation-child.js', 'preparation-runtime.js', 'worker-reporting.js',
     ]);
     expect(files).toEqual(expect.arrayContaining(['bin/node', 'quant-agent', 'dist/agent/main.js', 'migrations/agent/meta/_journal.json']));
+    for (const removed of ['dist/agent/install.js', 'dist/agent/update.js']) expect(files).not.toContain(removed);
     expect(files.filter((file) => /^(src|scripts|tests|data|dist\/(server|web|workers))\//.test(file))).toEqual([]);
     expect(files.filter((file) => file.startsWith('dist/') && /\.(map|ts|tsx)$/.test(file))).toEqual([]);
     expect(files.filter((file) => /^dist\/(runtime|shared)\/.*\/(auth|presentation|dart|broker)\//.test(file))).toEqual([]);
@@ -162,7 +163,6 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
     const preparation = container.backtestPreparationOrchestrator.start(input);
     const state = path.join(runtimeTemporary, 'state');
     fs.mkdirSync(state, { mode: 0o700 });
-    fs.writeFileSync(path.join(state, 'settings.json'), JSON.stringify({ serverUrl: address, token: credential.token }), { mode: 0o600 });
     const bootstrap = path.join(runtimeTemporary, 'bootstrap.mjs');
     fs.copyFileSync(new URL('../helpers/packaged-agent-bootstrap.mjs', import.meta.url), bootstrap);
     // PATH·환경·작업 폴더에서 저장소의 Node, loader, node_modules를 참조하지 않는다.
@@ -170,7 +170,7 @@ describe('다운로드용 Linux 에이전트 패키지', () => {
       execPath: path.join(packageRoot, 'bin/node'),
       execArgv: [],
       cwd: packageRoot,
-      env: { NODE_ENV: 'production', PATH: path.join(packageRoot, 'bin') },
+      env: { NODE_ENV: 'production', PATH: path.join(packageRoot, 'bin'), QUANT_AGENT_SERVER_URL: address, QUANT_AGENT_TOKEN: credential.token },
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
     const capture = (chunk: Buffer) => {

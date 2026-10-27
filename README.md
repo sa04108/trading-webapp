@@ -1,6 +1,6 @@
 # Quant Platform
 
-**브라우저에서 퀀트 백테스트를 준비·실행하고 결과를 비교·검증하는 개인용 플랫폼**이다. 모바일과 데스크톱을 지원하며, 별도 Linux 계산 에이전트를 연결해 계산 자원을 추가할 수 있다.
+**브라우저에서 퀀트 백테스트를 준비·실행하고 결과를 비교·검증하는 개인용 플랫폼**이다. 모바일과 데스크톱을 지원하며, Windows Docker Desktop 에이전트를 연결해 계산 자원을 추가할 수 있다.
 
 이 문서는 **개발 시작, 서버 초기 설정·배포, 에이전트 설치·사용, 유지보수 명령**을 안내한다. 아키텍처·보안·데이터·운영 원칙은 [SPEC](docs/SPEC.md)을 따른다.
 
@@ -18,11 +18,11 @@
 
 | 실행 위치 | 용도·전제 |
 | --- | --- |
-| **개발·배포 PC** | 저장소를 내려받아 개발·검증·배포한다. 아래 셸 명령은 Linux/WSL2의 Bash 기준이며, 배포와 에이전트 패키징은 Linux에서 실행한다. |
+| **개발·배포 PC** | 저장소를 내려받아 개발·검증·배포한다. 아래 셸 명령은 Linux/WSL2의 Bash 기준이며, 서버 배포는 Linux에서 실행한다. |
 | **운영 서버** | 프로비저닝된 서버에 SSH로 접속해 실행한다. 서버 CLI는 배포된 JavaScript를 `quant` 사용자·그룹과 운영 환경설정으로 실행한다. |
-| **에이전트 장치** | Linux/WSL2의 **일반 사용자**로 실행한다. `sudo ./quant-agent`나 `sudo systemctl --user`를 사용하지 않는다. |
+| **에이전트 장치** | Windows Docker Desktop에서 Linux 컨테이너로 실행한다. Linux/WSL2 네이티브 설치는 제공하지 않는다. |
 
-개발·배포 PC에는 **Node.js 24 (`>=24 <25`)**, Git, Bash, SSH/SCP, curl, tar가 필요하다. CI·Agent 이미지·서버 초기 설치는 [.node-version](.node-version)의 **24.22.1 LTS**로 맞춘다. pnpm 버전은 [package.json](package.json)의 `packageManager`를 따른다. Node는 [공식 설치 안내](https://nodejs.org/en/download)에서 24 계열을 선택한다. 다운로드한 에이전트에는 Node와 의존성이 들어 있으므로 **계산 장치에는 Node·pnpm을 별도로 설치하지 않는다.**
+개발·배포 PC에는 **Node.js 24 (`>=24 <25`)**, Git, Bash, SSH/SCP, curl, tar가 필요하다. CI·Agent 이미지·서버 초기 설치는 [.node-version](.node-version)의 **24.22.1 LTS**로 맞춘다. pnpm 버전은 [package.json](package.json)의 `packageManager`를 따른다. Node는 [공식 설치 안내](https://nodejs.org/en/download)에서 24 계열을 선택한다. 에이전트 이미지는 Node와 의존성을 포함하므로 **계산 장치에는 Node·pnpm을 별도로 설치하지 않는다.**
 
 예시의 `203.0.113.10`, `quant.example.com`, `ubuntu`, `~/.ssh/quant.pem`은 실제 서버 IP·도메인·SSH 계정·키 경로로 바꾼다. 앱 주소·포트·경로를 별도로 변경한 환경에서는 아래 기본 경로도 맞춰야 한다.
 
@@ -202,7 +202,7 @@ git status --short --branch
 pnpm run deploy
 ```
 
-배포할 수정사항을 먼저 커밋해 **작업 트리가 깨끗한 상태**여야 한다. 배포는 현재 체크아웃한 커밋을 사용하며, 원격 `main`을 자동으로 가져오지 않는다. 검증·빌드·에이전트 패키징도 배포 명령이 수행하므로 별도 선행 빌드는 필요하지 않다.
+배포할 수정사항을 먼저 커밋해 **작업 트리가 깨끗한 상태**여야 한다. 배포는 현재 체크아웃한 커밋을 사용하며, 원격 `main`을 자동으로 가져오지 않는다. 이 명령은 서버 검증·빌드·SSH 배포를 수행하며 사용자용 Agent image 빌드는 GitHub Actions production workflow에서 처리한다.
 
 ### 3.5 최초 관리자 생성·TOTP 등록
 
@@ -265,153 +265,28 @@ curl -fsS https://quant.example.com/api/v1/health/ready
 <a id="agent"></a>
 ## 4. 계산 에이전트 설치·사용
 
-### 4.1 장치 준비와 설치
+### 4.1 Windows Docker Desktop 설치
 
-Windows에서는 **Docker Desktop의 Linux 컨테이너**로 설치한다. 운영 웹의 **설정 → Agent**에서 토큰을 발급한 뒤 **Windows Docker Desktop 설치 파일**을 받아 실행한다. 설치기가 Docker Desktop을 설치·시작하고 GHCR의 최신 이미지를 내려받아 Agent 컨테이너를 실행한다. Docker Desktop 최초 설정이나 Windows 재부팅이 필요하면 안내를 마친 뒤 같은 파일을 다시 실행한다. 장치가 운영 서버의 HTTPS 주소에 접근할 수 있어야 하며, 인바운드 포트는 필요 없다.
+운영 웹의 **설정 → Agent**에서 장치 이름을 입력해 연결 토큰을 발급한다. 토큰을 발급하면 해당 장치용 **Windows Docker Desktop 설치 파일**을 다운로드할 수 있다. 토큰은 한 번만 표시되며 설치 파일 안에 포함되므로 파일과 토큰을 안전하게 보관한다.
 
-설치 파일에는 장치 토큰이 포함되므로 공유하지 않는다. 같은 파일을 다시 실행하면 최신 이미지로 업데이트하고 데이터 볼륨은 유지한다. Docker Desktop이 실행 중일 때 컨테이너가 자동으로 다시 시작되므로, Windows 로그인 시 Docker Desktop 자동 시작을 설정한다. Windows 절전·종료 중에는 작업할 수 없다. [Windows 설치·이미지 관리 상세](docs/AGENT_OPERATIONS.md#windows-docker-desktop).
+다운로드한 `quant-agent-windows.cmd`를 Windows에서 실행한다. 설치기는 Docker Desktop을 설치하거나 시작하고, Linux 엔진을 확인한 뒤 GHCR의 최신 이미지를 내려받아 Agent 컨테이너를 시작한다. Windows 기능 설정, UAC, Docker Desktop 최초 약관 동의 또는 재부팅 안내가 나오면 해당 절차를 마친 뒤 **같은 CMD 파일을 다시 실행**한다. Windows x64와 ARM64를 지원하며 장치에 맞는 Linux amd64 또는 arm64 이미지를 선택한다.
 
-Linux 서비스로 설치할 때는 glibc 환경, tar, 사용자 systemd가 필요하다. Windows의 기존 WSL2 서비스도 이 방식을 사용한다.
+장치가 운영 서버의 HTTPS 주소에 접근할 수 있어야 한다. 인바운드 포트는 필요 없다. 설치기와 컨테이너 동작은 [Windows 설치·이미지 관리 상세](docs/AGENT_OPERATIONS.md#windows-docker-desktop)를 참고한다.
 
-운영 웹의 **설정 → Agent**에서 장치 이름으로 토큰을 발급하고, 장치 아키텍처에 맞는 클라이언트를 다운로드한다. 토큰은 발급 직후 한 번만 표시되므로 장치별로 별도 발급한다. 실제 게시된 아키텍처만 다운로드할 수 있다.
+### 4.2 업데이트와 상태 확인
 
-**에이전트 장치 — 일반 사용자, 다운로드 파일이 있는 디렉터리:**
+업데이트할 때 처음 받은 같은 `quant-agent-windows.cmd` 파일을 다시 실행한다. 설치기는 latest를 다시 내려받아 컨테이너를 교체하며 named volume의 데이터 캐시와 미전송 결과는 유지한다. 설치 파일을 잃었거나 토큰을 교체해야 할 때는 기존 장치를 해제하고 새 토큰과 설치 파일을 발급받는다.
 
-```bash
-uname -m
-getconf GNU_LIBC_VERSION
-mkdir -p quant-agent-install
-tar -xzf quant-agent-linux-x64.tar.gz -C quant-agent-install
-cd quant-agent-install
-./quant-agent --check
-./quant-agent install
-```
-
-`x86_64` 장치는 x64 패키지를 사용한다. `aarch64` 장치는 **arm64 패키지가 게시된 경우에만** 파일명을 `quant-agent-linux-arm64.tar.gz`로 바꾼다. glibc 버전 오류는 패키지 빌드 환경과 장치의 호환성을 확인한다.
-
-서버 주소에는 `https://quant.example.com`처럼 서비스의 기본 주소를 입력하고 장치 토큰을 붙여 넣는다. **현재 토큰 입력은 화면에 표시된다.** 설치 후 사용자 서비스가 시작되며 운영 웹의 Agent 화면과 아래 명령으로 연결 상태를 확인한다.
-
-```bash
-systemctl --user status quant-agent --no-pager
-journalctl --user -u quant-agent -n 100 --no-pager
-```
-
-서비스의 `active` 표시는 프로세스 실행 확인이다. 서버 연결·데이터 준비 여부는 웹과 로그에서도 확인한다.
-
-### 4.2 상시 실행과 서비스 관리
-
-설치기가 로그아웃 후 실행을 위한 linger 설정을 완료하지 못했다면 **에이전트를 설치한 사용자의 셸**에서 다음 명령을 실행한다.
-
-```bash
-sudo loginctl enable-linger "$USER"
-loginctl show-user "$USER" -p Linger
-```
-
-이후 명령은 같은 일반 사용자로 실행한다. 필요한 명령을 골라 사용하며 아래를 한꺼번에 실행하지 않는다.
-
-| 작업 | 명령 |
-| --- | --- |
-| 상태 확인 | `systemctl --user status quant-agent --no-pager` |
-| 실시간 로그 확인 | `journalctl --user -u quant-agent -f` |
-| 일시 중지 / 다시 시작 | `systemctl --user stop quant-agent` / `systemctl --user start quant-agent` |
-| 재시작 | `systemctl --user restart quant-agent` |
-| 자동 시작 해제와 즉시 중지 | `systemctl --user disable --now quant-agent` |
-| 자동 시작 복구와 즉시 시작 | `systemctl --user enable --now quant-agent` |
-
-로그 보기를 `Ctrl+C`로 끝내도 서비스는 중지되지 않는다. 설치 후에는 처음 압축을 푼 복사본 대신 **설치된 `current` 실행 파일**을 사용한다.
-
-### 4.3 업데이트·주소·토큰 변경
-
-**에이전트 장치 — 일반 사용자:** 기본 설치 경로와 `XDG_DATA_HOME` 변경을 모두 처리하는 명령이다.
-
-```bash
-# 설치된 버전 확인
-"${XDG_DATA_HOME:-$HOME/.local/share}/quant-agent/current/quant-agent" --check
-
-# 게시된 최신 에이전트 확인·설치
-"${XDG_DATA_HOME:-$HOME/.local/share}/quant-agent/current/quant-agent" update
-```
-
-서버가 요구하는 에이전트 버전이 바뀌면 자동 업데이트도 수행한다. 수동 `update`는 저장된 토큰을 사용하며, 실행 중인 사용자 서비스는 업데이트 후 재시작한다. 이미 최신이거나 서비스가 원래 중지되어 있으면 불필요하게 시작하지 않는다.
-
-주소나 토큰을 바꿀 때는 다음 순서로 실행한다. 토큰을 잃었거나 폐기했다면 웹에서 새 장치 토큰을 발급받는다.
-
-```bash
-(
-  set -e
-  systemctl --user stop quant-agent
-  "${XDG_DATA_HOME:-$HOME/.local/share}/quant-agent/current/quant-agent" setup
-  systemctl --user start quant-agent
-)
-```
-
-`setup`은 설정을 저장할 뿐 서비스에 즉시 반영하지 않는다. 실패하면 서비스를 중지 상태로 두고 설정을 다시 확인한다.
-
-| 기본 경로 | 용도 |
-| --- | --- |
-| `~/.local/state/quant-agent/settings.json` | 서버 주소·장치 토큰 |
-| `~/.local/state/quant-agent/datasets/`, `jobs/` | 데이터 캐시·작업·전송 대기 결과 |
-| `~/.local/share/quant-agent/current` | 설치된 현재 버전 |
-| `~/.config/systemd/user/quant-agent.service` | 사용자 서비스 |
-
-XDG 환경설정에 따라 경로가 달라질 수 있다. `install --state "$HOME/agent-state"`로 설치했다면 이후 `setup`, `run`, `update`에도 **동일한 `--state "$HOME/agent-state"`**를 붙인다. `--state`는 상태 저장 위치이며 실행 파일 설치 위치와는 별개다. 경로를 잊었다면 `systemctl --user cat quant-agent`로 서비스의 실행 인자를 확인한다.
-
-### 4.4 장치 해제와 직접 실행
-
-장치를 더 이상 쓰지 않을 때는 로컬에서 중지한 뒤 **웹의 설정 → Agent에서 해당 장치를 해제**한다.
-
-```bash
-systemctl --user disable --now quant-agent
-```
-
-로컬 중지만으로 토큰이 폐기되지는 않는다. 웹에서 해제해도 이미 받은 데이터·작업 파일이 자동 삭제되지는 않으므로 장치 반납 전에는 해당 상태 경로를 확인한다.
-
-systemd가 없는 환경에서 직접 실행할 때는 **압축을 푼 패키지 디렉터리**에서 실행한다. 이미 설치한 서비스와 동시에 같은 상태 경로를 사용하지 않는다.
-
-```bash
-./quant-agent setup
-./quant-agent run
-```
-
-직접 실행은 터미널 종료와 `Ctrl+C`의 영향을 받는다. 자동 업데이트 뒤 종료 코드 `75`로 끝나면 출력에 안내된 설치 경로의 `current/quant-agent run`으로 다시 시작해야 한다.
-
-<details>
-<summary><strong>WSL2: systemd 활성화와 Windows 실행 조건</strong></summary>
-
-**Windows PowerShell:** WSL2 배포판이 설치되어 있다는 전제다. 아래에서 `Ubuntu`는 `wsl --list --verbose`에 나온 실제 배포판 이름으로 바꾼다.
+Docker Desktop이 실행 중일 때 컨테이너는 자동 재시작한다. Windows 로그인 시 Docker Desktop 자동 시작을 켜 둔다. Windows 절전·종료나 Docker Desktop 종료 중에는 계산할 수 없다. 연결 상태는 운영 웹의 설정 → Agent 화면에서 확인한다. 로컬 진단은 PowerShell에서 다음 명령을 사용한다.
 
 ```powershell
-wsl --version
-wsl --list --verbose
-wsl -d Ubuntu
+docker --context desktop-linux ps --filter "name=quant-agent-"
+docker --context desktop-linux logs --tail 100 <컨테이너 이름>
 ```
 
-**WSL 내부:** `ps -p 1 -o comm=`의 결과가 `systemd`이면 설정 변경은 생략한다. 아니라면 다음 파일을 편집하고 기존 내용을 유지하면서 `[boot]` 절에 `systemd=true`를 설정한다.
+설치 파일에는 서버 주소와 장치 토큰이 포함된다. 전달·게시하지 말고, 토큰은 이미지에 저장되지 않은 채 `QUANT_AGENT_SERVER_URL`·`QUANT_AGENT_TOKEN` 컨테이너 환경변수로만 전달된다. Docker 관리자는 컨테이너 환경변수를 확인할 수 있다. 장치를 해제할 때는 운영 웹에서 해당 Agent를 해제하고, 필요하면 Docker Desktop에서 컨테이너와 named volume을 직접 제거한다. 볼륨을 삭제하면 캐시와 미전송 결과도 삭제된다.
 
-```bash
-ps -p 1 -o comm=
-sudoedit /etc/wsl.conf
-```
-
-```ini
-[boot]
-systemd=true
-```
-
-**Windows PowerShell:** 저장 후 대상 배포판을 종료·다시 실행한다. 종료 전 해당 배포판의 진행 중인 작업을 끝낸다.
-
-```powershell
-wsl --terminate Ubuntu
-wsl -d Ubuntu
-```
-
-WSL에 다시 들어온 뒤 `ps -p 1 -o comm=`과 `systemctl --user status`로 확인하고 에이전트를 설치한다. 구형 WSL에서 systemd가 지원되지 않으면 Windows에서 `wsl --update` 후 다시 확인한다.
-
-**사용자 서비스 자동 시작과 Windows 부팅 시 WSL 자동 기동은 다른 설정이다.** linger나 systemd만으로 WSL 인스턴스의 상시 실행을 보장하지 않는다. Windows 재부팅 후에는 대상 배포판의 기동 상태를 확인하고, Windows 절전·종료 또는 WSL 종료 중에는 작업할 수 없다. WSL 설치·systemd 설정의 전제는 [Microsoft 공식 안내](https://learn.microsoft.com/en-us/windows/wsl/systemd)를 따른다.
-
-</details>
-
----
+서버와 Agent 실행 버전이 다르면 Agent는 작업을 중단하고 최신 설치 파일을 다시 실행하도록 안내한다. Linux 내부 런타임은 Docker 이미지에서 사용하며 Linux/WSL2 네이티브 설치나 별도 업데이트 명령은 제공하지 않는다.
 
 <a id="release"></a>
 ## 5. 개발 검증과 재배포
@@ -436,12 +311,7 @@ pnpm test:e2e
 
 E2E는 자체 테스트 서버의 `127.0.0.1:3100`을 사용하므로 그 포트를 비워 둔다. 모바일·데스크톱 프로젝트를 함께 검사한다.
 
-에이전트 변경을 별도 검증할 때는 Linux에서 패키징과 패키지 검사를 실행한다.
-
-```bash
-pnpm build:agent
-pnpm test:agent-package
-```
+에이전트 이미지 변경은 GitHub Actions가 Docker 빌드 전에 내부 런타임 경계와 실제 작업 실행을 검증한다. `pnpm build:agent`와 `pnpm test:agent-package`는 내부 Docker 구성·hermetic 검증용이며 사용자 다운로드 파일을 만들거나 게시하지 않는다.
 
 특정 테스트만 개발 중에 확인할 때는 Vitest에 디렉터리나 실제 파일 경로를 지정한다.
 
@@ -478,7 +348,7 @@ git log -1 --oneline
 pnpm run deploy
 ```
 
-명령 내부에서 **의존성 설치 → lint → typecheck → 전체 Vitest → 서버·웹 빌드 → 에이전트 패키징·검증 → SSH 배포**를 수행한다. E2E는 자동 포함되지 않는다. 완료 후 [정상 동작 확인](#36-정상-동작-확인과-첫-실행)을 반복하며, 기존 관리자를 다시 생성하지 않는다.
+명령 내부에서 **의존성 설치 → lint → typecheck → 전체 Vitest → 서버·웹 빌드 → SSH 배포**를 수행한다. GitHub Actions production workflow는 Agent 내부 runtime과 workload를 검증한 뒤 GHCR multi-arch image를 빌드·게시하고 서버 배포 성공 후 latest로 승격한다. E2E는 자동 포함되지 않는다. 완료 후 [정상 동작 확인](#36-정상-동작-확인과-첫-실행)을 반복하며, 기존 관리자를 다시 생성하지 않는다.
 
 실패 시 오류 출력을 먼저 확인한다. commit 단계 전 실패하면 코드·DB 복원을 시도하지만, **복원 실패나 finalize 실패까지 모두 이전 상태로 되돌아갔다고 가정하지 않는다.** 서비스·로그·실제 배포 버전을 확인한 뒤 후속 작업을 결정한다. 명령의 기준은 [build-release.sh](scripts/build-release.sh)와 [deploy.sh](scripts/deploy.sh)다.
 
@@ -653,11 +523,10 @@ sudo systemd-run --pipe --wait --collect \
 | `ConfigError`가 난다 | 앱 로그에서 변수명을 확인한다. 활성화한 빈 키, TOSS 자격증명 한쪽 누락, KRX 설정을 점검한다. 로그 공유 전 비밀값을 제거한다. |
 | HTTPS 502 또는 readiness 실패 | 앱 상태·로그와 로컬 readiness를 먼저 확인하고, 이어 Caddy 로그를 확인한다. 인증서 확인만으로 앱 배포가 완료된 것은 아니다. |
 | 준비가 대기 상태다 | 화면의 데이터 수집·호출 한도·실행 장치 상태를 확인한다. 원인을 보지 않고 반복 제출하거나 재시작하지 않는다. |
-| Agent가 `active`인데 연결되지 않는다 | 서버 주소, 토큰의 유효성, 네트워크, 패키지 아키텍처·glibc, Agent 로그와 웹 상태를 확인한다. |
-| `Failed to connect to bus`가 난다 | 에이전트를 설치한 일반 사용자로 로그인했는지, 사용자 systemd가 동작하는지 확인한다. WSL2는 위 systemd 설정을 확인한다. |
+| Agent가 연결되지 않는다 | Docker Desktop Linux 엔진, 컨테이너 상태·로그, 설치 파일에 포함된 토큰, 서버 HTTPS 접근을 확인한다. 필요하면 같은 설치 파일을 다시 실행한다. |
 | 배포가 작업 트리 오류로 중단된다 | `git status --short --branch`로 배포할 변경을 확인·커밋한다. 오류를 없애려고 사용자 변경을 강제로 지우지 않는다. |
 | 복원 이후 앱이 기동하지 않는다 | 백업 세트·릴리스 호환성·미완료 복원 기록과 로그를 확인한다. 빈 DB를 새로 만들어 덮거나 복원 기록을 강제로 삭제하지 않는다. |
 
 설계 원칙은 [SPEC](docs/SPEC.md), 에이전트의 상세 진단·복구는 [AGENT_OPERATIONS](docs/AGENT_OPERATIONS.md), 계산 코드·버전 계약은 [AGENT_RUNTIME_BOUNDARY](docs/AGENT_RUNTIME_BOUNDARY.md), 설계 변경 배경은 [DECISIONS](docs/DECISIONS.md)를 참고한다. 개발 작업 규칙은 [AGENTS.md](AGENTS.md)를 따른다.
 
-명령의 구현 기준은 [package.json](package.json), [서버 CLI](src/server/cli.ts), [bootstrap](scripts/bootstrap.sh), [배포 스크립트](scripts/deploy.sh), [에이전트 CLI](src/agent/cli.ts)다. `systemd-run` 옵션은 [Ubuntu 매뉴얼](https://manpages.ubuntu.com/manpages/noble/man1/systemd-run.1.html)을 참고한다.
+명령의 구현 기준은 [package.json](package.json), [서버 CLI](src/server/cli.ts), [bootstrap](scripts/bootstrap.sh), [배포 스크립트](scripts/deploy.sh), [Windows 설치기](scripts/install-agent-windows.ps1)다.

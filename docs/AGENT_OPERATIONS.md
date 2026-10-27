@@ -1,6 +1,6 @@
 # 계산 에이전트 운영
 
-Linux/WSL2의 사용자 서비스 또는 Windows Docker Desktop의 Linux 컨테이너에서 클라이언트가 상주한다. 부모 프로세스가 서버 연결,
+Windows Docker Desktop의 Linux 컨테이너에서만 외부 에이전트가 상주한다. Linux 런타임은 이미지 내부에서 실행하며 사용자가 Linux/WSL2에 네이티브 설치하지 않는다. 부모 프로세스가 서버 연결,
 데이터 캐시, 자원 측정과 결과 재전송을 담당하고 유니버스·백테스트는 자식 프로세스에서 계산한다.
 장치 SSH 배포, worker.env, GPU 실행은 사용하지 않는다.
 
@@ -17,7 +17,7 @@ Linux/WSL2의 사용자 서비스 또는 Windows Docker Desktop의 Linux 컨테�
 
 ```mermaid
 flowchart LR
-  PC[Linux 에이전트] -->|먼저 WSS 연결| APP[운영 서버]
+  PC[Windows Docker Desktop 에이전트] -->|먼저 WSS 연결| APP[운영 서버]
   APP -->|기존 연결로 작업 전달| PC
   PC -->|버전 확인 · 스냅샷 요청 · 부족 데이터 요청| APP
   APP -->|자신의 API 키로 수집| API[KRX · DART]
@@ -86,129 +86,20 @@ node scripts/publish-agent-image.mjs --promote sha256:<복구할-digest>
 node scripts/publish-agent-image.mjs --prune-only
 ```
 
-## Linux 서비스 설치와 실행
+## 컨테이너 상태와 자원 관리
 
-1. 운영 웹의 **설정 → Agent**에서 Agent 이름을 입력하고 전용 토큰을 발급한다.
-   토큰은 발급 직후 한 번만 표시한다. Agent마다 별도로 발급한다.
-2. 같은 화면에서 해당 Linux 아키텍처의 압축 파일을 다운로드한다.
-3. 다운로드한 파일이 있는 디렉터리에서 일반 사용자로 다음 명령을 실행한다. 아래는 x64 기준이다.
+설치 파일은 토큰 발급 후 웹에서 다운로드한다. 연결 토큰은 CMD 파일에 포함되며 한 번만 표시되므로 파일을 보호한다. 같은 CMD 파일을 다시 실행하면 최신 이미지를 pull해 컨테이너를 교체한다. 서버 주소와 토큰은 컨테이너 실행 때 `QUANT_AGENT_SERVER_URL`, `QUANT_AGENT_TOKEN` 환경변수로 전달하고 named volume의 파일이나 이미지에는 넣지 않는다.
 
-   ```bash
-   mkdir -p quant-agent
-   tar -xzf quant-agent-linux-x64.tar.gz -C quant-agent
-   cd quant-agent
-   ./quant-agent install
-   ```
+컨테이너 이름은 `quant-agent-<토큰 SHA-256 앞 12자리>`, 데이터 볼륨은 이름 뒤에 `-state`를 붙인다. `/var/lib/quant-agent`에 로컬 스냅샷 캐시, 작업 상태, 전송 대기 결과를 보관한다. 재설치·이미지 업데이트는 이 볼륨을 유지한다. named volume을 직접 지우면 저장된 데이터와 미전송 결과가 함께 삭제된다.
 
-   arm64 패키지는 압축 파일명을 `quant-agent-linux-arm64.tar.gz`로 바꾼다.
-   서버 HTTPS 주소와 Agent 토큰을 입력하면 사용자 systemd 서비스가 시작된다.
-   토큰은 입력하거나 붙여 넣은 원문 그대로 터미널에 표시된다.
+컨테이너는 비 root UID 1000, `unless-stopped` 재시작 정책으로 실행한다. Docker Desktop의 Linux 엔진이 동작하고 있어야 하며 Windows 절전·종료 중에는 작업할 수 없다. 자원 한도는 CPU affinity, cgroup, 시스템 부하, 작업 RSS를 바탕으로 자동 산정하며 사용자가 CPU·메모리·동시성 설정 파일을 만들지 않는다.
 
-Node 런타임과 필요한 패키지를 클라이언트에 포함하므로 장치에 Node·pnpm을 설치하지 않는다.
-Linux glibc 환경과 tar, 사용자 systemd가 필요하다. `dist/clients/manifest.json`에 빌드 환경의
-최소 glibc 버전을 기록한다. 배포 아키텍처는 실제 빌드한 x64 또는 arm64이며 다른 아키텍처는
-동일 Git 커밋을 해당 Linux 환경에서 빌드해야 한다.
+상태와 최근 로그는 PowerShell에서 확인한다.
 
-```bash
-systemctl --user status quant-agent
-journalctl --user -u quant-agent -f
-systemctl --user restart quant-agent
-systemctl --user disable --now quant-agent
+```powershell
+docker --context desktop-linux ps --filter "name=quant-agent-"
+docker --context desktop-linux logs --tail 100 <컨테이너 이름>
 ```
-
-설치기는 로그아웃 후에도 계속 실행되도록 사용자 linger 활성화를 시도한다.
-완료하지 못했다는 안내가 나오면 환경의 권한 정책에 따라 관리자가 다음 명령을 실행한다.
-
-```bash
-loginctl enable-linger "$USER"
-```
-
-WSL2는 Linux의 systemd를 활성화해야 한다. Windows 절전·종료나 WSL 종료 동안에는
-작업할 수 없다. systemd 없이 직접 실행할 때는 `./quant-agent setup` 후
-`./quant-agent run`을 사용하며 자동 업데이트 후 종료 코드 75가 나면 실행 관리자가 재시작해야 한다.
-
-기존 SHA 기반 agent는 제거한 뒤 새 패키지로 다시 설치한다. 구형 작업 상태와 데이터 캐시는 재사용하지 않는다.
-
-## 클라이언트 명령어
-
-아래 명령은 패키지 압축을 푼 디렉터리에서 일반 사용자로 실행한다.
-
-| 명령어 | 동작 |
-| --- | --- |
-| `./quant-agent` | 명령을 생략하면 `install`을 실행한다. |
-| `./quant-agent install` | 클라이언트를 사용자 경로에 설치하고 systemd 서비스를 등록·활성화한다. 설정 파일이 없을 때만 서버 주소와 토큰을 입력받으며, 기존 설정은 그대로 사용한다. |
-| `./quant-agent setup` | 서버 주소와 토큰을 입력받아 설정 파일을 생성하거나 덮어쓴다. 서비스 설치나 재시작은 수행하지 않는다. |
-| `./quant-agent run` | 현재 터미널에서 Agent를 실행한다. 설정 파일이 없으면 먼저 서버 주소와 토큰을 입력받는다. `Ctrl+C`로 종료한다. |
-| `./quant-agent update` | 저장된 서버 주소와 토큰으로 게시된 최신 클라이언트를 확인하고 다운로드·검증 후 설치한다. 실행 중인 사용자 systemd 서비스는 재시작한다. 이미 최신이면 다운로드와 재시작을 생략한다. |
-| `./quant-agent --check` | 클라이언트 내용 버전·빌드 커밋·Linux 아키텍처를 출력하고 종료한다. 서버에 연결하거나 설정을 변경하지 않는다. |
-
-`install`, `setup`, `run`, `update` 뒤에 `--state 경로`를 붙이면 설정·데이터 캐시·작업 상태를 저장할
-디렉터리를 지정할 수 있다. 예: `./quant-agent setup --state /home/사용자/agent-state`.
-`install --state 경로`로 설치한 서비스는 해당 경로를 사용하므로, 이후 `setup`, `run`, `update`에도
-같은 경로를 지정한다. 서버 주소와 토큰을 입력하는 모든 명령에서 토큰 원문이 표시된다.
-
-설치 후 기본 설치 경로의 클라이언트로 서버 주소나 토큰을 변경하려면 다음과 같이 실행한다.
-`setup`은 실행 중인 서비스에 설정을 즉시 반영하지 않으므로 저장 후 서비스를 재시작한다.
-
-```bash
-~/.local/share/quant-agent/current/quant-agent setup
-systemctl --user restart quant-agent
-```
-
-`XDG_DATA_HOME`을 지정해 설치했다면 실행 파일은 해당 경로 아래 `quant-agent/current/quant-agent`에 있다.
-별도 `--state` 경로를 사용했다면 위 `setup` 명령에도 같은 옵션을 붙인다.
-서비스 상태 확인·재시작·중지는 앞서 안내한 `systemctl --user` 명령으로 수행한다.
-
-## 설정과 자원 관리
-
-기본 경로는 다음과 같다. XDG 경로와 `--state 경로`로 상태 위치를 바꿀 수 있다.
-
-| 용도 | 경로 |
-| --- | --- |
-| 서버 주소·장치 토큰 | `~/.local/state/quant-agent/settings.json` (600) |
-| 로컬 입력 스냅샷 | `~/.local/state/quant-agent/datasets/` |
-| 작업과 전송 대기 결과 | `~/.local/state/quant-agent/jobs/` |
-| 설치 버전 | `~/.local/share/quant-agent/releases/` |
-| 현재 실행 버전 | `~/.local/share/quant-agent/current` |
-| 서비스 | `~/.config/systemd/user/quant-agent.service` |
-
-설정값은 `serverUrl`, `token` 두 가지다. CPU 수·메모리 용량·동시성 설정은 없다.
-CPU affinity, cgroup 제한, 사용 가능한 메모리와 시스템 부하를 측정하고 작업 RSS를 관찰한다.
-시스템 여유분을 남긴 뒤 슬롯 수, 자식 V8 heap, 적재 봉 수 한도를 자동 산정한다.
-장치가 보고한 한도보다 큰 작업은 그 장치에 배정하지 않는다. 큰 대기 작업이 있으면
-병렬도를 줄여 작업당 메모리 예산을 늘린다. 서버에도 제출 시 봉 수 검사를 유지하며
-제출 한도는 최소 기존 200만 봉 기준을 유지하고 연결 장치·서버의 더 큰 수용량을 반영한다.
-실제 실행 배정은 각 실행기의 현재 가용 자원 한도 안에서만 한다. 실행 도중 메모리 부족으로
-프로세스가 종료되면 해당 작업의 실패로 기록한다.
-
-## 수동 업데이트
-
-최초 설정에서 저장한 토큰으로 서버의 클라이언트 명세와 패키지를 받을 수 있다.
-WSS 연결 이력이 없어도 발급된 토큰이 유효하면 다운로드할 수 있으며, 웹에서 장치를
-해제하면 다운로드 권한도 사라진다. 웹 로그인이나 새 토큰 발급은 필요 없다.
-
-```bash
-~/.local/share/quant-agent/current/quant-agent update
-# 별도 상태 디렉터리로 설치한 경우 같은 경로를 지정한다.
-~/.local/share/quant-agent/current/quant-agent update --state /home/사용자/agent-state
-```
-
-`XDG_DATA_HOME`을 사용했다면 해당 설치 경로의 `current/quant-agent`를 실행한다.
-압축 해제 폴더의 `./quant-agent update`를 실행해도 현재 설치된 내용 버전을 기준으로
-최신 여부를 확인한다.
-
-- 패키지 크기·SHA-256·내부 버전·실행 검사를 통과한 뒤 `current` 링크를 교체한다.
-- 다운로드나 검증이 실패하면 현재 설치와 서비스는 유지한다. 직전 릴리스도 보관한다.
-- 설치·자동 업데이트·수동 업데이트는 공통 잠금으로 중복 실행을 막는다.
-- 실행 중인 사용자 systemd 서비스는 재시작한다. 중지된 서비스는 시작하지 않는다.
-- 직접 `run`으로 실행 중이면 종료한 뒤 업데이트하고, 안내된 `current/quant-agent run`으로
-  다시 실행한다. 상태 디렉터리를 지정했다면 재실행 때도 같은 `--state`를 사용한다.
-- 서비스 재시작만 실패하면 새 설치는 보존하고 `systemctl --user restart quant-agent`를 안내한다.
-
-최신 여부는 게시 명세와 설치 패키지의 `agentVersion`을 비교한다. 운영 배포의 Git SHA와
-게시 시각은 출처 정보이며, 웹·인증 코드만 바뀌어 재게시된 패키지는 다시 설치하지 않는다.
-미리보기·수집·백테스트·기간 검증도 별도 내용 버전을 갖는다. 자세한 입력 범위와 설치
-계약은 [Agent 실행 경계와 도메인 버전](AGENT_RUNTIME_BOUNDARY.md)에 정리한다.
 
 ## 작업 배정과 로컬 실행
 
@@ -350,22 +241,22 @@ PENDING 상태의 종목 이력이 있으면 삭제하지 않고 중단한다. �
 독립 watermark는 보존한다. 이후 `0002_collection_coverage_version`은 KRX coverage의 수집
 실행 출처 컬럼을 추가한다. NULL·이전 값도 재사용하며 현재 해시로 덮어쓰지 않는다.
 새 데이터 마이그레이션은 확인된 입력 문제와 관련 revision 처리를 추가하고 새 스냅샷을 게시한다.
-에이전트의 실행·스키마 계약이 바뀌면 새 `agentVersion`의 클라이언트로 업데이트한다.
+에이전트의 실행·스키마 계약이 바뀌면 새 `agentVersion` 이미지로 업데이트한다. 사용자는 같은 Windows CMD 설치 파일을 다시 실행한다.
 수집 파서·서버 버전 변경만으로 정상 DB를 재해석하거나 재수집하지 않는다. 실제 결손·손상이
 확인된 요청 범위에서만 저장 원문 재사용과 필요한 외부 수집을 수행한다.
 
 ## 빌드와 배포
 
 ```bash
-pnpm build:agent       # 현재 Linux 아키텍처의 독립 실행 패키지
-pnpm test:agent-package # 압축 파일로 준비·백테스트 실제 실행
-pnpm run deploy        # 서버 SSH 배포 + 같은 Git 버전 클라이언트 파일 게시
+pnpm build:agent       # Docker 구성·hermetic 검증용 내부 Linux 런타임 archive
+pnpm test:agent-package # archive 경계와 실제 준비·백테스트 workload 실행
+pnpm run deploy        # 서버만 SSH 배포; 공개 native agent 파일은 빌드·게시하지 않음
 ```
 
 `deploy.env`에는 `HOST`·`SSH_*` 접속 설정만 있다. 공급자 API 키와 서비스 설정은 서버의
-`app.env`에 남는다. 옛 worker 환경변수, Docker image·Compose, worker bootstrap·deploy 경로는
-제거했다. 장치에 SSH하거나 장치별 runtime env를 배포하지 않는다. 클라이언트 파일은 앱
-릴리스와 함께 교체되며 실패 시 코드와 DB 백업 세트를 함께 복원한다.
+`app.env`에 남는다. 옛 worker 환경변수, 장치별 SSH와 사용자용 native runtime 배포 경로는
+제거했다. Docker 이미지는 GHCR에 별도로 게시하며 standalone 서버 배포는 서버와 웹만 전송한다.
+실패 시 코드와 DB 백업 세트를 함께 복원한다.
 
 
 ## 기존 명칭의 DB 이행

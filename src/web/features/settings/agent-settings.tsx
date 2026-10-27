@@ -13,7 +13,6 @@ interface AgentList {
     lastSeenAtMs: number | null;
     revokedAtMs: number | null;
   }>;
-  downloads: Array<{ arch: string; file: string }>;
 }
 export function AgentSettings() {
   const queryClient = useQueryClient();
@@ -75,26 +74,12 @@ export function AgentSettings() {
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
         <p className="text-muted-foreground">
-          Windows에서는 Docker Desktop으로 Agent를 설치할 수 있습니다. Linux 또는
-          WSL2에서는 아래 클라이언트를 실행해 유니버스 준비와 백테스트를 맡길 수
-          있습니다. CPU와 메모리 사용량은 자동으로 조절됩니다.
+          Windows Docker Desktop으로 Agent를 설치해 유니버스 준비와 백테스트를
+          맡길 수 있습니다. CPU와 메모리 사용량은 자동으로 조절됩니다.
         </p>
-        <div className="flex flex-wrap gap-3">
-          {data?.downloads.map((download) => (
-            <a
-              key={download.arch}
-              className="underline"
-              href={`/api/v1/agents/download/${download.file}`}
-            >
-              Linux {download.arch} 다운로드
-            </a>
-          ))}
-          {data?.downloads.length === 0 && (
-            <span className="text-muted-foreground">
-              클라이언트 파일 게시를 기다리고 있습니다.
-            </span>
-          )}
-        </div>
+        <p className="text-muted-foreground">
+          연결 토큰을 발급하면 Windows Docker Desktop 설치 파일을 다운로드할 수 있습니다.
+        </p>
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -118,7 +103,10 @@ export function AgentSettings() {
         </form>
         {token && (
           <div className="space-y-2 rounded-md border p-3">
-            <p>이 연결 토큰은 한 번만 표시됩니다. Windows 설치 파일에 토큰이 포함되므로 안전하게 보관하세요.</p>
+            <p>
+              이 연결 토큰은 한 번만 표시됩니다. Windows 설치 파일을 다운로드해
+              해당 PC에서 실행하세요. 설치 파일에 토큰이 포함되므로 안전하게 보관하세요.
+            </p>
             <code className="block break-all select-all">{token}</code>
             <div className="flex gap-2">
               <Button size="sm" onClick={() => windowsInstaller.mutate(token)} disabled={windowsInstaller.isPending}>

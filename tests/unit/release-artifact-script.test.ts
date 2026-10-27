@@ -48,6 +48,9 @@ printf '%s\n' "$*" >> "$GATE_LOG"
 if [ "$1" = build ]; then
   mkdir -p dist
   printf 'built\n' > dist/server.js
+  mkdir -p dist/clients dist/agent-runtime
+  printf 'legacy\n' > dist/clients/quant-agent-linux-x64.tar.gz
+  printf 'internal\n' > dist/agent-runtime/quant-agent-runtime-linux-x64.tar.gz
 fi
 `);
     fs.chmodSync(path.join(bin, 'git'), 0o755);
@@ -78,8 +81,6 @@ fi
       'typecheck',
       'test',
       'build',
-      'build:agent --prepared',
-      'test:agent-package',
     ]);
     expect(fs.readFileSync(headCheckLog, 'utf8').trim().split('\n')).toHaveLength(2);
     expect(JSON.parse(fs.readFileSync(metadataFile, 'utf8'))).toEqual({
@@ -98,6 +99,9 @@ fi
     const installer = spawnSync('tar', ['-xOzf', path.join(out, archive), 'scripts/install-agent-windows.ps1'], { encoding: 'utf8' });
     expect(installer.status).toBe(0);
     expect(installer.stdout).toBe('# windows installer\n');
+    const entries = spawnSync('tar', ['-tzf', path.join(out, archive)], { encoding: 'utf8' });
+    expect(entries.status).toBe(0);
+    expect(entries.stdout).not.toMatch(/dist\/(clients|agent-runtime)\//);
 
     const verified = spawnSync(bash, ['-c', 'source "$1"; verify_release_checksum "$2" "$3"', '_',
       path.join(repo, 'scripts/build-release.sh'),

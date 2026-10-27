@@ -64,6 +64,8 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           node -e 'const fs=require("node:fs"); const {execFileSync}=require("node:child_process"); const versions=JSON.parse(execFileSync(process.execPath,["scripts/build-runtime-versions.mjs","--print"],{encoding:"utf8"})); fs.appendFileSync(process.env.GITHUB_OUTPUT,`version=${versions.agentVersion}\nnode=${fs.readFileSync(".node-version","utf8").trim()}\n`);'
+          pnpm build:agent
+          pnpm test:agent-package
 
       - name: Set up ARM image builds
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0

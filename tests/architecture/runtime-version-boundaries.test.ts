@@ -44,8 +44,8 @@ describe('실행 도메인 버전 경계', () => {
         changed: [],
       },
       {
-        name: '에이전트 서비스 설치',
-        overrides: changeCode('src/agent/install.ts'),
+        name: '에이전트 컨테이너 진입점',
+        overrides: changeCode('src/agent/cli.ts'),
         changed: ['agentVersion'],
       },
       {

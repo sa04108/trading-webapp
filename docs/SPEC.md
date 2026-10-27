@@ -13,7 +13,7 @@
 
 **단일 관리자가 모바일·데스크톱 브라우저에서 퀀트 백테스트를 준비·실행하고 결과를 비교·검증하는 개인용 플랫폼**이다. 데이터의 시점 정합성, 계산의 재현성, 제한된 서버 자원에서의 안정적인 운영을 우선한다. 공개 회원가입이나 다중 사용자 서비스를 전제로 하지 않는다.
 
-하나의 저장소와 제품으로 운영하는 **모듈러 모놀리스**다. 운영 서버가 인증·수집·작업·최종 결과의 기준점이며, 외부 계산 장치는 계산 용량만 확장한다. 서버·웹·다운로드형 에이전트는 같은 릴리스에 게시하되, 계산 코드의 호환성은 배포 커밋과 별도로 관리한다.
+하나의 저장소와 제품으로 운영하는 **모듈러 모놀리스**다. 운영 서버가 인증·수집·작업·최종 결과의 기준점이며, Windows Docker Desktop의 외부 계산 장치는 계산 용량만 확장한다. 서버·웹·GHCR 컨테이너 이미지는 production workflow에서 배포하되, 계산 코드의 호환성은 배포 커밋과 별도로 관리한다.
 
 ## 2. 절대 원칙
 
@@ -52,7 +52,7 @@
                                                        └─ 내부 에이전트 → 계산 자식
 ```
 
-두 경로는 같은 `src/runtime`의 준비·백테스트 자식을 실행한다. 원격 Linux 장치가 서버로 **WSS(TLS 기반 WebSocket) 연결을 먼저 만들고** 제어 메시지를 교환하며, 파일은 인증된 HTTPS로 전송한다. 내부 에이전트는 네트워크 재접속 없이 내부 메시지와 로컬 스냅샷을 사용한다.
+두 경로는 같은 `src/runtime`의 준비·백테스트 자식을 실행한다. Windows Docker Desktop에서 실행하는 Linux 컨테이너가 서버로 **WSS(TLS 기반 WebSocket) 연결을 먼저 만들고** 제어 메시지를 교환하며, 파일은 인증된 HTTPS로 전송한다. Linux/WSL2 네이티브 설치는 제공하지 않는다. 내부 에이전트는 네트워크 재접속 없이 내부 메시지와 로컬 스냅샷을 사용한다.
 
 **작업 흐름:** 요청 검증 → 준비·미리보기 → 부족 데이터 수집·스냅샷 게시 → 실행 가능한 작업 배정 → 계산 → 결과 검증·저장 → 상태·결과 조회.
 
@@ -97,12 +97,12 @@ src/
 │  ├─ modules/       준비·계산 엔진·데이터 조회 등 공유 로직
 │  ├─ workers/       준비·백테스트 계산 자식
 │  └─ shared/        계산·작업 DB 연결과 공통 실행 기반
-├─ agent/            Linux 클라이언트·자원 관리·캐시·업데이트
+├─ agent/            컨테이너 내 클라이언트·자원 관리·캐시
 ├─ workers/          서버 전용 스냅샷 게시·결과 반영 자식
 ├─ shared/           웹·서버·에이전트 사이의 스키마·통신 계약
 └─ web/              앱 셸·기능별 화면·공통 UI
 migrations/          operations/ · data/ · agent/
-packages/agent/      에이전트 전용 의존성·잠금 파일
+packages/agent/      컨테이너 런타임 전용 의존성·잠금 파일
 infra/ · scripts/    프로비저닝·빌드·배포·운영 도구
 tests/ · docs/       검증 코드·설계 및 운영 문서
 ```
@@ -121,7 +121,7 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 | 상태 확인 | `/api/v1/health/live`·`/api/v1/health/ready`는 공개 상태만 반환한다. `/api/v1/system/info`는 인증 후 조회한다. |
 | 브라우저 진행 상태 | SSE로 작업·알림 변화를 전달하고 폴링으로 복구한다. 브라우저 연결의 수명과 영속 작업의 수명을 분리한다. |
 | 에이전트 제어 | `/api/agents/connect`의 WSS. 장치 Bearer 토큰으로 인증하고 임대·진행률·데이터 요구·취소를 교환한다. |
-| 에이전트 파일 전송 | `/api/agents/datasets/:version`, `/api/agents/client/*`, `/api/agents/jobs/:jobId/result`. 장치 인증을 요구하며 결과 수신은 파일·실행 버전·현재 임대를 검증한다. |
+| 에이전트 파일 전송 | `/api/agents/datasets/:version`, `/api/agents/jobs/:jobId/result`. 장치 인증을 요구하며 결과 수신은 파일·실행 버전·현재 임대를 검증한다. Windows 설치 파일은 연결 토큰 발급 후 웹에서 내려받는다. |
 
 상세 필드·제한은 [공유 스키마](../src/shared/schemas/)·[에이전트 프로토콜](../src/shared/agent-protocol.ts)·각 `presentation`에서 관리한다. 라우트 등록과 인증 경계는 [server.ts](../src/server/bootstrap/server.ts)를 따른다.
 
@@ -192,7 +192,7 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 
 저장소가 지정한 Node·pnpm으로 `pnpm install --frozen-lockfile`을 실행한다. 개발은 `pnpm dev`·`pnpm dev:web`, 서버·웹 빌드는 `pnpm build`다.
 
-초기 구성은 `scripts/bootstrap.sh`, 이후 배포는 **Linux에서 `pnpm run deploy`**다. 깨끗한 작업 트리의 동일 스냅샷을 검증해 서버·웹·에이전트와 체크섬을 게시한다. 에이전트는 전용 코드·의존성·Node만 포함하고 서버·웹·인증 패키지는 제외한다.
+초기 구성은 `scripts/bootstrap.sh`, 이후 배포는 **Linux에서 `pnpm run deploy`**다. standalone 배포는 깨끗한 작업 트리의 동일 스냅샷을 검증해 서버·웹과 체크섬을 게시한다. Native Linux agent 파일은 만들거나 배포하지 않는다. Agent용 내부 Linux archive는 `dist/agent-runtime/`에서 Docker image 구성과 hermetic workload 검증에만 사용하며 배포 archive에 포함하지 않는다.
 
 배포 진입점은 독립 Bash 스크립트인 `scripts/deploy.sh` 하나다. 로컬 검증·전송 후 한 번의 원격 실행이 잠금을 잡고 배포를 끝낸다. `--remote`는 내부 호출용이며, 대상별 조정 계층·Node 조정 블록·호환 래퍼는 두지 않는다. `deploy.env`는 셸 코드로 평가하지 않는다. stdout·stderr를 화면과 `.logs/deploy-*.log`에 함께 기록하며 `LOG`로 위치를 지정할 수 있다.
 
@@ -209,10 +209,10 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 | `pnpm lint`·`pnpm typecheck` | 정적 규칙과 서버·웹 타입 검사 |
 | `pnpm test` | Vitest의 `tests/unit`, `tests/integration`, `tests/architecture` |
 | `pnpm test:e2e` | 빌드 후 Playwright 브라우저 검증. 기본 배포 스크립트와 별도로 실행한다. |
-| `pnpm test:agent-package` | 실제 패키지를 저장소 밖에서 실행해 구성·의존성·준비·계산·결과 저장 계약 검증 |
+| `pnpm test:agent-package` | 내부 runtime archive를 저장소 밖에서 실행해 구성·의존성·준비·계산·결과 저장 계약 검증. GHCR image workflow에서 Docker build/push 전에 실행 |
 
 자동 회귀 테스트는 운영 DB·실제 API 자격증명에 의존하지 않는다. 필요한 SQLite·자식 프로세스는 실제로 실행하되 외부 응답은 fixture·대체 서버로 제어한다. 앱·DB·가변 상태는 테스트별로 격리하고 실패해도 자원을 정리한다. 실서비스 API 점검은 별도다.
 
 회귀 검증은 계산·시점 정합성, 준비 결과 보존·재사용, 버전 호환성, 임대·취소·복구·결과 반영, 인증·모듈 경계를 포함한다. 계약 변경 시 해당 테스트도 변경한다.
 
-현재 배포 게이트는 **설치 → lint → typecheck → 전체 Vitest → build → 에이전트 build → 패키지 검증**이다. 변경 영향별 테스트 선택 배포는 구현된 것으로 가정하지 않는다. 기준: [vitest.config.ts](../vitest.config.ts), [test-fixtures.ts](../tests/helpers/test-fixtures.ts)·[test-app.ts](../tests/helpers/test-app.ts), [build-release.sh](../scripts/build-release.sh).
+standalone 서버 배포 게이트는 **설치 → lint → typecheck → 전체 Vitest → 서버·웹 build**다. GHCR Agent image workflow는 이미지 version 준비 단계에서 `pnpm test:agent-package`를 실행한 다음 multi-arch Docker build/push를 진행한다. 변경 영향별 테스트 선택 배포는 구현된 것으로 가정하지 않는다. 기준: [vitest.config.ts](../vitest.config.ts), [test-fixtures.ts](../tests/helpers/test-fixtures.ts)·[test-app.ts](../tests/helpers/test-app.ts), [build-release.sh](../scripts/build-release.sh).

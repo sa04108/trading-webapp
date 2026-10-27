@@ -3,9 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runAgentCli } from '../../src/agent/cli.js';
-import { readEnvironmentSettings, writeSettings } from '../../src/agent/config.js';
+import { readEnvironmentSettings } from '../../src/agent/config.js';
 
-const mocks = vi.hoisted(() => ({ start: vi.fn(), stop: vi.fn(), construct: vi.fn(), update: vi.fn() }));
+const mocks = vi.hoisted(() => ({ start: vi.fn(), stop: vi.fn(), construct: vi.fn() }));
 vi.mock('../../src/agent/client.js', () => ({
   AgentClient: class {
     start = mocks.start;
@@ -13,27 +13,33 @@ vi.mock('../../src/agent/client.js', () => ({
     constructor(...args: unknown[]) { mocks.construct(...args); }
   },
 }));
-vi.mock('../../src/agent/update.js', () => ({ updateAgent: mocks.update, withInstallLock: vi.fn() }));
 let directory: string;
 const settings = { serverUrl: 'https://quant.example.com', token: 't'.repeat(48) };
 
 beforeEach(() => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-container-'));
-  vi.stubEnv('QUANT_AGENT_CONTAINER', '1');
   vi.stubEnv('QUANT_AGENT_SERVER_URL', settings.serverUrl);
   vi.stubEnv('QUANT_AGENT_TOKEN', settings.token);
   if (process.getuid) vi.spyOn(process, 'getuid').mockReturnValue(1000);
   vi.spyOn(process, 'once').mockReturnValue(process);
   vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  vi.stubGlobal('fetch', vi.fn());
   vi.clearAllMocks();
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   fs.rmSync(directory, { recursive: true, force: true });
 });
 
 describe('컨테이너 Agent 설정과 업데이트', () => {
+  it('명령을 생략해도 설치 절차 없이 환경변수로 실행한다', async () => {
+    await runAgentCli([]);
+    expect(mocks.start).toHaveBeenCalledOnce();
+    expect(mocks.construct.mock.calls[0]?.[0]).toEqual(settings);
+  });
+
   it('환경변수로 비대화형 실행하고 토큰을 상태 볼륨에 기록하지 않는다', async () => {
     await runAgentCli(['run', '--state', directory]);
     expect(mocks.construct).toHaveBeenCalledWith(settings, directory, expect.any(Function));
@@ -42,7 +48,7 @@ describe('컨테이너 Agent 설정과 업데이트', () => {
   });
 
   it('볼륨에 남은 설정 대신 이번 실행에 주입된 토큰을 사용한다', async () => {
-    writeSettings(directory, { serverUrl: 'https://old.example.com', token: 'o'.repeat(48) });
+    fs.writeFileSync(path.join(directory, 'settings.json'), JSON.stringify({ serverUrl: 'https://old.example.com', token: 'o'.repeat(48) }), { mode: 0o600 });
     const before = fs.readFileSync(path.join(directory, 'settings.json'), 'utf8');
     await runAgentCli(['run', '--state', directory]);
     expect(mocks.construct.mock.calls[0]?.[0]).toEqual(settings);
@@ -59,7 +65,7 @@ describe('컨테이너 Agent 설정과 업데이트', () => {
     await runAgentCli(['run', '--state', directory]);
     const onUpdate = mocks.construct.mock.calls[0]?.[2] as (version: string) => Promise<void>;
     await onUpdate('a'.repeat(64));
-    expect(mocks.update).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
     expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Windows 설치 파일을 다시 실행'));
   });
 

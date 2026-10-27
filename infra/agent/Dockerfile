@@ -18,9 +18,9 @@ ARG BUILD_GIT_SHA
 ARG AGENT_VERSION
 RUN node --input-type=module -e 'import fs from "node:fs"; const gitSha=process.env.BUILD_GIT_SHA; if(!/^[a-f0-9]{40,64}$/.test(gitSha??"")) throw new Error("BUILD_GIT_SHA is required"); fs.mkdirSync("dist",{recursive:true}); fs.writeFileSync("dist/build-info.json",JSON.stringify({gitSha,builtAt:new Date().toISOString()}));' \
     && pnpm build:agent --prepared \
-    && node --input-type=module -e 'import fs from "node:fs"; const v=JSON.parse(fs.readFileSync("dist/clients/manifest.json")).runnerVersion; if(v!==process.env.AGENT_VERSION) throw new Error("Server/container agent versions differ");' \
+    && node --input-type=module -e 'import fs from "node:fs"; const v=JSON.parse(fs.readFileSync("dist/agent-runtime/manifest.json")).runnerVersion; if(v!==process.env.AGENT_VERSION) throw new Error("Server/container agent versions differ");' \
     && mkdir /agent \
-    && tar -xzf dist/clients/quant-agent-linux-$(node -p process.arch).tar.gz -C /agent \
+    && tar -xzf dist/agent-runtime/quant-agent-runtime-linux-$(node -p process.arch).tar.gz -C /agent \
     && rm /agent/bin/node \
     && ln -s /usr/local/bin/node /agent/bin/node
 
@@ -34,7 +34,7 @@ LABEL org.opencontainers.image.source="https://github.com/sa04108/trading-webapp
 WORKDIR /opt/quant-agent
 COPY --from=build --chown=node:node /agent/ ./
 RUN mkdir -p /var/lib/quant-agent && chown node:node /var/lib/quant-agent
-ENV QUANT_AGENT_CONTAINER=1 XDG_STATE_HOME=/var/lib NODE_ENV=production
+ENV XDG_STATE_HOME=/var/lib NODE_ENV=production
 USER node
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/opt/quant-agent/quant-agent"]

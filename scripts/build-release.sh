@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 운영 앱과 다운로드용 Linux 클라이언트를 같은 릴리스에 포함한다.
+# 운영 앱과 Windows 설치기 템플릿을 같은 릴리스에 포함한다.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -107,14 +107,8 @@ build_release() {
   printf '{"gitSha":"%s","builtAt":"%s"}\n' \
     "${RELEASE_GIT_SHA}" "${RELEASE_BUILT_AT}" > "${REPO_ROOT}/dist/build-info.json"
 
-  (
-    cd "${REPO_ROOT}"
-    pnpm build:agent --prepared
-    pnpm test:agent-package
-  )
-
   echo "==> 공통 release archive 생성: ${release_archive}"
-  tar -C "${REPO_ROOT}" -czf "${release_archive}" \
+  tar -C "${REPO_ROOT}" --exclude=dist/clients --exclude=dist/agent-runtime -czf "${release_archive}" \
     dist migrations package.json pnpm-lock.yaml pnpm-workspace.yaml \
     scripts/install-agent-windows.ps1
   printf '%s  %s\n' "$(sha256sum "${release_archive}" | awk '{ print $1 }')" \

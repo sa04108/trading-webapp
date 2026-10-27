@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Linux 호스트의 Node와 네이티브 의존성으로 다운로드 가능한 클라이언트를 만든다.
+// Docker 이미지에 넣을 Agent 런타임을 만들고 저장소 밖의 독립 실행도 검증한다.
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -11,14 +11,14 @@ import { generateRuntimeVersions } from "./build-runtime-versions.mjs";
 
 function run(command, args, cwd = process.cwd()) {
   const result = spawnSync(command, args, { cwd, stdio: "inherit" });
-  if (result.status !== 0) throw new Error(`클라이언트 빌드 실패: ${command}`);
+  if (result.status !== 0) throw new Error(`Agent 런타임 빌드 실패: ${command}`);
 }
 if (
   process.platform !== "linux" ||
   !["x64", "arm64"].includes(process.arch) ||
   Number(process.versions.node.split(".")[0]) !== 24
 ) {
-  throw new Error("Linux x64/arm64의 Node 24 환경에서 클라이언트를 빌드하세요");
+  throw new Error("Linux x64/arm64의 Node 24 환경에서 Docker용 Agent 런타임을 빌드하세요");
 }
 if (!process.argv.includes("--prepared")) {
   fs.mkdirSync("dist", { recursive: true });
@@ -38,7 +38,7 @@ const metadata = JSON.parse(
 );
 const versions = generateRuntimeVersions(root);
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "quant-agent-build-"));
-const output = path.join(root, "dist/clients");
+const output = path.join(root, "dist/agent-runtime");
 fs.mkdirSync(output, { recursive: true });
 try {
   const compiled = path.join(temporary, "compiled");
@@ -109,7 +109,7 @@ try {
     ["dist/agent/main.js", "--check"],
     temporary,
   );
-  const file = `quant-agent-linux-${process.arch}.tar.gz`;
+  const file = `quant-agent-runtime-linux-${process.arch}.tar.gz`;
   const destination = path.join(output, file);
   const stagedArchive = `${destination}.tmp`;
   run("tar", ["-czf", stagedArchive, "-C", temporary, "."]);
@@ -121,12 +121,12 @@ try {
   const manifestPath = path.join(output, "manifest.json");
   const previous = fs.existsSync(manifestPath)
     ? JSON.parse(fs.readFileSync(manifestPath, "utf8"))
-    : { clients: [] };
-  const clients =
+    : { runtimes: [] };
+  const runtimes =
     previous.runnerVersion === versions.agentVersion
-      ? previous.clients.filter((client) => client.arch !== process.arch)
+      ? previous.runtimes.filter((runtime) => runtime.arch !== process.arch)
       : [];
-  clients.push({
+  runtimes.push({
     buildGitSha: metadata.gitSha,
     arch: process.arch,
     file,
@@ -140,14 +140,14 @@ try {
       {
         runnerVersion: versions.agentVersion,
         buildGitSha: metadata.gitSha,
-        clients,
+        runtimes,
       },
       null,
       2,
     ),
   );
   fs.renameSync(`${manifestPath}.tmp`, manifestPath);
-  process.stdout.write(`Linux 클라이언트 생성: ${destination}\n`);
+  process.stdout.write(`Docker Agent 내부 런타임 생성: ${destination}\n`);
 } finally {
   fs.rmSync(temporary, { recursive: true, force: true });
 }

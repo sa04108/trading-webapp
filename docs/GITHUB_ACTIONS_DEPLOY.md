@@ -1,6 +1,6 @@
 # GitHub Actions에서 운영 배포
 
-`.github/workflows/deploy.yml`은 GitHub-hosted Ubuntu 24.04 x64에서 `main`을 운영 환경에 배포한다. `devel`에서 작업한 변경을 `main`에 merge하면 main push 이벤트로 자동 실행하며, main 직접 push도 같은 배포를 시작한다. `devel` push나 PR 생성은 배포하지 않는다. 수동 실행도 지원한다. 기존 `pnpm run deploy` 전체 검증·패키징·SSH 배포 경로를 사용하며, 이벤트의 커밋 SHA를 체크아웃하므로 대기 중 `main`에 새 커밋이 생겨도 배포 대상을 바꾸지 않는다.
+`.github/workflows/deploy.yml`은 GitHub-hosted Ubuntu 24.04 x64에서 `main`의 서버와 Agent 이미지를 운영 환경에 배포한다. `devel`에서 작업한 변경을 `main`에 merge하면 main push 이벤트로 자동 실행하며, main 직접 push도 같은 배포를 시작한다. `devel` push나 PR 생성은 배포하지 않는다. 수동 실행도 지원한다. 워크플로는 서버의 lint·typecheck·Vitest·build·SSH 배포와 Agent 이미지의 내부 workload 검증·multi-arch build/push 단계를 수행한다. 이벤트의 커밋 SHA를 체크아웃하므로 대기 중 `main`에 새 커밋이 생겨도 배포 대상을 바꾸지 않는다.
 
 ## 처음 한 번 설정하기
 
@@ -18,7 +18,7 @@
 
 `DEPLOY_KNOWN_HOSTS`에는 실제 host key 행을 저장한다. 기본 포트는 `host.example.com ssh-ed25519 ...` 형식이며, 다른 포트는 `[host.example.com]:2222 ssh-ed25519 ...` 형식이다. 지문과 키는 서버 관리자나 별도의 신뢰된 채널을 통해 검증한다. 워크플로는 `ssh-keyscan` 결과를 확인 없이 신뢰하지 않으며 SSH host key 검사를 끄지 않는다.
 
-운영 서버는 GitHub-hosted runner에서 SSH로 접근 가능해야 한다. 워크플로는 SSH jump host나 사설망 터널을 지원하지 않는다. 서버 방화벽이 고정 출발지 IP만 허용한다면 러너의 접속 경로를 먼저 준비한다. runner는 Ubuntu 24.04 x64, `.node-version`의 Node 24.22.1 LTS와 `package.json`의 `packageManager`에 지정된 pnpm을 사용한다. Linux 다운로드 패키지는 x64용이고, GHCR 이미지는 amd64·arm64를 함께 게시한다. Linux 장치의 glibc는 패키지에 기록된 최소 버전과 호환되어야 한다. Docker Actions도 Node 24 실행을 선언하는 버전으로 고정한다.
+운영 서버는 GitHub-hosted runner에서 SSH로 접근 가능해야 한다. 워크플로는 SSH jump host나 사설망 터널을 지원하지 않는다. 서버 방화벽이 고정 출발지 IP만 허용한다면 러너의 접속 경로를 먼저 준비한다. runner는 Ubuntu 24.04 x64, `.node-version`의 Node 24.22.1 LTS와 `package.json`의 `packageManager`에 지정된 pnpm을 사용한다. 외부 Agent는 Windows Docker Desktop 설치기로 배포하며 GHCR 이미지는 amd64·arm64를 함께 게시한다. Docker Actions도 Node 24 실행을 선언하는 버전으로 고정한다.
 
 개인키와 `known_hosts`는 러너 임시 디렉터리에 권한 `600`으로 만들고, 키 경로만 저장한 `deploy.env`는 기존 Git 제외 규칙을 따른다. 성공·실패 후 정리 단계에서 이 파일들을 삭제하며 artifact로 업로드하지 않는다.
 
@@ -42,7 +42,7 @@ curl --fail-with-body --request POST \
 
 ## 배포와 복구
 
-기존 `pnpm run deploy`가 의존성을 설치하고 lint, typecheck, 전체 Vitest, 서버·웹 빌드, Linux x64 Agent 패키징과 `test:agent-package`를 완료한 뒤 SSH로 배포한다. 패키지 검증은 loopback 테스트 서버와 fixture 데이터를 사용하므로 공급자 API 자격증명은 필요하지 않다. Agent 패키지의 의존성 설치는 앞선 frozen install이 채운 pnpm store를 사용해 오프라인으로 실행한다. E2E는 기존 배포 검증에 포함되지 않는다.
+standalone `pnpm run deploy`는 의존성을 설치하고 lint, typecheck, 전체 Vitest, 서버·웹 빌드를 완료한 뒤 서버만 SSH로 배포한다. 사용자용 native Linux Agent archive를 만들거나 게시하지 않는다. GitHub Actions production workflow는 Agent image version 준비 단계에서 `pnpm test:agent-package`로 내부 runtime archive와 실제 workload를 검증한 뒤 Docker multi-arch build/push를 수행하고 서버를 배포한다. 이 검증은 loopback 테스트 서버와 fixture 데이터를 사용하므로 공급자 API 자격증명은 필요하지 않다. E2E는 배포 검증에 포함되지 않는다.
 
 워크플로는 DB 파일이나 운영 `app.env`를 GitHub로 업로드하지 않는다. 기존 원격 배포 스크립트가 서버에서 운영 DB 세트를 백업하고 `db:prepare`, 서비스 재시작, readiness 확인을 수행하며 실패 경로의 복구를 관리한다. 성공한 배포는 기존 스크립트의 백업 보존·정리 정책을 따른다.
 

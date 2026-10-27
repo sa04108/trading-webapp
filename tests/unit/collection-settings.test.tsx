@@ -8,6 +8,8 @@ it("설정은 기존 화면·Agent·서버 설정만 제공하고 별도 수집 
   try {
     const html = renderToStaticMarkup(<QueryClientProvider client={client}><SettingsPage /></QueryClientProvider>);
     for (const label of ["설정", "화면", "Agent", "서버 상태"]) expect(html).toContain(label);
+    expect(html).toContain("연결 토큰을 발급하면 Windows Docker Desktop 설치 파일을 다운로드할 수 있습니다.");
+    expect(html).not.toContain("Linux x64 다운로드");
     for (const label of ["외부 데이터", "수집 승인", "수집 현황", "미확인 공시"]) expect(html).not.toContain(label);
     expect(client.getQueryCache().getAll().map((query) => query.queryKey)).toEqual([["system", "info"], ["agents"]]);
   } finally { client.clear(); }

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { Readable } from "node:stream";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -81,32 +80,6 @@ export function registerAgentControlRoutes(
         .header("cache-control", "private, immutable")
         .send(fs.createReadStream(file));
     },
-  );
-  app.get(
-    "/client/latest",
-    { preHandler: authenticate },
-    async (_request, reply) => {
-      const file = path.resolve("dist/clients/manifest.json");
-      if (!fs.existsSync(file))
-        return reply
-          .code(503)
-          .send({ error: "Linux 클라이언트 파일이 아직 게시되지 않았습니다" });
-      const manifest = JSON.parse(fs.readFileSync(file, "utf8")) as {
-        runnerVersion: string;
-      };
-      if (manifest.runnerVersion !== coordinator.runnerVersion)
-        return reply
-          .code(503)
-          .send({
-            error: "서버가 요구하는 클라이언트가 아직 게시되지 않았습니다",
-          });
-      return manifest;
-    },
-  );
-  app.get(
-    "/client/:file",
-    { preHandler: authenticate },
-    async (request, reply) => sendClient(request, reply),
   );
   app.addContentTypeParser(ARTIFACT_TYPE, (_request, stream, done) =>
     done(null, stream),
@@ -227,41 +200,14 @@ export function registerAgentControlRoutes(
   );
 }
 
-function sendClient(
-  request: FastifyRequest,
-  reply: FastifyReply,
-): FastifyReply {
-  const { file } = parseRequest(
-    z.object({
-      file: z.string().regex(/^quant-agent-linux-(x64|arm64)\.tar\.gz$/),
-    }),
-    request.params,
-  );
-  const location = path.resolve("dist/clients", file);
-  if (!fs.existsSync(location))
-    return reply
-      .code(404)
-      .send({ error: "이 아키텍처의 Linux 클라이언트가 없습니다" });
-  return reply
-    .type("application/gzip")
-    .header("content-disposition", `attachment; filename="${file}"`)
-    .header("content-length", fs.statSync(location).size)
-    .send(fs.createReadStream(location));
-}
-
 export function registerAgentManagementRoutes(
   app: FastifyInstance,
   coordinator: AgentCoordinator,
   requireAuth: PreHandler,
 ): void {
-  app.get("/agents", { preHandler: requireAuth }, async () => {
-    const file = path.resolve("dist/clients/manifest.json");
-    const downloads = fs.existsSync(file)
-      ? (JSON.parse(fs.readFileSync(file, "utf8")) as { clients: unknown[] })
-          .clients
-      : [];
-    return { clients: coordinator.registry.list(), downloads };
-  });
+  app.get("/agents", { preHandler: requireAuth }, async () => ({
+    clients: coordinator.registry.list(),
+  }));
   app.post("/agents", { preHandler: requireAuth }, async (request, reply) => {
     const { name } = parseRequest(
       z.object({ name: z.string().trim().min(1).max(80) }),
@@ -294,10 +240,5 @@ export function registerAgentManagementRoutes(
         ? { status: "REVOKED" }
         : reply.code(404).send({ error: "장치가 없습니다" });
     },
-  );
-  app.get(
-    "/agents/download/:file",
-    { preHandler: requireAuth },
-    async (request, reply) => sendClient(request, reply),
   );
 }
