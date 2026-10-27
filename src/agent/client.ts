@@ -154,7 +154,8 @@ export class AgentClient {
     const file = path.join(this.directory, "agent.pid");
     if (fs.existsSync(file)) {
       const pid = Number(fs.readFileSync(file, "utf8"));
-      if (Number.isInteger(pid) && pid > 0) {
+      // 컨테이너 재시작 뒤에는 이전 프로세스와 자신의 PID가 같을 수 있다.
+      if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) {
         let alive = true;
         try {
           process.kill(pid, 0);

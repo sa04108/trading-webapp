@@ -21,6 +21,33 @@ export function AgentSettings() {
   const [token, setToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
+  const windowsInstaller = useMutation({
+    mutationFn: async (issuedToken: string) => {
+      const response = await fetch("/api/v1/agents/install/windows", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: issuedToken, serverUrl: window.location.origin }),
+      });
+      if (!response.ok) {
+        let message = "Windows 설치 파일을 만들지 못했습니다.";
+        try {
+          const result = (await response.json()) as { error?: string };
+          if (result.error) message = result.error;
+        } catch { /* 응답 본문이 JSON이 아니면 기본 메시지를 표시한다. */ }
+        throw new Error(message);
+      }
+      return response.blob();
+    },
+    onSuccess: (blob) => {
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "quant-agent-windows.cmd";
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    },
+  });
   const { data, error } = useQuery({
     queryKey: ["agents"],
     queryFn: () => api<AgentList>("/agents"),
@@ -48,9 +75,9 @@ export function AgentSettings() {
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
         <p className="text-muted-foreground">
-          Linux 또는 WSL2 장치에서 클라이언트를 실행하면 유니버스 준비와
-          백테스트를 맡길 수 있습니다. CPU와 메모리 사용량은 자동으로
-          조절됩니다.
+          Windows에서는 Docker Desktop으로 Agent를 설치할 수 있습니다. Linux 또는
+          WSL2에서는 아래 클라이언트를 실행해 유니버스 준비와 백테스트를 맡길 수
+          있습니다. CPU와 메모리 사용량은 자동으로 조절됩니다.
         </p>
         <div className="flex flex-wrap gap-3">
           {data?.downloads.map((download) => (
@@ -91,12 +118,12 @@ export function AgentSettings() {
         </form>
         {token && (
           <div className="space-y-2 rounded-md border p-3">
-            <p>
-              클라이언트 첫 실행 때 서버 주소와 이 토큰을 입력하세요. 토큰은 이
-              화면에서 한 번만 표시됩니다.
-            </p>
+            <p>이 연결 토큰은 한 번만 표시됩니다. Windows 설치 파일에 토큰이 포함되므로 안전하게 보관하세요.</p>
             <code className="block break-all select-all">{token}</code>
             <div className="flex gap-2">
+              <Button size="sm" onClick={() => windowsInstaller.mutate(token)} disabled={windowsInstaller.isPending}>
+                {windowsInstaller.isPending ? "설치 파일 준비 중…" : "Windows Docker Desktop 설치 파일"}
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
@@ -126,6 +153,9 @@ export function AgentSettings() {
           <p role="alert" className="text-destructive">
             {copyError}
           </p>
+        )}
+        {windowsInstaller.error && (
+          <p role="alert" className="text-destructive">{windowsInstaller.error.message}</p>
         )}
         {(error || issue.error || revoke.error) && (
           <p role="alert" className="text-destructive">

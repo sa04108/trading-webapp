@@ -67,6 +67,13 @@ function harness() {
 }
 
 describe('에이전트 미전송 결과 복구', () => {
+  it('강제 종료 후 같은 PID로 다시 시작하는 컨테이너는 이전 잠금을 회수한다', () => {
+    fs.writeFileSync(path.join(directory, 'agent.pid'), String(process.pid));
+    const agent = harness();
+    expect(() => agent.client.start()).not.toThrow();
+    expect(agent.sent[0]).toMatchObject({ type: 'HELLO' });
+  });
+
   it('현재 형식은 HELLO 후 결과를 재전송하고 ACK를 받아야 정리한다', () => {
     const restored = lease();
     const jobDirectory = writeOutbox(restored);

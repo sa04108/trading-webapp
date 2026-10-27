@@ -11,6 +11,8 @@ import { test as base } from '../helpers/test-fixtures.js';
 import type { TestApp } from '../helpers/test-app.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import type { AgentLease, ServerAgentMessage } from '../../src/shared/agent-protocol.js';
+import Fastify from 'fastify';
+import { registerAgentManagementRoutes } from '../../src/server/modules/agents/presentation/agent-routes.js';
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -311,6 +313,48 @@ describe('연결과 리스 수명 분리', () => {
     ctx.container.agentCoordinator.registry.revoke(id);
     for (const url of endpoints) {
       expect((await ctx.app.inject({ method: 'GET', url, headers })).statusCode).toBe(401);
+    }
+  });
+
+  it('Windows 설치 파일은 웹 인증, 활성 Agent 토큰, HTTPS origin을 요구하고 비밀을 URL에 싣지 않는다', async ({ scenario }) => {
+    const { ctx, id, token } = scenario;
+    const unauthenticated = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/agents/install/windows',
+      payload: { token, serverUrl: 'https://example.com' },
+    });
+    expect(unauthenticated.statusCode).toBe(401);
+
+    const app = Fastify();
+    registerAgentManagementRoutes(app, ctx.container.agentCoordinator, async () => undefined);
+    await app.ready();
+    try {
+      const route = '/agents/install/windows';
+      expect((await app.inject({ method: 'POST', url: route, payload: { token: 'bad', serverUrl: 'https://example.com' } })).statusCode).toBe(400);
+      expect((await app.inject({ method: 'POST', url: route, payload: { token: 'x'.repeat(48), serverUrl: 'https://example.com' } })).statusCode).toBe(401);
+      expect((await app.inject({ method: 'POST', url: route, payload: { token, serverUrl: 'http://localhost:5173' } })).statusCode).toBe(400);
+      expect((await app.inject({ method: 'POST', url: route, payload: { token, serverUrl: 'https://example.com/path' } })).statusCode).toBe(400);
+
+      const response = await app.inject({ method: 'POST', url: route, payload: { token, serverUrl: 'https://example.com' } });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.headers['content-disposition']).toContain('quant-agent-windows.cmd');
+      expect(response.body).not.toContain(token);
+      expect(response.body).not.toContain('https://example.com');
+      expect(response.body).toContain('set "QUANT_AGENT_INSTALLER=%~f0"');
+      expect(response.body).toContain('$p=$env:QUANT_AGENT_INSTALLER');
+      expect(response.body).not.toContain("$p='%~f0'");
+      const encoded = response.body.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/)?.[1];
+      expect(encoded).toBeDefined();
+      expect(JSON.parse(Buffer.from(encoded!, 'base64').toString('utf8'))).toEqual({
+        serverUrl: 'https://example.com',
+        token,
+        image: 'ghcr.io/sa04108/quant-agent:latest',
+      });
+
+      ctx.container.agentCoordinator.registry.revoke(id);
+      expect((await app.inject({ method: 'POST', url: route, payload: { token, serverUrl: 'https://example.com' } })).statusCode).toBe(401);
+    } finally {
+      await app.close();
     }
   });
 

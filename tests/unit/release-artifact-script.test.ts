@@ -22,6 +22,7 @@ describe('shared release artifact builder', () => {
     fs.mkdirSync(path.join(repo, 'migrations'), { recursive: true });
     fs.mkdirSync(bin);
     fs.copyFileSync(path.resolve('scripts/build-release.sh'), path.join(repo, 'scripts/build-release.sh'));
+    fs.writeFileSync(path.join(repo, 'scripts/install-agent-windows.ps1'), '# windows installer\n');
     fs.writeFileSync(path.join(repo, 'migrations', '0000.sql'), 'SELECT 1;\n');
     fs.writeFileSync(path.join(repo, 'package.json'), '{}\n');
     fs.writeFileSync(path.join(repo, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
@@ -94,6 +95,9 @@ fi
     expect(JSON.parse(buildInfo.stdout)).toMatchObject({
       gitSha: '0123456789abcdef0123456789abcdef01234567',
     });
+    const installer = spawnSync('tar', ['-xOzf', path.join(out, archive), 'scripts/install-agent-windows.ps1'], { encoding: 'utf8' });
+    expect(installer.status).toBe(0);
+    expect(installer.stdout).toBe('# windows installer\n');
 
     const verified = spawnSync(bash, ['-c', 'source "$1"; verify_release_checksum "$2" "$3"', '_',
       path.join(repo, 'scripts/build-release.sh'),

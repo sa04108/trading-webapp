@@ -1,0 +1,22 @@
+# 허용한 소스만 전송해 로컬 데이터·자격 증명·기존 산출물을 제외한다.
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.server.json
+!tsconfig.build.json
+!tsconfig.agent.json
+!packages/
+!packages/agent/
+!packages/agent/package.json
+!packages/agent/pnpm-lock.yaml
+!packages/agent/pnpm-workspace.yaml
+!scripts/
+!scripts/build-agent-client.mjs
+!scripts/build-runtime-versions.mjs
+!scripts/lib/
+!scripts/lib/runtime-graph.mjs
+!src/
+!src/**
+!migrations/
+!migrations/**

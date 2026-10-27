@@ -115,7 +115,8 @@ build_release() {
 
   echo "==> 공통 release archive 생성: ${release_archive}"
   tar -C "${REPO_ROOT}" -czf "${release_archive}" \
-    dist migrations package.json pnpm-lock.yaml pnpm-workspace.yaml
+    dist migrations package.json pnpm-lock.yaml pnpm-workspace.yaml \
+    scripts/install-agent-windows.ps1
   printf '%s  %s\n' "$(sha256sum "${release_archive}" | awk '{ print $1 }')" \
     "$(basename "${release_archive}")" > "${release_checksum}"
   if [ -n "${metadata_file}" ]; then

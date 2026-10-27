@@ -267,7 +267,11 @@ curl -fsS https://quant.example.com/api/v1/health/ready
 
 ### 4.1 장치 준비와 설치
 
-Linux glibc 환경, tar, 사용자 systemd가 필요하다. Windows에서는 WSL2를 사용한다. 장치가 운영 서버의 HTTPS 주소에 접근할 수 있어야 하며, 장치의 인바운드 포트를 열 필요는 없다.
+Windows에서는 **Docker Desktop의 Linux 컨테이너**로 설치한다. 운영 웹의 **설정 → Agent**에서 토큰을 발급한 뒤 **Windows Docker Desktop 설치 파일**을 받아 실행한다. 설치기가 Docker Desktop을 설치·시작하고 GHCR의 최신 이미지를 내려받아 Agent 컨테이너를 실행한다. Docker Desktop 최초 설정이나 Windows 재부팅이 필요하면 안내를 마친 뒤 같은 파일을 다시 실행한다. 장치가 운영 서버의 HTTPS 주소에 접근할 수 있어야 하며, 인바운드 포트는 필요 없다.
+
+설치 파일에는 장치 토큰이 포함되므로 공유하지 않는다. 같은 파일을 다시 실행하면 최신 이미지로 업데이트하고 데이터 볼륨은 유지한다. Docker Desktop이 실행 중일 때 컨테이너가 자동으로 다시 시작되므로, Windows 로그인 시 Docker Desktop 자동 시작을 설정한다. Windows 절전·종료 중에는 작업할 수 없다. [Windows 설치·이미지 관리 상세](docs/AGENT_OPERATIONS.md#windows-docker-desktop).
+
+Linux 서비스로 설치할 때는 glibc 환경, tar, 사용자 systemd가 필요하다. Windows의 기존 WSL2 서비스도 이 방식을 사용한다.
 
 운영 웹의 **설정 → Agent**에서 장치 이름으로 토큰을 발급하고, 장치 아키텍처에 맞는 클라이언트를 다운로드한다. 토큰은 발급 직후 한 번만 표시되므로 장치별로 별도 발급한다. 실제 게시된 아키텍처만 다운로드할 수 있다.
 

@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
 import {
   defaultStateDirectory,
+  readEnvironmentSettings,
   readSettings,
   writeSettings,
 } from "./config.js";
@@ -32,11 +33,17 @@ export async function runAgentCli(
       ? (args[index + 1] ?? defaultStateDirectory())
       : defaultStateDirectory(),
   );
-  const command = args[0] ?? "install";
+  const container = process.env.QUANT_AGENT_CONTAINER === "1";
+  const command = args[0] ?? (container ? "run" : "install");
   if (!["install", "run", "setup", "update"].includes(command))
     throw new Error(
       "사용법: quant-agent [install|run|setup|update] [--state 경로]",
     );
+  if (container && command !== "run")
+    throw new Error(
+      "Docker에서는 run 명령만 사용합니다. 최신 이미지 설치 파일을 다시 실행해 업데이트하세요",
+    );
+  const environmentSettings = container ? readEnvironmentSettings() : null;
   if (
     command === "update" &&
     !fs.existsSync(path.join(state, "settings.json"))
@@ -46,8 +53,9 @@ export async function runAgentCli(
     );
   }
   if (
-    command === "setup" ||
-    !fs.existsSync(path.join(state, "settings.json"))
+    !environmentSettings &&
+    (command === "setup" ||
+      !fs.existsSync(path.join(state, "settings.json")))
   ) {
     if (!process.stdin.isTTY)
       throw new Error(
@@ -82,7 +90,7 @@ export async function runAgentCli(
     );
     return;
   }
-  const settings = readSettings(state);
+  const settings = environmentSettings ?? readSettings(state);
   if (command === "update") {
     const result = await updateAgent(settings, state, { restartService: true });
     if (!result.updated)
@@ -101,6 +109,12 @@ export async function runAgentCli(
   // 설치·설정·업데이트 명령은 계산 런타임과 네이티브 DB 모듈을 로드하지 않는다.
   const { AgentClient } = await import("./client.js");
   const client = new AgentClient(settings, state, async (version) => {
+    if (container) {
+      console.log(
+        "서버에 맞는 최신 Docker 이미지가 필요합니다. Windows 설치 파일을 다시 실행하세요",
+      );
+      return;
+    }
     await updateAgent(settings, state, { expectedVersion: version });
     await client.stop();
     console.log(

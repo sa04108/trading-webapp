@@ -101,6 +101,18 @@ SHA-256이다. 이 SHA-256은 Git 커밋 SHA와 다른 값이다. 일반 TS 실�
 사용한다. 테스트는 실행 시작 시 한 번 생성한 소스 버전을 자식 프로세스에 전달하며,
 검증 도중 소스나 빌드 메타데이터를 교체하지 않는다.
 
+## 컨테이너 배포와 버전 일치
+
+Windows Docker Desktop용 이미지도 동일한 agent 실행 그래프·의존성·내용 버전을 사용한다.
+CI와 이미지 빌드의 Node 버전은 `.node-version`으로 맞추고, 빌드된 이미지의 agentVersion이
+서버 빌드에서 산출한 값과 다르면 게시하지 않는다. 이미지 digest는 배포 산출물 식별자이고
+agentVersion은 서버와의 실행 호환성 기준이다.
+
+컨테이너는 환경변수의 서버 주소·토큰으로 직접 `run`하며 systemd 설치나 실행 파일의
+자체 교체를 수행하지 않는다. UPDATE_REQUIRED를 받으면 기존 리스를 정리하고 최신 이미지
+설치를 기다린다. 설치기는 latest를 새로 pull한 뒤 컨테이너를 재생성한다. latest와 previous
+두 이미지 릴리스를 보존하되 복구 시 서버도 같은 agentVersion으로 맞춰야 한다.
+
 ## 수집 계약과 실제 데이터
 
 미리보기는 `previewVersion`뿐 아니라 실제 데이터 revision도 확인한다.

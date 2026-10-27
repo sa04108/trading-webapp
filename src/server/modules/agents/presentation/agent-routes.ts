@@ -11,6 +11,7 @@ import {
 import { backtestExecutionTelemetrySchema } from "../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js";
 import type { AgentCoordinator } from "../application/agent-coordinator.js";
 import type { RemoteResultUploadManager } from "../../backtest/infrastructure/remote-result-upload-manager.js";
+import { agentContainerImage, buildWindowsAgentInstaller, validateAgentServerOrigin } from "../infrastructure/agent-windows-installer.js";
 
 type PreHandler = (
   request: FastifyRequest,
@@ -268,6 +269,21 @@ export function registerAgentManagementRoutes(
     );
     reply.header("cache-control", "no-store");
     return coordinator.registry.issue(name);
+  });
+  app.post("/agents/install/windows", { preHandler: requireAuth }, async (request, reply) => {
+    const { token, serverUrl } = parseRequest(
+      z.object({ token: z.string().min(32).max(256), serverUrl: z.string().max(2048) }),
+      request.body,
+    );
+    if (!coordinator.registry.authenticate(token))
+      return reply.code(401).send({ error: "유효한 Agent 토큰이 필요합니다" });
+    const origin = validateAgentServerOrigin(serverUrl);
+    const installer = buildWindowsAgentInstaller({ token, serverUrl: origin, image: agentContainerImage() });
+    return reply
+      .type("application/octet-stream")
+      .header("cache-control", "no-store")
+      .header("content-disposition", 'attachment; filename="quant-agent-windows.cmd"')
+      .send(installer);
   });
   app.delete(
     "/agents/:id",

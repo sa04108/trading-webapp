@@ -1,8 +1,8 @@
-# Linux 계산 에이전트 운영
+# 계산 에이전트 운영
 
-Linux 또는 WSL2 장치에서 다운로드한 클라이언트가 상주한다. 부모 프로세스가 서버 연결,
+Linux/WSL2의 사용자 서비스 또는 Windows Docker Desktop의 Linux 컨테이너에서 클라이언트가 상주한다. 부모 프로세스가 서버 연결,
 데이터 캐시, 자원 측정과 결과 재전송을 담당하고 유니버스·백테스트는 자식 프로세스에서 계산한다.
-Docker, 장치 SSH 배포, worker.env, GPU 실행은 사용하지 않는다.
+장치 SSH 배포, worker.env, GPU 실행은 사용하지 않는다.
 
 명칭은 다음과 같이 구분한다.
 
@@ -29,7 +29,64 @@ flowchart LR
   APP -->|배정 가능한 장치가 없으면| LOCAL[서버 계산 자식 프로세스]
 ```
 
-## 설치와 실행
+<a id="windows-docker-desktop"></a>
+## Windows Docker Desktop 설치와 업데이트
+
+1. 운영 웹의 **설정 → Agent**에서 장치 이름으로 연결 토큰을 발급한다.
+2. 같은 토큰 카드의 **Windows Docker Desktop 설치 파일**을 다운로드한다.
+3. `quant-agent-windows.cmd`를 실행한다. Docker Desktop이 없으면 winget으로 설치하고,
+   설치되어 있으면 시작한 뒤 Linux 엔진을 기다린다. Windows 기능 설정·UAC·최초 약관 확인·
+   재부팅 안내가 나오면 해당 절차를 마친 뒤 같은 설치 파일을 다시 실행한다.
+4. 최신 이미지를 받은 뒤 컨테이너가 실행된다. 웹에서 장치의 최근 연결을 확인한다.
+
+설치기는 로컬 `desktop-linux` 컨텍스트만 사용한다. 원격 Docker 호스트, Windows 컨테이너와
+HTTP 로컬 개발 서버는 지원하지 않는다. 운영 서버의 HTTPS 주소에 접근할 수 있어야 한다.
+인바운드 포트는 필요 없다. Windows x64/ARM64에서 각각 Linux amd64/arm64 이미지를 받는다.
+
+설치 파일에 서버 주소·토큰이 포함되므로 공유하지 않는다. 토큰은 `docker run`에만
+`QUANT_AGENT_SERVER_URL`, `QUANT_AGENT_TOKEN` 환경변수로 전달하며 이미지나 캐시 볼륨의
+`settings.json`에 저장하지 않는다. Docker 관리자는 컨테이너 환경변수를 확인할 수 있다.
+
+컨테이너 이름은 `quant-agent-<토큰 SHA-256 앞 12자리>`, 볼륨은 같은 이름 뒤의 `-state`다.
+같은 설치 파일을 다시 실행하면 반드시 latest를 pull하고 확인한 이미지 ID로 교체한다.
+다운로드에 실패하면 기존 컨테이너를 보존한다. 캐시·미전송 결과는 named volume의
+`/var/lib/quant-agent`에 남는다. 새 토큰으로 설치하면 별도 장치와 볼륨을 만든다.
+
+UID 1000과 `unless-stopped` 재시작 정책을 사용한다. Windows 로그인 시 Docker Desktop
+자동 시작을 켜 둔다. Windows 절전·종료와 Docker Desktop 종료 중에는 계산할 수 없다.
+컨테이너는 실행 파일을 자체 업데이트하지 않는다. 서버와 버전이 다르면 작업을 중단하고
+최신 이미지 설치를 안내하므로 보관한 설치 파일을 다시 실행한다.
+
+## GHCR 이미지 게시와 두 버전 보존
+
+기본 이미지는 `ghcr.io/sa04108/quant-agent:latest`다. 다른 계정으로 배포하면 workflow의
+이미지 경로와 서버의 `AGENT_CONTAINER_IMAGE=ghcr.io/<계정>/<이미지>:latest`를 함께 맞춘다.
+최초 게시 후 GitHub Packages에서 이미지 패키지의 visibility를 **Public**으로 설정해야
+로그인 없이 설치할 수 있다. 연결된 저장소의 Actions에 패키지 관리 권한도 필요하다.
+
+수동 **Deploy production** workflow는 Windows PowerShell 설치 시나리오를 검증하고,
+`.node-version`과 같은 Node로 두 아키텍처 이미지를 빌드한다. 후보 이미지의 실제 실행을
+확인한 뒤 서버를 배포한다. 성공하면 기존 latest를 previous로 보존하고 후보를 latest로
+승격한다. 후보 태그는 `v-<agentVersion>`이며, 사용자 설치기는 latest만 선택한다.
+서버 배포 실패 시 후보를 정리하고 기존 latest/previous를 보존한다.
+
+`scripts/publish-agent-image.mjs`는 latest·previous **두 릴리스**와 이들이 참조하는
+아키텍처 manifest·빌드 증명만 남긴다. 첫 게시에는 latest 하나만 있다. 하위 manifest는
+별도 실행 버전이 아니므로 Packages의 항목 수는 2보다 많을 수 있다.
+삭제가 거부되면 workflow도 실패하며 정리 성공으로 처리하지 않는다. GitHub는 공개 버전의
+다운로드가 5,000을 넘으면 삭제를 제한하므로 해당 경우 GitHub 지원이 필요하다.
+
+백업 복구 시 previous의 digest와 서버 agentVersion을 확인하고 서버도 같은 실행 코드로
+복원한다. 게시 권한 환경의 `AGENT_IMAGE`, `GH_TOKEN`, `GITHUB_ACTOR`, `GITHUB_REPOSITORY`,
+`GITHUB_REPOSITORY_OWNER`를 설정해 다음 명령을 실행한다. 사용자 설치기는 복구 후에도 latest를 받는다.
+
+```bash
+node scripts/publish-agent-image.mjs --promote sha256:<복구할-digest>
+# 현재 latest/previous를 보존하며 실패 후보를 정리한다.
+node scripts/publish-agent-image.mjs --prune-only
+```
+
+## Linux 서비스 설치와 실행
 
 1. 운영 웹의 **설정 → Agent**에서 Agent 이름을 입력하고 전용 토큰을 발급한다.
    토큰은 발급 직후 한 번만 표시한다. Agent마다 별도로 발급한다.
