@@ -20,7 +20,7 @@ DOMAIN="${1:-}"
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # CI·Agent 이미지와 같은 24.x LTS patch를 사용한다. SHA는 자동 검증한다.
-NODE_VERSION=v24.22.1
+NODE_VERSION=v24.22.2
 
 [ "$(id -u)" -eq 0 ] || { echo "root 로 실행해야 합니다 (sudo sh $0 <도메인>)" >&2; exit 1; }
 [ -n "${DOMAIN}" ] || {

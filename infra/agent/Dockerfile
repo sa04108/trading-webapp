@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-ARG NODE_VERSION=24.22.1
+ARG NODE_VERSION=24.22.2
 FROM node:${NODE_VERSION}-bookworm-slim AS build
 WORKDIR /build
 # 관리형 환경의 프록시 CA는 빌드에만 마운트하고 이미지에 보관하지 않는다.

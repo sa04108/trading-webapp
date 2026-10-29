@@ -22,7 +22,9 @@
 | **운영 서버** | 프로비저닝된 서버에 SSH로 접속해 실행한다. 서버 CLI는 배포된 JavaScript를 `quant` 사용자·그룹과 운영 환경설정으로 실행한다. |
 | **에이전트 장치** | Windows Docker Desktop에서 Linux 컨테이너로 실행한다. Linux/WSL2 네이티브 설치는 제공하지 않는다. |
 
-개발·배포 PC에는 **Node.js 24 (`>=24 <25`)**, Git, Bash, SSH/SCP, curl, tar가 필요하다. CI·Agent 이미지·서버 초기 설치는 [.node-version](.node-version)의 **24.22.1 LTS**로 맞춘다. pnpm 버전은 [package.json](package.json)의 `packageManager`를 따른다. Node는 [공식 설치 안내](https://nodejs.org/en/download)에서 24 계열을 선택한다. 에이전트 이미지는 Node와 의존성을 포함하므로 **계산 장치에는 Node·pnpm을 별도로 설치하지 않는다.**
+개발·배포 PC에는 **Node.js 24 (`>=24 <25`)**, Git, Bash, SSH/SCP, curl, tar가 필요하다. CI·Agent 이미지·서버 초기 설치는 [.node-version](.node-version)의 **24.22.2 LTS**로 맞춘다. pnpm 버전은 [package.json](package.json)의 `packageManager`를 따른다. Node는 [공식 설치 안내](https://nodejs.org/en/download)에서 24 계열을 선택한다. 에이전트 이미지는 Node와 의존성을 포함하므로 **계산 장치에는 Node·pnpm을 별도로 설치하지 않는다.**
+
+기존 운영 서버의 Node는 일반 앱 배포로 교체되지 않는다. [기존 서버의 Node 업데이트](docs/GITHUB_ACTIONS_DEPLOY.md#기존-서버의-node-업데이트)를 먼저 수행한다.
 
 예시의 `203.0.113.10`, `quant.example.com`, `ubuntu`, `~/.ssh/quant.pem`은 실제 서버 IP·도메인·SSH 계정·키 경로로 바꾼다. 앱 주소·포트·경로를 별도로 변경한 환경에서는 아래 기본 경로도 맞춰야 한다.
 

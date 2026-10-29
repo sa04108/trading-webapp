@@ -18,9 +18,46 @@
 
 `DEPLOY_KNOWN_HOSTS`에는 실제 host key 행을 저장한다. 기본 포트는 `host.example.com ssh-ed25519 ...` 형식이며, 다른 포트는 `[host.example.com]:2222 ssh-ed25519 ...` 형식이다. 지문과 키는 서버 관리자나 별도의 신뢰된 채널을 통해 검증한다. 워크플로는 `ssh-keyscan` 결과를 확인 없이 신뢰하지 않으며 SSH host key 검사를 끄지 않는다.
 
-운영 서버는 GitHub-hosted runner에서 SSH로 접근 가능해야 한다. 워크플로는 SSH jump host나 사설망 터널을 지원하지 않는다. 서버 방화벽이 고정 출발지 IP만 허용한다면 러너의 접속 경로를 먼저 준비한다. runner는 Ubuntu 24.04 x64, `.node-version`의 Node 24.22.1 LTS와 `package.json`의 `packageManager`에 지정된 pnpm을 사용한다. 외부 Agent는 Windows Docker Desktop 설치기로 배포하며 GHCR 이미지는 amd64·arm64를 함께 게시한다. Docker Actions도 Node 24 실행을 선언하는 버전으로 고정한다.
+운영 서버는 GitHub-hosted runner에서 SSH로 접근 가능해야 한다. 워크플로는 SSH jump host나 사설망 터널을 지원하지 않는다. 서버 방화벽이 고정 출발지 IP만 허용한다면 러너의 접속 경로를 먼저 준비한다. runner는 Ubuntu 24.04 x64, `.node-version`의 Node 24.22.2 LTS와 `package.json`의 `packageManager`에 지정된 pnpm을 사용한다. 외부 Agent는 Windows Docker Desktop 설치기로 배포하며 GHCR 이미지는 amd64·arm64를 함께 게시한다. Docker Actions도 Node 24 실행을 선언하는 버전으로 고정한다.
 
 개인키와 `known_hosts`는 러너 임시 디렉터리에 권한 `600`으로 만들고, 키 경로만 저장한 `deploy.env`는 기존 Git 제외 규칙을 따른다. 성공·실패 후 정리 단계에서 이 파일들을 삭제하며 artifact로 업로드하지 않는다.
+
+## 기존 서버의 Node 업데이트
+
+Node 24의 고정 버전은 `24.22.2`다. [공식 릴리스](https://nodejs.org/en/blog/release/v24.22.2)는 직전 [24.22.1 보안 릴리스](https://nodejs.org/en/blog/release/v24.22.1)의 수정을 포함한다. `.node-version` 변경은 CI와 새 Agent 이미지에 적용되고, `infra/provision.sh` 변경은 서버 프로비저닝에 적용된다. 일반 앱 배포는 기존 서버의 Node를 교체하지 않는다.
+
+기존 서버는 앱 배포 전에 별도로 Node를 갱신한다. 아래 명령은 기본 프로비저닝 경로의 Ubuntu x64 서버에서 Bash로 실행한다. 배포·유지보수 작업과 동시에 실행하지 않는다. 다운로드와 SHA-256·버전 검사를 마친 뒤 서비스를 중지하고 `/opt/node` 링크를 전환한다.
+
+```bash
+(
+  set -euo pipefail
+  node_patch=24.22.2
+  node_archive="node-v${node_patch}-linux-x64.tar.xz"
+  node_workdir="$(mktemp -d)"
+  trap 'rm -rf -- "$node_workdir"' EXIT
+  cd "$node_workdir"
+  curl -fsSLO "https://nodejs.org/dist/v${node_patch}/${node_archive}"
+  curl -fsSLO "https://nodejs.org/dist/v${node_patch}/SHASUMS256.txt"
+  awk -v name="$node_archive" '$2 == name { print }' SHASUMS256.txt > node.sha256
+  sha256sum --check node.sha256
+  mkdir runtime
+  tar -xJf "$node_archive" -C runtime --strip-components=1
+  test "$(runtime/bin/node --version)" = "v${node_patch}"
+  # 기존 설치를 덮어쓰거나 미완성 설치를 재사용하지 않는다.
+  sudo test ! -e "/opt/node-v${node_patch}"
+  sudo cp -a --no-preserve=ownership runtime "/opt/node-v${node_patch}"
+  test "$("/opt/node-v${node_patch}/bin/node" --version)" = "v${node_patch}"
+  readlink -f /opt/node
+  sudo systemctl stop quant-platform
+  sudo ln -sfn "/opt/node-v${node_patch}" /opt/node
+  test "$(/usr/local/bin/node --version)" = "v${node_patch}"
+  sudo systemctl start quant-platform
+  curl -fsS --retry 15 --retry-delay 1 --retry-connrefused \
+    http://127.0.0.1:3000/api/v1/health/ready
+)
+```
+
+`/opt/node-v24.22.2`가 이미 있으면 서비스 중지 전에 종료한다. 복사 중 실패해 남은 디렉터리는 사용 중인 `/opt/node`의 대상이 아닌지 확인하고 제거한 뒤 다시 설치한다. 이미 검증된 전체 설치라면 다운로드·복사 단계를 생략할 수 있다. 전환 전 `readlink`가 출력한 이전 경로는 보관한다. **서비스 중지 이후 어느 단계든 실패하면** 로그를 확인하고 서비스를 중지한 뒤 `/opt/node`를 그 이전 경로로 다시 연결하여 시작한다. 이후 일반 앱 배포로 서버 코드와 Agent 이미지도 같은 Node 버전으로 빌드한다. Windows 장치는 기존 CMD 설치 파일을 다시 실행해 새 이미지를 받는다.
 
 ## 배포 실행
 
