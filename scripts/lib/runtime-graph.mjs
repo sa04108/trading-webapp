@@ -3,7 +3,7 @@ import path from 'node:path';
 import { isBuiltin } from 'node:module';
 import ts from 'typescript';
 
-export const AGENT_ENTRYPOINTS = ['src/agent/main.ts', 'src/runtime/workers/backtest-child.ts', 'src/runtime/workers/preparation-child.ts'];
+export const AGENT_ENTRYPOINTS = ['src/agent/main.ts', 'src/runtime/workers/backtest-child.ts', 'src/runtime/workers/preparation-child.ts', 'src/runtime/workers/universe-child.ts'];
 const defaultCompilerOptions = { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext, removeComments: true, esModuleInterop: true };
 const emitKeys = new Set(['target', 'module', 'moduleResolution', 'jsx', 'jsxFactory', 'jsxFragmentFactory', 'jsxImportSource', 'verbatimModuleSyntax', 'esModuleInterop', 'importHelpers', 'downlevelIteration', 'useDefineForClassFields', 'experimentalDecorators', 'emitDecoratorMetadata', 'alwaysStrict', 'preserveConstEnums', 'isolatedModules', 'resolveJsonModule']);
 const emitted = new Map();

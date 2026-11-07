@@ -63,7 +63,7 @@ const it = agentBase.extend<{ scenario: Scenario }>({
           const { id } = coordinator.registry.issue('remote');
           const dataset = await coordinator.snapshots.ensureLatest();
           coordinator.connect(id, peer as unknown as WebSocket);
-          peer.submit({ type: 'HELLO', protocolVersion: 3, runnerVersion: coordinator.runnerVersion });
+          peer.submit({ type: 'HELLO', protocolVersion: 4, runnerVersion: coordinator.runnerVersion });
           await vi.waitFor(() => expect(peer.received.some((m) => m.type === 'DATASET')).toBe(true));
           peer.submit({ type: 'CAPACITY', slots, datasetVersion: dataset.version, maxBars: 8_000_000 });
           await new Promise((resolve) => setImmediate(resolve));

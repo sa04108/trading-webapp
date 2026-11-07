@@ -31,6 +31,8 @@ import { MAX_BACKTEST_BARS } from "../shared/backtest-limits.js";
 import { backtestMemoryPlan } from "../runtime/modules/backtest/application/backtest-memory-plan.js";
 import { AgentDatasetCache, durableJson } from "./dataset-cache.js";
 import type { AgentSettings } from "./config.js";
+import { AgentUniverseTasks } from "./universe-tasks.js";
+import { universeComputeInputSchema } from "../shared/universe-compute.js";
 import { parseWorkerDiagnostics, type WorkerDiagnostics } from "../shared/agent-diagnostics.js";
 import {
   classifyWorker, diagnosticError, diagnosticSummary, emptyDiagnostics,
@@ -115,6 +117,7 @@ export class AgentClient {
   private runnerVersion: string | null = null;
   private lastDiagnosticsPruneAt = 0;
   private resourceRetryAt = 0;
+  private readonly universeTasks: AgentUniverseTasks;
 
   constructor(
     readonly settings: AgentSettings,
@@ -134,6 +137,20 @@ export class AgentClient {
       new AgentDatasetCache(path.join(directory, "datasets"), settings, (progress) => {
         this.send({ type: "DEVICE_ACTIVITY", progress });
       });
+    this.universeTasks = new AgentUniverseTasks({
+      active: () => this.running.size + this.universeTasks.size,
+      resources: () => (this.runtime?.resources ?? availableResources)(
+        this.running.size + this.universeTasks.size, this.observedRss, this.profiled, this.requestedBars),
+      dataset: () => this.cache.syncing || this.stopping || this.updating || this.runtime
+        ? null : this.cache.current,
+      file: (dataset) => this.cache.file(dataset),
+      send: (message) => this.send(message),
+      finished: (peakRss) => {
+        if (peakRss > 0) { this.observedRss = Math.max(this.observedRss, peakRss); this.profiled = true; }
+        this.capacity();
+        this.prune();
+      },
+    });
   }
 
   start(): void {
@@ -270,7 +287,16 @@ export class AgentClient {
   }
 
   private message(message: ServerAgentMessage): void {
-    if (message.type === "WELCOME") {
+    if (message.type === "UNIVERSE_TASK") {
+      this.universeTasks.start(message);
+      this.capacity();
+    } else if (message.type === "UNIVERSE_CANCEL") {
+      this.universeTasks.cancel(message.taskId);
+    } else if (message.type === "UNIVERSE_REPLY") {
+      const running = this.running.get(`${message.jobId}-${message.attempt}`);
+      if (running?.child.connected && !running.cancellation)
+        running.child.send(message, (error) => { if (error) running.observation.recordError(error); });
+    } else if (message.type === "WELCOME") {
       this.ready = true;
       this.retry = 0;
       this.log("운영 서버에 연결됨 — 작업 대기");
@@ -351,7 +377,7 @@ export class AgentClient {
   private capacity(): void {
     if (!this.ready) return;
     this.admission = (this.runtime?.resources ?? availableResources)(
-      this.running.size,
+      this.running.size + this.universeTasks.size,
       this.observedRss,
       this.profiled,
       this.requestedBars,
@@ -401,6 +427,7 @@ export class AgentClient {
   }
 
   private sample(): void {
+    this.universeTasks.sample();
     if (Date.now() - this.lastDiagnosticsPruneAt >= 60 * 60_000) {
       pruneDiagnostics(this.directory, this.log);
       this.lastDiagnosticsPruneAt = Date.now();
@@ -493,7 +520,7 @@ export class AgentClient {
       child = fork(fileURLToPath(new URL(target, import.meta.url)), [], {
         execArgv: [
           `--max-old-space-size=${this.admission.heapMb}`,
-          ...(this.runtime && lease.kind === "BACKTEST"
+          ...(this.runtime
             ? ["--max-semi-space-size=4"]
             : []),
           ...(ts ? ["--import", "tsx"] : []),
@@ -506,6 +533,7 @@ export class AgentClient {
           WORKER_MAX_BARS: String(this.maxBars()),
           WORKER_STREAM_BARS: this.runtime ? "1" : "0",
           WORKER_BUDGET_BYTES: String(this.admission.budgetBytes),
+          WORKER_CPU_BUDGET: String(Math.max(1, Math.floor(this.admission.cpus / Math.max(1, this.admission.slots)))),
           BACKTEST_RESULT_PATH: path.join(directory, "result.sqlite"),
         },
         stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -547,6 +575,8 @@ export class AgentClient {
       "message",
       (message: {
         type: string;
+        requestId?: string;
+        input?: unknown;
         diagnosticError?: unknown;
         phase?: string;
         telemetry?: unknown;
@@ -565,6 +595,16 @@ export class AgentClient {
       }) => {
         try {
           if (!message || typeof message !== "object") return;
+          if (message.type === "UNIVERSE_REQUEST" && lease.kind === "PREPARATION" &&
+              typeof message.requestId === "string" && !running.cancellation) {
+            const input = universeComputeInputSchema.parse(message.input);
+            if (!this.ready || (!this.runtime && this.socket?.readyState !== WebSocket.OPEN)) {
+              if (child.connected) child.send({ type: "UNIVERSE_REPLY", requestId: message.requestId,
+                reply: { status: "UNAVAILABLE" } }, (error) => { if (error) observation.recordError(error); });
+            } else this.send({ type: "UNIVERSE_REQUEST", ...this.identity(lease), kind: "PREPARATION",
+              requestId: message.requestId, input });
+            return;
+          }
           if (message.type === "WORKER_DIAGNOSTIC")
             observation.workerError(message.diagnosticError);
           const phase = message.activity ?? message.progress?.phase ?? message.phase;
@@ -864,9 +904,9 @@ export class AgentClient {
   private prune(): void {
     this.cache.prune(
       new Set(
-        [...this.running.values()].map(({ lease }) =>
+        [...this.universeTasks.files(), ...[...this.running.values()].map(({ lease }) =>
           this.cache.file(lease.dataset),
-        ),
+        )],
       ),
     );
   }
@@ -922,10 +962,11 @@ export class AgentClient {
   }
 
   private async cancelChildren(): Promise<void> {
+    const auxiliary = this.universeTasks.stop();
     for (const running of this.running.values())
       this.cancel(running, this.updating ? "AGENT_UPDATE" : "AGENT_SHUTDOWN");
     // spawn 실패로 exit가 없어도 close에 연결된 completion은 반드시 정리된다.
-    await Promise.all([...this.finishing]);
+    await Promise.all([...this.finishing, auxiliary]);
   }
 
   private async update(version: string): Promise<void> {

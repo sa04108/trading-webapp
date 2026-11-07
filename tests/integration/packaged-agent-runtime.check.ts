@@ -94,7 +94,7 @@ describe('Docker 이미지 내부 Agent 런타임', () => {
     ]);
     expect(fs.readdirSync(path.join(packageRoot, 'migrations'))).toEqual(['agent']);
     expect(fs.readdirSync(path.join(packageRoot, 'dist/runtime/workers')).sort()).toEqual([
-      'backtest-child.js', 'cancellation.js', 'preparation-child.js', 'preparation-runtime.js', 'worker-reporting.js',
+      'backtest-child.js', 'cancellation.js', 'preparation-child.js', 'preparation-runtime.js', 'universe-child.js', 'universe-executor.js', 'universe-runtime.js', 'worker-reporting.js',
     ]);
     expect(files).toEqual(expect.arrayContaining(['bin/node', 'quant-agent', 'dist/agent/main.js', 'migrations/agent/meta/_journal.json']));
     for (const removed of ['dist/agent/install.js', 'dist/agent/update.js']) expect(files).not.toContain(removed);

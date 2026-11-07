@@ -59,6 +59,11 @@ describe('실행 도메인 버전 경계', () => {
         changed: ['validationVersion'],
       },
       {
+        name: '유니버스 분할 워커',
+        overrides: changeCode('src/runtime/workers/universe-child.ts'),
+        changed: ['agentVersion', 'previewVersion', 'validationVersion'],
+      },
+      {
         name: '백테스트 엔진',
         overrides: changeCode(engine),
         changed: ['agentVersion', 'executionVersion', 'validationVersion'],

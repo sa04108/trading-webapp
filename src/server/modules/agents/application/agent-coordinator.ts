@@ -33,6 +33,7 @@ import type { ExecutionProgress } from "../../../../shared/execution-progress.js
 import { createAuditLogService } from "../../../../runtime/modules/audit/audit-service.js";
 import { systemClock } from "../../../../runtime/shared/clock.js";
 import { recordWorkerDiagnostics } from "./agent-diagnostic-recorder.js";
+import { UniverseComputeBroker } from "./universe-compute-broker.js";
 
 interface Connection {
   socket: {
@@ -81,6 +82,7 @@ export class AgentCoordinator {
   private memorySampling: { jobId: string; progress: ExecutionProgress } | null = null;
   private lastSamplingNotificationAt = 0;
   private readonly startingPreparations = new Map<string, number>();
+  private readonly universeCompute: UniverseComputeBroker;
 
   constructor(
     private readonly database: DatabaseHandle,
@@ -94,6 +96,28 @@ export class AgentCoordinator {
     private readonly logger: Logger,
     private readonly executionVersion: string,
   ) {
+    this.universeCompute = new UniverseComputeBroker({
+      ownerDataset: (owner, request) => {
+        if (this.stopped || !this.preparations.owns(owner, request)) return null;
+        const job = this.database.sqlite.prepare(
+          "SELECT request_json, cancel_requested FROM backtest_preparation_jobs WHERE id = ?",
+        ).get(request.jobId) as { request_json: string; cancel_requested: number } | undefined;
+        if (!job || job.cancel_requested) return null;
+        const original = JSON.parse(job.request_json) as { universeRule: unknown; period: unknown };
+        if (JSON.stringify(original.universeRule) !== JSON.stringify(request.input.rule) ||
+            JSON.stringify(original.period) !== JSON.stringify(request.input.period)) return null;
+        const version = this.preparations.datasetVersion(request.jobId);
+        return version === null ? null : this.snapshots.get(version);
+      },
+      peers: () => [...this.connections].filter(([id, connection]) =>
+        connection.ready && connection.socket.readyState === 1 && this.registry.active(id))
+        .map(([id, connection]) => ({ id, datasetVersion: connection.datasetVersion,
+          available: this.available(id, connection) })),
+      send: (id, message) => {
+        const connection = id === LOCAL_AGENT_ID ? this.localConnection : this.connections.get(id);
+        if (connection) this.send(connection, message);
+      },
+    });
     this.queue.events.on("queued", this.wake);
     this.backtests.events.on("job", this.wake);
   }
@@ -192,6 +216,15 @@ export class AgentCoordinator {
       return;
     }
     if (!connection.ready) throw new Error("HELLO가 필요합니다");
+    if (message.type === "UNIVERSE_REQUEST") {
+      this.universeCompute.request(clientId, message);
+      return;
+    }
+    if (message.type === "UNIVERSE_RESULT") {
+      this.universeCompute.result(clientId, message);
+      this.wake();
+      return;
+    }
     if (message.type === "CAPACITY") {
       connection.slots = message.slots;
       connection.maxBars = message.maxBars;
@@ -1007,6 +1040,7 @@ export class AgentCoordinator {
         if (row?.attempt !== Number(key.slice(separator + 1))) this.startingPreparations.delete(key);
       }
       this.preparations.sweep();
+      this.universeCompute.sweep();
       this.dataQueue.tick();
       if (Date.now() - this.lastPrunedAt > 60_000) {
         const rows = this.database.sqlite
@@ -1076,12 +1110,13 @@ export class AgentCoordinator {
         "SELECT COUNT(*) AS n FROM agent_preparation_leases l JOIN backtest_preparation_jobs j ON j.id = l.job_id WHERE client_id = ? AND j.status = 'RUNNING'",
       )
       .get(clientId) as { n: number };
-    return backtests.n + preparations.n;
+    return backtests.n + preparations.n + this.universeCompute.active(clientId);
   }
 
   stop(): Promise<void> {
     if (this.closing) return this.closing;
     this.stopped = true;
+    this.universeCompute.sweep(true);
     this.queue.events.off("queued", this.wake);
     this.backtests.events.off("job", this.wake);
     this.closing = this.shutdown();

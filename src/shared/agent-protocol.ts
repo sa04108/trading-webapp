@@ -4,8 +4,10 @@ export const LOCAL_AGENT_ID = "server-local";
 import { z } from "zod";
 import { isoDateSchema } from "./schemas/backtest-request.js";
 import type { ExecutionActivity } from "./execution-progress.js";
+import { universeComputeInputSchema, universeComputeReplySchema,
+  type UniverseComputeInput, type UniverseComputeReply } from "./universe-compute.js";
 
-export const AGENT_PROTOCOL_VERSION = 3;
+export const AGENT_PROTOCOL_VERSION = 4;
 export const AGENT_LEASE_MS = 90_000;
 export const AGENT_HEARTBEAT_MS = 15_000;
 export const AGENT_MAX_ATTEMPTS = 3;
@@ -116,6 +118,14 @@ const identity = {
 };
 export const agentMessageSchema = z.discriminatedUnion("type", [
   z.object({
+    type: z.literal("UNIVERSE_REQUEST"), ...identity, kind: z.literal("PREPARATION"),
+    requestId: z.string().uuid(), input: universeComputeInputSchema,
+  }),
+  z.object({
+    type: z.literal("UNIVERSE_RESULT"), taskId: z.string().uuid(),
+    token: z.string().min(32).max(256), reply: universeComputeReplySchema,
+  }),
+  z.object({
     type: z.literal("HELLO"),
     protocolVersion: z.literal(AGENT_PROTOCOL_VERSION),
     runnerVersion: z.string().regex(/^[a-f0-9]{64}$/),
@@ -184,6 +194,11 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
 ]);
 export type AgentMessage = z.infer<typeof agentMessageSchema>;
 export type ServerAgentMessage =
+  | { type: "UNIVERSE_TASK"; taskId: string; token: string; deadlineMs: number;
+      dataset: DatasetManifest; input: UniverseComputeInput }
+  | { type: "UNIVERSE_CANCEL"; taskId: string }
+  | { type: "UNIVERSE_REPLY"; jobId: string; attempt: number; requestId: string;
+      reply: UniverseComputeReply }
   | { type: "WELCOME"; runnerVersion: string }
   | { type: "UPDATE_REQUIRED"; runnerVersion: string }
   | { type: "DEMAND"; estimatedBars: number }

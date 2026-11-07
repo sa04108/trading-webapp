@@ -52,7 +52,7 @@ const it = agentBase.extend<{
         async connect(runnerVersion = ctx.container.agentCoordinator.runnerVersion) {
           const peer = new Peer();
           ctx.container.agentCoordinator.connect(credential.id, peer as unknown as WebSocket);
-          peer.submit({ type: 'HELLO', protocolVersion: 3, runnerVersion });
+          peer.submit({ type: 'HELLO', protocolVersion: 4, runnerVersion });
           await vi.waitFor(() => expect(peer.received.length).toBeGreaterThan(0));
           return peer;
         },
@@ -105,7 +105,7 @@ describe('연결과 리스 수명 분리', () => {
     ctx.container.agentCoordinator.connect(id, peer as unknown as WebSocket);
     peer.submit({
       type: 'HELLO',
-      protocolVersion: 3,
+      protocolVersion: 4,
       runnerVersion: ctx.container.agentCoordinator.runnerVersion,
     });
     await vi.waitFor(() => expect(peer.received[0]).toMatchObject({ type: 'WELCOME' }));
@@ -282,7 +282,7 @@ describe('연결과 리스 수명 분리', () => {
     const { ctx, connect } = scenario;
     const peer = await connect(); capacity(peer);
     await vi.waitFor(() => expect(ctx.container.agentCoordinator.maxBacktestBars()).toBe(8_000_000));
-    peer.submit({ type: 'HELLO', protocolVersion: 3, runnerVersion: 'b'.repeat(64) });
+    peer.submit({ type: 'HELLO', protocolVersion: 4, runnerVersion: 'b'.repeat(64) });
     await vi.waitFor(() => expect(peer.received.some((message) => message.type === 'UPDATE_REQUIRED')).toBe(true));
     const job = ctx.container.jobQueue.enqueue(request);
     await new Promise((resolve) => setImmediate(resolve));

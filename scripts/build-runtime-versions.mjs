@@ -115,7 +115,7 @@ export function generateRuntimeVersions(root = repository, overrides = {}) {
     inputs(["src/runtime/workers/backtest-child.ts"]),
   );
   const previewVersion = digest({
-    ...inputs(["src/runtime/workers/preparation-child.ts"]),
+    ...inputs(["src/runtime/workers/preparation-child.ts", "src/runtime/workers/universe-child.ts"]),
     collectionVersion,
   });
   const validationVersion = digest({

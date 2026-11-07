@@ -7,6 +7,12 @@ import {
 } from "../../shared/agent-protocol.js";
 import { createPreparationWorkerRuntime } from "./preparation-runtime.js";
 import { disconnectWorker, reportWorkerError, reportWorkerPhase, sendWorkerMessage } from "./worker-reporting.js";
+import { randomUUID } from "node:crypto";
+import { UniverseExecutor } from "./universe-executor.js";
+import { createUniverseRuntime } from "./universe-runtime.js";
+import { assertSafeIdentitySelections } from "../modules/backtest/application/backtest-symbol-identity.js";
+import { UNIVERSE_COMPUTE_TIMEOUT_MS, universeComputeReplySchema,
+  type UniverseComputeInput, type UniverseComputeReply } from "../../shared/universe-compute.js";
 
 reportWorkerPhase("BOOTSTRAP_READY");
 
@@ -38,7 +44,42 @@ async function run(input: {
   let orchestrator:
     ReturnType<typeof createPreparationWorkerRuntime> | undefined;
   let stop: (() => void) | undefined;
-  let onMessage: ((message: { type: string }) => void) | undefined;
+  let onMessage: ((message: { type: string; requestId?: string; reply?: unknown }) => void) | undefined;
+  const pending = new Map<string, { finish: (reply: UniverseComputeReply) => void; timer: NodeJS.Timeout }>();
+  const remote = (task: UniverseComputeInput): Promise<UniverseComputeReply> => new Promise((resolve) => {
+    const requestId = randomUUID();
+    const finish = (reply: UniverseComputeReply) => {
+      const entry = pending.get(requestId);
+      if (!entry) return;
+      clearTimeout(entry.timer);
+      pending.delete(requestId);
+      resolve(reply);
+    };
+    pending.set(requestId, { finish,
+      timer: setTimeout(() => finish({ status: "UNAVAILABLE" }), UNIVERSE_COMPUTE_TIMEOUT_MS + 5000) });
+    if (!process.connected) finish({ status: "UNAVAILABLE" });
+    else process.send!({ type: "UNIVERSE_REQUEST", requestId, input: task }, (error) => {
+      if (error) finish({ status: "UNAVAILABLE" });
+    });
+  });
+  const universe = createUniverseRuntime(database, lease.dataset.collectionVersion);
+  const executor = new UniverseExecutor(universe.resolver, {
+    dataPath: input.dataPath, collectionVersion: lease.dataset.collectionVersion,
+    budgetBytes: Number(process.env.WORKER_BUDGET_BYTES ?? 0),
+    cpuBudget: Number(process.env.WORKER_CPU_BUDGET ?? 1), remote,
+    verifyRemote: (task, result) => {
+      if (result.kind !== "READY") return;
+      for (const date of result.schedule) {
+        if (!task.rebalanceDates.includes(date.rebalanceDate) ||
+            !universe.symbolMaster.isCovered(date.rebalanceDate) ||
+            universe.symbolMaster.effectiveTradingDateWithinCoverage(date.rebalanceDate) !== date.effectiveDate)
+          throw new Error("보조 계산 결과의 실제 거래일이 스냅샷과 다릅니다");
+      }
+      assertSafeIdentitySelections(universe.symbolMaster, result.schedule.flatMap((date) =>
+        date.members.map((member) => ({ shortCode: member.symbol,
+          standardCode: member.standardCode, effectiveDate: date.effectiveDate }))));
+    },
+  });
   try {
     database.db
       .insert(backtestPreparationJobs)
@@ -58,6 +99,7 @@ async function run(input: {
       .run();
     orchestrator = createPreparationWorkerRuntime(database, {
       collectionVersion: lease.dataset.collectionVersion,
+      resolveUniverse: executor.resolve,
       onJobUpdated: () => {
         const progress = orchestrator?.get(input.lease.jobId);
         if (progress) {
@@ -68,9 +110,16 @@ async function run(input: {
     });
     stop = () => {
       orchestrator?.cancel(input.lease.jobId);
+      for (const entry of pending.values()) entry.finish({ status: "UNAVAILABLE" });
+      void executor.close();
     };
-    onMessage = (message: { type: string }) => {
+    onMessage = (message) => {
       if (message.type === "cancel") stop?.();
+      else if (message.type === "UNIVERSE_REPLY" && message.requestId) {
+        const parsed = universeComputeReplySchema.safeParse(message.reply);
+        pending.get(message.requestId)?.finish(parsed.success ? parsed.data
+          : { status: "FAILED", error: "잘못된 선정 계산 응답입니다" });
+      }
     };
     process.on("SIGTERM", stop);
     process.on("disconnect", stop);
@@ -117,6 +166,8 @@ async function run(input: {
       process.off("disconnect", stop);
     }
     if (onMessage) process.off("message", onMessage);
+    for (const entry of pending.values()) entry.finish({ status: "UNAVAILABLE" });
+    await executor.close();
     try { await orchestrator?.stop(); }
     finally { database.close(); }
   }

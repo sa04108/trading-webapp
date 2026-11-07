@@ -331,6 +331,27 @@ export class UniverseRuleResolver {
     period: BacktestPeriod,
     hooks: UniverseResolveHooks = {},
   ): Promise<UniverseResolveAttempt> {
+    return this.resolveRebalanceDates(
+      rule,
+      period,
+      computeSharedRebalanceDates(period, rule.rebalanceInterval),
+      hooks,
+    );
+  }
+
+  async resolveRebalanceDates(
+    rule: UniverseRule,
+    period: BacktestPeriod,
+    rebalanceDates: readonly string[],
+    hooks: UniverseResolveHooks = {},
+  ): Promise<UniverseResolveAttempt> {
+    const allowedDates = new Set(computeSharedRebalanceDates(period, rule.rebalanceInterval));
+    for (let index = 0; index < rebalanceDates.length; index += 1) {
+      const date = rebalanceDates[index]!;
+      if (!allowedDates.has(date) || (index > 0 && rebalanceDates[index - 1]! >= date)) {
+        throw new Error("리밸런스 날짜가 원래 일정의 정렬된 부분집합이 아닙니다.");
+      }
+    }
     const { selectionMetrics, candles, facts, factCoverage, actionCoverage } =
       this.requirePipelineDeps();
     const factSymbols = new Set<string>();
@@ -355,10 +376,6 @@ export class UniverseRuleResolver {
     // 넣으면 DAY 일정에서 같은 200종목을 수천 번 DB 조회하게 된다. 호출 수명 캐시라
     // 다음 resolve/ingest의 변경은 숨기지 않는다.
     const validatedIdentityPairs = new Set<string>();
-    const rebalanceDates = computeSharedRebalanceDates(
-      period,
-      rule.rebalanceInterval,
-    );
     let completedRebalanceDates = 0;
     hooks.onProgress?.({
       completedRebalanceDates,

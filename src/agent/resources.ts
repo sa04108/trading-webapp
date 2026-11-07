@@ -37,7 +37,7 @@ export interface ResourceSample {
   load: number;
   /** 가용량에서 이미 빠진 API 프로세스 RSS를 여유분으로 다시 차감하지 않는다. */
   parentRss?: number;
-  /** 회수 가능한 파일 캐시를 제외하지 않은 실제 하드 한도의 여유다. */
+  /** 하드 한도에서도 회수 가능한 깨끗한 파일 캐시를 제외한 여유다. */
   hardAvailable?: number;
 }
 
@@ -131,6 +131,7 @@ export function availableResources(
   const root = "/sys/fs/cgroup";
   let directory = path.resolve(root, `.${relative}`);
   if (!directory.startsWith(`${root}/`) && directory !== root) directory = root;
+  let serviceReclaimable: number | undefined;
   for (;;) {
     const cpuMax = read(path.join(directory, "cpu.max"))?.split(/\s+/);
     if (cpuMax?.[0] && cpuMax[0] !== "max" && Number(cpuMax[1]) > 0)
@@ -144,24 +145,34 @@ export function availableResources(
       : Math.min(high, hardLimit ?? Number.POSITIVE_INFINITY);
     const used = number(path.join(directory, "memory.current"));
     if (limit !== null) total = Math.min(total, limit);
-    if (hardLimit !== null && used !== null)
-      hardAvailable = Math.min(hardAvailable, Math.max(0, hardLimit - used));
-    if (limit !== null && used !== null) {
-      sampledCgroup = true;
-      // 스냅샷 파일을 읽고 남은 비활성 캐시를 워커의 상주 메모리로 계산하지 않는다.
-      // 쓰기 미완료 캐시와 활성 캐시는 회수 가능량에서 보수적으로 제외한다.
+    let reclaimable = 0;
+    if (used !== null) {
+      // 스냅샷 검증 직후에는 깨끗한 캐시도 active_file에 남는다. 이를 상주 입력으로
+      // 계산하면 유휴 상태에서 계속 메모리 대기한다. 두 파일 LRU를 함께 보되, 실제
+      // 프로세스에 매핑된 페이지와 쓰기 미완료 페이지는 회수 가능량에서 제외한다.
       const stat = server ? read(path.join(directory, "memory.stat")) ?? "" : "";
       const values = new Map(stat.split("\n").map((line): [string, number] => {
         const [key, raw] = line.split(/\s+/);
         return [key ?? "", Number(raw)];
       }));
-      const counters = ["inactive_file", "file_dirty", "file_writeback"]
+      const counters = ["inactive_file", "active_file", "file_dirty", "file_writeback", "file_mapped"]
         .map((key) => values.get(key));
-      const reclaimable = counters.every((value) => value !== undefined &&
+      reclaimable = counters.every((value) => value !== undefined &&
           Number.isFinite(value) && value >= 0)
-        ? Math.min(used, Math.max(0, counters[0]! - counters[1]! - counters[2]!)) : 0;
+        ? Math.min(used, Math.max(0, counters[0]! + counters[1]! - counters[2]! - counters[3]! - counters[4]!)) : 0;
+    }
+    // 상위 그룹의 캐시에는 memory.min으로 보호된 다른 서비스의 페이지도 섞인다.
+    // 이 서비스에서 확인한 회수 가능량까지만 상위 한도의 여유로 인정한다.
+    serviceReclaimable ??= reclaimable;
+    reclaimable = Math.min(reclaimable, serviceReclaimable);
+    if (limit !== null && used !== null) {
+      sampledCgroup = true;
       available = Math.min(available, Math.max(0, limit - used + reclaimable));
     }
+    // 현재 cache 점유만으로 하드 압력을 선언하면 커널이 회수할 기회도 없이 계산을
+    // 중단한다. 상주·매핑·dirty 페이지를 위한 64 MiB 여유 검사는 그대로 유지한다.
+    if (hardLimit !== null && used !== null)
+      hardAvailable = Math.min(hardAvailable, Math.max(0, hardLimit - used + reclaimable));
     if (directory === root) break;
     directory = path.dirname(directory);
   }

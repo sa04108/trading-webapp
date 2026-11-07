@@ -13,7 +13,7 @@ agent 최신 여부, 백테스트 결과의 호환성, 기간 검증의 일관�
 | --- | --- |
 | `src/agent` | 컨테이너 연결, 자원 측정, worker 관리, 스냅샷 캐시, 결과 전송 |
 | `src/runtime/modules` | 엔진·전략, 유니버스 준비, 데이터 조회·coverage 검사, 결과 파일 작성 |
-| `src/runtime/workers` | `preparation-child`, `preparation-runtime`, `backtest-child`, 취소 처리 |
+| `src/runtime/workers` | `preparation-child`, `universe-child`, `backtest-child`, 준비 런타임과 취소 처리 |
 | `src/runtime/shared/db` | 계산 데이터 조회 스키마, agent에 필요한 작업 스키마와 DB 연결 |
 | `src/server` | HTTP·인증·수집 API, 작업 배정, 사용자별 미리보기 소유권, 결과 수신·저장 |
 | `src/workers` | 서버 전용 스냅샷 게시와 결과 import |
@@ -42,7 +42,7 @@ agent는 `migrations/agent`로 작업 DB를 만들고 서버가 게시한 계산
 
 권장 분리 순서에 따라 전용 진입점, 공유 코드 이동, 경계 검사, 내용 기반 버전을 적용했다.
 
-`tsconfig.agent.json`의 진입점은 agent CLI와 두 계산 worker다. worker는 파일 경로로
+`tsconfig.agent.json`의 진입점은 agent CLI와 세 계산 worker다. worker는 파일 경로로
 fork되므로 import 그래프 외에 명시적으로 등록한다. `scripts/build-agent-client.mjs`는 Docker 내부 런타임 builder로 `dist/agent-runtime/quant-agent-runtime-linux-{x64|arm64}.tar.gz`와 manifest를 만든다. 이 archive는 서버 배포 archive나 사용자 다운로드로 전달하지 않는다. `scripts/lib/runtime-graph.mjs`는
 타입 전용 import를 제거한 실행 그래프를 추적한다. builder는 전용 컴파일 결과에서
 그 그래프에 속한 JS만 복사하고, 서버·웹 디렉터리가 들어오면 실패한다.
@@ -77,7 +77,7 @@ SHA-256이다. 이 SHA-256은 Git 커밋 SHA와 다른 값이다. 일반 TS 실�
 
 | 버전 | 변경을 반영하는 범위 | 사용하는 곳 |
 | --- | --- | --- |
-| `agentVersion` | CLI·상주 프로세스·두 worker 전체 실행 그래프, 전용 패키지·작업 DB·빌드 규칙 | 컨테이너 연결과 서버 버전 일치 확인 |
+| `agentVersion` | CLI·상주 프로세스·세 worker 전체 실행 그래프, 전용 패키지·작업 DB·빌드 규칙 | 컨테이너 연결과 서버 버전 일치 확인 |
 | `collectionVersion` | 실제 KRX·DART 수집 factory와 수집·정규화·저장 코드, 계산 DB 마이그레이션 | 수집 실행 출처, 스냅샷 메타데이터; 원천 재사용·HTTP 허용 기준 아님 |
 | `previewVersion` | 준비 worker의 실행 그래프 + `collectionVersion` | 미리보기 캐시의 재사용 |
 | `executionVersion` | 백테스트 worker의 엔진·전략·입력 처리·결과 작성 그래프 | 작업 임대, 결과 파일 검증·저장, 기간 검증의 실행 일치 |
@@ -209,3 +209,32 @@ manifest의 경고 요약은 최대 1,000개·항목당 4,000자를 유지한다
 이미지 안의 `agentVersion`은 서버와 통신할 실행 호환성 기준이며 이미지 digest는 배포 산출물의
 식별자다. 서버와 버전이 다르면 작업을 중단하고 최신 Windows CMD 설치 파일을 다시 실행하도록
 안내한다. 기존 native 패키지나 임대의 `collectionVersion`이 달라도 그 사실만으로 수집하지 않는다.
+
+
+## 유니버스 선정 분산
+
+프로토콜 4의 준비 리스 소유 에이전트가 전체 기간과 리밸런스 기준을 보존한 채 최대
+6개 기준일씩 계산을 요청한다. 서버는 유효한 준비 리스, 취소 상태, 원본 규칙·기간,
+고정된 스냅샷 버전을 확인하고 같은 버전을 가진 다른 원격 에이전트의 빈 슬롯에
+전달한다. 준비 리스 하나당 최대 4개, 서버 전체 최대 32개의 보조 작업만 보관한다.
+서버에는 계산 그래프나 가격 이력을 올리지 않으며 결과 병합은 리스 소유 에이전트가 맡는다.
+
+보조 작업에는 별도 토큰과 120초 기한이 있다. 만료·연결 해제·취소·준비 리스 교체 후의
+늦은 결과는 반영하지 않는다. 보조 장치가 없거나 실패한 부분은 소유 장치가 같은
+스냅샷으로 다시 계산한다. 수집이 필요하면 전체 준비 작업의 기존 NEEDS_DATA 흐름을
+따르며, 서로 다른 데이터 버전의 부분 결과를 섞지 않는다.
+
+에이전트 내부의 병렬화는 읽기 전용 SQLite 연결을 가진 worker thread로 수행한다.
+부모 프로세스 192 MiB와 워커당 256 MiB 예산, 배정받은 CPU 수를 만족할 때만
+2~4개 워커를 연다. 작은 서버는 추가 스레드 없이 기존 순차 경로를 사용한다.
+동시 수신 창도 최대 4개로 제한하고, 창이 끝나면 날짜 순으로 합쳐 중복 후보와 결손
+메타데이터를 해제한다. 보조 프로세스도 에이전트 슬롯·RSS 감시·스냅샷 보존·종료 대상이다.
+
+각 날짜 안에서는 기존 단계 순서와 전체 후보 순위를 유지한다. 병합은 원래 날짜 순서,
+첫 종목 식별자, BigInt 순위, 결손의 합집합을 보존한다. 리스 소유자는 결과 형식과
+할당 날짜·실제 거래일·종목 식별자를 검증하고, 서버는 기존 최종 미리보기의 데이터
+revision과 일정 hash를 검증한다. 동일 런타임의 등록 에이전트는 계산을 수행하는 신뢰
+경계에 포함되며, 서버가 순위를 전부 재계산하는 방식은 아니다.
+
+보유 상태·현금·미체결 주문·난수 상태를 이어 받는 백테스트 엔진의 날짜 순서는 유지한다.
+선정 단계의 분산과 일자별 거래 상태 전이를 구분하며, 날짜별 거래를 독립 실행하지 않는다.
