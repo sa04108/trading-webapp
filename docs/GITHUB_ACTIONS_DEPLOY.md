@@ -79,7 +79,7 @@ curl --fail-with-body --request POST \
 
 ## 배포와 복구
 
-standalone `pnpm run deploy`는 의존성을 설치하고 lint, typecheck, 전체 Vitest, 서버·웹 빌드를 완료한 뒤 서버만 SSH로 배포한다. 사용자용 native Linux Agent archive를 만들거나 게시하지 않는다. GitHub Actions production workflow는 Agent image version 준비 단계에서 `pnpm test:agent-package`로 내부 runtime archive와 실제 workload를 검증한 뒤 Docker multi-arch build/push를 수행하고 서버를 배포한다. 이 검증은 loopback 테스트 서버와 fixture 데이터를 사용하므로 공급자 API 자격증명은 필요하지 않다. E2E는 배포 검증에 포함되지 않는다.
+standalone `pnpm run deploy`는 의존성을 설치하고 lint, typecheck, 전체 Vitest(`pnpm test:all`: 일반 회귀 후 자원 검사), 서버·웹 빌드를 완료한 뒤 서버만 SSH로 배포한다. 사용자용 native Linux Agent archive를 만들거나 게시하지 않는다. GitHub Actions production workflow는 Agent image version 준비 단계에서 `pnpm test:agent-package`로 내부 runtime archive와 실제 workload를 검증한 뒤 Docker multi-arch build/push를 수행하고 서버를 배포한다. 이 검증은 loopback 테스트 서버와 fixture 데이터를 사용하므로 공급자 API 자격증명은 필요하지 않다. E2E는 배포 검증에 포함되지 않는다.
 
 워크플로는 DB 파일이나 운영 `app.env`를 GitHub로 업로드하지 않는다. 기존 원격 배포 스크립트가 서버에서 운영 DB 세트를 백업하고 `db:prepare`, 서비스 재시작, readiness 확인을 수행하며 실패 경로의 복구를 관리한다. 성공한 배포는 기존 스크립트의 백업 보존·정리 정책을 따른다.
 

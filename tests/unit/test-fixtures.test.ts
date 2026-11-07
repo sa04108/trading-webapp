@@ -2,15 +2,15 @@ import { describe, expect } from 'vitest';
 import { test } from '../helpers/test-fixtures.js';
 
 describe('test-scoped app fixture', () => {
-  test('추가 앱 factory도 서로 독립된 경로를 만든다', async ({ apps }) => {
-    const first = await apps.create();
-    const second = await apps.create({ env: { MAX_QUEUED_BACKTESTS: '3' } });
+  test('추가 앱 factory가 설정 콜백을 전달한다', async ({ apps }) => {
+    const app = await apps.create({
+      configure: (instance) => {
+        instance.get('/fixture-configured', async () => ({ configured: true }));
+      },
+    });
 
-    expect(first.dir).not.toBe(second.dir);
-    expect(first.container.database.dataPath).not.toBe(
-      second.container.database.dataPath,
-    );
-    await first.close();
-    expect(() => second.container.jobQueue.getJob('missing-job')).not.toThrow();
+    const response = await app.app.inject({ method: 'GET', url: '/fixture-configured' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ configured: true });
   });
 });

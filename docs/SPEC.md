@@ -207,7 +207,9 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 | 명령 | 검증 범위 |
 | --- | --- |
 | `pnpm lint`·`pnpm typecheck` | 정적 규칙과 서버·웹 타입 검사 |
-| `pnpm test` | Vitest의 `tests/unit`, `tests/integration`, `tests/architecture` |
+| `pnpm test` | 일반 회귀 검사: `tests/unit`, `tests/integration`, `tests/architecture` |
+| `pnpm test:resources` | `tests/resources`의 대용량 메모리 검사. 파일을 순차 실행하며 기존 입력·상한을 유지한다. |
+| `pnpm test:all` | 일반 회귀 검사 후 자원 검사. `devel` 병합 전 전체 검증과 서버 배포에서 필수 실행 |
 | `pnpm test:e2e` | 빌드 후 Playwright 브라우저 검증. 기본 배포 스크립트와 별도로 실행한다. |
 | `pnpm test:agent-package` | 내부 runtime archive를 저장소 밖에서 실행해 구성·의존성·준비·계산·결과 저장 계약 검증. GHCR image workflow에서 Docker build/push 전에 실행 |
 
@@ -215,4 +217,4 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 
 회귀 검증은 계산·시점 정합성, 준비 결과 보존·재사용, 버전 호환성, 임대·취소·복구·결과 반영, 인증·모듈 경계를 포함한다. 계약 변경 시 해당 테스트도 변경한다.
 
-standalone 서버 배포 게이트는 **설치 → lint → typecheck → 전체 Vitest → 서버·웹 build**다. GHCR Agent image workflow는 이미지 version 준비 단계에서 `pnpm test:agent-package`를 실행한 다음 multi-arch Docker build/push를 진행한다. 변경 영향별 테스트 선택 배포는 구현된 것으로 가정하지 않는다. 기준: [vitest.config.ts](../vitest.config.ts), [test-fixtures.ts](../tests/helpers/test-fixtures.ts)·[test-app.ts](../tests/helpers/test-app.ts), [build-release.sh](../scripts/build-release.sh).
+standalone 서버 배포 게이트는 **설치 → lint → typecheck → 전체 Vitest(`test:all`) → 서버·웹 build**다. GHCR Agent image workflow는 이미지 version 준비 단계에서 `pnpm test:agent-package`를 실행한 다음 multi-arch Docker build/push를 진행한다. 변경 영향별 테스트 선택 배포는 구현된 것으로 가정하지 않는다. 기준: [vitest.config.ts](../vitest.config.ts)·[vitest.resources.config.ts](../vitest.resources.config.ts), [test-fixtures.ts](../tests/helpers/test-fixtures.ts)·[test-app.ts](../tests/helpers/test-app.ts), [build-release.sh](../scripts/build-release.sh).

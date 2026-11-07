@@ -34,8 +34,10 @@ describe('UniverseRebalancingSection', () => {
 
   it('편입 숫자는 gain, 편출 숫자는 loss 색상이고 문구는 색과 별도로 남는다', () => {
     const html = renderToStaticMarkup(<UniverseRebalancingSection entries={entries} />);
-    expect(html).toContain('편입 <span class="text-gain tabular-nums">2</span>');
-    expect(html).toContain('편출 <span class="text-loss tabular-nums">1</span>');
+    const added = html.match(/편입 <span\b([^>]*)>2<\/span>/)?.[1] ?? '';
+    const removed = html.match(/편출 <span\b([^>]*)>1<\/span>/)?.[1] ?? '';
+    expect(added.match(/\sclass="([^"]*)"/)?.[1]?.split(/\s+/)).toContain('text-gain');
+    expect(removed.match(/\sclass="([^"]*)"/)?.[1]?.split(/\s+/)).toContain('text-loss');
   });
 
   it('일정이 없으면 카드를 렌더링하지 않는다', () => {

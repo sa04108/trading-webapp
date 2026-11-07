@@ -1,4 +1,4 @@
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { createTestAdmin, type TestApp } from '../helpers/test-app.js';
 import { authenticatedTest as it } from '../helpers/test-fixtures.js';
 
@@ -115,52 +115,59 @@ describe('backtest wizard draft routes', () => {
   });
 
   it('returns the latest unfinished context and can clear every context explicitly', async ({ ctx, cookie }) => {
-    await ctx.app.inject({
-      method: 'PUT',
-      url: '/api/v1/backtests/wizard-draft/strategy',
-      cookies: { session: cookie },
-      payload: { strategyId: 'range-breakout', parameters: {}, currentStep: 'period' },
-    });
-    await new Promise((resolve) => setTimeout(resolve, 2));
-    await ctx.app.inject({
-      method: 'PUT',
-      url: '/api/v1/backtests/wizard-draft/strategy?sourceJobId=bt_source',
-      cookies: { session: cookie },
-      payload: { strategyId: 'range-breakout', parameters: {}, currentStep: 'review' },
-    });
+    const now = ctx.container.clock.now();
+    const clock = vi.spyOn(ctx.container.clock, 'now');
+    clock.mockReturnValue(now);
+    try {
+      await ctx.app.inject({
+        method: 'PUT',
+        url: '/api/v1/backtests/wizard-draft/strategy',
+        cookies: { session: cookie },
+        payload: { strategyId: 'range-breakout', parameters: {}, currentStep: 'period' },
+      });
+      clock.mockReturnValue(now + 1);
+      await ctx.app.inject({
+        method: 'PUT',
+        url: '/api/v1/backtests/wizard-draft/strategy?sourceJobId=bt_source',
+        cookies: { session: cookie },
+        payload: { strategyId: 'range-breakout', parameters: {}, currentStep: 'review' },
+      });
 
-    const candidate = await ctx.app.inject({
-      method: 'GET',
-      url: '/api/v1/backtests/wizard-draft',
-      cookies: { session: cookie },
-    });
-    expect(candidate.statusCode).toBe(200);
-    expect(candidate.json().candidate).toMatchObject({
-      sourceJobId: 'bt_source',
-      currentStep: 'review',
-      updatedAtMs: expect.any(Number),
-    });
-
-    const removed = await ctx.app.inject({
-      method: 'DELETE',
-      url: '/api/v1/backtests/wizard-draft?all=true',
-      cookies: { session: cookie },
-    });
-    expect(removed.statusCode).toBe(204);
-
-    const emptyCandidate = await ctx.app.inject({
-      method: 'GET',
-      url: '/api/v1/backtests/wizard-draft',
-      cookies: { session: cookie },
-    });
-    expect(emptyCandidate.json()).toEqual({ candidate: null });
-    for (const query of ['', '?sourceJobId=bt_source']) {
-      const response = await ctx.app.inject({
+      const candidate = await ctx.app.inject({
         method: 'GET',
-        url: `/api/v1/backtests/wizard-draft/strategy${query}`,
+        url: '/api/v1/backtests/wizard-draft',
         cookies: { session: cookie },
       });
-      expect(response.json()).toEqual({ draft: null });
+      expect(candidate.statusCode).toBe(200);
+      expect(candidate.json().candidate).toMatchObject({
+        sourceJobId: 'bt_source',
+        currentStep: 'review',
+        updatedAtMs: expect.any(Number),
+      });
+
+      const removed = await ctx.app.inject({
+        method: 'DELETE',
+        url: '/api/v1/backtests/wizard-draft?all=true',
+        cookies: { session: cookie },
+      });
+      expect(removed.statusCode).toBe(204);
+
+      const emptyCandidate = await ctx.app.inject({
+        method: 'GET',
+        url: '/api/v1/backtests/wizard-draft',
+        cookies: { session: cookie },
+      });
+      expect(emptyCandidate.json()).toEqual({ candidate: null });
+      for (const query of ['', '?sourceJobId=bt_source']) {
+        const response = await ctx.app.inject({
+          method: 'GET',
+          url: `/api/v1/backtests/wizard-draft/strategy${query}`,
+          cookies: { session: cookie },
+        });
+        expect(response.json()).toEqual({ draft: null });
+      }
+    } finally {
+      clock.mockRestore();
     }
   });
 

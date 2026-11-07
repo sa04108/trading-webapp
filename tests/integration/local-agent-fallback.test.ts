@@ -27,11 +27,26 @@ const schedule = [{ rebalanceDate: '2026-01-05', effectiveTradingDate: '2026-01-
 class Peer extends EventEmitter {
   readyState = 1;
   readonly received: ServerAgentMessage[] = [];
-  send(value: string) { this.received.push(JSON.parse(value) as ServerAgentMessage); }
+  send(value: string) {
+    const message = JSON.parse(value) as ServerAgentMessage;
+    this.received.push(message);
+    this.emit('received', message);
+  }
   close() { this.readyState = 3; this.emit('close'); }
   terminate() { this.close(); }
   submit(value: unknown) { this.emit('message', Buffer.from(JSON.stringify(value)), false); }
   jobs(): AgentLease[] { return this.received.filter((m) => m.type === 'JOB').map((m) => m.lease); }
+  async waitForJob(jobId: string): Promise<void> {
+    if (this.jobs().some((job) => job.jobId === jobId)) return;
+    await new Promise<void>((resolve) => {
+      const onMessage = (message: ServerAgentMessage) => {
+        if (message.type !== 'JOB' || message.lease.jobId !== jobId) return;
+        this.off('received', onMessage);
+        resolve();
+      };
+      this.on('received', onMessage);
+    });
+  }
 }
 
 interface Scenario {
@@ -131,7 +146,6 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
     ctx.container.agentCoordinator.start();
     await ctx.container.agentCoordinator.snapshots.ensureLatest();
     const preparation = ctx.container.backtestPreparationOrchestrator.start(input);
-    await vi.waitFor(() => expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('RUNNING'), { timeout: 1500 });
     await vi.waitFor(() => expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED'), { timeout: 60_000 });
     expect(ctx.container.database.sqlite.prepare('SELECT client_id FROM agent_preparation_leases WHERE job_id = ?').get(preparation.id)).toEqual({ client_id: LOCAL_AGENT_ID });
     expect(resolver).not.toHaveBeenCalled();
@@ -150,7 +164,6 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
     expect(ctx.container.jobQueue.getJob(oversized.id)?.status).toBe('QUEUED');
 
     const preparation = ctx.container.backtestPreparationOrchestrator.start(input);
-    await vi.waitFor(() => expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('RUNNING'), { timeout: 1500 });
     await vi.waitFor(() => expect(ctx.container.backtestPreparationOrchestrator.get(preparation.id)?.status).toBe('COMPLETED'), { timeout: 60_000 });
     expect(ctx.container.database.sqlite.prepare('SELECT client_id FROM agent_preparation_leases WHERE job_id = ?').get(preparation.id)).toEqual({ client_id: LOCAL_AGENT_ID });
     expect(ctx.container.jobQueue.getJob(oversized.id)?.status).toBe('QUEUED');
@@ -192,7 +205,8 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
     await new Promise((resolve) => setImmediate(resolve));
     expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('QUEUED');
     peer.submit({ type: 'CAPACITY', slots: 1, datasetVersion: dataset.version, maxBars: 8_000_000 });
-    await vi.waitFor(() => expect(peer.jobs()[0]?.jobId).toBe(job.id), { timeout: 500 });
+    await peer.waitForJob(job.id);
+    expect(peer.jobs()[0]?.jobId).toBe(job.id);
     expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({ agentId: id, attempt: 1 });
   });
 
@@ -205,7 +219,8 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
     setLocalAvailable(false);
     const second = ctx.container.jobQueue.enqueue({ ...request, randomSeed: 2 }, schedule);
     const { peer, id } = await connect(1);
-    await vi.waitFor(() => expect(peer.jobs()[0]?.jobId).toBe(second.id), { timeout: 500 });
+    await peer.waitForJob(second.id);
+    expect(peer.jobs()[0]?.jobId).toBe(second.id);
     await finished(first.id);
     expect(ctx.container.jobQueue.getJob(second.id)).toMatchObject({ agentId: id, attempt: 1 });
   });

@@ -79,7 +79,7 @@ fi
       'install --frozen-lockfile',
       'lint',
       'typecheck',
-      'test',
+      'test:all',
       'build',
     ]);
     expect(fs.readFileSync(headCheckLog, 'utf8').trim().split('\n')).toHaveLength(2);

@@ -284,6 +284,22 @@ test('기간의 벤치마크가 부족하면 동기화 완료 전까지 유니�
 test('기간 확인 중 입력이 바뀌면 이전 응답으로 다음 단계를 열지 않는다', async ({ page }) => {
   await login(page);
 
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch;
+    window.fetch = async (...args) => {
+      const response = await originalFetch(...args);
+      if (response.url.includes('/api/v1/benchmarks?')) {
+        const originalJson = response.json.bind(response);
+        response.json = async () => {
+          const body: unknown = await originalJson();
+          // 응답을 소비한 비동기 연속 작업을 마친 뒤 다음 브라우저 작업에서 알린다.
+          setTimeout(() => { document.documentElement.dataset.benchmarkResponseHandled = 'true'; }, 0);
+          return body;
+        };
+      }
+      return response;
+    };
+  });
   let releaseFirst!: () => void;
   let markFirstRequested!: () => void;
   const firstRequested = new Promise<void>((resolve) => { markFirstRequested = resolve; });
@@ -326,7 +342,8 @@ test('기간 확인 중 입력이 바뀌면 이전 응답으로 다음 단계를
 
   await page.getByLabel('종료일').fill('2026-01-12');
   releaseFirst();
-  await page.waitForTimeout(100);
+  await page.waitForFunction(() => document.documentElement.dataset.benchmarkResponseHandled === 'true');
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
   await expect(page).toHaveURL(/\/backtests\/new\/period$/);
 
   await page.getByRole('button', { name: '다음' }).click();

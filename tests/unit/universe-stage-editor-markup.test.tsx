@@ -117,9 +117,21 @@ describe('방향 선택', () => {
       { criterion: 'DECLINE', direction: 'HIGH', limit: 50, lookbackTradingDays: 20 },
     ]);
     expect(html).toContain('id="stage-direction-0"');
-    expect(html).toContain('<option value="HIGH" selected="">상위</option><option value="LOW">하위</option>');
-    expect(html).toContain('<option value="LOW" selected="">낮음</option><option value="HIGH">높음</option>');
-    expect(html).toContain('<option value="HIGH" selected="">급상승</option><option value="LOW">급하락</option>');
+    for (const [index, expected] of [
+      [['HIGH', '상위', true], ['LOW', '하위', false]],
+      [['LOW', '낮음', true], ['HIGH', '높음', false]],
+      [['HIGH', '급상승', true], ['LOW', '급하락', false]],
+    ].entries()) {
+      const select = html.match(new RegExp(`<select\\b(?=[^>]*\\sid="stage-direction-${index}"(?=\\s|>))[^>]*>(.*?)</select>`));
+      expect(select?.[1]).toBeDefined();
+      const options = [...(select?.[1] ?? '').matchAll(/<option\b([^>]*)>([^<]*)<\/option>/g)]
+        .map(([, attributes = '', label]) => [
+          attributes.match(/\svalue="([^"]*)"(?=\s|$)/)?.[1],
+          label,
+          /\sselected(?:="[^"]*")?(?=\s|$)/.test(attributes),
+        ]);
+      expect(options).toEqual(expected);
+    }
   });
 });
 
@@ -140,7 +152,7 @@ describe('리밸런스 주기와 기간 정합성', () => {
       { ...DEFAULT_UNIVERSE_RULE, rebalanceInterval: { unit: 'NONE', value: 1 } },
     );
     expect(html).toContain('백테스트 시작에 아래 단계를 한 번 적용하고 종목을 유지');
-    expect(html).toContain('max="1" disabled="" name="rebalanceIntervalValue"');
+    expect(html).toMatch(/<input\b(?=[^>]*\sname="rebalanceIntervalValue"(?=\s|\/?>))(?=[^>]*\smax="1"(?=\s|\/?>))(?=[^>]*\sdisabled(?:="[^"]*")?(?=\s|>))[^>]*>/);
   });
 
   it('10일짜리 기간에 1개월 주기를 넣으면 rebalanceIntervalFitsPeriod 가 false 다', () => {
@@ -154,13 +166,13 @@ describe('리밸런스 주기와 기간 정합성', () => {
 
   it('그 기간에서는 미리보기 버튼이 비활성화되고 오류가 보인다', () => {
     const html = renderRuleStep({ from: '2026-08-01', to: '2026-08-10' });
-    expect(html).toContain('disabled="">미리보기</button>');
+    expect(html).toMatch(/<button\b(?=[^>]*\sdisabled(?:="[^"]*")?(?=\s|>))[^>]*>미리보기<\/button>/);
     expect(html).toContain('리밸런스 주기');
     expect(html).toContain('role="alert"');
   });
 
   it('주기가 기간에 맞으면 그 오류가 없다', () => {
     const html = renderRuleStep({ from: '2026-01-01', to: '2026-12-31' });
-    expect(html).not.toContain('disabled="">미리보기</button>');
+    expect(html).toMatch(/<button\b(?![^>]*\sdisabled(?:="[^"]*")?(?=\s|>))[^>]*>미리보기<\/button>/);
   });
 });
