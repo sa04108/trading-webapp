@@ -300,9 +300,21 @@ docker --context desktop-linux logs --tail 100 <컨테이너 이름>
 ```bash
 pnpm lint
 pnpm typecheck
-pnpm test
+pnpm test:all
 pnpm build
 ```
+
+검사는 역할과 실행 비용에 따라 나눈다.
+
+| 명령 | 범위와 실행 시점 |
+| --- | --- |
+| `pnpm test` | 단위·일반 통합·아키텍처 회귀 검사. 개발 중 기본 실행 |
+| `pnpm test:resources` | `tests/resources`의 대용량 메모리 검사. 파일 하나씩 실행 |
+| `pnpm test:all` | 일반 회귀 검사 후 대용량 메모리 검사. `devel` 병합 전 전체 검증과 서버 배포의 필수 검사 |
+
+대용량 검사 3개는 기존 입력 규모·결과·메모리 상한을 유지한다. 일반 회귀 검사에
+대용량 DB 생성과 반복 계산을 섞지 않되, 배포 스크립트는 `test:all`로 모두 실행한다.
+새 테스트의 추가·통합·삭제 기준은 [AGENTS.md](AGENTS.md)의 검증 정책을 따른다.
 
 UI 동작은 별도로 E2E를 실행한다. 브라우저와 OS 의존성 설치는 해당 환경에서 최초 1회 필요하다.
 
@@ -350,7 +362,7 @@ git log -1 --oneline
 pnpm run deploy
 ```
 
-명령 내부에서 **의존성 설치 → lint → typecheck → 전체 Vitest → 서버·웹 빌드 → SSH 배포**를 수행한다. GitHub Actions production workflow는 Agent 내부 runtime과 workload를 검증한 뒤 GHCR multi-arch image를 빌드·게시하고 서버 배포 성공 후 latest로 승격한다. E2E는 자동 포함되지 않는다. 완료 후 [정상 동작 확인](#36-정상-동작-확인과-첫-실행)을 반복하며, 기존 관리자를 다시 생성하지 않는다.
+명령 내부에서 **의존성 설치 → lint → typecheck → 전체 Vitest(`test:all`) → 서버·웹 빌드 → SSH 배포**를 수행한다. GitHub Actions production workflow는 Agent 내부 runtime과 workload를 검증한 뒤 GHCR multi-arch image를 빌드·게시하고 서버 배포 성공 후 latest로 승격한다. E2E는 자동 포함되지 않는다. 완료 후 [정상 동작 확인](#36-정상-동작-확인과-첫-실행)을 반복하며, 기존 관리자를 다시 생성하지 않는다.
 
 실패 시 오류 출력을 먼저 확인한다. commit 단계 전 실패하면 코드·DB 복원을 시도하지만, **복원 실패나 finalize 실패까지 모두 이전 상태로 되돌아갔다고 가정하지 않는다.** 서비스·로그·실제 배포 버전을 확인한 뒤 후속 작업을 결정한다. 명령의 기준은 [build-release.sh](scripts/build-release.sh)와 [deploy.sh](scripts/deploy.sh)다.
 

@@ -319,13 +319,15 @@ KRX는 [공식 거래일력](krx-trading-calendar.md)으로 휴장과 게시 전
 
 ### 월별 유니버스 선정 메모리 회귀 검사
 
-`tests/integration/universe-preparation-memory.test.ts`는 실제 SQLite 마이그레이션·저장소로
+`pnpm test:resources`로 실행하는 `tests/resources/universe-preparation-memory.test.ts`는
+실제 SQLite 마이그레이션·저장소로
 합성 KOSPI 900종목, 2016~2025년 월별 120회 선정을 실행한다. 시총 HIGH 200개를 좁힌 뒤
 최근 20거래일 가격변동 HIGH 50개를 고른다. 2015년 가격 warm-up과 분기별 자본변동을
 포함하며, 직렬 실행과 두 워커 실행의 READY·종목 제외·NEEDS_DATA 결과를 비교한다.
 각 자식은 old-space 128 MiB와 semi-space 4 MiB로 실행하고 직렬 RSS 320 MiB 미만,
 두 워커 RSS 700 MiB 미만을 검사한다. 두 워커 검사는 에이전트 내부 병렬 경로에 대한
 검사이며 작은 운영 서버의 기본 동시 실행 수를 늘리지 않는다.
+자원 검사 파일은 서로 순차 실행하며 `pnpm test:all`을 통해 서버 배포 검증에도 포함된다.
 
 운영 데이터로 확인할 때는 데이터 수집과 스냅샷 게시 후 남은 파일 캐시도 같은 cgroup에
 포함해야 한다. 계산 함수만 실행하거나 다른 cgroup이 이미 캐시한 DB만 읽으면 실제 서버의

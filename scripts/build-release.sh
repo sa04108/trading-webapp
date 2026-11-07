@@ -93,7 +93,7 @@ build_release() {
     pnpm install --frozen-lockfile
     pnpm lint
     pnpm typecheck
-    pnpm test
+    pnpm test:all
     pnpm build
   )
   require_clean_worktree
