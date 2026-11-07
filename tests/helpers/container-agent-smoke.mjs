@@ -9,6 +9,7 @@ import { setTimeout, clearTimeout } from 'node:timers';
 // 최종 이미지 안에서 실제 CLI·환경변수·네이티브 모듈·WSS 프로토콜을 확인한다.
 const require = createRequire('/opt/quant-agent/package.json');
 const { WebSocketServer } = require('ws');
+const { AGENT_PROTOCOL_VERSION } = await import('/opt/quant-agent/dist/shared/agent-protocol.js');
 const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
 await new Promise(resolve => server.once('listening', resolve));
 const token = 'container-smoke-token-'.padEnd(48, 't');
@@ -31,7 +32,7 @@ try {
           if (message.type === 'HELLO') {
             const versions = JSON.parse(fs.readFileSync('/opt/quant-agent/dist/runtime-versions.json', 'utf8'));
             assert.equal(message.runnerVersion, versions.agentVersion);
-            assert.equal(message.protocolVersion, 3);
+            assert.equal(message.protocolVersion, AGENT_PROTOCOL_VERSION);
             socket.send(JSON.stringify({ type: 'WELCOME', runnerVersion: versions.agentVersion }));
           }
           if (message.type === 'CAPACITY') resolve();
