@@ -27,7 +27,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { api, ApiError, postJson, postJsonWithStatus } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage, postJson, postJsonWithStatus } from "@/lib/api-client";
 import { rebalanceIntervalFitsPeriod } from "../../../shared/schemas/rebalance-interval.js";
 import type {
   RebalanceInterval,
@@ -205,11 +205,11 @@ export interface UniverseRuleStepProps {
     readonly result: UniversePreviewResponseDto;
   } | null;
   /**
-   * 제출이 409 PREPARATION_REQUIRED 로 거절되면 부모가 이 값을 올려 새 준비 요청을
-   * 시작하라고 신호한다(Task 10, 브리프 5번). 값 자체(증가하는 정수)는 의미가 없다 —
-   * "이전에 본 값보다 커졌다" 만 새 시도의 신호다.
+   * 제출 거절 사유를 확인한 사용자가 재확인을 선택하면 부모가 올리는 요청 번호다.
    */
   previewRetryToken: number;
+  /** 부모가 소비 기록을 보관한다. 같은 번호를 다시 받으면 false를 반환한다. */
+  consumePreviewRetry: (token: number) => boolean;
   /**
    * 미리보기가 성공할 때마다(재동기화 뒤 재시도 포함) 그때 실제로 쓴 params 와 결과를
    * 그대로 올려 보낸다. **유효성 판정 자체는 하지 않는다** — 부모가 지금 값과 비교해
@@ -257,6 +257,7 @@ export function UniverseRuleStep({
   parameters,
   initialResolved = null,
   previewRetryToken,
+  consumePreviewRetry,
   onPreviewResolved,
 }: UniverseRuleStepProps) {
   const queryClient = useQueryClient();
@@ -292,9 +293,6 @@ export function UniverseRuleStep({
   // 그 job 을 시작시킨 params — COMPLETED 가 왔을 때 "지금 값과 여전히 같은가" 를
   // 판정하는 데 쓴다. ref 인 이유: 이 값이 바뀐다고 다시 그릴 것이 없다.
   const preparingParamsRef = useRef<PreviewParams | null>(null);
-  // 부모가 올려주는 previewRetryToken(브리프 5번, 409 PREPARATION_REQUIRED) 을
-  // 최근 처리한 값 — 매 렌더 다시 시작하지 않게 막는다.
-  const lastHandledRetryToken = useRef(0);
 
   const previewMutation = useMutation({
     mutationFn: (
@@ -376,16 +374,15 @@ export function UniverseRuleStep({
     // 이 컴포넌트도 다시 그려지므로, 그 렌더에서 만든 currentParams 가 여기 쓰인다).
   }, [liveJob?.status]);
 
-  // 부모가 준비 요청을 다시 시작하라고 신호하면(제출 409 PREPARATION_REQUIRED,
-  // 브리프 5번) 지금 값으로 미리보기를 다시 부른다. 아직 준비되지 않은 입력
-  // (기간·전략·파라미터 중 하나라도 비어 있으면)이면 시도하지 않는다.
+  // 사용자가 선택한 재확인만 한 번 시작한다. 소비 여부는 단계 전환 뒤에도 살아 있는
+  // 부모가 판정하므로 화면 재진입이나 StrictMode effect 재실행이 요청을 반복하지 않는다.
   useEffect(() => {
-    if (previewRetryToken <= lastHandledRetryToken.current) return;
-    lastHandledRetryToken.current = previewRetryToken;
-    if (strategyReady && paramsReady) runPreview(currentParams);
-    // 의존성은 previewRetryToken 뿐이다 — 위 effect 와 같은 이유로 currentParams 는
-    // 최신 렌더의 클로저 값을 그대로 쓴다.
-  }, [previewRetryToken]);
+    if (!consumePreviewRetry(previewRetryToken)) return;
+    if (strategyReady && paramsReady && period.from !== "" && period.to !== "") {
+      runPreview(currentParams);
+    }
+    // 입력 편집만으로는 시작하지 않는다. 요청 시점 렌더의 최신 입력을 사용한다.
+  }, [previewRetryToken, consumePreviewRetry]);
 
   const preview = resolved?.result ?? null;
   // 이 컴포넌트가 화면에 떠 있는 동안 "다시 미리보기하세요" 안내를 보여줄 뿐이다 —
@@ -772,9 +769,12 @@ export function UniverseRuleStep({
           {previewMutation.isError ? (
             <Alert variant="destructive" role="alert">
               <AlertDescription>
-                {previewMutation.error instanceof ApiError
-                  ? previewMutation.error.message
-                  : "미리보기에 실패했습니다"}
+                {apiErrorMessage(
+                  previewMutation.error,
+                  previewMutation.error instanceof ApiError
+                    ? previewMutation.error.message
+                    : "미리보기에 실패했습니다",
+                )}
               </AlertDescription>
             </Alert>
           ) : null}
