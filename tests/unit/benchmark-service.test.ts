@@ -13,6 +13,7 @@ import {
   symbolMasterTradingDays,
 } from '../../src/runtime/shared/db/schema.js';
 import type { Logger } from '../../src/server/shared/logger.js';
+import { ProviderRequestBlockedError } from '../../src/runtime/shared/provider-request-blocked-error.js';
 
 const logger = {
   debug() {}, info() {}, warn() {}, error() {},
@@ -181,6 +182,72 @@ describe('벤치마크 저장과 결과 비교', () => {
         points: [
           { date: '2026-01-02', close: 3_100 },
           { date: '2026-01-06', close: 3_120 },
+        ],
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it('빈 KRX 응답 대기를 실패 날짜와 원래 공급자 근거로 설명하고 해당 날짜부터 다시 동기화한다', async () => {
+    const database = openDatabase(':memory:');
+    const originalError = new ProviderRequestBlockedError(
+      'PENDING_PUBLICATION',
+      'fingerprint-123',
+      'KRX_EMPTY_PENDING:{"calendar":{"state":"OPEN"},"fetchedAtMs":123}',
+    );
+    let shouldBlock = true;
+    const errorLogs: Array<Record<string, unknown>> = [];
+    const fetchBenchmarkClose = vi.fn(async (_id: 'KOSPI' | 'KOSDAQ', date: string) => {
+      if (date === '2026-01-05' && shouldBlock) throw originalError;
+      return date === '2026-01-02' ? 3_100 : 3_120;
+    });
+    const service = new BenchmarkService({
+      db: database.db,
+      krxSource: {
+        fetchIssueBaseInfo: async () => [],
+        fetchDailyTrades: async () => [],
+        fetchBenchmarkClose,
+        todayMaxEndpointCallCount: () => 0,
+      },
+      fredSource: { fetchBenchmarkRange: async () => [] },
+      clock: { now: () => 456 },
+      logger: {
+        ...logger,
+        error: (context: Record<string, unknown>) => errorLogs.push(context),
+      } as Logger,
+    });
+
+    try {
+      service.startBackfill('KOSPI', '2026-01-02', '2026-01-05');
+      await vi.waitFor(() => expect(service.backfillStatus().state).toBe('FAILED'));
+
+      const failed = service.backfillStatus();
+      expect(failed).toMatchObject({
+        benchmarkId: 'KOSPI', state: 'FAILED', cursorDate: '2026-01-05',
+        from: '2026-01-02', to: '2026-01-05',
+      });
+      expect(failed.error).toContain('코스피 (KOSPI) 2026-01-05');
+      expect(failed.error).toContain(originalError.message);
+      expect(failed.error).toContain('KRX 응답이 비어 있어 수집을 중단했습니다. 미게시로 추정한 상태이며 실제 미게시 여부는 확인되지 않았습니다. 자동으로 수집 중인 상태가 아니므로 이후 다시 동기화해 주세요.');
+      expect(service.status('KOSPI', '2026-01-02', '2026-01-05')).toMatchObject({
+        covered: false,
+        points: [{ date: '2026-01-02', close: 3_100 }],
+      });
+      expect(errorLogs[0]).toMatchObject({
+        benchmarkId: 'KOSPI', from: '2026-01-02', to: '2026-01-05',
+        date: '2026-01-05', error: expect.stringContaining(originalError.message),
+      });
+
+      shouldBlock = false;
+      service.startBackfill('KOSPI', '2026-01-05', '2026-01-05');
+      await vi.waitFor(() => expect(service.backfillStatus().state).toBe('IDLE'));
+      expect(fetchBenchmarkClose).toHaveBeenLastCalledWith('KOSPI', '2026-01-05');
+      expect(service.status('KOSPI', '2026-01-02', '2026-01-05')).toMatchObject({
+        covered: true,
+        points: [
+          { date: '2026-01-02', close: 3_100 },
+          { date: '2026-01-05', close: 3_120 },
         ],
       });
     } finally {

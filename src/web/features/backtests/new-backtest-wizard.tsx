@@ -660,9 +660,13 @@ export function NewBacktestWizard() {
         `/benchmarks?${new URLSearchParams({ benchmarkId, from, to })}`,
       ),
     // 복원된 초안의 확인 기록은 현재 커버리지를 보장하지 않으므로 검토·실행에서 재조회한다.
-    enabled:
+    // 화면 복귀 때 초안은 동기화 필요 표시를 초기화하지만 캐시의 수집 상태는 남는다.
+    // 표시 중인 작업은 계속 조회해야 과거 RUNNING으로 버튼이 영구히 잠기지 않는다.
+    enabled: (query) =>
       benchmarkCheckActive &&
-      benchmarkCheckRequired &&
+      (benchmarkCheckRequired ||
+        query.state.data?.backfill.state === "RUNNING" ||
+        query.state.data?.backfill.state === "FAILED") &&
       Boolean(from && to && from <= to),
     staleTime: 0,
     refetchInterval: (query) =>
@@ -698,9 +702,26 @@ export function NewBacktestWizard() {
       setStepError(error.message || "벤치마크 동기화를 시작하지 못했습니다");
     },
   });
+  const backfillStatus = benchmarkCoverage.data?.backfill;
+  const acceptedBackfill = benchmarkBackfill.data;
+  // 서버는 한 번에 하나만 수집하므로 시작 요청에 다른 기간의 기존 작업이 반환될 수 있다.
+  // 그 작업을 기다렸다면 종료 오류도 같은 화면에서 설명한다.
+  const benchmarkBackfillFailed =
+    benchmarkCheckActive &&
+    !benchmarkBackfill.isPending &&
+    backfillStatus?.state === "FAILED" &&
+    ((backfillStatus.benchmarkId === benchmarkId &&
+      backfillStatus.from === from &&
+      backfillStatus.to === to) ||
+      (benchmarkBackfill.variables?.benchmarkId === benchmarkId &&
+        benchmarkBackfill.variables.from === from &&
+        benchmarkBackfill.variables.to === to &&
+        acceptedBackfill?.benchmarkId === backfillStatus.benchmarkId &&
+        acceptedBackfill?.from === backfillStatus.from &&
+        acceptedBackfill?.to === backfillStatus.to));
   const benchmarkNeedsSync =
     benchmarkCheckActive &&
-    benchmarkCheckRequired &&
+    (benchmarkCheckRequired || benchmarkBackfillFailed) &&
     !benchmarkCoverage.isError &&
     benchmarkCoverage.data?.covered === false;
   const benchmarkSyncing =
@@ -708,13 +729,12 @@ export function NewBacktestWizard() {
     (benchmarkBackfill.isPending ||
       (!benchmarkCoverage.isError &&
         benchmarkCoverage.data?.backfill.state === "RUNNING"));
-  const benchmarkCoverageFailed =
-    benchmarkCheckActive && benchmarkCheckRequired && benchmarkCoverage.isError;
-  const benchmarkBackfillFailed =
-    benchmarkCoverage.data?.backfill.state === "FAILED" &&
-    benchmarkCoverage.data.backfill.benchmarkId === benchmarkId &&
-    benchmarkCoverage.data.backfill.from === from &&
-    benchmarkCoverage.data.backfill.to === to;
+  const benchmarkCoverageFailed = benchmarkCheckActive && benchmarkCoverage.isError;
+  const benchmarkFailureMessage = benchmarkBackfillFailed
+    ? `벤치마크 동기화에 실패했습니다 — ${backfillStatus?.benchmarkId ? BENCHMARK_NAMES[backfillStatus.benchmarkId] : "벤치마크"} · ${backfillStatus?.cursorDate ?? "날짜 확인 불가"}\n${backfillStatus?.error ?? "알 수 없는 오류"}`
+    : benchmarkCoverageFailed
+      ? `벤치마크 수집 상태를 확인하지 못했습니다 — ${benchmarkCoverage.error.message}. 다시 확인해 주세요.`
+      : null;
 
   useEffect(() => {
     if (
@@ -1443,20 +1463,17 @@ export function NewBacktestWizard() {
               </div>
             </CardContent>
           </Card>
-          {benchmarkBackfillFailed ? (
+          {benchmarkFailureMessage ? (
             <Alert variant="destructive" role="alert">
-              <AlertDescription>
-                벤치마크 동기화에 실패했습니다 —{" "}
-                {benchmarkCoverage.data?.backfill.error ?? "알 수 없는 오류"}
+              <AlertDescription className="whitespace-pre-wrap break-all">
+                {benchmarkFailureMessage}
               </AlertDescription>
             </Alert>
-          ) : null}
-          {benchmarkCoverageFailed ? (
-            <Alert variant="destructive" role="alert">
+          ) : benchmarkSyncing ? (
+            <Alert role="status">
               <AlertDescription>
-                {benchmarkCoverage.error instanceof Error
-                  ? benchmarkCoverage.error.message
-                  : "벤치마크 기간을 다시 확인하지 못했습니다"}
+                벤치마크 기간 데이터를 동기화하고 있습니다.
+                {backfillStatus?.cursorDate ? ` · ${backfillStatus.cursorDate}` : ""}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -1603,22 +1620,19 @@ export function NewBacktestWizard() {
                 ? "destructive"
                 : "default"
             }
-            role="status"
+            role={benchmarkFailureMessage ? "alert" : "status"}
           >
-            <AlertDescription>
-              {benchmarkSyncing
-                ? "벤치마크 기간 데이터를 동기화하고 있습니다."
-                : benchmarkCoverage.isFetching
-                  ? "벤치마크 기간 동기화 여부를 확인하고 있습니다."
-                  : benchmarkCoverageFailed
-                    ? "벤치마크 기간을 확인하지 못했습니다. 다시 확인해 주세요."
-                    : benchmarkBackfillFailed
-                      ? `벤치마크 동기화에 실패했습니다 — ${benchmarkCoverage.data?.backfill.error ?? "알 수 없는 오류"}`
-                      : benchmarkNeedsSync
-                        ? "벤치마크 기간 데이터가 부족합니다. 동기화한 뒤 진행하세요."
-                        : benchmarkCoverage.data?.covered
-                          ? "벤치마크 기간 동기화를 확인했습니다."
-                          : "벤치마크 기간 확인이 필요합니다."}
+            <AlertDescription className="whitespace-pre-wrap break-all">
+              {benchmarkFailureMessage ??
+                (benchmarkSyncing
+                  ? `벤치마크 기간 데이터를 동기화하고 있습니다.${backfillStatus?.cursorDate ? ` · ${backfillStatus.cursorDate}` : ""}`
+                  : benchmarkCoverage.isFetching
+                    ? "벤치마크 기간 동기화 여부를 확인하고 있습니다."
+                    : benchmarkNeedsSync
+                      ? "벤치마크 기간 데이터가 부족합니다. 동기화한 뒤 진행하세요."
+                      : benchmarkCoverage.data?.covered
+                        ? "벤치마크 기간 동기화를 확인했습니다."
+                        : "벤치마크 기간 확인이 필요합니다.")}
             </AlertDescription>
           </Alert>
           {reusingSourcePreview ? (
@@ -1788,7 +1802,9 @@ export function NewBacktestWizard() {
             {benchmarkSyncing
               ? "동기화 중…"
               : benchmarkNeedsSync
-                ? "동기화"
+                ? benchmarkBackfillFailed
+                  ? "동기화 다시 시도"
+                  : "동기화"
                 : benchmarkCoverageFailed
                   ? "다시 확인"
                   : benchmarkCheckActive && benchmarkCoverage.isFetching
