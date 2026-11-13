@@ -26,6 +26,7 @@ import {
   type FredBenchmarkSource,
   type KrxHistoricalUniverseSource,
 } from "../../../../runtime/modules/market-data/application/ports.js";
+import { ProviderRequestBlockedError } from "../../../../runtime/shared/provider-request-blocked-error.js";
 
 export type BenchmarkBackfillState = "IDLE" | "RUNNING" | "FAILED";
 
@@ -339,7 +340,14 @@ export class BenchmarkService {
         error: null,
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const originalMessage = error instanceof Error ? error.message : String(error);
+      const cursorDate = this.backfill.cursorDate;
+      const pendingEmpty = error instanceof ProviderRequestBlockedError &&
+        error.reason === "PENDING_PUBLICATION" && error.evidence.startsWith("KRX_EMPTY_PENDING:");
+      const explanation = pendingEmpty
+        ? "KRX 응답이 비어 있어 수집을 중단했습니다. 미게시로 추정한 상태이며 실제 미게시 여부는 확인되지 않았습니다. 자동으로 수집 중인 상태가 아니므로 이후 다시 동기화해 주세요.\n"
+        : "";
+      const message = `${BENCHMARK_NAMES[benchmarkId]} (${benchmarkId}) ${cursorDate ?? "날짜 확인 불가"}: ${explanation}${originalMessage}`;
       this.backfill = {
         benchmarkId,
         state: "FAILED",
@@ -352,7 +360,10 @@ export class BenchmarkService {
         {
           module: "market-data",
           event: "benchmark.backfill-failed",
-          date: this.backfill.cursorDate,
+          benchmarkId,
+          from,
+          to,
+          date: cursorDate,
           error: message,
         },
         "벤치마크 백필이 날짜 처리 중 실패했다",

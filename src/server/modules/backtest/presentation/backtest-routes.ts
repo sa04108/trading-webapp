@@ -814,9 +814,20 @@ export function registerBacktestRoutes(
         throw error;
       }
       if (!prepared) {
+        const reason = preparation.getWizardPreviewUnavailabilityReason(
+          preparationInputOf(body), request.authUser!.id,
+        );
+        const messages = {
+          WIZARD_REFERENCE_MISSING: "사용 중인 미리보기를 찾을 수 없습니다. 미리보기를 다시 확인하세요.",
+          PREPARATION_INPUT_CHANGED: "미리보기에 영향을 주는 설정이 변경되었습니다. 미리보기를 다시 확인하세요.",
+          PREPARATION_UNAVAILABLE: "완료된 미리보기 결과를 사용할 수 없습니다. 미리보기를 다시 확인하세요.",
+          PREVIEW_VERSION_CHANGED: "미리보기 검증 기준이 변경되었습니다. 미리보기를 다시 확인하세요.",
+          DATA_REVISION_CHANGED: "미리보기 완료 후 데이터가 변경되었습니다. 미리보기를 다시 확인하세요.",
+        };
         return reply.code(409).send({
           error: "PREPARATION_REQUIRED",
-          message: "동일한 조건의 데이터 준비를 먼저 완료하세요.",
+          reason,
+          message: messages[reason],
         });
       }
 

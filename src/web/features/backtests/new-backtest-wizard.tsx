@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useLocation,
   useNavigate,
   useParams,
   useSearchParams,
 } from "react-router";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, ApiError, postJson } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage, postJson } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { formatKrw, timeframeLabel } from "@/lib/format";
 import { wizardTimeframes } from "@/features/datasets/dataset-slices";
@@ -215,6 +215,8 @@ export function NewBacktestWizard() {
   const [slippageProfileId, setSlippageProfileId] = useState("fixed-5bps");
   const [randomSeed, setRandomSeed] = useState("42");
   const [stepError, setStepError] = useState<string | null>(null);
+  // 제출 거절 사유는 단계 이동으로 지우지 않는다. 새 미리보기를 확인해야 해소된다.
+  const [preparationIssue, setPreparationIssue] = useState<string | null>(null);
   // `다음`을 눌러 부족함을 확인한 현재 벤치마크/기간만 동기화 대상으로 표시한다.
   // 입력 변경 시 두 상태를 함께 비워 이전 판정이 새 입력의 버튼·단계 잠금을 바꾸지 않는다.
   const [benchmarkSyncRequiredFor, setBenchmarkSyncRequiredFor] = useState<
@@ -223,12 +225,15 @@ export function NewBacktestWizard() {
   const [benchmarkCoverageVerifiedFor, setBenchmarkCoverageVerifiedFor] =
     useState<string | null>(null);
   const benchmarkCheckId = useRef(0);
-  /**
-   * 제출이 409 PREPARATION_REQUIRED 로 거절되면(Task 10, 브리프 5번) 이 값을 올려
-   * `UniverseRuleStep` 에게 새 준비 요청을 다시 시작하라고 신호한다 — 값 자체는
-   * 의미가 없고 "이전보다 커졌다" 만 신호다.
-   */
+  // 사용자가 재확인을 선택했을 때만 올린다. 소비 기록도 부모에 두어 유니버스 단계가
+  // 다시 마운트되어도 이미 처리한 요청을 재실행하지 않는다.
   const [previewRetryToken, setPreviewRetryToken] = useState(0);
+  const consumedPreviewRetryToken = useRef(0);
+  const consumePreviewRetry = useCallback((token: number): boolean => {
+    if (token <= consumedPreviewRetryToken.current) return false;
+    consumedPreviewRetryToken.current = token;
+    return true;
+  }, []);
   const [sourceReuseRejected, setSourceReuseRejected] = useState(false);
   const suppressDraftFlush = useRef(false);
   const pageHiding = useRef(false);
@@ -515,6 +520,9 @@ export function NewBacktestWizard() {
     result: UniversePreviewResponseDto,
   ): void => {
     setLastPreview({ params, result });
+    if (sameUniverseParams(params, currentUniverseParams)) {
+      setPreparationIssue(null);
+    }
   };
 
   // 위저드는 항상 timeframe 을 명시해 만든다(§9.5) — BacktestRequestBody 의 timeframe 이
@@ -589,11 +597,8 @@ export function NewBacktestWizard() {
     onError: (error: unknown, variables) => {
       // 제출이 실패하면 사용자가 수정할 수 있도록 자동 저장을 다시 켠다.
       suppressDraftFlush.current = false;
-      // 준비된 데이터가 아직 없다는 뜻이다(Task 6) — 검토·실행 단계에 머물며 같은
-      // 사유를 빨간 배너로 띄우면 사용자는 "왜 실패했는지" 를 알 방법이 없다. 대신
-      // 미리보기 단계로 돌려보내고 새 준비 요청을 바로 시작시킨다(브리프 5번).
-      // 서버 `{error, message}` 관례상 사람이 읽는 문장은 details.message 에 있고
-      // `error.message` 자체는 코드('PREPARATION_REQUIRED')다(api-client.ts 참고).
+      // 준비 결과가 무효라면 실행 화면에 사유를 남긴다. 단계 이동과 재요청은
+      // 사용자가 재확인 버튼을 눌렀을 때만 수행한다.
       if (
         error instanceof ApiError &&
         error.status === 409 &&
@@ -607,8 +612,11 @@ export function NewBacktestWizard() {
         if (shouldRejectSourceReuse(variables.reuseSource, error.message)) {
           setSourceReuseRejected(true);
         }
-        setPreviewRetryToken((token) => token + 1);
-        goToSlug(recordTraversal(2));
+        setStepError(null);
+        setPreparationIssue(apiErrorMessage(
+          error,
+          "기존 유니버스 미리보기의 유효성을 확인할 수 없습니다. 다시 확인해 주세요.",
+        ));
         return;
       }
       setStepError(
@@ -660,9 +668,13 @@ export function NewBacktestWizard() {
         `/benchmarks?${new URLSearchParams({ benchmarkId, from, to })}`,
       ),
     // 복원된 초안의 확인 기록은 현재 커버리지를 보장하지 않으므로 검토·실행에서 재조회한다.
-    enabled:
+    // 화면 복귀 때 초안은 동기화 필요 표시를 초기화하지만 캐시의 수집 상태는 남는다.
+    // 표시 중인 작업은 계속 조회해야 과거 RUNNING으로 버튼이 영구히 잠기지 않는다.
+    enabled: (query) =>
       benchmarkCheckActive &&
-      benchmarkCheckRequired &&
+      (benchmarkCheckRequired ||
+        query.state.data?.backfill.state === "RUNNING" ||
+        query.state.data?.backfill.state === "FAILED") &&
       Boolean(from && to && from <= to),
     staleTime: 0,
     refetchInterval: (query) =>
@@ -698,9 +710,26 @@ export function NewBacktestWizard() {
       setStepError(error.message || "벤치마크 동기화를 시작하지 못했습니다");
     },
   });
+  const backfillStatus = benchmarkCoverage.data?.backfill;
+  const acceptedBackfill = benchmarkBackfill.data;
+  // 서버는 한 번에 하나만 수집하므로 시작 요청에 다른 기간의 기존 작업이 반환될 수 있다.
+  // 그 작업을 기다렸다면 종료 오류도 같은 화면에서 설명한다.
+  const benchmarkBackfillFailed =
+    benchmarkCheckActive &&
+    !benchmarkBackfill.isPending &&
+    backfillStatus?.state === "FAILED" &&
+    ((backfillStatus.benchmarkId === benchmarkId &&
+      backfillStatus.from === from &&
+      backfillStatus.to === to) ||
+      (benchmarkBackfill.variables?.benchmarkId === benchmarkId &&
+        benchmarkBackfill.variables.from === from &&
+        benchmarkBackfill.variables.to === to &&
+        acceptedBackfill?.benchmarkId === backfillStatus.benchmarkId &&
+        acceptedBackfill?.from === backfillStatus.from &&
+        acceptedBackfill?.to === backfillStatus.to));
   const benchmarkNeedsSync =
     benchmarkCheckActive &&
-    benchmarkCheckRequired &&
+    (benchmarkCheckRequired || benchmarkBackfillFailed) &&
     !benchmarkCoverage.isError &&
     benchmarkCoverage.data?.covered === false;
   const benchmarkSyncing =
@@ -708,13 +737,12 @@ export function NewBacktestWizard() {
     (benchmarkBackfill.isPending ||
       (!benchmarkCoverage.isError &&
         benchmarkCoverage.data?.backfill.state === "RUNNING"));
-  const benchmarkCoverageFailed =
-    benchmarkCheckActive && benchmarkCheckRequired && benchmarkCoverage.isError;
-  const benchmarkBackfillFailed =
-    benchmarkCoverage.data?.backfill.state === "FAILED" &&
-    benchmarkCoverage.data.backfill.benchmarkId === benchmarkId &&
-    benchmarkCoverage.data.backfill.from === from &&
-    benchmarkCoverage.data.backfill.to === to;
+  const benchmarkCoverageFailed = benchmarkCheckActive && benchmarkCoverage.isError;
+  const benchmarkFailureMessage = benchmarkBackfillFailed
+    ? `벤치마크 동기화에 실패했습니다 — ${backfillStatus?.benchmarkId ? BENCHMARK_NAMES[backfillStatus.benchmarkId] : "벤치마크"} · ${backfillStatus?.cursorDate ?? "날짜 확인 불가"}\n${backfillStatus?.error ?? "알 수 없는 오류"}`
+    : benchmarkCoverageFailed
+      ? `벤치마크 수집 상태를 확인하지 못했습니다 — ${benchmarkCoverage.error.message}. 다시 확인해 주세요.`
+      : null;
 
   useEffect(() => {
     if (
@@ -1268,6 +1296,30 @@ export function NewBacktestWizard() {
         </Alert>
       ) : null}
 
+      {!prefilling && preparationIssue !== null ? (
+        <Alert variant="destructive" role="alert">
+          <AlertTitle>유니버스 재확인이 필요합니다</AlertTitle>
+          <AlertDescription className="space-y-2">
+            <p>{preparationIssue}</p>
+            <p>
+              재확인 과정에서 필요한 데이터 준비와 유니버스 계산이 실행될 수
+              있습니다. 완료 후 결과를 검토하고 백테스트를 실행해 주세요.
+            </p>
+            {step > 2 ? (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setPreviewRetryToken((token) => token + 1);
+                  goToSlug(recordTraversal(2));
+                }}
+              >
+                유니버스 다시 확인
+              </Button>
+            ) : null}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {!prefilling && step === 0 ? (
         <div className="space-y-3">
           {/* 마지막 카드의 pb-3 을 상쇄한다 — 접힘 애니메이션이 여백까지 같이 줄이도록
@@ -1443,20 +1495,17 @@ export function NewBacktestWizard() {
               </div>
             </CardContent>
           </Card>
-          {benchmarkBackfillFailed ? (
+          {benchmarkFailureMessage ? (
             <Alert variant="destructive" role="alert">
-              <AlertDescription>
-                벤치마크 동기화에 실패했습니다 —{" "}
-                {benchmarkCoverage.data?.backfill.error ?? "알 수 없는 오류"}
+              <AlertDescription className="whitespace-pre-wrap break-all">
+                {benchmarkFailureMessage}
               </AlertDescription>
             </Alert>
-          ) : null}
-          {benchmarkCoverageFailed ? (
-            <Alert variant="destructive" role="alert">
+          ) : benchmarkSyncing ? (
+            <Alert role="status">
               <AlertDescription>
-                {benchmarkCoverage.error instanceof Error
-                  ? benchmarkCoverage.error.message
-                  : "벤치마크 기간을 다시 확인하지 못했습니다"}
+                벤치마크 기간 데이터를 동기화하고 있습니다.
+                {backfillStatus?.cursorDate ? ` · ${backfillStatus.cursorDate}` : ""}
               </AlertDescription>
             </Alert>
           ) : null}
@@ -1474,6 +1523,7 @@ export function NewBacktestWizard() {
             parameters={parsedParameters}
             initialResolved={lastPreview ?? sourcePreview}
             previewRetryToken={previewRetryToken}
+            consumePreviewRetry={consumePreviewRetry}
             onPreviewResolved={handlePreviewResolved}
           />
 
@@ -1603,22 +1653,19 @@ export function NewBacktestWizard() {
                 ? "destructive"
                 : "default"
             }
-            role="status"
+            role={benchmarkFailureMessage ? "alert" : "status"}
           >
-            <AlertDescription>
-              {benchmarkSyncing
-                ? "벤치마크 기간 데이터를 동기화하고 있습니다."
-                : benchmarkCoverage.isFetching
-                  ? "벤치마크 기간 동기화 여부를 확인하고 있습니다."
-                  : benchmarkCoverageFailed
-                    ? "벤치마크 기간을 확인하지 못했습니다. 다시 확인해 주세요."
-                    : benchmarkBackfillFailed
-                      ? `벤치마크 동기화에 실패했습니다 — ${benchmarkCoverage.data?.backfill.error ?? "알 수 없는 오류"}`
-                      : benchmarkNeedsSync
-                        ? "벤치마크 기간 데이터가 부족합니다. 동기화한 뒤 진행하세요."
-                        : benchmarkCoverage.data?.covered
-                          ? "벤치마크 기간 동기화를 확인했습니다."
-                          : "벤치마크 기간 확인이 필요합니다."}
+            <AlertDescription className="whitespace-pre-wrap break-all">
+              {benchmarkFailureMessage ??
+                (benchmarkSyncing
+                  ? `벤치마크 기간 데이터를 동기화하고 있습니다.${backfillStatus?.cursorDate ? ` · ${backfillStatus.cursorDate}` : ""}`
+                  : benchmarkCoverage.isFetching
+                    ? "벤치마크 기간 동기화 여부를 확인하고 있습니다."
+                    : benchmarkNeedsSync
+                      ? "벤치마크 기간 데이터가 부족합니다. 동기화한 뒤 진행하세요."
+                      : benchmarkCoverage.data?.covered
+                        ? "벤치마크 기간 동기화를 확인했습니다."
+                        : "벤치마크 기간 확인이 필요합니다.")}
             </AlertDescription>
           </Alert>
           {reusingSourcePreview ? (
@@ -1629,9 +1676,11 @@ export function NewBacktestWizard() {
             </Alert>
           ) : null}
           {typeof request === "string" ? (
-            <Alert variant="destructive">
-              <AlertDescription>{request}</AlertDescription>
-            </Alert>
+            preparationIssue === null ? (
+              <Alert variant="destructive">
+                <AlertDescription>{request}</AlertDescription>
+              </Alert>
+            ) : null
           ) : request ? (
             <Card>
               <CardHeader>
@@ -1788,7 +1837,9 @@ export function NewBacktestWizard() {
             {benchmarkSyncing
               ? "동기화 중…"
               : benchmarkNeedsSync
-                ? "동기화"
+                ? benchmarkBackfillFailed
+                  ? "동기화 다시 시도"
+                  : "동기화"
                 : benchmarkCoverageFailed
                   ? "다시 확인"
                   : benchmarkCheckActive && benchmarkCoverage.isFetching
