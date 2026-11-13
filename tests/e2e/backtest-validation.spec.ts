@@ -132,8 +132,101 @@ test('실행 단계로 복원해도 벤치마크 조회 오류를 재확인하�
   await restoreWizard(page, 'run');
   const retry = page.getByRole('button', { name: '다시 확인', exact: true });
   await expect(retry).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('alert').filter({ hasText: '일시적인 조회 실패' })).toBeVisible();
   expect(submissions).toBe(0);
   failed = false;
   await retry.click();
   await expect.poll(() => submissions).toBe(1);
+});
+
+for (const step of ['period', 'review', 'run']) {
+  test(`${step}에서 벤치마크 수집 실패를 표시하고 명시적으로 재시도한다`, async ({ page }) => {
+    await login(page);
+    let state = 'IDLE';
+    let attempts = 0;
+    const error = 'PENDING_PUBLICATION: fixture (KRX_EMPTY_PENDING:빈 응답)';
+    await page.route('**/api/v1/benchmarks**', (route) => {
+      if (route.request().method() === 'POST') {
+        attempts += 1;
+        state = 'RUNNING';
+        return route.fulfill({ status: 202, json: {
+          ...idleBackfill, benchmarkId: 'KOSPI', ...period, state, cursorDate: period.from,
+        } });
+      }
+      return route.fulfill({ json: {
+        benchmarkId: 'KOSPI', points: [], covered: false,
+        backfill: { ...idleBackfill, benchmarkId: 'KOSPI', ...period, state,
+          cursorDate: period.from, error: state === 'FAILED' ? error : null },
+      } });
+    });
+    await restoreWizard(page, step);
+    if (step === 'period') await page.getByRole('button', { name: '다음', exact: true }).click();
+    await page.getByRole('button', { name: '동기화', exact: true }).click();
+    await expect(page.getByRole('button', { name: '동기화 중…', exact: true })).toBeDisabled();
+    state = 'FAILED';
+    const failure = page.getByRole('alert').filter({ hasText: '벤치마크 동기화에 실패했습니다' });
+    await expect(failure).toContainText(error);
+    await expect(failure).toContainText(period.from);
+    await expect(page.getByRole('button', { name: '동기화 중…', exact: true })).toHaveCount(0);
+    const retry = page.getByRole('button', { name: '동기화 다시 시도', exact: true });
+    await expect(retry).toBeEnabled();
+    expect(attempts).toBe(1);
+    await retry.click();
+    await expect.poll(() => attempts).toBe(2);
+    await expect(failure).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`/backtests/new/${step}$`));
+  });
+}
+
+test('수집 중 화면을 나갔다 돌아와도 저장된 RUNNING을 재조회해 실패를 표시한다', async ({ page }) => {
+  await login(page);
+  let state = 'IDLE';
+  await page.route('**/api/v1/benchmarks**', (route) => {
+    if (route.request().method() === 'POST') {
+      state = 'RUNNING';
+      return route.fulfill({ status: 202, json: {
+        ...idleBackfill, benchmarkId: 'KOSPI', ...period, state,
+      } });
+    }
+    return route.fulfill({ json: {
+      benchmarkId: 'KOSPI', points: [], covered: false,
+      backfill: { ...idleBackfill, benchmarkId: 'KOSPI', ...period, state,
+        cursorDate: period.from, error: state === 'FAILED' ? 'KRX 응답 없음' : null },
+    } });
+  });
+  await restoreWizard(page, 'period');
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await page.getByRole('button', { name: '동기화', exact: true }).click();
+  await expect(page.getByRole('button', { name: '동기화 중…', exact: true })).toBeDisabled();
+  await page.getByRole('link', { name: '대시보드', exact: true }).click();
+  state = 'FAILED';
+  await page.goBack();
+  await expect(page).toHaveURL(/\/backtests\/new\/period$/);
+  await expect(page.getByRole('alert').filter({ hasText: 'KRX 응답 없음' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '동기화 다시 시도', exact: true })).toBeEnabled();
+});
+
+test('서버가 기존 수집 작업을 반환해도 기다리던 작업의 오류를 숨기지 않는다', async ({ page }) => {
+  await login(page);
+  let state = 'IDLE';
+  const otherJob = { benchmarkId: 'KOSDAQ', from: '2026-04-01', to: '2026-04-02', cursorDate: '2026-04-02' };
+  await page.route('**/api/v1/benchmarks**', (route) => {
+    if (route.request().method() === 'POST') {
+      expect(route.request().postDataJSON()).toEqual({ benchmarkId: 'KOSPI', ...period });
+      state = 'RUNNING';
+      return route.fulfill({ status: 202, json: { ...idleBackfill, ...otherJob, state } });
+    }
+    return route.fulfill({ json: {
+      benchmarkId: 'KOSPI', points: [], covered: false,
+      backfill: { ...idleBackfill, ...otherJob, state, error: state === 'FAILED' ? 'KRX_HTTP_503' : null },
+    } });
+  });
+  await restoreWizard(page, 'review');
+  await page.getByRole('button', { name: '동기화', exact: true }).click();
+  await expect(page.getByRole('button', { name: '동기화 중…', exact: true })).toBeDisabled();
+  state = 'FAILED';
+  const failure = page.getByRole('alert').filter({ hasText: 'KRX_HTTP_503' });
+  await expect(failure).toContainText('코스닥');
+  await expect(failure).toContainText(otherJob.cursorDate);
+  await expect(page.getByRole('button', { name: '동기화 다시 시도', exact: true })).toBeEnabled();
 });
