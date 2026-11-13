@@ -152,6 +152,23 @@ describe('PreparationPreviewCache source invalidation', () => {
     expect(changed.get('request')).toBeNull();
   });
 
+  it('거절된 미리보기의 원인을 본문을 읽지 않고 구분한다', () => {
+    expect(cache.unavailabilityReason('other', 'prep_test')).toBe('PREPARATION_INPUT_CHANGED');
+    expect(cache.unavailabilityReason('request', 'missing')).toBe('PREPARATION_UNAVAILABLE');
+    expect(cache.unavailabilityReason('request', 'prep_test')).toBe('PREPARATION_UNAVAILABLE');
+    writer.sqlite.exec("UPDATE backtest_preparation_jobs SET status = 'RUNNING'");
+    expect(cache.unavailabilityReason('request', 'prep_test')).toBe('PREPARATION_UNAVAILABLE');
+    writer.sqlite.exec("UPDATE backtest_preparation_jobs SET status = 'COMPLETED'");
+    cache.store('prep_test', cache.beginValidation(), ['005930']);
+    writer.sqlite.exec("UPDATE preparation_preview_cache SET validation_version = 'old'");
+    expect(cache.unavailabilityReason('request', 'prep_test')).toBe('PREVIEW_VERSION_CHANGED');
+    cache.store('prep_test', cache.beginValidation(), ['005930']);
+    writer.sqlite.exec("UPDATE symbols SET name = 'changed'");
+    expect(cache.unavailabilityReason('request', 'prep_test')).toBe('DATA_REVISION_CHANGED');
+    writer.sqlite.exec("DELETE FROM preparation_preview_cache WHERE job_id = 'prep_test'");
+    expect(cache.unavailabilityReason('request', 'prep_test')).toBe('PREPARATION_UNAVAILABLE');
+  });
+
   it('validation survives reopening the database and still detects later changes', () => {
     database.close();
     database = openDatabase(path.join(directory, 'app.sqlite'));

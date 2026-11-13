@@ -14,6 +14,22 @@ export class ApiError extends Error {
   }
 }
 
+/** 오류 코드는 분기에 쓰고, 화면에는 서버가 보낸 설명을 우선 표시한다. */
+export function apiErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof ApiError)) return fallback;
+  const details = error.details;
+  if (
+    typeof details === "object" &&
+    details !== null &&
+    "message" in details &&
+    typeof details.message === "string" &&
+    details.message.trim() !== ""
+  ) {
+    return details.message;
+  }
+  return fallback;
+}
+
 /** `api`·`postJsonWithStatus` 가 공유하는 오류 파싱 — 실패 응답 모양은 둘 다 같다 */
 async function throwApiError(response: Response): Promise<never> {
   let message = response.statusText;

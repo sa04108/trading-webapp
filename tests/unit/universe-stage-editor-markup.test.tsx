@@ -37,6 +37,7 @@ function renderRuleStep(
         strategyId="dummy-strategy"
         parameters={{}}
         previewRetryToken={0}
+        consumePreviewRetry={() => false}
         onPreviewResolved={() => undefined}
       />
     </QueryClientProvider>,

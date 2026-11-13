@@ -551,6 +551,15 @@ export class BacktestPreparationOrchestrator {
     );
   }
 
+  getWizardPreviewUnavailabilityReason(input: PreparationInput, userId: string) {
+    const owner = this.deps.references?.getWizard(userId);
+    if (!owner) return "WIZARD_REFERENCE_MISSING" as const;
+    const strategy = this.requireStrategy(input);
+    return this.previewCache.unavailabilityReason(
+      backtestPreparationRequestHash(input, strategy), owner.preparationJobId,
+    );
+  }
+
   /** 기존 호환 경로에서 같은 요청의 완료 결과를 다시 확인해 오래된 미리보기를 거른다. */
   async getReadyPreview(
     input: PreparationInput,
