@@ -193,6 +193,75 @@ test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 
 });
 
 
+test('제출 거절 사유를 실행 화면에 남기고 사용자가 선택한 재확인만 한 번 실행한다', async ({ page }) => {
+  await login(page);
+  await page.route('**/api/v1/benchmarks?**', route => route.fulfill({
+    json: {
+      benchmarkId: 'KOSPI', covered: true,
+      points: [{ date: '2026-01-05', close: 2_500 }, { date: '2026-03-31', close: 2_600 }],
+      backfill: { benchmarkId: null, state: 'IDLE', cursorDate: null, from: null, to: null, error: null },
+    },
+  }));
+  let previewRequests = 0;
+  await page.route('**/api/v1/backtests/universe-preview', route => {
+    previewRequests += 1;
+    return route.fulfill({ json: {
+      schedule: [{ rebalanceDate: '2026-01-05', effectiveDate: '2026-01-05', members: [{ symbol: '005930' }] }],
+      unionSymbols: ['005930'], scheduleHash: 'validated-preview',
+      uncoveredDates: [], periodCovered: true, missingCandleSymbols: [], warnings: [],
+    } });
+  });
+  const reason = '미리보기 완료 후 데이터가 변경되었습니다. 미리보기를 다시 확인하세요.';
+  let submissions = 0;
+  await page.route('**/api/v1/backtests', async route => {
+    if (route.request().method() !== 'POST') return route.continue();
+    submissions += 1;
+    return submissions === 1
+      ? route.fulfill({ status: 409, json: { error: 'PREPARATION_REQUIRED', reason: 'DATA_REVISION_CHANGED', message: reason } })
+      : route.fulfill({ status: 201, json: { job: { id: 'bt_revalidated' } } });
+  });
+  await page.goto('/backtests/new');
+  await page.getByRole('button', { name: /전고점 돌파/ }).click();
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await page.getByLabel('시작일').fill('2026-01-05');
+  await page.getByLabel('종료일').fill('2026-03-31');
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await expect(page).toHaveURL(/\/universe$/);
+  await page.getByLabel('N', { exact: true }).fill('1');
+  await page.getByRole('button', { name: '미리보기', exact: true }).click();
+  await expect(page.getByText('리밸런스 일정')).toBeVisible();
+  for (const slug of ['capital', 'review', 'run']) {
+    await page.getByRole('button', { name: '다음', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/${slug}$`));
+  }
+  await page.getByRole('button', { name: '백테스트 실행', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText(reason);
+  await expect(page).toHaveURL(/\/run$/);
+  await expect(page.getByRole('button', { name: '백테스트 실행', exact: true })).toBeDisabled();
+  expect(previewRequests).toBe(1);
+
+  await page.getByRole('button', { name: '유니버스 다시 확인', exact: true }).click();
+  await expect(page).toHaveURL(/\/universe$/);
+  await expect(page.getByText('리밸런스 일정')).toBeVisible();
+  await expect(page.getByText(reason, { exact: true })).toHaveCount(0);
+  expect(previewRequests).toBe(2);
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await expect(page).toHaveURL(/\/capital$/);
+  await page.getByRole('button', { name: '이전', exact: true }).click();
+  await expect(page).toHaveURL(/\/universe$/);
+  await expect(page.getByText('리밸런스 일정')).toBeVisible();
+  for (const slug of ['capital', 'review', 'run']) {
+    await page.getByRole('button', { name: '다음', exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/${slug}$`));
+  }
+  // 단계를 다시 연 뒤 검토를 마치고 실제 제출까지 진행해 effect가 요청을 재생하지
+  // 않았는지 확인한다. 고정 시간 대기는 쓰지 않는다.
+  await page.getByRole('button', { name: '백테스트 실행', exact: true }).click();
+  await expect(page).toHaveURL(/\/backtests\/bt_revalidated$/);
+  expect(previewRequests).toBe(2);
+  expect(submissions).toBe(2);
+});
+
 test('기간의 벤치마크가 부족하면 동기화 완료 전까지 유니버스 단계를 열지 않는다', async ({
   page,
 }) => {

@@ -201,6 +201,7 @@ describe('backtest preparation HTTP/SSE', () => {
     });
     expect(blocked.statusCode).toBe(409);
     expect(blocked.json<{ error: string }>().error).toBe('PREPARATION_REQUIRED');
+    expect(blocked.json<{ reason: string }>().reason).toBe('WIZARD_REFERENCE_MISSING');
 
     const started = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
@@ -224,6 +225,7 @@ describe('backtest preparation HTTP/SSE', () => {
       cookies: { session: cookie }, payload: request,
     });
     expect(stale.statusCode).toBe(409);
+    expect(stale.json<{ reason: string }>().reason).toBe('DATA_REVISION_CHANGED');
     const refreshed = await ctx.app.inject({
       method: 'POST', url: '/api/v1/backtests/universe-preview',
       cookies: { session: cookie }, payload: preparation,

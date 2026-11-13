@@ -8,6 +8,12 @@ import {
 } from "../../../shared/db/schema.js";
 import type { ReadyPreviewDetails } from "./backtest-preparation-orchestrator.js";
 
+export type PreviewUnavailabilityReason =
+  | "PREPARATION_INPUT_CHANGED"
+  | "PREPARATION_UNAVAILABLE"
+  | "PREVIEW_VERSION_CHANGED"
+  | "DATA_REVISION_CHANGED";
+
 export class PreparationPreviewCache {
   private readonly previewVersion = readRuntimeVersions().previewVersion;
 
@@ -54,6 +60,32 @@ export class PreparationPreviewCache {
         )
         .get() !== undefined
     );
+  }
+
+  /** 실패 원인 진단은 본문을 읽거나 준비 작업을 다시 실행하지 않는다. */
+  unavailabilityReason(requestHash: string, preparationJobId: string): PreviewUnavailabilityReason {
+    const row = this.database.db
+      .select({
+        requestHash: backtestPreparationJobs.requestHash,
+        status: backtestPreparationJobs.status,
+        hasPreview: sql<number>`${backtestPreparationJobs.previewJson} IS NOT NULL`,
+        receiptJobId: preparationPreviewCache.jobId,
+        validationVersion: preparationPreviewCache.validationVersion,
+        dataRevision: preparationPreviewCache.dataRevision,
+        currentRevision: sql<number>`(SELECT revision FROM dataset_state WHERE singleton = 1)`,
+      })
+      .from(backtestPreparationJobs)
+      .leftJoin(preparationPreviewCache, eq(preparationPreviewCache.jobId, backtestPreparationJobs.id))
+      .where(eq(backtestPreparationJobs.id, preparationJobId))
+      .get();
+    if (!row) return "PREPARATION_UNAVAILABLE";
+    if (row.requestHash !== requestHash) return "PREPARATION_INPUT_CHANGED";
+    if (row.status !== "COMPLETED" || !row.hasPreview || !row.receiptJobId)
+      return "PREPARATION_UNAVAILABLE";
+    if (row.validationVersion !== this.previewVersion) return "PREVIEW_VERSION_CHANGED";
+    if (row.currentRevision !== null && row.dataRevision !== row.currentRevision)
+      return "DATA_REVISION_CHANGED";
+    return "PREPARATION_UNAVAILABLE";
   }
 
   /** 같은 SQL 스냅샷에서 검증 버전과 완료된 본문을 함께 읽는다. */
