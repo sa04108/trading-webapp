@@ -22,7 +22,6 @@ function harness() {
   roots.push(root);
   const bin = path.join(root, 'bin');
   fs.mkdirSync(bin);
-  fs.copyFileSync('config.env.example', path.join(root, 'config.env.example'));
   const log = path.join(root, 'docker.jsonl');
   fs.writeFileSync(path.join(bin, 'docker'), String.raw`#!/usr/bin/env node
 const fs = require('node:fs');
@@ -88,7 +87,13 @@ describe('Docker 서버 설정과 업데이트', () => {
     h.clear();
     expect(h.run(['update'], { CANDIDATE: oldImage }).status).not.toBe(0);
     expect(h.calls().some(call => call.args.includes('db:prepare'))).toBe(false);
-    expect(h.run(['update']).status).toBe(0);
+    // 로컬 별칭 목록보다 게시 작업에서 검증된 digest를 우선한다.
+    expect(h.run(['update', candidate], { CANDIDATE: oldImage }).status).toBe(0);
+    // runner checkout의 배포 구성을 사용하고 운영 폴더의 설정·상태는 보존한다.
+    const composeCall = h.calls().find(call => call.args[0] === 'compose')!;
+    expect(composeCall.args[composeCall.args.indexOf('-f') + 1]).toBe(path.resolve('compose.yaml'));
+    expect(composeCall.args[composeCall.args.indexOf('--project-directory') + 1]).toBe(h.root);
+    expect(fs.readFileSync(h.file('config.env'), 'utf8')).toBe(original);
     expect(fs.existsSync(h.file('.server-update-pending'))).toBe(false);
     expect(fs.readFileSync(h.file('.server-image'), 'utf8').trim()).toBe(candidate);
     expect(fs.readFileSync(h.file('.server-image.previous'), 'utf8').trim()).toBe(oldImage);

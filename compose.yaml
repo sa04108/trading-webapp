@@ -1,6 +1,7 @@
 name: quant-platform
 services:
   server:
+    container_name: quant-platform
     image: ${SERVER_IMAGE:-ghcr.io/sa04108/quant-platform:latest}
     init: true
     restart: unless-stopped

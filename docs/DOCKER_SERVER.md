@@ -12,9 +12,15 @@
 
 ## 이미지 게시
 
-서버 이전 중에는 `main` 병합·push에 따른 자동 게시 트리거를 주석 처리해 둔다. [Publish images](../.github/workflows/deploy.yml)를 `main`에서 수동 실행하면 Windows 설치기, lint·typecheck·일반 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64·arm64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행을 검사한 뒤, 같은 Agent digest를 기본값으로 포함한 amd64 서버 이미지를 `ghcr.io/sa04108/quant-platform:sha-<커밋 SHA>`로 게시·검사한다. 두 이미지 검사가 성공하면 각각의 `latest` 별칭을 갱신한다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. 패키지를 로그인 없이 내려받으려면 GitHub Packages에서 두 패키지를 Public으로 설정하고 Actions에 패키지 쓰기 권한을 부여한다.
+`main` push 또는 [Publish images](../.github/workflows/deploy.yml)를 `main`에서 수동 실행하면 Windows 설치기, lint·typecheck·일반 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64·arm64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행을 검사한 뒤, 같은 Agent digest를 기본값으로 포함한 amd64 서버 이미지를 `ghcr.io/sa04108/quant-platform:sha-<커밋 SHA>`로 게시·검사한다. 두 이미지 검사가 성공하면 각각의 `latest` 별칭을 갱신한다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. 패키지를 로그인 없이 내려받으려면 GitHub Packages에서 두 패키지를 Public으로 설정하고 Actions에 패키지 쓰기 권한을 부여한다.
 
-서버에 이미지를 적용하는 절차는 아래 운영 명령을 따른다. workflow의 동시 실행은 `quant-platform-production` 그룹으로 제한되고 실행 중인 작업은 새 실행 때문에 취소되지 않는다. 이전 서버·Agent 설치 파일이 참조하는 이미지는 자동 삭제하지 않는다.
+게시 후 미니 PC runner가 해당 서버 digest를 적용한다. 배포 직전 커밋이 최신 `main`이 아니면 적용을 건너뛴다. workflow의 동시 실행은 `quant-platform-production` 그룹으로 제한되고 실행 중인 작업은 새 실행 때문에 취소되지 않는다. 이전 서버·Agent 설치 파일이 참조하는 이미지는 자동 삭제하지 않는다.
+
+## 자동 배포 설정
+
+미니 PC에서 최초 설정을 마친 뒤 GitHub 저장소 **Settings → Actions → Runners → New self-hosted runner**에서 Linux x64를 선택한다. 표시되는 다운로드·설정 명령을 Docker 접근 권한이 있는 일반 사용자로 실행하고 runner에 `quant-platform` label을 추가한다. runner 디렉터리에서 `sudo ./svc.sh install <사용자명>`과 `sudo ./svc.sh start`로 runner 서비스를 등록·시작한다. 앱은 Docker로 실행한다. 빌드와 검사는 GitHub 호스팅 runner에서 수행하며 미니 PC는 배포 작업만 맡는다. self-hosted runner에 접근 가능한 workflow와 브랜치를 신뢰할 수 있도록 저장소 권한을 제한한다.
+
+저장소 **Settings → Secrets and variables → Actions → Variables**에 `QUANT_SERVER_HOME`을 추가하고 기존 미니 PC 저장소 디렉터리의 절대 경로로 지정한다. 이 디렉터리는 runner의 `_work`·`_temp` 밖에 있어야 하며 runner 사용자가 읽고 쓸 수 있어야 한다. 기존 `config.env`, `.server-image`, `.server-update-pending` 등 운영 상태를 이곳에 유지한다. 자동 배포는 릴리스 체크아웃의 `scripts/server.sh`와 Compose 설정을 사용하고 운영 디렉터리의 설정·상태를 읽으므로 그 디렉터리에서 `git pull`할 필요가 없다. 배포 작업은 GitHub 토큰으로 GHCR에 임시 로그인하며 별도의 앱 또는 SSH secret은 필요 없다.
 
 ## 최초 실행
 
@@ -64,6 +70,8 @@ Compose는 `traefik.enable`, 도메인 Host 규칙, `websecure`, TLS, `letsencry
 
 클라이언트 IP를 로그인 기록 등에 반영하려면 `TRAEFIK_TRUSTED_IPS`에 **Traefik의 정확한 Docker 내부 IP**를 입력한다. 공인 고정 IP와 별개의 설정이다. 값이 비어 있으면 전달 헤더를 신뢰하지 않으며 기록에는 직접 연결한 프록시 주소가 남는다. 공유 네트워크 전체를 무조건 신뢰하지 않는다. 여러 주소는 쉼표로 구분하며 CIDR은 신뢰할 프록시만 있는 전용 네트워크에 한해 사용한다. Traefik의 내부 IP가 바뀌면 설정을 갱신하고 `up`을 실행한다.
 
+서버 컨테이너 이름은 `quant-platform`이다. 기존 Traefik file provider에서 서버 URL을 직접 지정한다면 `http://quant-platform:3000`으로 변경한다. 기존 `infra-proxy` 네트워크와 데이터 볼륨은 유지한다.
+
 Traefik은 WebSocket·SSE도 전달한다. 앱 업데이트 명령은 기존 Traefik을 재시작하지 않는다. 502·404 또는 인증서 문제가 있으면 `infra-proxy` 연결, 라우터·서비스 label, Traefik 로그와 기존 인증서 resolver 설정을 확인한다.
 
 ## G3 기본 자원
@@ -94,6 +102,8 @@ bash scripts/server.sh stop
 `stop`·`status`·`logs`는 설정을 읽지 않고 고정된 프로젝트·서비스 label로 컨테이너를 찾으므로 원본에 오류가 있어도 사용할 수 있다. 운영은 helper를 통해 실행하며 원본이나 임시 파일을 직접 `docker compose --env-file`에 넘기지 않는다. 볼륨 삭제 명령은 일반 중지에 사용하지 않는다. 앱 로그는 Docker `local` 드라이버로 20MiB × 5개까지 회전한다. `unless-stopped`는 종료된 프로세스와 Docker 재기동에 대응하지만, healthcheck가 `unhealthy`인 것만으로 자동 재시작하지 않는다. 종료 유예는 120초다.
 
 ## 업데이트와 실패 처리
+
+자동 배포 외에 수동으로 적용할 때는 릴리스에 맞는 체크아웃에서 실행한다.
 
 ```bash
 git pull --ff-only
