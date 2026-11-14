@@ -177,15 +177,15 @@ export function BenchmarkPanel() {
         </Alert>
       ) : null}
       {backfillStatus?.state === "FAILED" ? (
-        <Alert variant="destructive">
-          <AlertDescription>
+        <Alert variant="destructive" className="min-w-0">
+          <AlertDescription className="min-w-0 whitespace-pre-wrap wrap-anywhere">
             수집 실패 — {backfillStatus.error}
           </AlertDescription>
         </Alert>
       ) : null}
       {query.isError ? (
-        <Alert variant="destructive">
-          <AlertDescription>
+        <Alert variant="destructive" className="min-w-0">
+          <AlertDescription className="min-w-0 whitespace-pre-wrap wrap-anywhere">
             {query.error instanceof Error
               ? query.error.message
               : "조회에 실패했습니다."}
