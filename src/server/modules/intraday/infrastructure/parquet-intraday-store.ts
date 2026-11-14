@@ -1,0 +1,317 @@
+import { createHash, randomUUID } from "node:crypto";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { parquetReadObjects } from "hyparquet";
+import { parquetWriteBuffer } from "hyparquet-writer";
+import {
+  INTRADAY_RETENTION_DAYS,
+  intradayBarSchema,
+  intradaySymbolSchema,
+  type IntradayBar,
+  type IntradaySymbolData,
+} from "../../../../shared/schemas/intraday.js";
+
+type Entry = { month: string; file: string; sha256: string };
+type Manifest = IntradaySymbolData & { version: 1; files: Entry[] };
+const locks = new Map<string, Promise<void>>();
+const hash = (value: Uint8Array | string) =>
+  createHash("sha256").update(value).digest("hex");
+const fields = ["endMs", "open", "high", "low", "close", "volume"] as const;
+const revision = (files: Entry[]) => hash(JSON.stringify(files));
+const monthOf = (endMs: number) =>
+  new Date(endMs + 9 * 3_600_000).toISOString().slice(0, 7);
+
+export class ParquetIntradayStore {
+  private readonly root: string;
+  constructor(root: string) {
+    this.root = path.resolve(root);
+  }
+  private async gate<T>(action: () => Promise<T>): Promise<T> {
+    const previous = locks.get(this.root) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    locks.set(this.root, current);
+    await previous;
+    try {
+      return await action();
+    } finally {
+      release();
+      if (locks.get(this.root) === current) locks.delete(this.root);
+    }
+  }
+  private dir(symbol: string): string {
+    return path.join(this.root, intradaySymbolSchema.parse(symbol));
+  }
+  private async manifest(symbol: string): Promise<Manifest | null> {
+    const dir = this.dir(symbol);
+    let raw: string;
+    try {
+      raw = await fs.readFile(path.join(dir, "manifest.json"), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      try {
+        await fs.access(dir);
+      } catch (inner) {
+        if ((inner as NodeJS.ErrnoException).code === "ENOENT") return null;
+        throw inner;
+      }
+      throw new Error(`분봉 manifest가 없습니다: ${symbol}`, { cause: error });
+    }
+    const m = JSON.parse(raw) as Manifest;
+    if (
+      m.version !== 1 ||
+      m.symbol !== symbol ||
+      !Array.isArray(m.files) ||
+      !Number.isSafeInteger(m.bars) ||
+      m.bars < 0 ||
+      (m.bars === 0 &&
+        (m.firstEndMs !== null ||
+          m.lastEndMs !== null ||
+          m.files.length !== 0)) ||
+      (m.bars > 0 &&
+        (!Number.isSafeInteger(m.firstEndMs) ||
+          !Number.isSafeInteger(m.lastEndMs) ||
+          m.firstEndMs! > m.lastEndMs! ||
+          m.files.length === 0)) ||
+      !Number.isSafeInteger(m.updatedAtMs) ||
+      m.files.some(
+        (f, index) =>
+          !/^\d{4}-\d{2}$/.test(f.month) ||
+          (index > 0 && m.files[index - 1]!.month >= f.month) ||
+          !/^[a-f0-9]{64}\.parquet$/.test(f.file) ||
+          !/^[a-f0-9]{64}$/.test(f.sha256) ||
+          f.file !== `${f.sha256}.parquet`,
+      ) ||
+      m.revision !== revision(m.files)
+    )
+      throw new Error(`분봉 manifest가 손상되었습니다: ${symbol}`);
+    return m;
+  }
+  private async load(
+    symbol: string,
+    manifest: Manifest,
+    range?: { fromMs: number; toMs: number },
+  ): Promise<IntradayBar[]> {
+    const bars: IntradayBar[] = [];
+    const fromMonth = range && monthOf(range.fromMs);
+    const toMonth = range && monthOf(range.toMs);
+    const entries = range
+      ? manifest.files.filter(
+          (entry) => entry.month >= fromMonth! && entry.month <= toMonth!,
+        )
+      : manifest.files;
+    for (const entry of entries) {
+      const bytes = await fs.readFile(path.join(this.dir(symbol), entry.file));
+      if (hash(bytes) !== entry.sha256)
+        throw new Error(`분봉 파일 checksum이 일치하지 않습니다: ${symbol}`);
+      const file = bytes.buffer.slice(
+        bytes.byteOffset,
+        bytes.byteOffset + bytes.byteLength,
+      ) as ArrayBuffer;
+      const rows = await parquetReadObjects({ file });
+      for (const row of rows) {
+        const data = Object.fromEntries(
+          fields.map((field) => [
+            field,
+            typeof row[field] === "bigint" ? Number(row[field]) : row[field],
+          ]),
+        );
+        const bar = intradayBarSchema.parse(data);
+        if (
+          monthOf(bar.endMs) !== entry.month ||
+          (bars.length && bars[bars.length - 1]!.endMs >= bar.endMs)
+        )
+          throw new Error("분봉 파일 순서가 올바르지 않습니다");
+        bars.push(bar);
+      }
+    }
+    if (
+      entries.length === manifest.files.length &&
+      (bars.length !== manifest.bars ||
+        (bars[0]?.endMs ?? null) !== manifest.firstEndMs ||
+        (bars.at(-1)?.endMs ?? null) !== manifest.lastEndMs)
+    )
+      throw new Error("분봉 manifest와 데이터가 일치하지 않습니다");
+    return bars;
+  }
+  private async publish(
+    symbol: string,
+    bars: IntradayBar[],
+    nowMs: number,
+  ): Promise<Manifest> {
+    const dir = this.dir(symbol);
+    await fs.mkdir(dir, { recursive: true });
+    const months = new Map<string, IntradayBar[]>();
+    for (const bar of bars) {
+      const month = monthOf(bar.endMs);
+      const rows = months.get(month) ?? [];
+      rows.push(bar);
+      months.set(month, rows);
+    }
+    const files: Entry[] = [];
+    for (const [month, rows] of months) {
+      const buffer = parquetWriteBuffer({
+        columnData: fields.map((name) => ({
+          name,
+          type: "INT64" as const,
+          data: rows.map((row) => BigInt(row[name])),
+        })),
+      });
+      const bytes = new Uint8Array(buffer);
+      const sha256 = hash(bytes);
+      const file = `${sha256}.parquet`;
+      const target = path.join(dir, file);
+      let exists = false;
+      try {
+        const old = await fs.readFile(target);
+        if (hash(old) !== sha256)
+          throw new Error(`분봉 파일 checksum이 일치하지 않습니다: ${symbol}`);
+        exists = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (!exists) await this.atomicWrite(target, bytes);
+      files.push({ month, file, sha256 });
+    }
+    const m: Manifest = {
+      version: 1,
+      symbol,
+      files,
+      revision: revision(files),
+      bars: bars.length,
+      firstEndMs: bars[0]?.endMs ?? null,
+      lastEndMs: bars.at(-1)?.endMs ?? null,
+      updatedAtMs: nowMs,
+    };
+    await this.atomicWrite(path.join(dir, "manifest.json"), JSON.stringify(m));
+    return m;
+  }
+  private async atomicWrite(
+    target: string,
+    data: Uint8Array | string,
+  ): Promise<void> {
+    const tmp = path.join(path.dirname(target), `.${randomUUID()}.tmp`);
+    try {
+      await fs.writeFile(tmp, data, { flag: "wx" });
+      await fs.rename(tmp, target);
+    } finally {
+      await fs.rm(tmp, { force: true });
+    }
+  }
+  async list(): Promise<IntradaySymbolData[]> {
+    return this.gate(async () => {
+      let entries: string[];
+      try {
+        entries = await fs.readdir(this.root);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+        throw error;
+      }
+      const result: IntradaySymbolData[] = [];
+      for (const symbol of entries
+        .filter((entry) => /^\d{6}$/.test(entry))
+        .sort()) {
+        const m = await this.manifest(symbol);
+        if (m) result.push(this.summary(m));
+      }
+      return result;
+    });
+  }
+  private summary(m: Manifest): IntradaySymbolData {
+    return {
+      symbol: m.symbol,
+      bars: m.bars,
+      firstEndMs: m.firstEndMs,
+      lastEndMs: m.lastEndMs,
+      revision: m.revision,
+      updatedAtMs: m.updatedAtMs,
+    };
+  }
+  async read(
+    symbol: string,
+    fromMs: number,
+    toMs: number,
+  ): Promise<{ bars: IntradayBar[]; revision: string }> {
+    return this.gate(async () => {
+      if (
+        !Number.isSafeInteger(fromMs) ||
+        !Number.isSafeInteger(toMs) ||
+        fromMs > toMs
+      )
+        throw new Error("분봉 조회 범위가 올바르지 않습니다");
+      const m = await this.manifest(symbol);
+      if (!m) return { bars: [], revision: revision([]) };
+      const bars = await this.load(symbol, m, { fromMs, toMs });
+      return {
+        bars: bars.filter((bar) => bar.endMs >= fromMs && bar.endMs <= toMs),
+        revision: m.revision,
+      };
+    });
+  }
+  async merge(
+    symbol: string,
+    incoming: IntradayBar[],
+    nowMs: number,
+  ): Promise<IntradaySymbolData> {
+    return this.gate(async () => {
+      intradaySymbolSchema.parse(symbol);
+      if (!Number.isSafeInteger(nowMs))
+        throw new Error("보관 기준 시각이 올바르지 않습니다");
+      const cutoff = nowMs - INTRADAY_RETENTION_DAYS * 86_400_000;
+      const m = await this.manifest(symbol);
+      const existing = m ? await this.load(symbol, m) : [];
+      const bars = new Map(
+        existing
+          .filter((bar) => bar.endMs >= cutoff)
+          .map((bar) => [bar.endMs, bar]),
+      );
+      for (const raw of incoming) {
+        const bar = intradayBarSchema.parse(raw);
+        if (bar.endMs >= cutoff && bar.endMs <= nowMs) bars.set(bar.endMs, bar);
+      }
+      return this.summary(
+        await this.publish(
+          symbol,
+          [...bars.values()].sort((a, b) => a.endMs - b.endMs),
+          nowMs,
+        ),
+      );
+    });
+  }
+  async prune(nowMs: number): Promise<void> {
+    await this.gate(async () => {
+      if (!Number.isSafeInteger(nowMs))
+        throw new Error("보관 기준 시각이 올바르지 않습니다");
+      let entries: string[];
+      try {
+        entries = await fs.readdir(this.root);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw error;
+      }
+      const cutoff = nowMs - INTRADAY_RETENTION_DAYS * 86_400_000;
+      for (const symbol of entries.filter((entry) => /^\d{6}$/.test(entry))) {
+        const old = await this.manifest(symbol);
+        if (!old) continue;
+        let current = old;
+        if (old.firstEndMs !== null && old.firstEndMs < cutoff) {
+          const bars = await this.load(symbol, old);
+          current = await this.publish(
+            symbol,
+            bars.filter((bar) => bar.endMs >= cutoff),
+            nowMs,
+          );
+        }
+        const keep = new Set(current.files.map((entry) => entry.file));
+        for (const file of await fs.readdir(this.dir(symbol)))
+          if (
+            (/^[a-f0-9]{64}\.parquet$/.test(file) && !keep.has(file)) ||
+            /^\.[0-9a-f-]{36}\.tmp$/.test(file)
+          )
+            await fs.unlink(path.join(this.dir(symbol), file));
+      }
+    });
+  }
+}

@@ -2,10 +2,19 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { StrategyArtifacts } from "../../src/server/modules/trading/infrastructure/strategy-artifacts.js";
 
 const roots: string[] = [];
+let sharedRoot: string;
+let initialBuildRoot: string;
+beforeAll(() => {
+  sharedRoot = mkdtempSync(path.join(tmpdir(), "strategy-artifacts-build-"));
+  initialBuildRoot = build(sharedRoot, "a".repeat(64));
+});
+afterAll(() => {
+  if (sharedRoot) rmSync(sharedRoot, { recursive: true, force: true });
+});
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function build(root: string, executionVersion: string): string {
   const buildRoot = path.join(root, "build");
@@ -19,7 +28,7 @@ function build(root: string, executionVersion: string): string {
 describe("strategy artifacts", () => {
   it("archives immutable bundles across builds and rejects tampering", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "strategy-artifacts-test-")); roots.push(root);
-    const buildRoot = build(root, "a".repeat(64));
+    const buildRoot = initialBuildRoot;
     const options = { dataRoot: path.join(root, "data"), buildRoot };
     const first = new StrategyArtifacts(options);
     const initial = first.list();
@@ -28,8 +37,8 @@ describe("strategy artifacts", () => {
     expect(original.latest).toBe(true);
     const strategy = await first.load(original.strategyId, original.artifactHash);
     expect(strategy.version).toBe(original.version);
-    build(root, "b".repeat(64));
-    const restarted = new StrategyArtifacts(options);
+    const nextBuildRoot = build(root, "b".repeat(64));
+    const restarted = new StrategyArtifacts({ ...options, buildRoot: nextBuildRoot });
     const old = restarted.list().find((item) => item.strategyId === original.strategyId && item.artifactHash === original.artifactHash);
     const current = restarted.list().find((item) => item.strategyId === original.strategyId && item.latest);
     expect(old?.latest).toBe(false);
@@ -40,7 +49,7 @@ describe("strategy artifacts", () => {
   }, 30_000);
   it("rejects modified archived manifests and does not invent a current version", () => {
     const root = mkdtempSync(path.join(tmpdir(), "strategy-artifacts-test-")); roots.push(root);
-    const buildRoot = build(root, "c".repeat(64));
+    const buildRoot = initialBuildRoot;
     const options = { dataRoot: path.join(root, "data"), buildRoot };
     const catalog = new StrategyArtifacts(options);
     const artifact = catalog.list()[0]!;

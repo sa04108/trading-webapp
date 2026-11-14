@@ -1,5 +1,5 @@
 import { describe, expect } from 'vitest';
-import { test as base } from '../helpers/test-fixtures.js';
+import { test as base } from '../helpers/database-fixtures.js';
 import { krxDailyBars } from '../../src/runtime/shared/db/schema.js';
 import type { AppDatabase } from '../../src/runtime/shared/db/database.js';
 import {
@@ -29,8 +29,8 @@ describe('날짜 경계 변환', () => {
 
 describe('KrxDailyCandleRepository', () => {
   const it = base.extend<{ db: AppDatabase; repository: KrxDailyCandleRepository }>({
-    db: async ({ ctx }, use) => {
-      const db = ctx.container.database.db;
+    db: async ({ database }, use) => {
+      const db = database.db;
       db.insert(krxDailyBars)
         .values([
           { shortCode: '005930', date: '2026-08-05', market: 'KOSPI', open: 100, high: 110, low: 90, close: 105, volume: 1000 },

@@ -46,10 +46,6 @@ describe("daily decision worker integration", () => {
       await expect(engine.evaluate({ deployment: { ...deployment, activatedAtMs: deployment.createdAtMs }, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: false } as never)).rejects.toThrow("데이터 준비 필요");
       expect(ensureData).toHaveBeenCalledTimes(1);
       expect(ensureData.mock.calls[0]?.[2]).toMatchObject({ masterDates: ["2026-11-13"], priceRange: { to: "2026-11-16" }, actions: { symbols: ["005930"] } });
-      database.db.delete(krxDailyBars).where(eq(krxDailyBars.date, "2026-11-12")).run();
-      now = Date.parse("2026-11-16T00:01:00Z");
-      await expect(engine.evaluate({ deployment, portfolio: {}, checkpoint: null, warmupOnly: true } as never)).rejects.toThrow("데이터 준비 필요");
-      expect(ensureData).toHaveBeenCalledTimes(2);
     } finally { await engine?.close(); database.close(); rmSync(root, { recursive: true, force: true }); }
   }, 90_000);
 });

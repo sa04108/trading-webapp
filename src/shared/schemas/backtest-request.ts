@@ -44,6 +44,8 @@ export const MAX_RANDOM_SEED = 0xffff_ffff;
  */
 export const backtestRequestSchema = z
   .object({
+    /** 구분자가 없는 과거 요청은 일봉으로 유지하며 분봉의 오접수를 차단한다. */
+    mode: z.literal("daily").optional(),
     strategyId: z.string().min(1),
     parameters: z.record(z.string(), z.unknown()),
     universeRule: universeRuleSchema,

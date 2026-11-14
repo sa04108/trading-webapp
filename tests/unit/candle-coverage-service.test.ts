@@ -1,14 +1,14 @@
 import { and, eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
-import { test as base } from '../helpers/test-fixtures.js';
+import { test as base } from '../helpers/database-fixtures.js';
 import { krxDailyBars } from '../../src/runtime/shared/db/schema.js';
 import { CandleCoverageService } from '../../src/runtime/modules/market-data/application/candle-coverage-service.js';
 
 const midnight = (date: string): number => Date.parse(`${date}T00:00:00Z`);
 
 const it = base.extend<{ service: CandleCoverageService }>({
-  service: async ({ ctx }, use) => {
-    const db = ctx.container.database.db;
+  service: async ({ database }, use) => {
+    const db = database.db;
     db.insert(krxDailyBars)
       .values([
         { shortCode: '005930', date: '2026-08-05', market: 'KOSPI', open: 100, high: 110, low: 90, close: 105, volume: 1000 },
@@ -41,8 +41,8 @@ describe('CandleCoverageService', () => {
     expect(service.getCoverage([])).toEqual([]);
   });
 
-  it('요청 기간 밖의 옛 봉은 기간 coverage로 세지 않고 유효한 행만 센다', ({ ctx, service }) => {
-    ctx.container.database.db.insert(krxDailyBars).values([
+  it('요청 기간 밖의 옛 봉은 기간 coverage로 세지 않고 유효한 행만 센다', ({ database, service }) => {
+    database.db.insert(krxDailyBars).values([
       { shortCode: '000660', date: '2026-08-06', market: 'KOSPI', open: 100, high: 90, low: 80, close: 85, volume: 100 },
       { shortCode: '035420', date: '2026-08-06', market: 'KOSDAQ', open: 100, high: 110, low: 90, close: 105, volume: 100 },
     ]).run();
@@ -63,8 +63,8 @@ describe('CandleCoverageService', () => {
     ]);
   });
 
-  it('유효 일봉 집계는 부분 인덱스를 쓰고, 유효성 변경을 즉시 반영한다', ({ ctx, service }) => {
-    const sqlite = ctx.container.database.sqlite;
+  it('유효 일봉 집계는 부분 인덱스를 쓰고, 유효성 변경을 즉시 반영한다', ({ database, service }) => {
+    const sqlite = database.sqlite;
     const plan = sqlite.prepare(`
       EXPLAIN QUERY PLAN
       SELECT short_code, min(date), max(date), count(*)
@@ -82,7 +82,7 @@ describe('CandleCoverageService', () => {
       'idx_krx_daily_bars_valid_code_date',
     );
 
-    ctx.container.database.db.insert(krxDailyBars).values({
+    database.db.insert(krxDailyBars).values({
       shortCode: '035420', date: '2026-08-06', market: 'KOSPI',
       open: 100, high: 90, low: 80, close: 85, volume: 100,
     }).run();
@@ -91,18 +91,18 @@ describe('CandleCoverageService', () => {
     );
 
     expect(coverage()[0]?.barCount).toBe(0);
-    ctx.container.database.db.update(krxDailyBars).set({ high: 110 })
+    database.db.update(krxDailyBars).set({ high: 110 })
       .where(and(eq(krxDailyBars.shortCode, '035420'), eq(krxDailyBars.date, '2026-08-06')))
       .run();
     expect(coverage()[0]?.barCount).toBe(1);
-    ctx.container.database.db.update(krxDailyBars).set({ market: 'KONEX' })
+    database.db.update(krxDailyBars).set({ market: 'KONEX' })
       .where(and(eq(krxDailyBars.shortCode, '035420'), eq(krxDailyBars.date, '2026-08-06')))
       .run();
     expect(coverage()[0]?.barCount).toBe(0);
   });
 
-  it('기간 경계를 포함해 여러 종목의 날짜를 DISTINCT 타임라인으로 준다', ({ ctx, service }) => {
-    ctx.container.database.db.insert(krxDailyBars).values([
+  it('기간 경계를 포함해 여러 종목의 날짜를 DISTINCT 타임라인으로 준다', ({ database, service }) => {
+    database.db.insert(krxDailyBars).values([
       { shortCode: '000660', date: '2026-08-05', market: 'KOSPI', open: 200, high: 210, low: 190, close: 205, volume: 500 },
       { shortCode: '000660', date: '2026-08-06', market: 'KOSPI', open: 205, high: 215, low: 200, close: 210, volume: 600 },
       { shortCode: '000660', date: '2026-08-08', market: 'KOSPI', open: 210, high: 220, low: 205, close: 215, volume: 700 },
@@ -123,8 +123,8 @@ describe('CandleCoverageService', () => {
     expect(service.getTimeline([], midnight('2026-08-05'), midnight('2026-08-07'))).toEqual([]);
   });
 
-  it('worker가 봉에서 제외하는 잘못된 OHLCV·시장 행은 타임라인에서도 제외한다', ({ ctx, service }) => {
-    ctx.container.database.db.insert(krxDailyBars).values([
+  it('worker가 봉에서 제외하는 잘못된 OHLCV·시장 행은 타임라인에서도 제외한다', ({ database, service }) => {
+    database.db.insert(krxDailyBars).values([
       { shortCode: '035420', date: '2026-08-05', market: 'KOSPI', open: 100, high: 90, low: 80, close: 85, volume: 100 },
       { shortCode: '035420', date: '2026-08-06', market: 'KONEX', open: 100, high: 110, low: 90, close: 105, volume: 100 },
       { shortCode: '035420', date: '2026-08-07', market: 'KOSDAQ', open: 100, high: 110, low: 90, close: 105, volume: -1 },
@@ -137,8 +137,8 @@ describe('CandleCoverageService', () => {
     )).toEqual([]);
   });
 
-  it('종목별 여러 실행 창 안의 마지막 유효 봉만 찾는다', ({ ctx, service }) => {
-    ctx.container.database.db.insert(krxDailyBars).values([
+  it('종목별 여러 실행 창 안의 마지막 유효 봉만 찾는다', ({ database, service }) => {
+    database.db.insert(krxDailyBars).values([
       { shortCode: '000660', date: '2026-08-06', market: 'KOSPI', open: 100, high: 90, low: 80, close: 85, volume: 100 },
       { shortCode: '035420', date: '2026-08-06', market: 'KONEX', open: 100, high: 110, low: 90, close: 105, volume: 100 },
     ]).run();

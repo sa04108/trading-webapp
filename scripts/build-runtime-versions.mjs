@@ -112,10 +112,16 @@ export function generateRuntimeVersions(root = repository, overrides = {}) {
     inputs(collectionEntries, migrations("data")),
   );
   const executionVersion = digest(
-    inputs(["src/runtime/workers/backtest-child.ts"]),
+    inputs([
+      "src/runtime/workers/backtest-child.ts",
+      "src/runtime/modules/intraday/domain/engine.ts",
+    ]),
   );
   const previewVersion = digest({
-    ...inputs(["src/runtime/workers/preparation-child.ts", "src/runtime/workers/universe-child.ts"]),
+    ...inputs([
+      "src/runtime/workers/preparation-child.ts",
+      "src/runtime/workers/universe-child.ts",
+    ]),
     collectionVersion,
   });
   const validationVersion = digest({

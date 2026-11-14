@@ -1,4 +1,10 @@
 import { createBrowserRouter } from "react-router";
+import {
+  IntradayDataPage,
+  IntradayDetailPage,
+  IntradayListPage,
+  IntradayNewPage,
+} from "../features/intraday/pages";
 import { LoginPage } from "../features/auth/login-page";
 import { BacktestDetailPage } from "../features/backtests/backtest-detail-page";
 import { BacktestsPage } from "../features/backtests/backtests-page";
@@ -30,6 +36,9 @@ export const router = createBrowserRouter([
           { index: true, element: <DashboardPage /> },
           { path: "trading", element: <TradingPage /> },
           { path: "backtests", element: <BacktestsPage /> },
+          { path: "backtests/intraday", element: <IntradayListPage /> },
+          { path: "backtests/intraday/new", element: <IntradayNewPage /> },
+          { path: "backtests/intraday/:id", element: <IntradayDetailPage /> },
           { path: "backtests/new", element: <NewBacktestEntry /> },
           { path: "backtests/new/:step", element: <NewBacktestWizard /> },
           { path: "backtests/batches/:id", element: <SeedCloneBatchPage /> },
@@ -39,6 +48,7 @@ export const router = createBrowserRouter([
             element: <DataPage />,
             children: [
               { index: true, element: <DatasetsIndexRedirect /> },
+              { path: "intraday", element: <IntradayDataPage /> },
               { path: "master", element: <SymbolMasterPanel /> },
               { path: "benchmarks", element: <BenchmarkPanel /> },
               // 모르는 하위 경로(옛 tab 값을 경로로 손입력한 /datasets/prices 같은 것)도
