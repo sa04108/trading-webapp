@@ -166,7 +166,7 @@ jobs:
   deploy:
     needs: [plan, publish]
     if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.plan.result == 'success' && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && needs.plan.outputs.reuse == 'true')) }}
-    runs-on: [self-hosted, Linux, X64, quant-platform]
+    runs-on: [self-hosted, Linux, X64, minipc]
     timeout-minutes: 20
     permissions:
       contents: read
