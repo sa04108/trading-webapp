@@ -4,23 +4,25 @@
 
 ## 준비
 
-- Linux amd64용 Docker Engine과 Compose 플러그인 **2.30 이상**을 [Docker 공식 Ubuntu 설치 안내](https://docs.docker.com/engine/install/ubuntu/)에 따라 준비한다. `docker info`, `docker compose version`으로 현재 계정의 실행 권한을 확인한다. 호스트 Node.js·pnpm은 필요 없다. Bash, Git, `flock`(util-linux), coreutils를 사용한다.
+- Linux amd64용 Docker Engine과 Compose 플러그인 **2.30 이상**, Buildx를 [Docker 공식 Ubuntu 설치 안내](https://docs.docker.com/engine/install/ubuntu/)에 따라 준비한다. `docker info`, `docker compose version`, `docker buildx version`으로 현재 계정의 실행 권한을 확인한다. 호스트 Node.js·pnpm은 필요 없다. Bash, Git, `flock`(util-linux), coreutils를 사용한다.
 - 기존 Traefik의 Docker provider가 활성화되어 있고 `infra-proxy` 네트워크에 연결되어 있어야 한다. 앱은 같은 **external network**를 사용하며 이 네트워크나 Traefik을 생성·삭제하지 않는다. `docker network inspect infra-proxy`로 존재 여부를 확인한다.
 - HTTPS entryPoint는 `websecure`, 인증서 resolver는 `letsencrypt`를 사용한다. Traefik의 인증서 저장·갱신, TCP 80/443 게시와 HTTP→HTTPS 전환은 기존 Traefik 설정에서 관리한다.
 - `trading.hyunbbai.com`의 DNS와 공유기 포트 전달이 Traefik의 공개 진입점을 향해야 한다. 앱의 3000번 포트는 호스트에 게시하지 않는다.
-- [이미지 게시 workflow](../.github/workflows/deploy.yml)가 `main`에서 성공하여 서버·Agent 이미지가 GHCR에 있어야 한다. **devel 병합만으로 이미지를 게시하거나 서버를 배포하지 않는다.** 공개 패키지 설정 전에는 GHCR 읽기 권한으로 로그인해야 한다.
+- 서버 이미지는 미니 PC에서 빌드한다. 사용자 설치용 `quant-agent`만 GHCR에 게시하며 로그인 없이 설치하려면 이 패키지를 Public으로 설정한다. **devel 병합만으로 이미지를 게시하거나 서버를 배포하지 않는다.**
 
-## 이미지 게시
+## 빌드와 이미지 게시
 
-`main` push 또는 [Publish images](../.github/workflows/deploy.yml)를 `main`에서 수동 실행하면 먼저 서버의 `sha-<커밋 SHA>`와 `latest` 태그를 조회한다. 두 태그의 유효한 SHA-256 digest가 같으면 이전에 검증·게시한 이미지를 재사용하고 Windows 설치기 검사와 릴리스 검증·빌드·게시를 건너뛴다. 태그가 없거나 조회에 실패하거나 digest가 다르면 전체 절차를 실행한다. 전체 절차는 Windows 설치기, lint·typecheck·일반 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64·arm64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행을 검사한 뒤, 같은 Agent digest를 기본값으로 포함한 amd64 서버 이미지를 `ghcr.io/sa04108/quant-platform:sha-<커밋 SHA>`로 게시·검사한다. 모든 검증과 두 이미지 검사가 성공하면 각각의 `latest` 별칭을 갱신한다. 서버 `latest`와 `sha-<커밋 SHA>`는 검증된 게시물의 재사용 판정에 사용하므로 수동으로 다시 지정하지 않는다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. 패키지를 로그인 없이 내려받으려면 GitHub Packages에서 두 패키지를 Public으로 설정하고 Actions에 패키지 쓰기 권한을 부여한다.
+`main` push 또는 [Publish and deploy](../.github/workflows/deploy.yml)를 `main`에서 수동 실행하면 GitHub 호스팅 runner에서 Windows 설치기, lint·typecheck·전체 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64·arm64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행 검사에 성공하면 Agent `latest` 별칭을 갱신한다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. Actions의 패키지 쓰기 권한은 Agent 게시 작업에만 필요하다.
 
-새로 게시하거나 재사용한 서버 digest를 미니 PC runner가 적용한다. 이전 배포가 실패했어도 게시된 빌드는 유효하므로 같은 커밋을 다시 실행하면 태그가 일치하는 경우 빌드 없이 배포를 재시도한다. 배포 직전 커밋이 최신 `main`이 아니면 적용을 건너뛴다. workflow의 동시 실행은 `quant-platform-production` 그룹으로 제한되고 실행 중인 작업은 새 실행 때문에 취소되지 않는다. 이전 서버·Agent 설치 파일이 참조하는 이미지는 자동 삭제하지 않는다.
+이어 미니 PC의 self-hosted runner가 같은 커밋에서 서버 이미지를 직접 빌드하고 로컬 Docker에 적재한다. 서버 이미지에는 검증한 Agent digest가 내장된다. 빌더는 CPU 2개·메모리 4GiB로 제한하고 BuildKit 캐시를 유지한다. DB 준비·웹·readiness·정상 종료·Agent 버전·배포 SHA를 임시 컨테이너에서 검사한 뒤에만 `quant-platform:sha-<커밋 SHA>` 태그를 붙이고 정확한 이미지 ID로 서버를 교체한다. 성공 후 `quant-platform:local`도 같은 이미지로 지정한다. 서버 이미지는 레지스트리에 게시하거나 레지스트리에서 내려받지 않는다.
+
+같은 커밋의 검증된 로컬 태그가 남아 있으면 서버를 다시 빌드하지 않고 같은 이미지 ID를 재검사해 사용한다. 이때 내장된 기존 Agent digest도 유지한다. 따라서 DB 준비·기동 실패 후 같은 커밋을 다시 실행해 같은 후보로 복구할 수 있다. 호스팅 runner의 릴리스 검사와 Agent 게이트는 매번 실행한다. 빌드 전과 적용 직전에 최신 `main`인지 확인하며 이전 커밋이면 적용을 건너뛴다. workflow는 `quant-platform-production` 그룹으로 직렬화하고 실행 중인 작업을 새 실행 때문에 취소하지 않는다. 이전 로컬 서버 이미지와 Agent 설치 파일이 참조하는 GHCR 이미지는 자동 삭제하지 않는다.
 
 ## 자동 배포 설정
 
-미니 PC에서 최초 설정을 마친 뒤 GitHub 저장소 **Settings → Actions → Runners → New self-hosted runner**에서 Linux x64를 선택한다. 표시되는 다운로드·설정 명령을 Docker 접근 권한이 있는 일반 사용자로 실행하고 runner에 `minipc` label을 추가한다. runner 디렉터리에서 `sudo ./svc.sh install <사용자명>`과 `sudo ./svc.sh start`로 runner 서비스를 등록·시작한다. 앱은 Docker로 실행한다. 빌드와 검사는 GitHub 호스팅 runner에서 수행하며 미니 PC는 배포 작업만 맡는다. self-hosted runner에 접근 가능한 workflow와 브랜치를 신뢰할 수 있도록 저장소 권한을 제한한다.
+미니 PC에서 최초 설정을 마친 뒤 GitHub 저장소 **Settings → Actions → Runners → New self-hosted runner**에서 Linux x64를 선택한다. 표시되는 다운로드·설정 명령을 Docker 접근 권한이 있는 일반 사용자로 실행하고 runner에 `minipc` label을 추가한다. runner 디렉터리에서 `sudo ./svc.sh install <사용자명>`과 `sudo ./svc.sh start`로 runner 서비스를 등록·시작한다. 앱은 Docker로 실행한다. 미니 PC는 서버 이미지 빌드·실행 검사·배포를 맡고, 일반 회귀와 Agent 빌드·게시 검사는 GitHub 호스팅 runner에서 수행한다. self-hosted runner에 접근 가능한 workflow와 브랜치를 신뢰할 수 있도록 저장소 권한을 제한한다.
 
-저장소 **Settings → Secrets and variables → Actions → Secrets → New repository secret**에 `DEPLOY_PATH`를 추가하고 기존 미니 PC 저장소 디렉터리의 절대 경로로 지정한다. 공개 실행 로그에서 경로가 마스킹되도록 Variables 대신 Secrets를 사용하며 기존 `DEPLOY_PATH` Variable은 사용하지 않으므로 삭제할 수 있다. 이 디렉터리는 runner의 `_work`·`_temp` 밖에 있어야 하며 runner 사용자가 읽고 쓸 수 있어야 한다. 기존 `config.env`, `.server-image`, `.server-update-pending` 등 운영 상태를 이곳에 유지한다. 자동 배포는 릴리스 체크아웃의 `scripts/server.sh`와 Compose 설정을 사용하고 운영 디렉터리의 설정·상태를 읽으므로 그 디렉터리에서 `git pull`할 필요가 없다. 배포 작업은 GitHub 토큰으로 GHCR에 임시 로그인하며 별도의 앱 또는 SSH secret은 필요 없다.
+저장소 **Settings → Secrets and variables → Actions → Secrets → New repository secret**에 `DEPLOY_PATH`를 추가하고 기존 미니 PC 저장소 디렉터리의 절대 경로로 지정한다. 공개 실행 로그에서 경로가 마스킹되도록 Variables 대신 Secrets를 사용하며 기존 `DEPLOY_PATH` Variable은 사용하지 않으므로 삭제할 수 있다. 이 디렉터리는 runner의 `_work`·`_temp` 밖에 있어야 하며 runner 사용자가 읽고 쓸 수 있어야 한다. 기존 `config.env`, `.server-image`, `.server-update-pending` 등 운영 상태를 이곳에 유지한다. 자동 배포는 릴리스 체크아웃의 `scripts/server.sh`와 Compose 설정을 사용하고 운영 디렉터리의 설정·상태를 읽으므로 그 디렉터리에서 `git pull`할 필요가 없다. 서버 배포에는 GHCR 로그인이나 앱·SSH secret이 필요 없다. Docker 베이스 이미지와 빌드 의존성을 받는 네트워크 연결은 필요하다.
 
 ## 최초 실행
 
@@ -31,7 +33,6 @@ git clone --branch main https://github.com/sa04108/trading-webapp.git
 cd trading-webapp
 bash scripts/server.sh init
 nano config.env
-bash scripts/server.sh validate
 ```
 
 `config.env`의 기본 구성은 다음과 같다. `DOMAIN`에는 URL 전체가 아닌 도메인만 입력한다.
@@ -51,7 +52,7 @@ SERVER_MEMORY=10g
 
 도구는 한 번 읽은 원본에서 필요한 값만 추출한다. 도메인·이미지·자원·Traefik 설정은 Compose에 전달하고, API 키 등 앱 설정은 `.server-runtime/run.*/app.env`에 권한 600(디렉터리 700)으로 작성한다. 이 파일은 실행 중에만 사용하고 종료 시 정리하며 직접 편집하지 않는다. Compose의 `raw` 형식으로 값의 의미를 보존한다. 앱은 이 원본 파일이나 호스트 경로를 알지 못하고 기존 환경변수만 읽는다.
 
-`validate`는 선택된 이미지에서 실제 앱 설정 스키마와 Agent 이미지 참조를 검증한다. 필요한 이미지가 없으면 내려받지만 DB를 열거나 실행 중인 앱을 중지하지 않는다. 일회성 검사·CLI 컨테이너에는 `traefik.enable=false`를 적용한다. 출력에는 설정값을 나열하지 않는다. `config.env`를 수정한 뒤 `validate`와 `up`으로 현재 고정 이미지에 반영하고, 이미지까지 바꾸려면 `update`를 사용한다.
+최초 수동 실행에는 아래 업데이트 절차로 이미지를 먼저 빌드한다. `validate`는 선택된 로컬 이미지에서 실제 앱 설정 스키마와 Agent 이미지 참조를 검증한다. 이미지가 없으면 실패하며 내려받지 않는다. DB를 열거나 실행 중인 앱을 중지하지 않는다. 일회성 검사·CLI 컨테이너에는 `traefik.enable=false`를 적용한다. 출력에는 설정값을 나열하지 않는다. `config.env`를 수정한 뒤 `validate`와 `up`으로 현재 고정 이미지에 반영하고, 이미지까지 바꾸려면 `update`를 사용한다.
 
 새 DB인 경우 서버를 처음 공개하기 전에 관리자와 TOTP를 등록한다. 기존 DB에 이미 계정이 있으면 반복하지 않는다.
 
@@ -62,7 +63,7 @@ bash scripts/server.sh up
 bash scripts/server.sh status
 ```
 
-CLI는 같은 이미지와 데이터 볼륨을 사용한다. 모든 CLI 명령은 서버를 중지한 상태에서만 실행할 수 있다. 첫 `up`은 이미지를 내려받고 DB 준비 후 서버 readiness를 확인한다. Traefik이 Docker label을 읽어 도메인 요청을 내부 3000번 포트로 전달한다. HTTPS 로그인과 설정 → Agent의 연결 상태를 확인한다. 서버 healthcheck만으로 Traefik·DNS·인증서 상태까지 확인됐다고 간주하지 않는다.
+CLI는 같은 로컬 이미지와 데이터 볼륨을 사용한다. 모든 CLI 명령은 서버를 중지한 상태에서만 실행할 수 있다. 첫 `up`은 로컬 이미지로 DB를 준비하고 서버 readiness를 확인한다. Traefik이 Docker label을 읽어 도메인 요청을 내부 3000번 포트로 전달한다. HTTPS 로그인과 설정 → Agent의 연결 상태를 확인한다. 서버 healthcheck만으로 Traefik·DNS·인증서 상태까지 확인됐다고 간주하지 않는다.
 
 ## 프록시와 전달 IP
 
@@ -103,18 +104,39 @@ bash scripts/server.sh stop
 
 ## 업데이트와 실패 처리
 
-자동 배포 외에 수동으로 적용할 때는 릴리스에 맞는 체크아웃에서 실행한다.
+자동 배포 외에 수동으로 적용할 때는 검증한 릴리스의 체크아웃에서 이미지를 빌드한다. `AGENT_CONTAINER_IMAGE`에는 해당 릴리스에서 게시·검증한 Agent digest를, `EXPECTED_AGENT_VERSION`에는 그 Agent의 `v-<agentVersion>` 태그에서 접두사를 뺀 버전을 넣는다. 운영 중 빌드에는 자동 배포와 같은 자원 제한의 Buildx 빌더를 사용한다.
 
 ```bash
+set -euo pipefail
 git pull --ff-only
-bash scripts/server.sh update
-# 특정 릴리스 지정도 가능하다.
-bash scripts/server.sh update ghcr.io/sa04108/quant-platform:sha-<커밋SHA>
+export AGENT_CONTAINER_IMAGE='ghcr.io/sa04108/quant-agent@sha256:<검증한 Agent digest>'
+export EXPECTED_AGENT_VERSION='<같은 릴리스의 agentVersion>'
+export EXPECTED_GIT_SHA="$(git rev-parse HEAD)"
+if ! docker buildx inspect quant-server-manual >/dev/null 2>&1; then
+  docker buildx create --name quant-server-manual --driver docker-container \
+    --driver-opt memory=4g,cpu-period=100000,cpu-quota=200000
+fi
+docker buildx build --builder quant-server-manual --load --platform linux/amd64 \
+  -f infra/server/Dockerfile -t quant-platform:local \
+  --build-arg NODE_VERSION="$(cat .node-version)" \
+  --build-arg BUILD_GIT_SHA="$EXPECTED_GIT_SHA" \
+  --build-arg AGENT_CONTAINER_IMAGE="$AGENT_CONTAINER_IMAGE" .
+candidate="$(docker image inspect --format '{{.Id}}' quant-platform:local)"
+docker run --pull never --rm --init --memory 1g --cpus 1 \
+  --env EXPECTED_AGENT_VERSION --env EXPECTED_GIT_SHA \
+  --mount "type=bind,source=$PWD/tests/helpers/container-server-smoke.mjs,target=/tmp/container-server-smoke.mjs,readonly" \
+  --entrypoint node "$candidate" /tmp/container-server-smoke.mjs
 ```
 
-업데이트는 서버 이미지 다운로드 → 후보 이미지의 설정 검증 → 앱 서비스 중지 → 후보 이미지의 `db:prepare` → readiness 확인 순서다. 다운로드·설정 검증 실패는 실행 중인 앱을 중지하지 않는다. 성공한 서버 digest를 `.server-image`에 기록하여 이후 `up`이 같은 이미지를 실행한다. 기존 pin은 `.server-image.previous`에 남는다. `pnpm deploy`는 같은 업데이트 명령의 별칭이다.
+최초 실행이면 위의 관리자 등록 절차로 이어간다. 기존 서버를 교체할 때는 검사를 통과한 후보를 적용한다.
 
-DB 준비·기동 실패 시 앱은 중지 상태로 남고 `.server-update-pending`에 후보 digest를 보존한다. 일반 `up`과 CLI는 차단된다. 로그를 확인하고 **기록된 같은 digest**로 업데이트를 재시도한다.
+```bash
+bash scripts/server.sh update "$candidate"
+```
+
+업데이트는 로컬 이미지 ID 확인 → 후보 이미지의 설정 검증 → 앱 서비스 중지 → 후보 이미지의 `db:prepare` → readiness 확인 순서다. 이미지 조회·설정 검증 실패는 실행 중인 앱을 중지하지 않는다. 성공한 서버 이미지 ID(`sha256:…`)를 `.server-image`에 기록하여 이후 `up`이 같은 이미지를 실행한다. 기존 pin은 `.server-image.previous`에 남는다. `pnpm deploy`는 같은 업데이트 명령의 별칭이다. 기본 후보는 `config.env`의 `SERVER_IMAGE`이며 새 기본값은 `quant-platform:local`이다.
+
+DB 준비·기동 실패 시 앱은 중지 상태로 남고 `.server-update-pending`에 후보 이미지 ID를 보존한다. 일반 `up`과 CLI는 차단된다. 로그를 확인하고 **기록된 같은 이미지**로 업데이트를 재시도한다. 이전 배포에서 기록한 GHCR digest도 로컬 이미지가 남아 있으면 같은 ID로 확인해 재시도할 수 있다.
 
 ```bash
 bash scripts/server.sh logs
@@ -122,5 +144,7 @@ bash scripts/server.sh update "$(cat .server-update-pending)"
 ```
 
 다른 버전으로 되돌릴 때는 운영자가 DB·데이터·이미지 호환성을 함께 확인하고 필요한 복원을 수행한다. 이전 이미지 기록만으로 자동 롤백하지 않는다. pending 파일은 복구 상태가 확인된 뒤에만 수동 정리하며, 직접 `docker compose up`으로 이 차단을 우회하지 않는다. 같은 프로젝트의 변경 작업은 helper의 잠금으로 직렬화한다.
+
+로컬 서버 이미지는 복구에도 사용하므로 `.server-image`, `.server-image.previous`, `.server-update-pending`이 참조하는 이미지와 검증된 커밋 태그를 보존한다. 이 이미지를 지우는 `docker image prune -a` 등의 정리를 하지 않는다. GHCR의 기존 `quant-platform` 패키지는 새 로컬 빌드 방식으로 첫 배포가 성공하고 필요한 이전 이미지가 미니 PC에 남아 있음을 확인한 뒤 운영자가 삭제할 수 있다. 사용자 설치에 필요한 `quant-agent` 패키지는 유지한다. 기존 `config.env`의 `SERVER_IMAGE`가 GHCR 주소라면 수동 업데이트를 위해 `quant-platform:local`로 바꾼다. 자동 배포는 명시적인 로컬 이미지 ID를 전달하므로 기존 설정값에 의존하지 않는다.
 
 Docker 서버에는 같은 릴리스의 Agent 이미지 digest가 내장된다. 서버 업데이트 후 버전 불일치가 표시되면 설정 → Agent에서 저장한 기존 활성 토큰으로 Agent 설치 파일을 다시 내려받아 실행한다. 같은 토큰은 기존 장치와 캐시 볼륨을 유지한다. 토큰을 보관하지 않았다면 기존 장치를 해제하고 새 토큰을 발급하며, 이 경우 별도 캐시 볼륨을 사용한다. 이전 서버·설치 파일이 참조하는 이미지를 workflow에서 자동 삭제하지 않는다.

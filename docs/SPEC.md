@@ -13,7 +13,7 @@
 
 **단일 관리자가 모바일·데스크톱 브라우저에서 퀀트 백테스트를 준비·실행하고 결과를 비교·검증하는 개인용 플랫폼**이다. 데이터의 시점 정합성, 계산의 재현성, 제한된 서버 자원에서의 안정적인 운영을 우선한다. 공개 회원가입이나 다중 사용자 서비스를 전제로 하지 않는다.
 
-하나의 저장소와 제품으로 운영하는 **모듈러 모놀리스**다. 운영 서버가 인증·수집·작업·최종 결과의 기준점이며, Windows Docker Desktop의 외부 계산 장치는 계산 용량만 확장한다. GitHub Actions는 서버·웹을 포함한 서버 이미지와 Agent 이미지를 GHCR에 게시하고 검증된 서버 digest를 미니 PC에 적용한다. 계산 코드의 호환성은 배포 커밋과 별도로 관리한다.
+하나의 저장소와 제품으로 운영하는 **모듈러 모놀리스**다. 운영 서버가 인증·수집·작업·최종 결과의 기준점이며, Windows Docker Desktop의 외부 계산 장치는 계산 용량만 확장한다. GitHub Actions는 사용자 설치용 Agent 이미지만 GHCR에 게시한다. 서버·웹을 포함한 서버 이미지는 미니 PC의 self-hosted runner에서 빌드·검사하고 로컬 이미지 ID로 적용한다. 계산 코드의 호환성은 배포 커밋과 별도로 관리한다.
 
 ## 2. 절대 원칙
 
@@ -198,9 +198,9 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 
 저장소가 지정한 Node·pnpm으로 개발·검증하고 서버·웹은 `pnpm build`로 빌드한다. 서버 배포 산출물은 컨테이너 이미지다. Agent용 Linux archive는 `dist/agent-runtime/`에서 Agent 이미지와 hermetic workload 검증에만 사용한다.
 
-운영 명령은 `bash scripts/server.sh init`·`validate`·`up`·`update`·`stop`·`status`·`logs`·`cli`다. 호스트 Node는 필요 없다. `pnpm deploy`는 같은 Docker 업데이트의 별칭이다. `main` push 또는 main에서 수동 실행한 workflow는 서버/Agent 이미지를 검증·게시하고 최신 main의 서버 digest를 미니 PC runner로 적용한다. 같은 커밋의 서버 SHA 태그와 검증 후 승격한 `latest`의 유효한 digest가 일치하면 빌드·검사를 건너뛰고 해당 digest를 재사용해 배포를 시도한다. 조회 실패나 불일치 시 전체 게이트를 실행하며 이전 배포 실패는 게시된 빌드의 재사용을 막지 않는다. 빌드와 검사는 GitHub 호스팅 runner에서 수행한다.
+운영 명령은 `bash scripts/server.sh init`·`validate`·`up`·`update`·`stop`·`status`·`logs`·`cli`다. 호스트 Node는 필요 없다. `pnpm deploy`는 같은 Docker 업데이트의 별칭이다. `main` push 또는 main에서 수동 실행한 workflow는 GitHub 호스팅 runner에서 릴리스 게이트와 Agent 빌드·게시·실행 검사를 수행한다. 미니 PC runner는 서버를 로컬 빌드하고 임시 컨테이너로 실행·버전·배포 SHA를 검사한 뒤 최신 main의 이미지 ID를 적용한다. 같은 커밋의 검증된 로컬 태그가 있으면 서버 재빌드 없이 같은 이미지 ID를 재검사해 사용하여 실패한 업데이트를 재시도할 수 있다. 서버 이미지의 게시·다운로드와 GHCR 조회 기반 재사용은 하지 않는다.
 
-원본 설정 변경은 검증 후 `up`으로 현재 고정 이미지에 적용한다. `update`는 후보 이미지를 먼저 확보하고 앱 설정 검증을 통과한 뒤 서비스를 중지해 DB 준비와 readiness를 확인한다. 성공 digest를 고정하고 미완료 업데이트는 이전 이미지의 `up`과 CLI를 차단한다. 설정/다운로드 실패는 실행 중인 앱을 유지하며, DB 준비 이후 실패는 중지 상태에서 같은 후보로 복구한다. 백업·복원을 자동화하지 않는다. 자세한 절차는 [Docker 서버 운영](DOCKER_SERVER.md)을 따른다.
+원본 설정 변경은 검증 후 `up`으로 현재 고정 이미지에 적용한다. `update`는 로컬 후보 이미지를 불변 ID로 확인하고 앱 설정 검증을 통과한 뒤 서비스를 중지해 DB 준비와 readiness를 확인한다. 성공 이미지 ID를 고정하고 미완료 업데이트는 이전 이미지의 `up`과 CLI를 차단한다. 로컬 이미지 조회·설정 검증 실패는 실행 중인 앱을 유지하며, DB 준비 이후 실패는 중지 상태에서 같은 후보로 복구한다. 이전 GHCR digest 기록도 이미지가 로컬에 있으면 지원한다. 백업·복원을 자동화하지 않는다. 자세한 절차는 [Docker 서버 운영](DOCKER_SERVER.md)을 따른다.
 
 CLI는 배포와 같은 잠금을 사용하며 서버가 중지된 상태에서만 실행한다. 백업·복원이 필요하면 `db:backup`·`db:restore`를 사용하고 **두 DB와 백업 명세를 한 세트로 관리**한다. 유지보수 중 쓰기를 중지하고 여러 WAL DB 파일의 장애 원자성을 가정하지 않는다. 파일 누락·식별자 불일치·미완료 복원은 기동을 차단한다.
 
@@ -210,7 +210,7 @@ CLI는 배포와 같은 잠금을 사용하며 서버가 중지된 상태에서�
 | --- | --- |
 | `pnpm lint`·`pnpm typecheck` | 정적 규칙과 서버·웹 타입 검사 |
 | `pnpm test` | 일반 회귀 검사: `tests/unit`, `tests/integration`, `tests/architecture` |
-| `pnpm test:all` | 전체 일반 회귀 검사의 릴리스 진입점(`pnpm test`). `devel` 병합 전과 새 서버 이미지 게시에서 필수 실행 |
+| `pnpm test:all` | 전체 일반 회귀 검사의 릴리스 진입점(`pnpm test`). `devel` 병합 전과 서버 로컬 빌드·배포 workflow의 릴리스 게이트에서 필수 실행 |
 | `pnpm test:e2e` | 빌드 후 Playwright 브라우저 검증. 이미지 게시 workflow와 별도로 실행한다. |
 | `pnpm test:agent-package` | 내부 runtime archive를 저장소 밖에서 실행해 구성·의존성·준비·계산·결과 저장 계약 검증. GHCR image workflow에서 Docker build/push 전에 실행 |
 
