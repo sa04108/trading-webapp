@@ -159,7 +159,7 @@ export function BacktestJobCard({
     return (
       <div className="flex items-start gap-3">
         <span className="mt-5 size-4 shrink-0" aria-hidden="true" />
-        <div className="min-w-0 flex-1 opacity-70">{card}</div>
+        <div className="min-w-0 flex-1">{card}</div>
       </div>
     );
   }

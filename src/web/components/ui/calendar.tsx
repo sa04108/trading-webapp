@@ -174,7 +174,7 @@ export function Calendar({
                 "relative flex h-8 items-center justify-center rounded-md text-sm tabular-nums transition-colors",
                 "hover:bg-accent hover:text-accent-foreground",
                 "focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-                cell.outside && "text-muted-foreground/50",
+                cell.outside && "text-muted-foreground",
                 disabled && "pointer-events-none opacity-30",
                 selected &&
                   "bg-primary text-primary-foreground hover:bg-primary",

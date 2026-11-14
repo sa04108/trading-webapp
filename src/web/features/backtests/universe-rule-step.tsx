@@ -856,7 +856,7 @@ export function UniverseRuleStep({
               수 있습니다 — 봉이 없는 종목이 있을 때 먼저 시도할 방법입니다.
             </p>
             {preview.uncoveredDates.length > 0 ? (
-              <p className="text-xs tabular-nums opacity-80">
+              <p className="text-xs tabular-nums">
                 {preview.uncoveredDates.join(", ")}
               </p>
             ) : null}
@@ -874,7 +874,7 @@ export function UniverseRuleStep({
                 : "기간 전체 동기화"}
             </Button>
             {backfillRunning ? (
-              <p className="text-xs opacity-80">
+              <p className="text-xs">
                 동기화는 서버에서 진행되므로 화면을 나가거나 브라우저를 닫아도
                 계속됩니다. 나중에 돌아와서 미리보기를 다시 누르면 그 사이
                 수집된 데이터가 반영됩니다.
