@@ -20,6 +20,7 @@ import {
 } from "../modules/auth/presentation/auth-routes.js";
 import { registerSymbolRoutes } from "../modules/market-data/presentation/symbol-routes.js";
 import { registerStrategyRoutes } from "../modules/strategy/presentation/strategy-routes.js";
+import { registerTradingRoutes } from "../modules/trading/presentation/trading-routes.js";
 import { registerBacktestRoutes } from "../modules/backtest/presentation/backtest-routes.js";
 import { registerBacktestWizardDraftRoutes } from "../modules/backtest/presentation/backtest-wizard-draft-routes.js";
 import { registerBacktestPreparationRoutes } from "../modules/backtest/presentation/backtest-preparation-routes.js";
@@ -62,6 +63,7 @@ export async function buildServer(
   registerRequestObservability(app);
 
   app.addHook("preClose", async () => {
+    await container.tradingService.close();
     await container.submissionValidator?.stop();
     await container.agentCoordinator.stop();
   });
@@ -115,6 +117,7 @@ export async function buildServer(
       registerAuthRoutes(api, authDeps);
       registerSymbolRoutes(api, container.symbolInfoService, requireAuth);
       registerStrategyRoutes(api, container.strategyRegistry, requireAuth);
+      registerTradingRoutes(api, container.tradingService, requireAuth);
       registerBacktestWizardDraftRoutes(
         api,
         container.backtestWizardDraftService,
@@ -251,6 +254,7 @@ export async function buildServer(
   // 첫 요청 전에 로그인 타이밍 균등화용 더미 해시를 준비한다 (콜드스타트 타이밍 노출 차단).
   // buildServer 를 거치는 모든 진입점(main, E2E, 테스트)이 자동으로 포함된다.
   await container.authService.ready();
+  app.addHook("onReady", async () => { container.tradingService.start(); });
 
   const runtimeObserver = startRuntimeObserver(app.log);
   app.addHook("onClose", async () => { runtimeObserver.stop(); });

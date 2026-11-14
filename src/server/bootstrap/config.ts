@@ -54,7 +54,7 @@ const envSchema = z.object({
       (/^\d+$/.test(prefix) && Number(prefix) > 0 && Number(prefix) <= (family === 4 ? 32 : 128)));
   }), "TRUST_PROXY_ADDRESSES must contain explicit IP addresses or restricted CIDRs"),
   LIVE_TRADING_ENABLED: booleanString.default(false),
-  /** 토스증권 Open API (D-018). 미설정이면 종목 이름 조회 어댑터는 비활성 */
+  /** 토스증권 Open API. 종목 정보와 계좌·주문 클라이언트가 인증을 공유한다. */
   TOSS_BASE_URL: z.string().url().default("https://openapi.tossinvest.com"),
   TOSS_CLIENT_ID: z.string().min(1).optional(),
   TOSS_CLIENT_SECRET: z.string().min(1).optional(),

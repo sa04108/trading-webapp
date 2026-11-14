@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import {
   Bell,
+  CandlestickChart,
   Database,
   FlaskConical,
   LayoutDashboard,
@@ -22,6 +23,7 @@ import { queryClient } from "./query-client";
 
 const NAV_ITEMS = [
   { to: "/", label: "대시보드", icon: LayoutDashboard, end: true },
+  { to: "/trading", label: "매매", icon: CandlestickChart, end: false },
   { to: "/backtests", label: "백테스트", icon: FlaskConical, end: false },
   { to: "/datasets", label: "데이터", icon: Database, end: false },
   { to: "/settings", label: "설정", icon: Settings, end: false },
@@ -121,7 +123,7 @@ function BottomNav() {
       className="fixed inset-x-0 bottom-0 z-20 border-t bg-background pb-[env(safe-area-inset-bottom)] md:hidden"
       aria-label="주 메뉴"
     >
-      <div className="grid grid-cols-4">
+      <div className="grid grid-cols-5">
         {NAV_ITEMS.map(({ to, label, icon: Icon, end }) => (
           <NavLink
             key={to}

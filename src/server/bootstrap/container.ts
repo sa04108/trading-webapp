@@ -58,6 +58,12 @@ import type { SymbolService } from "../../runtime/modules/market-data/applicatio
 import { CandleCoverageService } from "../../runtime/modules/market-data/application/candle-coverage-service.js";
 import type { CandleRepository } from "../../runtime/modules/market-data/application/ports.js";
 import { createTossStockInfoSource } from "../modules/broker/infrastructure/toss/toss-stock-info-source.js";
+import { createTossClient } from "../modules/broker/infrastructure/toss/toss-client.js";
+import { createTossTradingBroker } from "../modules/broker/infrastructure/toss/toss-trading-broker.js";
+import { TradingService } from "../modules/trading/application/trading-service.js";
+import { StrategyArtifacts } from "../modules/trading/infrastructure/strategy-artifacts.js";
+import { DailyTradingEngine } from "../modules/trading/infrastructure/daily-trading-engine.js";
+import { TradingDataPreparation } from "../modules/trading/application/trading-data-preparation.js";
 import { KrxDailyCandleRepository } from "../../runtime/modules/market-data/infrastructure/krx-daily-candle-repository.js";
 import { StrategyRegistry } from "../../runtime/modules/strategy/application/strategy-registry.js";
 import { strategyRequiresFinancialData } from "../../runtime/modules/strategy/domain/strategy.js";
@@ -131,6 +137,7 @@ export interface Container {
   readonly symbolService: SymbolService;
   readonly symbolInfoService: SymbolInfoService;
   readonly strategyRegistry: StrategyRegistry;
+  readonly tradingService: TradingService;
   readonly backtestWizardDraftService: BacktestWizardDraftService;
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
@@ -314,16 +321,38 @@ export function createContainer(
   );
   // 증권사 선택은 조립부 전용 지식 (§2.4) — 애플리케이션은 StockInfoSource 만 안다.
   // 자격 증명 미설정이면 어댑터가 포트 에러를 던지는 비활성 소스가 된다.
-  const stockInfoSource = createTossStockInfoSource(
-    config.tossClientId && config.tossClientSecret
+  const tossConfig = config.tossClientId && config.tossClientSecret
       ? {
           baseUrl: config.tossBaseUrl,
           clientId: config.tossClientId,
           clientSecret: config.tossClientSecret,
         }
-      : null,
-    logger,
-  );
+      : null;
+  const tossClient = tossConfig ? createTossClient(tossConfig, logger) : undefined;
+  const stockInfoSource = createTossStockInfoSource(tossConfig, logger, { client: tossClient });
+  const tradingArtifacts = new StrategyArtifacts({ dataRoot: config.dataRoot });
+  const tradingDataPreparation = new TradingDataPreparation({
+    master: symbolMasterService,
+    symbols: symbolService,
+    facts: factSyncService,
+    usage: externalApiUsage,
+    progress: (id, message, error) => tradingService.preparationProgress(id, message, error),
+  });
+  const tradingService = new TradingService({
+    database,
+    broker: createTossTradingBroker(tossConfig, logger, { client: tossClient }),
+    artifacts: tradingArtifacts,
+    enabled: config.liveTradingEnabled,
+    now: () => clock.now(),
+    engine: new DailyTradingEngine({
+      databasePath: config.databasePath,
+      dataPath: database.dataPath,
+      artifacts: tradingArtifacts,
+      now: () => clock.now(),
+      ensureData: async (_date, input, need) => tradingDataPreparation.request(input.deployment.id, input.deployment.artifactHash, need),
+    }),
+    notify: (message) => notificationService.create({ type: "trading", severity: "error", title: "자동매매 주문 중지", body: message, link: "/trading" }),
+  });
   // 로컬 폴백(symbolService)을 함께 넘긴다 — 증권사가 모르거나 조회에 실패한 코드도
   // 종목 마스터가 채워 둔 이름이 있으면 그걸로 보여준다 (자격 증명 미설정 환경도 포함).
   const symbolInfoService = new SymbolInfoService(
@@ -673,6 +702,7 @@ export function createContainer(
     symbolService,
     symbolInfoService,
     strategyRegistry,
+    tradingService,
     backtestWizardDraftService,
     jobQueue,
     jobOrchestrator,
@@ -698,6 +728,8 @@ export function createContainer(
     close: () => {
       if (closing !== null) return closing;
       closing = (async () => {
+        await tradingService.close();
+        await tradingDataPreparation.close();
         clearInterval(pruneTimer);
         await collection.filingDiscovery.stop();
         await submissionValidator?.stop();
