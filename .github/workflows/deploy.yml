@@ -131,7 +131,7 @@ jobs:
       contents: read
       packages: read
     env:
-      QUANT_SERVER_HOME: ${{ vars.QUANT_SERVER_HOME }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
       SERVER_IMAGE: ${{ needs.publish.outputs.server-image }}
     defaults:
       run:
@@ -141,11 +141,11 @@ jobs:
       - name: Verify persistent server directory
         run: |
           set -euo pipefail
-          [[ "$QUANT_SERVER_HOME" == /* && "$QUANT_SERVER_HOME" != / ]] || {
-            echo 'QUANT_SERVER_HOME에 기존 운영 저장소의 절대 경로를 등록하세요.' >&2
+          [[ "$DEPLOY_PATH" == /* && "$DEPLOY_PATH" != / ]] || {
+            echo 'DEPLOY_PATH에 기존 운영 저장소의 절대 경로를 등록하세요.' >&2
             exit 1
           }
-          server_home="$(realpath -e -- "$QUANT_SERVER_HOME")"
+          server_home="$(realpath -e -- "$DEPLOY_PATH")"
           runner_work_home="$(realpath -m -- "$GITHUB_WORKSPACE/../..")"
           temporary_home="$(realpath -m -- "$RUNNER_TEMP")"
           case "$server_home/" in

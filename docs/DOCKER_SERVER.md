@@ -20,7 +20,7 @@
 
 미니 PC에서 최초 설정을 마친 뒤 GitHub 저장소 **Settings → Actions → Runners → New self-hosted runner**에서 Linux x64를 선택한다. 표시되는 다운로드·설정 명령을 Docker 접근 권한이 있는 일반 사용자로 실행하고 runner에 `quant-platform` label을 추가한다. runner 디렉터리에서 `sudo ./svc.sh install <사용자명>`과 `sudo ./svc.sh start`로 runner 서비스를 등록·시작한다. 앱은 Docker로 실행한다. 빌드와 검사는 GitHub 호스팅 runner에서 수행하며 미니 PC는 배포 작업만 맡는다. self-hosted runner에 접근 가능한 workflow와 브랜치를 신뢰할 수 있도록 저장소 권한을 제한한다.
 
-저장소 **Settings → Secrets and variables → Actions → Variables**에 `QUANT_SERVER_HOME`을 추가하고 기존 미니 PC 저장소 디렉터리의 절대 경로로 지정한다. 이 디렉터리는 runner의 `_work`·`_temp` 밖에 있어야 하며 runner 사용자가 읽고 쓸 수 있어야 한다. 기존 `config.env`, `.server-image`, `.server-update-pending` 등 운영 상태를 이곳에 유지한다. 자동 배포는 릴리스 체크아웃의 `scripts/server.sh`와 Compose 설정을 사용하고 운영 디렉터리의 설정·상태를 읽으므로 그 디렉터리에서 `git pull`할 필요가 없다. 배포 작업은 GitHub 토큰으로 GHCR에 임시 로그인하며 별도의 앱 또는 SSH secret은 필요 없다.
+저장소 **Settings → Secrets and variables → Actions → Variables**에 `DEPLOY_PATH`를 추가하고 기존 미니 PC 저장소 디렉터리의 절대 경로로 지정한다. 이 디렉터리는 runner의 `_work`·`_temp` 밖에 있어야 하며 runner 사용자가 읽고 쓸 수 있어야 한다. 기존 `config.env`, `.server-image`, `.server-update-pending` 등 운영 상태를 이곳에 유지한다. 자동 배포는 릴리스 체크아웃의 `scripts/server.sh`와 Compose 설정을 사용하고 운영 디렉터리의 설정·상태를 읽으므로 그 디렉터리에서 `git pull`할 필요가 없다. 배포 작업은 GitHub 토큰으로 GHCR에 임시 로그인하며 별도의 앱 또는 SSH secret은 필요 없다.
 
 ## 최초 실행
 

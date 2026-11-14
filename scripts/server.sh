@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 배포 구성은 실행한 릴리스에서, 설정·잠금·이미지 기록은 운영 디렉터리에서 읽는다.
 RELEASE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-ROOT="${QUANT_SERVER_HOME:-$RELEASE_ROOT}"
+ROOT="${DEPLOY_PATH:-$RELEASE_ROOT}"
 cd "$ROOT"
 ROOT="$PWD"
 source "$SCRIPT_DIR/lib/server-config.sh"

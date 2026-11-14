@@ -45,7 +45,7 @@ if (args[0] === 'compose') {
   fs.chmodSync(path.join(bin, 'docker'), 0o755);
   const run = (args: string[], env: Record<string, string | undefined> = {}) => {
     const result = spawnSync(bash, [path.resolve('scripts/server.sh'), ...args], {
-      cwd: root, encoding: 'utf8', env: { ...process.env, QUANT_SERVER_HOME: root,
+      cwd: root, encoding: 'utf8', env: { ...process.env, DEPLOY_PATH: root,
         PATH: `${bin}:${process.env.PATH}`, DOCKER_CALLS: log, CANDIDATE: candidate, ...env },
     });
     const generated = path.join(root, '.server-runtime');
