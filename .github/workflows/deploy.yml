@@ -1,16 +1,14 @@
 name: Publish images
-run-name: Publish images · ${{ github.sha }}
+run-name: Publish and deploy · ${{ github.sha }}
 
 on:
-  # 서버 이전 동안 main 병합·push에 따른 자동 이미지 게시를 중지한다.
-  # push:
-  #   branches:
-  #     - main
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: quant-platform-production
@@ -36,6 +34,11 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      server-image: ghcr.io/sa04108/quant-platform@${{ steps.server-build.outputs.digest }}
     defaults:
       run:
         shell: bash
@@ -118,3 +121,70 @@ jobs:
         run: |
           docker buildx imagetools create --tag ghcr.io/sa04108/quant-agent:latest "ghcr.io/sa04108/quant-agent@$AGENT_DIGEST"
           docker buildx imagetools create --tag ghcr.io/sa04108/quant-platform:latest "ghcr.io/sa04108/quant-platform@$SERVER_DIGEST"
+
+  deploy:
+    needs: publish
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, quant-platform]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+      SERVER_IMAGE: ${{ needs.publish.outputs.server-image }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # checkout이 기존 운영 설정·상태를 청소하지 못하도록 먼저 경로를 확인한다.
+      - name: Verify persistent server directory
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_PATH" == /* && "$DEPLOY_PATH" != / ]] || {
+            echo 'DEPLOY_PATH에 기존 운영 저장소의 절대 경로를 등록하세요.' >&2
+            exit 1
+          }
+          server_home="$(realpath -e -- "$DEPLOY_PATH")"
+          runner_work_home="$(realpath -m -- "$GITHUB_WORKSPACE/../..")"
+          temporary_home="$(realpath -m -- "$RUNNER_TEMP")"
+          case "$server_home/" in
+            "$runner_work_home/"*|"$temporary_home/"*)
+              echo '운영 디렉터리는 runner checkout·임시 디렉터리 밖에 두세요.' >&2
+              exit 1
+              ;;
+          esac
+          [[ -f "$server_home/config.env" && -w "$server_home" ]] || {
+            echo '운영 디렉터리의 config.env와 쓰기 권한을 확인하세요.' >&2
+            exit 1
+          }
+      - name: Checkout verified release
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Skip superseded release
+        id: release
+        run: |
+          set -euo pipefail
+          if [[ "$(git rev-parse refs/remotes/origin/main)" != "$GITHUB_SHA" ]]; then
+            echo 'main이 갱신되어 이전 커밋의 서버 적용을 건너뜁니다.'
+            echo 'deploy=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'deploy=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Update server to verified image
+        if: steps.release.outputs.deploy == 'true'
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          # registry 인증은 이번 작업 동안만 보관한다.
+          registry_config="$(mktemp -d "$RUNNER_TEMP/quant-ghcr.XXXXXX")"
+          trap 'rm -rf -- "$registry_config"' EXIT
+          export DOCKER_CONFIG="$registry_config"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+          bash scripts/server.sh update "$SERVER_IMAGE"
+          bash scripts/server.sh status

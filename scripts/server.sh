@@ -2,7 +2,9 @@
 # config.env 한 곳에서 Docker 운영 설정을 읽는다. DB 백업·복원은 자동 수행하지 않는다.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="${QUANT_SERVER_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+# 배포 구성은 실행한 릴리스에서, 설정·잠금·이미지 기록은 운영 디렉터리에서 읽는다.
+RELEASE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ROOT="${DEPLOY_PATH:-$RELEASE_ROOT}"
 cd "$ROOT"
 ROOT="$PWD"
 source "$SCRIPT_DIR/lib/server-config.sh"
@@ -41,7 +43,7 @@ compose_image() {
     TRAEFIK_CERT_RESOLVER="${SETTINGS[TRAEFIK_CERT_RESOLVER]}" \
     TRAEFIK_TRUSTED_IPS="${SETTINGS[TRAEFIK_TRUSTED_IPS]}" \
     APP_ENV_FILE="$RENDER_DIR/app.env" COMPOSE_DISABLE_ENV_FILE=true \
-    docker compose --project-directory "$ROOT" --project-name quant-platform --env-file /dev/null -f "$ROOT/compose.yaml" "$@"
+    docker compose --project-directory "$ROOT" --project-name quant-platform --env-file /dev/null -f "$RELEASE_ROOT/compose.yaml" "$@"
 }
 compose() { compose_image "${SETTINGS[SERVER_IMAGE]}" "$@"; }
 active_image() {
@@ -80,7 +82,12 @@ update() {
   [[ "$requested" =~ ^[a-z0-9][a-zA-Z0-9./:@_-]+$ ]] || { echo '이미지 주소가 올바르지 않습니다.' >&2; return 1; }
   # 다운로드·설정 검증 실패는 실행 중인 서비스를 중지시키지 않는다.
   docker pull "$requested"
-  candidate="$(docker image inspect --format '{{index .RepoDigests 0}}' "$requested")"
+  if [[ "$requested" =~ @sha256:[a-f0-9]{64}$ ]]; then
+    # 게시 작업이 지정한 digest를 다른 로컬 이미지 참조로 바꾸지 않는다.
+    candidate="$requested"
+  else
+    candidate="$(docker image inspect --format '{{index .RepoDigests 0}}' "$requested")"
+  fi
   [[ "$candidate" =~ @sha256:[a-f0-9]{64}$ ]] || { echo '이미지 digest를 확인할 수 없습니다.' >&2; return 1; }
   if [[ -e .server-update-pending && "$(cat .server-update-pending)" != "$candidate" ]]; then
     echo '미완료 업데이트와 다른 이미지입니다. DB 호환성을 수동 복구하기 전에는 전환할 수 없습니다.' >&2
@@ -120,7 +127,7 @@ case "$command" in
         exit 1
       fi
       secret="$(od -An -N48 -tx1 /dev/urandom | tr -d ' \n')"
-      (set -o noclobber; { cat config.env.example; printf '\nSESSION_SECRET=%s\n' "$secret"; } > config.env)
+      (set -o noclobber; { cat "$RELEASE_ROOT/config.env.example"; printf '\nSESSION_SECRET=%s\n' "$secret"; } > config.env)
       echo 'config.env를 생성했습니다. 이 파일에서 도메인과 필요한 API 키를 설정하세요.'
     fi
     ;;
