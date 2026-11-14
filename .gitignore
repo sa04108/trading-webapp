@@ -124,4 +124,3 @@ test-results/
 playwright-report/
 .claude
 .worktrees/
-actions-runner/

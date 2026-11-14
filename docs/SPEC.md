@@ -198,7 +198,7 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 
 저장소가 지정한 Node·pnpm으로 개발·검증하고 서버·웹은 `pnpm build`로 빌드한다. 서버 배포 산출물은 컨테이너 이미지다. Agent용 Linux archive는 `dist/agent-runtime/`에서 Agent 이미지와 hermetic workload 검증에만 사용한다.
 
-운영 명령은 `bash scripts/server.sh init`·`validate`·`up`·`update`·`stop`·`status`·`logs`·`cli`다. 호스트 Node는 필요 없다. `pnpm deploy`는 같은 Docker 업데이트의 별칭이다. `main` push 또는 main에서 수동 실행한 workflow는 서버/Agent 이미지를 검증·게시하고 최신 main의 서버 digest를 미니 PC runner로 적용한다. 빌드와 검사는 GitHub 호스팅 runner에서 수행한다.
+운영 명령은 `bash scripts/server.sh init`·`validate`·`up`·`update`·`stop`·`status`·`logs`·`cli`다. 호스트 Node는 필요 없다. `pnpm deploy`는 같은 Docker 업데이트의 별칭이다. `main` push 또는 main에서 수동 실행한 workflow는 서버/Agent 이미지를 검증·게시하고 최신 main의 서버 digest를 미니 PC runner로 적용한다. 같은 커밋의 서버 SHA 태그와 검증 후 승격한 `latest`의 유효한 digest가 일치하면 빌드·검사를 건너뛰고 해당 digest를 재사용해 배포를 시도한다. 조회 실패나 불일치 시 전체 게이트를 실행하며 이전 배포 실패는 게시된 빌드의 재사용을 막지 않는다. 빌드와 검사는 GitHub 호스팅 runner에서 수행한다.
 
 원본 설정 변경은 검증 후 `up`으로 현재 고정 이미지에 적용한다. `update`는 후보 이미지를 먼저 확보하고 앱 설정 검증을 통과한 뒤 서비스를 중지해 DB 준비와 readiness를 확인한다. 성공 digest를 고정하고 미완료 업데이트는 이전 이미지의 `up`과 CLI를 차단한다. 설정/다운로드 실패는 실행 중인 앱을 유지하며, DB 준비 이후 실패는 중지 상태에서 같은 후보로 복구한다. 백업·복원을 자동화하지 않는다. 자세한 절차는 [Docker 서버 운영](DOCKER_SERVER.md)을 따른다.
 
@@ -210,7 +210,7 @@ CLI는 배포와 같은 잠금을 사용하며 서버가 중지된 상태에서�
 | --- | --- |
 | `pnpm lint`·`pnpm typecheck` | 정적 규칙과 서버·웹 타입 검사 |
 | `pnpm test` | 일반 회귀 검사: `tests/unit`, `tests/integration`, `tests/architecture` |
-| `pnpm test:all` | 전체 일반 회귀 검사의 릴리스 진입점(`pnpm test`). `devel` 병합 전과 서버 배포에서 필수 실행 |
+| `pnpm test:all` | 전체 일반 회귀 검사의 릴리스 진입점(`pnpm test`). `devel` 병합 전과 새 서버 이미지 게시에서 필수 실행 |
 | `pnpm test:e2e` | 빌드 후 Playwright 브라우저 검증. 이미지 게시 workflow와 별도로 실행한다. |
 | `pnpm test:agent-package` | 내부 runtime archive를 저장소 밖에서 실행해 구성·의존성·준비·계산·결과 저장 계약 검증. GHCR image workflow에서 Docker build/push 전에 실행 |
 
@@ -218,4 +218,4 @@ CLI는 배포와 같은 잠금을 사용하며 서버가 중지된 상태에서�
 
 회귀 검증은 계산·시점 정합성, 준비 결과 보존·재사용, 버전 호환성, 임대·취소·복구·결과 반영, 인증·모듈 경계를 포함한다. 계약 변경 시 해당 테스트도 변경한다.
 
-이미지 게시 게이트는 **설치 → lint → typecheck → 전체 Vitest(`test:all`) → 서버·웹 및 Agent build → Agent 패키지 검사 → 이미지 build·실행 검사**다. 변경 영향별 테스트 선택 배포는 구현된 것으로 가정하지 않는다. 기준: [vitest.config.ts](../vitest.config.ts), [test-fixtures.ts](../tests/helpers/test-fixtures.ts)·[test-app.ts](../tests/helpers/test-app.ts), [게시 workflow](../.github/workflows/deploy.yml).
+새 이미지 게시 게이트는 **설치 → lint → typecheck → 전체 Vitest(`test:all`) → 서버·웹 및 Agent build → Agent 패키지 검사 → 이미지 build·실행 검사**다. 변경 영향별 테스트 선택 배포는 구현된 것으로 가정하지 않는다. 기준: [vitest.config.ts](../vitest.config.ts), [test-fixtures.ts](../tests/helpers/test-fixtures.ts)·[test-app.ts](../tests/helpers/test-app.ts), [게시 workflow](../.github/workflows/deploy.yml).

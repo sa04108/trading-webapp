@@ -12,13 +12,13 @@
 
 ## 이미지 게시
 
-`main` push 또는 [Publish images](../.github/workflows/deploy.yml)를 `main`에서 수동 실행하면 Windows 설치기, lint·typecheck·일반 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64·arm64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행을 검사한 뒤, 같은 Agent digest를 기본값으로 포함한 amd64 서버 이미지를 `ghcr.io/sa04108/quant-platform:sha-<커밋 SHA>`로 게시·검사한다. 두 이미지 검사가 성공하면 각각의 `latest` 별칭을 갱신한다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. 패키지를 로그인 없이 내려받으려면 GitHub Packages에서 두 패키지를 Public으로 설정하고 Actions에 패키지 쓰기 권한을 부여한다.
+`main` push 또는 [Publish images](../.github/workflows/deploy.yml)를 `main`에서 수동 실행하면 먼저 서버의 `sha-<커밋 SHA>`와 `latest` 태그를 조회한다. 두 태그의 유효한 SHA-256 digest가 같으면 이전에 검증·게시한 이미지를 재사용하고 Windows 설치기 검사와 릴리스 검증·빌드·게시를 건너뛴다. 태그가 없거나 조회에 실패하거나 digest가 다르면 전체 절차를 실행한다. 전체 절차는 Windows 설치기, lint·typecheck·일반 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64·arm64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행을 검사한 뒤, 같은 Agent digest를 기본값으로 포함한 amd64 서버 이미지를 `ghcr.io/sa04108/quant-platform:sha-<커밋 SHA>`로 게시·검사한다. 모든 검증과 두 이미지 검사가 성공하면 각각의 `latest` 별칭을 갱신한다. 서버 `latest`와 `sha-<커밋 SHA>`는 검증된 게시물의 재사용 판정에 사용하므로 수동으로 다시 지정하지 않는다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. 패키지를 로그인 없이 내려받으려면 GitHub Packages에서 두 패키지를 Public으로 설정하고 Actions에 패키지 쓰기 권한을 부여한다.
 
-게시 후 미니 PC runner가 해당 서버 digest를 적용한다. 배포 직전 커밋이 최신 `main`이 아니면 적용을 건너뛴다. workflow의 동시 실행은 `quant-platform-production` 그룹으로 제한되고 실행 중인 작업은 새 실행 때문에 취소되지 않는다. 이전 서버·Agent 설치 파일이 참조하는 이미지는 자동 삭제하지 않는다.
+새로 게시하거나 재사용한 서버 digest를 미니 PC runner가 적용한다. 이전 배포가 실패했어도 게시된 빌드는 유효하므로 같은 커밋을 다시 실행하면 태그가 일치하는 경우 빌드 없이 배포를 재시도한다. 배포 직전 커밋이 최신 `main`이 아니면 적용을 건너뛴다. workflow의 동시 실행은 `quant-platform-production` 그룹으로 제한되고 실행 중인 작업은 새 실행 때문에 취소되지 않는다. 이전 서버·Agent 설치 파일이 참조하는 이미지는 자동 삭제하지 않는다.
 
 ## 자동 배포 설정
 
-미니 PC에서 최초 설정을 마친 뒤 GitHub 저장소 **Settings → Actions → Runners → New self-hosted runner**에서 Linux x64를 선택한다. 표시되는 다운로드·설정 명령을 Docker 접근 권한이 있는 일반 사용자로 실행하고 runner에 `quant-platform` label을 추가한다. runner 디렉터리에서 `sudo ./svc.sh install <사용자명>`과 `sudo ./svc.sh start`로 runner 서비스를 등록·시작한다. 앱은 Docker로 실행한다. 빌드와 검사는 GitHub 호스팅 runner에서 수행하며 미니 PC는 배포 작업만 맡는다. self-hosted runner에 접근 가능한 workflow와 브랜치를 신뢰할 수 있도록 저장소 권한을 제한한다.
+미니 PC에서 최초 설정을 마친 뒤 GitHub 저장소 **Settings → Actions → Runners → New self-hosted runner**에서 Linux x64를 선택한다. 표시되는 다운로드·설정 명령을 Docker 접근 권한이 있는 일반 사용자로 실행하고 runner에 `minipc` label을 추가한다. runner 디렉터리에서 `sudo ./svc.sh install <사용자명>`과 `sudo ./svc.sh start`로 runner 서비스를 등록·시작한다. 앱은 Docker로 실행한다. 빌드와 검사는 GitHub 호스팅 runner에서 수행하며 미니 PC는 배포 작업만 맡는다. self-hosted runner에 접근 가능한 workflow와 브랜치를 신뢰할 수 있도록 저장소 권한을 제한한다.
 
 저장소 **Settings → Secrets and variables → Actions → Secrets → New repository secret**에 `DEPLOY_PATH`를 추가하고 기존 미니 PC 저장소 디렉터리의 절대 경로로 지정한다. 공개 실행 로그에서 경로가 마스킹되도록 Variables 대신 Secrets를 사용하며 기존 `DEPLOY_PATH` Variable은 사용하지 않으므로 삭제할 수 있다. 이 디렉터리는 runner의 `_work`·`_temp` 밖에 있어야 하며 runner 사용자가 읽고 쓸 수 있어야 한다. 기존 `config.env`, `.server-image`, `.server-update-pending` 등 운영 상태를 이곳에 유지한다. 자동 배포는 릴리스 체크아웃의 `scripts/server.sh`와 Compose 설정을 사용하고 운영 디렉터리의 설정·상태를 읽으므로 그 디렉터리에서 `git pull`할 필요가 없다. 배포 작업은 GitHub 토큰으로 GHCR에 임시 로그인하며 별도의 앱 또는 SSH secret은 필요 없다.
 
