@@ -12,9 +12,9 @@
 
 ## 이미지 게시
 
-`main` push 또는 [Publish images](../.github/workflows/deploy.yml)를 `main`에서 수동 실행하면 Windows 설치기, lint·typecheck·일반 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64·arm64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행을 검사한 뒤, 같은 Agent digest를 기본값으로 포함한 amd64 서버 이미지를 `ghcr.io/sa04108/quant-platform:sha-<커밋 SHA>`로 게시·검사한다. 두 이미지 검사가 성공하면 각각의 `latest` 별칭을 갱신한다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. 패키지를 로그인 없이 내려받으려면 GitHub Packages에서 두 패키지를 Public으로 설정하고 Actions에 패키지 쓰기 권한을 부여한다.
+`main` push 또는 [Publish images](../.github/workflows/deploy.yml)를 `main`에서 수동 실행하면 먼저 서버의 `sha-<커밋 SHA>`와 `latest` 태그를 조회한다. 두 태그의 유효한 SHA-256 digest가 같으면 이전에 검증·게시한 이미지를 재사용하고 Windows 설치기 검사와 릴리스 검증·빌드·게시를 건너뛴다. 태그가 없거나 조회에 실패하거나 digest가 다르면 전체 절차를 실행한다. 전체 절차는 Windows 설치기, lint·typecheck·일반 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64·arm64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행을 검사한 뒤, 같은 Agent digest를 기본값으로 포함한 amd64 서버 이미지를 `ghcr.io/sa04108/quant-platform:sha-<커밋 SHA>`로 게시·검사한다. 모든 검증과 두 이미지 검사가 성공하면 각각의 `latest` 별칭을 갱신한다. 서버 `latest`와 `sha-<커밋 SHA>`는 검증된 게시물의 재사용 판정에 사용하므로 수동으로 다시 지정하지 않는다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. 패키지를 로그인 없이 내려받으려면 GitHub Packages에서 두 패키지를 Public으로 설정하고 Actions에 패키지 쓰기 권한을 부여한다.
 
-게시 후 미니 PC runner가 해당 서버 digest를 적용한다. 배포 직전 커밋이 최신 `main`이 아니면 적용을 건너뛴다. workflow의 동시 실행은 `quant-platform-production` 그룹으로 제한되고 실행 중인 작업은 새 실행 때문에 취소되지 않는다. 이전 서버·Agent 설치 파일이 참조하는 이미지는 자동 삭제하지 않는다.
+새로 게시하거나 재사용한 서버 digest를 미니 PC runner가 적용한다. 이전 배포가 실패했어도 게시된 빌드는 유효하므로 같은 커밋을 다시 실행하면 태그가 일치하는 경우 빌드 없이 배포를 재시도한다. 배포 직전 커밋이 최신 `main`이 아니면 적용을 건너뛴다. workflow의 동시 실행은 `quant-platform-production` 그룹으로 제한되고 실행 중인 작업은 새 실행 때문에 취소되지 않는다. 이전 서버·Agent 설치 파일이 참조하는 이미지는 자동 삭제하지 않는다.
 
 ## 자동 배포 설정
 

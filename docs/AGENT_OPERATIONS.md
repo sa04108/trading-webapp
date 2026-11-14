@@ -61,7 +61,7 @@ UID 1000과 `unless-stopped` 재시작 정책을 사용한다. Windows 로그인
 
 서버 Docker 이미지는 같은 커밋에서 검증한 Agent 이미지의 `ghcr.io/sa04108/quant-agent@sha256:<digest>`를 기본값으로 포함한다. 설치 파일은 이 참조를 담으므로 서버가 바뀐 뒤에는 현재 서버에서 새 설치 파일을 받는다. 설정값은 GHCR의 소문자 경로와 `latest`, `v-<agentVersion>` 또는 SHA-256 digest를 지원한다.
 
-`main` push 또는 main에서 수동 실행한 **Publish images** workflow는 설치기와 Agent 패키지를 검증하고 amd64·arm64 Agent 이미지를 `v-<agentVersion>` 태그로 게시한다. Agent 실행 검사 후 그 digest를 서버 이미지에 포함하고 서버 실행 검사까지 성공하면 latest 별칭을 갱신한다. 이어 미니 PC runner가 검증된 서버 digest를 적용한다. 설정과 복구는 [Docker 서버 운영](DOCKER_SERVER.md)을 따른다. 최초 게시 후 로그인 없이 설치하려면 GitHub Packages에서 패키지 visibility를 Public으로 설정해야 한다.
+`main` push 또는 main에서 수동 실행한 **Publish images** workflow는 새 빌드가 필요하면 설치기와 Agent 패키지를 검증하고 amd64·arm64 Agent 이미지를 `v-<agentVersion>` 태그로 게시한다. Agent 실행 검사 후 그 digest를 서버 이미지에 포함하고 서버 실행 검사까지 성공하면 latest 별칭을 갱신한다. 같은 커밋의 서버 SHA 태그와 검증 후 승격한 `latest`의 digest가 일치하면 검사와 빌드를 건너뛰고 그 digest를 재사용한다. 이어 미니 PC runner가 최신 main 여부를 확인하고 검증된 서버 digest를 적용한다. 배포 실패 후 같은 커밋을 재실행해도 게시된 이미지를 재사용할 수 있다. 설정과 복구는 [Docker 서버 운영](DOCKER_SERVER.md)을 따른다. 최초 게시 후 로그인 없이 설치하려면 GitHub Packages에서 패키지 visibility를 Public으로 설정해야 한다.
 
 서버 이미지와 이미 내려받은 설치 파일이 이전 Agent digest를 참조할 수 있으므로 게시 workflow는 이전 이미지를 자동 삭제하지 않는다. `scripts/publish-agent-image.mjs`의 과거 promotion 및 pruning 명령은 오래된 digest를 삭제할 수 있으므로 사용 중인 서버의 핀을 보존하는 운영 절차로 사용하지 않는다.
 

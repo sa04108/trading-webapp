@@ -15,7 +15,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  plan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      reuse: ${{ steps.image.outputs.reuse }}
+      server-image: ${{ steps.image.outputs.server-image }}
+    steps:
+      - name: Set up image inspection
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Find last verified build for commit
+        id: image
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          reuse=false
+          server_image=''
+          # latest는 모든 검사 후 갱신하므로 이미지 태그가 존재하는 것만으로 재사용하지 않는다.
+          if printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin &&
+            commit_digest="$(docker buildx imagetools inspect "ghcr.io/sa04108/quant-platform:sha-$GITHUB_SHA" --format '{{json .Manifest}}' | jq -r '.digest')" &&
+            verified_digest="$(docker buildx imagetools inspect ghcr.io/sa04108/quant-platform:latest --format '{{json .Manifest}}' | jq -r '.digest')" &&
+            [[ "$commit_digest" =~ ^sha256:[a-f0-9]{64}$ && "$commit_digest" == "$verified_digest" ]]; then
+            reuse=true
+            server_image="ghcr.io/sa04108/quant-platform@$commit_digest"
+            echo '같은 커밋의 마지막 검증 완료 이미지를 재사용합니다.'
+          else
+            echo '같은 커밋의 검증 완료 이미지를 확인하지 못해 전체 빌드를 수행합니다.'
+          fi
+          {
+            printf 'reuse=%s\n' "$reuse"
+            printf 'server-image=%s\n' "$server_image"
+          } >> "$GITHUB_OUTPUT"
+
   windows-installer:
+    needs: plan
+    if: ${{ !cancelled() && (needs.plan.result == 'skipped' || (needs.plan.result == 'success' && needs.plan.outputs.reuse != 'true')) }}
     runs-on: windows-latest
     timeout-minutes: 10
     permissions:
@@ -30,8 +71,8 @@ jobs:
         run: ./tests/windows/agent-installer.test.ps1
 
   publish:
-    needs: windows-installer
-    if: github.ref == 'refs/heads/main'
+    needs: [plan, windows-installer]
+    if: github.ref == 'refs/heads/main' && needs.plan.outputs.reuse != 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -123,8 +164,8 @@ jobs:
           docker buildx imagetools create --tag ghcr.io/sa04108/quant-platform:latest "ghcr.io/sa04108/quant-platform@$SERVER_DIGEST"
 
   deploy:
-    needs: publish
-    if: github.ref == 'refs/heads/main'
+    needs: [plan, publish]
+    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.plan.result == 'success' && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && needs.plan.outputs.reuse == 'true')) }}
     runs-on: [self-hosted, Linux, X64, quant-platform]
     timeout-minutes: 20
     permissions:
@@ -132,7 +173,7 @@ jobs:
       packages: read
     env:
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-      SERVER_IMAGE: ${{ needs.publish.outputs.server-image }}
+      SERVER_IMAGE: ${{ needs.publish.outputs.server-image || needs.plan.outputs.server-image }}
     defaults:
       run:
         shell: bash
