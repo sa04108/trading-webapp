@@ -21,8 +21,8 @@ services:
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
-    cpus: ${SERVER_CPUS:-3.0}
-    mem_limit: ${SERVER_MEMORY:-10g}
+    cpus: ${SERVER_CPUS:-4.0}
+    mem_limit: ${SERVER_MEMORY:-12g}
     pids_limit: 512
     stop_grace_period: 120s
     networks: [edge]

@@ -26,6 +26,8 @@ export interface AgentResources {
   heapMb: number;
   maxBars: number;
   budgetBytes: number;
+  /** 로컬 자식의 고정 예산 합계가 넘지 않아야 하는 전체 계산 한도다. */
+  computeBudgetBytes?: number;
   /** 운영 서버의 최소 여유 또는 API 프로세스 몫이 소진된 상태다. */
   memoryPressure?: boolean;
 }
@@ -51,24 +53,25 @@ export function calculateResources(
   server = false,
 ): AgentResources {
   const cpus = Math.max(1, Math.floor(sample.cpus));
-  // 운영 서버는 memory.high까지의 절반을 API에 남기고
+  // 작은 서버의 API 몫은 유지하되 큰 서버의 RAM 절반을 비워 두지 않는다.
   // 이미 사용 중인 API RSS를 제외한 성장 여유만 가용량에서 차감한다.
   const parentRss = Math.max(0, sample.parentRss ?? 0);
+  const apiBudget = Math.min(sample.total * 0.5, Math.max(512 * MIB, sample.total * 0.1));
   const reserveBytes = server
-    ? Math.max(64 * MIB, sample.total * 0.5 - parentRss)
+    ? Math.max(64 * MIB, apiBudget - parentRss)
     : Math.max(256 * MIB, sample.total * 0.1);
   const availableBytes = Math.max(0, sample.available - reserveBytes);
   // 회수 압박 전에 계산을 중단한다. 하드 한도에는 별도로 64 MiB를 남긴다.
   const memoryPressure = server &&
-    (parentRss >= sample.total * 0.5 || sample.available < 32 * MIB ||
+    (sample.available < 32 * MIB ||
       (sample.hardAvailable !== undefined && sample.hardAvailable < 64 * MIB));
   const workerAvailable = server
-    ? Math.min(availableBytes, sample.total * 0.5)
+    ? Math.min(availableBytes, sample.total - apiBudget)
     : availableBytes;
   const estimated = Math.max(
     // 로컬 분할 입력의 작업별 필요량은 배정과 시작 직전에 별도로 검사한다.
     server ? 0 : requestedBars * 1280,
-    // 한 개만 실행하는 서버에서 과거 큰 작업의 RSS가 다음 작은 작업까지 막지 않는다.
+    // 과거 큰 작업의 RSS가 다음 작은 작업까지 막지 않는다.
     // 개별 작업은 시작 때 고정한 예산과 실행 중 RSS 감시로 제한한다.
     server ? 0 : observedJobRss * 1.35,
     // 장치 RAM/CPU 비율은 작업의 실사용량이 아니다. 첫 실행은 기존 128 MiB
@@ -76,23 +79,18 @@ export function calculateResources(
     128 * MIB,
   );
   const otherLoad = Math.max(0, sample.load - running);
-  // 운영 서버에서는 요청 처리용 CPU 여유를 남기고 포화 상태에서 계산을 추가하지 않는다.
-  const cpuBudget = server
-    ? Math.max(1, cpus - Math.max(1, Math.ceil(cpus * 0.25)))
-    : cpus;
-  const cpuSlots =
-    server && otherLoad >= cpus
-      ? 0
-      : Math.max(server ? 0 : 1, cpuBudget - Math.floor(otherLoad));
+  // loadavg는 호스트 전체의 I/O 대기와 종료된 작업 부하도 포함한다. 로컬 계산은
+  // 실제 자식의 CPU 예약으로 제한하고 낮은 우선순위로 API에 CPU를 양보한다.
+  const cpuSlots = server ? cpus : Math.max(1, cpus - Math.floor(otherLoad));
   const possible = Math.min(
-    server ? 1 : Number.POSITIVE_INFINITY,
     memoryPressure ? 0 : Number.POSITIVE_INFINITY,
     cpuSlots,
     running + Math.floor(workerAvailable / estimated),
   );
-  // 첫 계산의 실제 RSS를 관찰하기 전에는 하나만 실행하고 그 슬롯에 가용 예산을 준다.
-  const slots = Math.max(running, profiled ? possible : Math.min(1, possible));
-  const budget = workerAvailable / Math.max(1, slots - running);
+  // 원격 장치는 첫 계산의 실제 RSS를 관찰하기 전까지 하나만 실행한다.
+  const slots = Math.max(running, server || profiled ? possible : Math.min(1, possible));
+  // 로컬은 작업별 계획과 기존 자식의 미사용 예약을 반영한 뒤 예산을 나눈다.
+  const budget = server ? workerAvailable : workerAvailable / Math.max(1, slots - running);
   const heapMb = Math.max(64, Math.floor((budget * 0.65) / MIB));
   return {
     cpus,
@@ -101,6 +99,7 @@ export function calculateResources(
     slots,
     heapMb,
     budgetBytes: budget,
+    ...(server ? { computeBudgetBytes: Math.max(0, sample.total - apiBudget) } : {}),
     memoryPressure,
     maxBars: Math.max(1, Math.floor((budget * 0.4) / 512)),
   };

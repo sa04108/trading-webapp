@@ -139,7 +139,7 @@ describe('Docker 서버 설정과 업데이트', () => {
     expect(validation.appEnv).toContain('NODE_ENV=production\n');
     expect(validation.appEnv).not.toMatch(/^(DOMAIN|SERVER_|TRAEFIK_)/m);
     expect(validation.domain).toBe('trading.hyunbbai.com');
-    expect(validation.memory).toBe('10g');
+    expect(validation.memory).toBe('12g');
     expect(validation.args).not.toContain(secret);
     // 일회성 설정 검사에 운영 라우터가 연결되면 정상 앱의 요청도 실패한다.
     expect(validation.args).toContain('traefik.enable=false');

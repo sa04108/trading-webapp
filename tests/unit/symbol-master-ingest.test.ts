@@ -46,6 +46,35 @@ async function setup(krxApps: KrxTestFactory): Promise<Ctx> {
 }
 
 describe('SymbolMasterService.ingestDate', () => {
+  it('한 시장이 실패해도 다른 시장 수집 종료를 기다리고 커버리지를 남기지 않는다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
+    let finish!: (rows: never[]) => void;
+    const delayed = new Promise<never[]>((resolve) => { finish = resolve; });
+    let started!: () => void;
+    const bothStarted = new Promise<void>((resolve) => { started = resolve; });
+    const source: SymbolMasterServiceDeps['source'] = {
+      fetchDailyTrades: async (market) => {
+        if (market === 'KOSPI') throw new Error('시장 수집 실패');
+        started();
+        return delayed;
+      },
+      fetchIssueBaseInfo: async () => { throw new Error('호출되면 안 됨'); },
+      fetchBenchmarkClose: async () => null,
+      todayMaxEndpointCallCount: () => 0,
+    };
+    const svc = new SymbolMasterService({ db: ctx.t.container.database.db, source,
+      clock: ctx.t.container.clock, logger: ctx.t.container.logger });
+    let settled = false;
+    const result = svc.ingestDate('2023-01-02').finally(() => { settled = true; });
+    await bothStarted;
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(svc.isCovered('2023-01-02')).toBe(false);
+    finish([]);
+    await expect(result).rejects.toThrow('시장 수집 실패');
+    expect(svc.isCovered('2023-01-02')).toBe(false);
+  });
+
   it('최초 수집은 baseline 버전을 만들고 이벤트가 없다', async ({ krxApps }) => {
     const ctx = await setup(krxApps);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });

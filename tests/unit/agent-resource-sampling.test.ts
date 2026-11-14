@@ -136,7 +136,7 @@ describe('에이전트 cgroup 자원 샘플링', () => {
     }));
 
     expect(result.memoryPressure).toBe(false);
-    expect(result.slots).toBe(1);
+    expect(result.slots).toBe(2);
   });
 
   it('스냅샷 읽기 직후의 활성 캐시도 매핑되지 않고 깨끗하면 회수할 수 있다', () => {

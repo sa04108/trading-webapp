@@ -48,6 +48,7 @@ const TOKEN_REFRESH_MARGIN_MS = 60_000;
 export class RestClient {
   private token: { accessToken: string; expiresAtMs: number } | null = null;
   private lastCallAtByGroup = new Map<string, number>();
+  private readonly startsByGroup = new Map<string, Promise<void>>();
   private readonly fetchImpl: typeof fetch;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly random: () => number;
@@ -88,6 +89,21 @@ export class RestClient {
     this.lastCallAtByGroup.set(group, this.clock());
   }
 
+  private async startRequest(group: string, start: () => void): Promise<void> {
+    const previous = this.startsByGroup.get(group) ?? Promise.resolve();
+    const current = previous.then(async () => {
+      await measureAsync("rest.rate_limit_wait", () => this.respectRateLimit(group));
+      start();
+    });
+    const settled = current.catch(() => undefined);
+    this.startsByGroup.set(group, settled);
+    try {
+      await current;
+    } finally {
+      if (this.startsByGroup.get(group) === settled) this.startsByGroup.delete(group);
+    }
+  }
+
   async request<T>(
     group: string,
     path: string,
@@ -103,28 +119,34 @@ export class RestClient {
 
     for (;;) {
       init.signal?.throwIfAborted();
-      await measureAsync("rest.rate_limit_wait", () => this.respectRateLimit(group));
       const token = await this.getToken();
-      init.signal?.throwIfAborted();
-      hooks.beforeAttempt?.();
 
       let response: Response;
+      let pendingStarted = false;
       try {
-        response = await measureAsync("rest.fetch_headers", () => this.fetchImpl(`${this.options.baseUrl}${path}`, {
-          ...(init.signal ? { signal: init.signal } : {}),
-          method: init.method ?? "GET",
-          headers: {
-            ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
-            ...(init.body !== undefined
-              ? { "content-type": "application/json" }
-              : {}),
-            ...init.headers,
-          },
-          ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
-        }));
+        let pending!: Promise<Response>;
+        await this.startRequest(group, () => {
+          init.signal?.throwIfAborted();
+          hooks.beforeAttempt?.();
+          pendingStarted = true;
+          pending = measureAsync("rest.fetch_headers", () => this.fetchImpl(`${this.options.baseUrl}${path}`, {
+            ...(init.signal ? { signal: init.signal } : {}),
+            method: init.method ?? "GET",
+            headers: {
+              ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
+              ...(init.body !== undefined
+                ? { "content-type": "application/json" }
+                : {}),
+              ...init.headers,
+            },
+            ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+          }));
+          void pending.catch(() => undefined);
+        });
+        response = await pending;
       } catch (error) {
         init.signal?.throwIfAborted();
-        hooks.onTransientFailure?.();
+        if (pendingStarted) hooks.onTransientFailure?.();
         throw error;
       }
 

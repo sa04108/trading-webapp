@@ -83,6 +83,7 @@ interface Running {
   >["preparationProgress"];
   peakRss: number;
   budgetBytes: number;
+  cpuBudget: number;
   resourceError?: string;
   observation: WorkerObservation;
   cancellationReason?: string;
@@ -375,14 +376,37 @@ export class AgentClient {
     return this.admission.budgetBytes;
   }
 
-  private capacity(): void {
-    if (!this.ready) return;
-    this.admission = (this.runtime?.resources ?? availableResources)(
+  /** 이미 시작한 자식의 미사용 예산까지 예약해 동시에 성장해도 중복 배정하지 않는다. */
+  private resources(): AgentResources {
+    const resources = (this.runtime?.resources ?? availableResources)(
       this.running.size + this.universeTasks.size,
       this.observedRss,
       this.profiled,
       this.requestedBars,
     );
+    if (!this.runtime) return resources;
+    let reservedBytes = 0;
+    let allocatedBytes = 0;
+    let reservedCpus = 0;
+    for (const running of this.running.values()) {
+      const rss = running.child.pid ? processRss(running.child.pid) : 0;
+      reservedBytes += Math.max(0, running.budgetBytes - rss);
+      allocatedBytes += running.budgetBytes;
+      reservedCpus += running.cpuBudget;
+    }
+    // cgroup 측정과 RSS 조회 사이의 증가량이나 공유 페이지를 새 예산으로 중복 인정하지 않는다.
+    const budgetBytes = Math.max(0, Math.min(resources.budgetBytes - reservedBytes,
+      (resources.computeBudgetBytes ?? Number.POSITIVE_INFINITY) - allocatedBytes));
+    const cpus = Math.max(0, resources.cpus - reservedCpus);
+    const freeSlots = resources.memoryPressure ? 0 : Math.max(0, Math.min(
+      resources.slots - this.running.size, cpus, Math.floor(budgetBytes / (128 * 1024 ** 2)),
+    ));
+    return { ...resources, cpus, budgetBytes, slots: this.running.size + freeSlots };
+  }
+
+  private capacity(): void {
+    if (!this.ready) return;
+    this.admission = this.resources();
     const slots = this.admission.slots;
     this.send({
       type: "CAPACITY",
@@ -464,12 +488,10 @@ export class AgentClient {
   private spawn(lease: AgentLease): void {
     if (this.runtime) {
       // 배정 이후 자원이 바뀌거나 이전 리스의 자식이 아직 종료 중이면 시작하지 않는다.
-      this.admission = this.runtime.resources(
-        this.running.size, this.observedRss, this.profiled, this.requestedBars,
-      );
+      this.admission = this.resources();
       const memoryPlan = lease.kind === "BACKTEST"
         ? lease.memoryPlan ?? backtestMemoryPlan(lease.payload) : null;
-      if (this.running.size >= 1 || this.admission.slots < 1 || this.admission.memoryPressure ||
+      if (this.admission.slots <= this.running.size || this.admission.memoryPressure ||
           (memoryPlan && this.admission.budgetBytes < memoryPlan.requiredBytes)) {
         if (lease.kind === "BACKTEST" && memoryPlan) {
           // 반환 통지 전에 새 배정을 막는다. 재시작·ACK 재전송도 기존 outbox가 보장한다.
@@ -487,6 +509,14 @@ export class AgentClient {
           "RESOURCE_BUDGET_EXCEEDED");
         return;
       }
+      // 백테스트는 한 코어씩 실행하며 큰 입력은 필요한 만큼 예산을 합친다.
+      // 준비 작업은 남은 CPU·메모리를 사용해 독립 리밸런스 날짜를 병렬 계산한다.
+      const budgetBytes = lease.kind === "BACKTEST"
+        ? Math.max(memoryPlan!.requiredBytes,
+            this.admission.budgetBytes / Math.max(1, this.admission.slots - this.running.size))
+        : this.admission.budgetBytes;
+      this.admission = { ...this.admission, budgetBytes,
+        heapMb: Math.max(64, Math.floor(budgetBytes * 0.65 / 1024 ** 2)) };
     }
     const key = this.key(lease);
     const directory = path.join(this.directory, "jobs", key);
@@ -516,7 +546,9 @@ export class AgentClient {
       lease.kind === "PREPARATION"
         ? `../runtime/workers/preparation-child.${ts ? "ts" : "js"}`
         : `../runtime/workers/backtest-child.${ts ? "ts" : "js"}`;
-    const cpuBudget = Math.max(1, Math.floor(this.admission.cpus / Math.max(1, this.admission.slots)));
+    const cpuBudget = this.runtime
+      ? lease.kind === "BACKTEST" ? 1 : Math.max(1, this.admission.cpus)
+      : Math.max(1, Math.floor(this.admission.cpus / Math.max(1, this.admission.slots)));
     const heapMb = lease.kind === "PREPARATION"
       ? preparationHeapMb(this.admission.budgetBytes, cpuBudget, this.admission.heapMb)
       : this.admission.heapMb;
@@ -566,6 +598,7 @@ export class AgentClient {
       jobPath,
       peakRss: 0,
       budgetBytes: this.admission.budgetBytes,
+      cpuBudget,
       cancellation: false,
       observation,
       timers,
@@ -691,6 +724,7 @@ export class AgentClient {
       }
     });
     this.log(`${lease.kind} 작업 시작: ${lease.jobId}`);
+    if (this.runtime) this.capacity();
   }
 
   private inspectExecution(running: Running): WorkerDiagnostics {

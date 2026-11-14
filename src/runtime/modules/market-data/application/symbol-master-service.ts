@@ -207,6 +207,13 @@ function metricDecimalText(raw: string | null): string | null {
     : BigInt(raw.replaceAll(",", "").trim()).toString();
 }
 
+async function settleMarketPair<T>(first: Promise<T>, second: Promise<T>): Promise<[T, T]> {
+  const [left, right] = await Promise.allSettled([first, second]);
+  if (left.status === "rejected") throw left.reason;
+  if (right.status === "rejected") throw right.reason;
+  return [left.value, right.value];
+}
+
 export class SymbolMasterService {
   /**
    * 같은 date 로 겹쳐 들어온 호출을 하나로 묶는다 — POST /symbol-master/sync 이중 클릭,
@@ -349,10 +356,9 @@ export class SymbolMasterService {
 
     // 두 시장 모두 거래가 없으면 휴장이다. 기본정보는 휴장에도 조회되는 정적 데이터라
     // 거래 유무로만 거래일 여부를 가른다.
-    const kospiTrades = await this.deps.source.fetchDailyTrades("KOSPI", date);
-    const kosdaqTrades = await this.deps.source.fetchDailyTrades(
-      "KOSDAQ",
-      date,
+    const [kospiTrades, kosdaqTrades] = await settleMarketPair(
+      this.deps.source.fetchDailyTrades("KOSPI", date),
+      this.deps.source.fetchDailyTrades("KOSDAQ", date),
     );
     if (kospiTrades.length === 0 && kosdaqTrades.length === 0) {
       return this.deps.db.transaction((tx) => {
@@ -367,13 +373,9 @@ export class SymbolMasterService {
       });
     }
 
-    const kospiBaseInfo = await this.deps.source.fetchIssueBaseInfo(
-      "KOSPI",
-      date,
-    );
-    const kosdaqBaseInfo = await this.deps.source.fetchIssueBaseInfo(
-      "KOSDAQ",
-      date,
+    const [kospiBaseInfo, kosdaqBaseInfo] = await settleMarketPair(
+      this.deps.source.fetchIssueBaseInfo("KOSPI", date),
+      this.deps.source.fetchIssueBaseInfo("KOSDAQ", date),
     );
     const modeledBeforeWrite = this.readUniverseAsOfInternal(date);
     this.assertBaseInfoPresent(

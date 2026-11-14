@@ -62,8 +62,11 @@ const it = agentBase.extend<{ scenario: Scenario }>({
     let localAvailable = true;
     // 이 통합 검사는 tsx 자식의 배정 계약을 검증한다. 1 GB 배포 예산은 자원 단위 검사와
     // compiled 서버의 cgroup 검증에서 확인하며 개발용 TS 로더 메모리는 그 예산에 섞지 않는다.
-    vi.spyOn(resources, 'availableServerResources').mockImplementation((running, observed, profiled, requestedBars) =>
-      resources.calculateResources({ cpus: 2, total: 4 * GIB, available: localAvailable ? 3 * GIB : GIB, load: 0 }, running, observed, profiled, requestedBars, true));
+    vi.spyOn(resources, 'availableServerResources').mockImplementation((running, observed, profiled, requestedBars) => {
+      const capacity = resources.calculateResources({ cpus: 2, total: 4 * GIB, available: 3 * GIB, load: 0 }, running, observed, profiled, requestedBars, true);
+      // 새 배정만 막고 이미 실행 중인 자식의 메모리 압력은 만들지 않는다.
+      return { ...capacity, slots: localAvailable ? capacity.slots : running };
+    });
     seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [{ standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '1000000000' }]);
     registerSymbols(ctx.container, 'KR', ['005930']);
     seedDailyBars(ctx.container.database.db, [{ symbol: '005930', market: 'KR', timeframe: '1d', tsMs: Date.parse('2026-01-05T00:00:00Z'), open: 100, high: 110, low: 90, close: 105, volume: 1000 }]);
@@ -103,7 +106,7 @@ const it = agentBase.extend<{ scenario: Scenario }>({
 });
 
 describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
-  it('두 작업을 한 로컬 워커씩 순서대로 완료하고 HTTP 응답을 유지한다', { timeout: 90_000 }, async ({ scenario }) => {
+  it('두 작업을 여러 로컬 워커에서 완료하고 HTTP 응답을 유지한다', { timeout: 90_000 }, async ({ scenario }) => {
     const { ctx, finished } = scenario;
     ctx.container.agentCoordinator.start();
     await ctx.container.agentCoordinator.snapshots.ensureLatest();
@@ -132,7 +135,7 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
       clearInterval(sample);
       await Promise.all(probes);
     }
-    expect(maxRunning).toBe(1);
+    expect(maxRunning).toBe(2);
     expect(statuses.length).toBeGreaterThan(0);
     expect(unexpectedResponses).toEqual([]);
     for (const job of [first, second])

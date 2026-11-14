@@ -26,6 +26,7 @@ type HarnessRunning = MemoryGuardRunning & {
   jobPath: string;
   peakRss: number;
   budgetBytes: number;
+  cpuBudget: number;
   observation: {
     exited: boolean;
     snapshot: () => { exited: boolean };
@@ -118,6 +119,7 @@ function harness(local: boolean, memoryPressure: boolean, cancelling = false) {
     jobPath: path.join(directory, "job.sqlite"),
     peakRss: 0,
     budgetBytes: 1,
+    cpuBudget: 1,
     cancellation: cancelling,
     timers: [],
     observation: {
@@ -232,7 +234,7 @@ describe("AgentClient 메모리 보호", () => {
     expect(fs.existsSync(path.join(h.client.directory, "jobs", "memory-guard-1"))).toBe(false);
   });
 
-  it("기존 로컬 자식이 drain 중이면 다음 작업 폴더를 만들기 전에 거절한다", () => {
+  it("마지막 코어를 쓰는 로컬 자식이 drain 중이면 다음 작업을 거절한다", () => {
     const h = harness(true, false);
     const failure = vi.spyOn(
       h.client as unknown as SetupFailureClient,
@@ -245,5 +247,30 @@ describe("AgentClient 메모리 보호", () => {
       "RESOURCE_BUDGET_EXCEEDED",
     );
     expect(fs.existsSync(path.join(h.client.directory, "jobs", "next-memory-guard-1"))).toBe(false);
+  });
+
+  it("자식 RSS가 별도 측정되어도 고정 예산 합계와 CPU 한도 안에서 병렬 시작한다", () => {
+    const h = harness(true, false);
+    h.running.budgetBytes = 1024 ** 3;
+    h.runtime!.resources = () => ({ ...resources(false)(0), cpus: 4, slots: 4,
+      budgetBytes: 4 * 1024 ** 3, computeBudgetBytes: 4 * 1024 ** 3 });
+    vi.mocked(fork).mockClear();
+    h.internals.spawn({ ...lease(), jobId: "parallel-preparation" });
+    expect(fork).toHaveBeenCalledWith(expect.any(String), [], expect.objectContaining({
+      env: expect.objectContaining({ WORKER_BUDGET_BYTES: String(3 * 1024 ** 3), WORKER_CPU_BUDGET: "3" }),
+    }));
+  });
+
+  it("RSS가 아직 작아도 기존 자식이 앞으로 쓸 예산을 다음 작업에 중복 배정하지 않는다", () => {
+    const h = harness(true, false);
+    h.running.child.pid = 0;
+    h.running.budgetBytes = 1024 ** 3;
+    h.runtime!.resources = () => ({ ...resources(false)(0), cpus: 4, slots: 4,
+      budgetBytes: 1024 ** 3 + 64 * 1024 ** 2 });
+    const failure = vi.spyOn(h.client as unknown as SetupFailureClient, "failSetup")
+      .mockImplementation(() => undefined);
+    h.internals.spawn({ ...lease(), jobId: "unreserved-memory" });
+    expect(failure).toHaveBeenCalledWith(expect.anything(), expect.any(Error), "RESOURCE_BUDGET_EXCEEDED");
+    expect(fs.existsSync(path.join(h.client.directory, "jobs", "unreserved-memory-1"))).toBe(false);
   });
 });
