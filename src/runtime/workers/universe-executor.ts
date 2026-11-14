@@ -7,13 +7,8 @@ import { UniverseResolutionCancelledError, type UniverseRuleResolver,
 import { partitionRebalanceDates, UniverseResolutionAccumulator } from "../modules/backtest/application/universe-resolution-partitions.js";
 import { decodeUniverseResolution } from "../modules/backtest/application/universe-resolution-wire.js";
 
-const MIB = 1024 ** 2;
-
-/** 부모와 각 isolate의 native/SQLite 여유까지 확보한 뒤에만 내부 병렬화를 켠다. */
-export function universeParallelism(budgetBytes: number, cpuBudget: number): number {
-  const count = Math.min(4, Math.floor(cpuBudget), Math.floor((budgetBytes - 192 * MIB) / (256 * MIB)));
-  return Number.isFinite(count) && count >= 2 ? count : 0;
-}
+import { universeParallelism, universeThreadHeapMb } from "../shared/universe-resources.js";
+export { universeParallelism, universeThreadHeapMb } from "../shared/universe-resources.js";
 
 export class UniverseExecutor {
   private readonly workers: Worker[] = [];
@@ -123,7 +118,7 @@ export class UniverseExecutor {
       worker = new Worker(new URL(`./universe-child.${ts ? "ts" : "js"}`, import.meta.url), {
         workerData: { dataPath: this.options.dataPath, collectionVersion: this.options.collectionVersion },
         execArgv: ts ? ["--import", "tsx"] : [],
-        resourceLimits: { maxOldGenerationSizeMb: 128, maxYoungGenerationSizeMb: 4 },
+        resourceLimits: { maxOldGenerationSizeMb: universeThreadHeapMb(this.options.budgetBytes, this.parallelism), maxYoungGenerationSizeMb: 4 },
       });
       this.workers[lane] = worker;
     }

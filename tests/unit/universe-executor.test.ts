@@ -1,5 +1,6 @@
+import { preparationHeapMb } from '../../src/runtime/shared/universe-resources.js';
 import { describe, expect, it, vi } from 'vitest';
-import { UniverseExecutor, universeParallelism } from '../../src/runtime/workers/universe-executor.js';
+import { UniverseExecutor, universeParallelism, universeThreadHeapMb } from '../../src/runtime/workers/universe-executor.js';
 import { UniverseResolutionCancelledError, type UniverseResolveAttempt, type UniverseRuleResolver } from '../../src/runtime/modules/backtest/application/universe-rule-resolver.js';
 import { encodeUniverseResolution } from '../../src/runtime/modules/backtest/application/universe-resolution-wire.js';
 import { computeRebalanceDates } from '../../src/shared/schemas/rebalance-interval.js';
@@ -142,5 +143,12 @@ describe('UniverseExecutor', () => {
     expect(universeParallelism(4096 * MIB, 1)).toBe(0);
     expect(universeParallelism(Number.NaN, 4)).toBe(0);
     expect(universeParallelism(Infinity, Infinity)).toBe(4);
+    expect(universeParallelism(5 * 1024 * MIB, 3)).toBe(3);
+    expect(universeThreadHeapMb(704 * MIB, 2)).toBe(128);
+    expect(universeThreadHeapMb(5 * 1024 * MIB, 3)).toBe(426);
+    expect(preparationHeapMb(5 * 1024 * MIB, 3, 3328)).toBe(426);
+    expect(preparationHeapMb(5 * 1024 * MIB, 1, 3328)).toBe(3328);
+    expect(preparationHeapMb(5 * 1024 * MIB, 3, 300)).toBe(300);
+    expect(universeThreadHeapMb(64 * 1024 * MIB, 4)).toBe(1024);
   });
 });

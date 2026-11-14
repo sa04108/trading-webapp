@@ -7,6 +7,57 @@ import { afterEach, describe, expect, it } from 'vitest';
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
 const roots: string[] = [];
 
+describe('Docker 서버 업데이트 복구 경계', () => {
+  it('실패한 준비 뒤 이전 이미지 시작을 막고 같은 후보의 성공 뒤에만 pin을 바꾼다', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'docker-release-'));
+    roots.push(root);
+    const bin = path.join(root, 'bin');
+    fs.mkdirSync(bin);
+    fs.mkdirSync(path.join(root, 'infra/server'), { recursive: true });
+    fs.copyFileSync('server.env.example', path.join(root, 'server.env.example'));
+    fs.copyFileSync('infra/server/app.env.example', path.join(root, 'infra/server/app.env.example'));
+    const oldImage = `ghcr.io/example/server@sha256:${'a'.repeat(64)}`;
+    const candidate = `ghcr.io/example/server@sha256:${'b'.repeat(64)}`;
+    fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/bash
+printf '%s\\n' "$*" >> "$DOCKER_CALLS"
+case "$*" in
+  pull*) exit 0 ;;
+  'image inspect'*) printf '%s\\n' "$CANDIDATE" ;;
+  *'config --images server') echo ghcr.io/example/server:latest ;;
+  *'run --rm --no-deps -T server node dist/server/cli.js db:prepare') exit "\${PREPARE_EXIT:-0}" ;;
+  *'up -d --pull never --wait --wait-timeout 180') exit "\${START_EXIT:-0}" ;;
+  *'ps --status running --services server') if [[ "\${SERVER_RUNNING:-0}" == 1 ]]; then echo server; fi ;;
+esac
+exit 0
+`);
+    fs.chmodSync(path.join(bin, 'docker'), 0o755);
+    const log = path.join(root, 'docker.log');
+    const run = (args: string[], env: Record<string, string | undefined> = {}) => spawnSync(bash,
+      [path.resolve('scripts/server.sh'), ...args], {
+        cwd: root, encoding: 'utf8', env: { ...process.env, QUANT_SERVER_HOME: root,
+          PATH: `${bin}:${process.env.PATH}`, DOCKER_CALLS: log, CANDIDATE: candidate, ...env },
+      });
+    expect(run(['init']).status).toBe(0);
+    const originalSecret = fs.readFileSync(path.join(root, 'app.env'), 'utf8');
+    expect(run(['init']).status).toBe(0);
+    expect(fs.readFileSync(path.join(root, 'app.env'), 'utf8')).toBe(originalSecret);
+    fs.writeFileSync(path.join(root, '.server-image'), `${oldImage}\n`);
+    expect(run(['cli', 'admin:create'], { SERVER_RUNNING: '1' }).status).not.toBe(0);
+    for (const failure of [{ PREPARE_EXIT: '1' }, { START_EXIT: '1' }]) {
+      expect(run(['update'], failure).status).not.toBe(0);
+      expect(fs.readFileSync(path.join(root, '.server-image'), 'utf8').trim()).toBe(oldImage);
+      expect(fs.readFileSync(path.join(root, '.server-update-pending'), 'utf8').trim()).toBe(candidate);
+      fs.writeFileSync(log, '');
+      expect(run(['up']).status).not.toBe(0);
+      expect(fs.readFileSync(log, 'utf8')).not.toContain('up -d');
+    }
+    expect(run(['update']).status).toBe(0);
+    expect(fs.existsSync(path.join(root, '.server-update-pending'))).toBe(false);
+    expect(fs.readFileSync(path.join(root, '.server-image'), 'utf8').trim()).toBe(candidate);
+    expect(fs.readFileSync(path.join(root, '.server-image.previous'), 'utf8').trim()).toBe(oldImage);
+  });
+});
+
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });

@@ -1,8 +1,8 @@
 # 스펙 §29 — /etc/systemd/system/quant-platform.service
 [Unit]
 Description=Quant Trading Platform
-After=network-online.target
-Wants=network-online.target
+After=network-online.target docker.service
+Wants=network-online.target docker.service
 
 [Service]
 Type=simple
@@ -10,10 +10,11 @@ User=quant
 Group=quant
 WorkingDirectory=/opt/quant-platform/current
 EnvironmentFile=/etc/quant-platform/app.env
+EnvironmentFile=-/etc/quant-platform/network.env
 ExecStart=/usr/local/bin/node /opt/quant-platform/current/dist/server/bootstrap/main.js
 Restart=on-failure
 RestartSec=5
-TimeoutStopSec=30
+TimeoutStopSec=120
 
 NoNewPrivileges=true
 PrivateTmp=true
@@ -34,12 +35,10 @@ ReadWritePaths=/var/lib/quant-platform
 ReadOnlyPaths=/opt/quant-platform/current
 
 LimitNOFILE=65536
-# 909MB 박스에서 앱이 555MB 만 써도 시스템(sshd·journald·caddy)이 질식했다
-# (2026-07-28 장애, D-023). MemoryHigh 에서 먼저 회수 압박을 걸어 Max 도달 전에
-# 스왑·캐시로 밀어내고, 캡도 시스템 몫 ~270MB 를 남기는 선까지 내린다.
-MemoryHigh=512M
-MemoryMax=640M
-TasksMax=256
+CPUQuota=300%
+MemoryHigh=10G
+MemoryMax=10G
+TasksMax=512
 
 StandardOutput=journal
 StandardError=journal

@@ -1,0 +1,47 @@
+name: quant-platform
+services:
+  server:
+    image: ${SERVER_IMAGE:-ghcr.io/sa04108/quant-platform:latest}
+    init: true
+    restart: unless-stopped
+    env_file:
+      - path: ./app.env
+        format: raw
+    environment:
+      APP_BIND_ADDRESS: 0.0.0.0
+      APP_PORT: '3000'
+      TRUST_PROXY_LOOPBACK: 'false'
+      TRUST_PROXY_ADDRESSES: ${TRAEFIK_TRUSTED_IPS:-}
+    volumes:
+      - server_data:/var/lib/quant-platform
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cpus: ${SERVER_CPUS:-3.0}
+    mem_limit: ${SERVER_MEMORY:-10g}
+    pids_limit: 512
+    stop_grace_period: 120s
+    networks: [edge]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:-infra-proxy}
+      - traefik.http.routers.quant-platform.rule=Host(`${DOMAIN:?server.env에 DOMAIN을 설정하세요}`)
+      - traefik.http.routers.quant-platform.entrypoints=${TRAEFIK_HTTPS_ENTRYPOINT:-websecure}
+      - traefik.http.routers.quant-platform.tls=true
+      - traefik.http.routers.quant-platform.tls.certresolver=${TRAEFIK_CERT_RESOLVER-letsencrypt}
+      - traefik.http.routers.quant-platform.service=quant-platform
+      - traefik.http.services.quant-platform.loadbalancer.server.port=3000
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: '5'
+networks:
+  edge:
+    external: true
+    name: ${TRAEFIK_NETWORK:-infra-proxy}
+volumes:
+  server_data:

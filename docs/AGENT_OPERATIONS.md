@@ -37,7 +37,7 @@ flowchart LR
 3. `quant-agent-windows.cmd`를 실행한다. Docker Desktop이 없으면 winget으로 설치하고,
    설치되어 있으면 시작한 뒤 Linux 엔진을 기다린다. Windows 기능 설정·UAC·최초 약관 확인·
    재부팅 안내가 나오면 해당 절차를 마친 뒤 같은 설치 파일을 다시 실행한다.
-4. 최신 이미지를 받은 뒤 컨테이너가 실행된다. 웹에서 장치의 최근 연결을 확인한다.
+4. 설치 파일에 지정된 이미지를 받은 뒤 컨테이너가 실행된다. 웹에서 장치의 최근 연결을 확인한다.
 
 설치기는 로컬 `desktop-linux` 컨텍스트만 사용한다. 원격 Docker 호스트, Windows 컨테이너와
 HTTP 로컬 개발 서버는 지원하지 않는다. 운영 서버의 HTTPS 주소에 접근할 수 있어야 한다.
@@ -48,47 +48,26 @@ HTTP 로컬 개발 서버는 지원하지 않는다. 운영 서버의 HTTPS 주�
 `settings.json`에 저장하지 않는다. Docker 관리자는 컨테이너 환경변수를 확인할 수 있다.
 
 컨테이너 이름은 `quant-agent-<토큰 SHA-256 앞 12자리>`, 볼륨은 같은 이름 뒤의 `-state`다.
-같은 설치 파일을 다시 실행하면 반드시 latest를 pull하고 확인한 이미지 ID로 교체한다.
+같은 설치 파일을 다시 실행하면 지정된 이미지를 pull하고 확인한 이미지 ID로 교체한다.
 다운로드에 실패하면 기존 컨테이너를 보존한다. 캐시·미전송 결과는 named volume의
 `/var/lib/quant-agent`에 남는다. 새 토큰으로 설치하면 별도 장치와 볼륨을 만든다.
 
 UID 1000과 `unless-stopped` 재시작 정책을 사용한다. Windows 로그인 시 Docker Desktop
 자동 시작을 켜 둔다. Windows 절전·종료와 Docker Desktop 종료 중에는 계산할 수 없다.
 컨테이너는 실행 파일을 자체 업데이트하지 않는다. 서버와 버전이 다르면 작업을 중단하고
-최신 이미지 설치를 안내하므로 보관한 설치 파일을 다시 실행한다.
+새 설치를 안내하므로 현재 서버의 설정 → Agent에서 저장한 기존 활성 토큰으로 설치 파일을 다시 다운로드하여 실행한다. 토큰을 보관하지 않았다면 기존 장치를 해제하고 새 토큰을 발급한다. 새 토큰은 별도 캐시 볼륨을 사용한다.
 
-## GHCR 이미지 게시와 두 버전 보존
+## GHCR 이미지 게시와 보존
 
-기본 이미지는 `ghcr.io/sa04108/quant-agent:latest`다. 다른 계정으로 배포하면 workflow의
-이미지 경로와 서버의 `AGENT_CONTAINER_IMAGE=ghcr.io/<계정>/<이미지>:latest`를 함께 맞춘다.
-최초 게시 후 GitHub Packages에서 이미지 패키지의 visibility를 **Public**으로 설정해야
-로그인 없이 설치할 수 있다. 연결된 저장소의 Actions에 패키지 관리 권한도 필요하다.
+서버 Docker 이미지는 같은 커밋에서 검증한 Agent 이미지의 `ghcr.io/sa04108/quant-agent@sha256:<digest>`를 기본값으로 포함한다. 설치 파일은 이 참조를 담으므로 서버가 바뀐 뒤에는 현재 서버에서 새 설치 파일을 받는다. 기존 systemd 설정은 `AGENT_CONTAINER_IMAGE`를 지정하지 않으면 `ghcr.io/sa04108/quant-agent:latest`를 사용한다. 설정값은 GHCR의 소문자 경로와 `latest`, `v-<agentVersion>` 또는 SHA-256 digest를 지원한다.
 
-main push 또는 수동 실행으로 시작하는 **Deploy production** workflow는 Windows PowerShell 설치 시나리오를 검증하고,
-`.node-version`과 같은 Node로 두 아키텍처 이미지를 빌드한다. 후보 이미지의 실제 실행을
-확인한 뒤 서버를 배포한다. 성공하면 기존 latest를 previous로 보존하고 후보를 latest로
-승격한다. 후보 태그는 `v-<agentVersion>`이며, 사용자 설치기는 latest만 선택한다.
-서버 배포 실패 시 후보를 정리하고 기존 latest/previous를 보존한다.
+main push 또는 수동 실행의 **Publish images** workflow는 설치기와 Agent 패키지를 검증하고 amd64·arm64 Agent 이미지를 `v-<agentVersion>` 태그로 게시한다. Agent 실행 검사 후 그 digest를 서버 이미지에 포함하고 서버 실행 검사까지 성공하면 latest 별칭을 갱신한다. 일반 push는 서버에 SSH 배포하지 않는다. 최초 게시 후 로그인 없이 설치하려면 GitHub Packages에서 패키지 visibility를 Public으로 설정해야 한다.
 
-`scripts/publish-agent-image.mjs`는 latest·previous **두 릴리스**와 이들이 참조하는
-아키텍처 manifest·빌드 증명만 남긴다. 첫 게시에는 latest 하나만 있다. 하위 manifest는
-별도 실행 버전이 아니므로 Packages의 항목 수는 2보다 많을 수 있다.
-삭제가 거부되면 workflow도 실패하며 정리 성공으로 처리하지 않는다. GitHub는 공개 버전의
-다운로드가 5,000을 넘으면 삭제를 제한하므로 해당 경우 GitHub 지원이 필요하다.
-
-백업 복구 시 previous의 digest와 서버 agentVersion을 확인하고 서버도 같은 실행 코드로
-복원한다. 게시 권한 환경의 `AGENT_IMAGE`, `GH_TOKEN`, `GITHUB_ACTOR`, `GITHUB_REPOSITORY`,
-`GITHUB_REPOSITORY_OWNER`를 설정해 다음 명령을 실행한다. 사용자 설치기는 복구 후에도 latest를 받는다.
-
-```bash
-node scripts/publish-agent-image.mjs --promote sha256:<복구할-digest>
-# 현재 latest/previous를 보존하며 실패 후보를 정리한다.
-node scripts/publish-agent-image.mjs --prune-only
-```
+서버 이미지와 이미 내려받은 설치 파일이 이전 Agent digest를 참조할 수 있으므로 게시 workflow는 이전 이미지를 자동 삭제하지 않는다. `scripts/publish-agent-image.mjs`의 과거 promotion 및 pruning 명령은 오래된 digest를 삭제할 수 있으므로 사용 중인 서버의 핀을 보존하는 운영 절차로 사용하지 않는다.
 
 ## 컨테이너 상태와 자원 관리
 
-설치 파일은 토큰 발급 후 웹에서 다운로드한다. 연결 토큰은 CMD 파일에 포함되며 한 번만 표시되므로 파일을 보호한다. 같은 CMD 파일을 다시 실행하면 최신 이미지를 pull해 컨테이너를 교체한다. 서버 주소와 토큰은 컨테이너 실행 때 `QUANT_AGENT_SERVER_URL`, `QUANT_AGENT_TOKEN` 환경변수로 전달하고 named volume의 파일이나 이미지에는 넣지 않는다.
+설치 파일은 토큰 발급 후 웹에서 다운로드한다. 연결 토큰은 CMD 파일에 포함되며 한 번만 표시되므로 파일을 보호한다. 같은 CMD 파일을 다시 실행하면 파일에 지정된 이미지를 pull해 컨테이너를 교체한다. 서버 주소와 토큰은 컨테이너 실행 때 `QUANT_AGENT_SERVER_URL`, `QUANT_AGENT_TOKEN` 환경변수로 전달하고 named volume의 파일이나 이미지에는 넣지 않는다.
 
 컨테이너 이름은 `quant-agent-<토큰 SHA-256 앞 12자리>`, 데이터 볼륨은 이름 뒤에 `-state`를 붙인다. `/var/lib/quant-agent`에 로컬 스냅샷 캐시, 작업 상태, 전송 대기 결과를 보관한다. 재설치·이미지 업데이트는 이 볼륨을 유지한다. named volume을 직접 지우면 저장된 데이터와 미전송 결과가 함께 삭제된다.
 
@@ -118,13 +97,15 @@ docker --context desktop-linux logs --tail 100 <컨테이너 이름>
 다시 다운로드하지 않는다. 별도 설치, 장치 토큰 또는 worker.env 설정은 필요 없다.
 작업 상태와 전송 대기 결과는 계산 DB 옆 `server-agent/`에 보존한다.
 
-1 GB 운영 서버의 서비스 제한은 `MemoryHigh=512M`, `MemoryMax=640M`을 유지한다.
+Docker·systemd G3 서버의 기본 한도는 CPU 3개·RAM 10GiB이며 계산 예산은 최대 약 5GiB다.
+상세 운영·병렬도는 [Docker 서버 운영](DOCKER_SERVER.md#g3-기본-자원)을 따른다.
+systemd 서비스도 `CPUQuota=300%`, `MemoryHigh=10G`, `MemoryMax=10G`를 기본으로 사용한다. 1GB 호스트에는 이 기본값을 그대로 적용하지 말고 호스트 용량에 맞게 별도로 줄여야 한다.
 로컬 계산은 CPU 수와 관계없이 동시에 한 개다. 물리 RAM과 현재·상위 cgroup의
 `memory.high`/`memory.max` 중 작은 값을 운영 예산으로 보고 절반을 API에 남긴다.
 API의 현재 RSS는 가용량에서 이미 빠졌으므로, 추가 성장 여유
 `max(64 MiB, 운영 예산/2 - API RSS)`만 차감한다. 워커 예산은 남은 가용량과 운영
-예산의 절반 중 작은 값이다. 기본 운영 설정에서는 워커 RSS 최대 256 MiB,
-V8 old-space 최대 166 MiB, young-generation semi-space 4 MiB다. API 사용량·다른 자식·시스템 여유가 부족하면 더 줄거나 대기한다.
+예산의 절반 중 작은 값이다. 예를 들어 운영 예산이 512MiB인 작은 서버에서는 워커 RSS 최대 256MiB,
+V8 old-space 최대 166MiB, young-generation semi-space 4MiB다. G3에서는 더 큰 작업 예산에 비례하여 확장한다. API 사용량·다른 자식·시스템 여유가 부족하면 더 줄거나 대기한다.
 
 스냅샷 조회 후 남는 깨끗하고 매핑되지 않은 파일 캐시는 활성·비활성 LRU 모두 회수 가능한
 용량으로 계산한다. dirty·writeback·프로세스에 매핑된 페이지는 제외한다. 하드 한도에서도
@@ -158,7 +139,7 @@ CPU 여유분과 낮은 계산 우선순위도 유지한다.
 
 API와 자식은 같은 cgroup에 있으므로 위 정책은 커널의 프로세스별 메모리 격리가 아니다.
 폴링 사이의 급격한 할당이나 동기 API 처리를 포함해 응답 지연이 전혀 없다고 보장하지는 않는다.
-제한 환경의 실제 검증과 범위는 [1 GB 운영 메모리 검증](local-worker-memory-verification.md)을 따른다.
+실제 최대 메모리는 운영 데이터·전략과 파일 캐시를 포함한 전체 서비스 기준으로 관측한다. 작은 정책 검사의 통과만으로 특정 기간의 실데이터 메모리를 보증하지 않는다.
 
 수집은 연도·종목·거래일 단위 사이에 이벤트 루프를 양보한다. DART 응답 캐시는 현재 요청과
 직전 연도 앵커 범위만 유지하고, 이전 원문은 영속 저장소에서 재사용한다. 미리보기 자본변동
@@ -214,6 +195,8 @@ WSS는 TLS 위의 WebSocket 연결이다. PC에서 운영 서버의 HTTPS 포트
 
 ## DB 마이그레이션과 복원
 
+Docker 업데이트는 자동 백업·복원이나 다운그레이드를 수행하지 않는다. pending-update marker가 남으면 같은 후보로 재시도하거나 운영자가 데이터를 확인하고 복구해야 한다. 다음 자동 백업과 복구 설명은 기존 systemd 배포에 적용된다.
+
 `DATABASE_PATH`는 운영 파일이며 계산 파일 경로는 자동으로 `*.data.sqlite`로 결정한다.
 각 파일은 `migrations/operations`, `migrations/data`의 독립 마이그레이션 이력을 가진다.
 배포는 서비스를 중지하고 두 DB를 백업한 뒤 새 릴리스의 `db:prepare`를 실행한다.
@@ -244,7 +227,7 @@ PENDING 상태의 종목 이력이 있으면 삭제하지 않고 중단한다. �
 독립 watermark는 보존한다. 이후 `0002_collection_coverage_version`은 KRX coverage의 수집
 실행 출처 컬럼을 추가한다. NULL·이전 값도 재사용하며 현재 해시로 덮어쓰지 않는다.
 새 데이터 마이그레이션은 확인된 입력 문제와 관련 revision 처리를 추가하고 새 스냅샷을 게시한다.
-에이전트의 실행·스키마 계약이 바뀌면 새 `agentVersion` 이미지로 업데이트한다. 사용자는 같은 Windows CMD 설치 파일을 다시 실행한다.
+에이전트의 실행·스키마 계약이 바뀌면 새 `agentVersion` 이미지로 업데이트한다. 사용자는 현재 서버에서 새 Windows CMD 설치 파일을 받아 실행한다.
 수집 파서·서버 버전 변경만으로 정상 DB를 재해석하거나 재수집하지 않는다. 실제 결손·손상이
 확인된 요청 범위에서만 저장 원문 재사용과 필요한 외부 수집을 수행한다.
 
@@ -253,13 +236,13 @@ PENDING 상태의 종목 이력이 있으면 삭제하지 않고 중단한다. �
 ```bash
 pnpm build:agent       # Docker 구성·hermetic 검증용 내부 Linux 런타임 archive
 pnpm test:agent-package # archive 경계와 실제 준비·백테스트 workload 실행
-pnpm run deploy        # 서버만 SSH 배포; 공개 native agent 파일은 빌드·게시하지 않음
+pnpm run deploy        # 로컬 Docker 서버 업데이트
+pnpm run deploy:systemd # 기존 systemd 서버 SSH 배포
 ```
 
-`deploy.env`에는 `HOST`·`SSH_*` 접속 설정만 있다. 공급자 API 키와 서비스 설정은 서버의
+systemd 배포의 `deploy.env`에는 `HOST`·`SSH_*` 접속 설정만 있다. 공급자 API 키와 서비스 설정은 서버의
 `app.env`에 남는다. 옛 worker 환경변수, 장치별 SSH와 사용자용 native runtime 배포 경로는
-제거했다. Docker 이미지는 GHCR에 별도로 게시하며 standalone 서버 배포는 서버와 웹만 전송한다.
-실패 시 코드와 DB 백업 세트를 함께 복원한다.
+제거했다. Docker 이미지는 GHCR에 게시한다. 기존 systemd 배포의 실패 복구는 코드와 DB 백업 세트를 함께 다룬다.
 
 
 ## 기존 명칭의 DB 이행
@@ -317,37 +300,8 @@ KRX는 [공식 거래일력](krx-trading-calendar.md)으로 휴장과 게시 전
 자동 smoke를 실행해 검증을 대신하지 않는다.
 
 
-### 월별 유니버스 선정 메모리 회귀 검사
+### 계산 검증
 
-`pnpm test:resources`로 실행하는 `tests/resources/universe-preparation-memory.test.ts`는
-실제 SQLite 마이그레이션·저장소로
-합성 KOSPI 900종목, 2016~2025년 월별 120회 선정을 실행한다. 시총 HIGH 200개를 좁힌 뒤
-최근 20거래일 가격변동 HIGH 50개를 고른다. 2015년 가격 warm-up과 분기별 자본변동을
-포함하며, 직렬 실행과 두 워커 실행의 READY·종목 제외·NEEDS_DATA 결과를 비교한다.
-각 자식은 old-space 128 MiB와 semi-space 4 MiB로 실행하고 직렬 RSS 320 MiB 미만,
-두 워커 RSS 700 MiB 미만을 검사한다. 두 워커 검사는 에이전트 내부 병렬 경로에 대한
-검사이며 작은 운영 서버의 기본 동시 실행 수를 늘리지 않는다.
-자원 검사 파일은 서로 순차 실행하며 `pnpm test:all`을 통해 서버 배포 검증에도 포함된다.
-
-운영 데이터로 확인할 때는 데이터 수집과 스냅샷 게시 후 남은 파일 캐시도 같은 cgroup에
-포함해야 한다. 계산 함수만 실행하거나 다른 cgroup이 이미 캐시한 DB만 읽으면 실제 서버의
-최대 점유를 과소평가할 수 있다. 합성 데이터 검사는 실제 KRX 데이터의 결손·과거 종목 수·
-자본변동 분포까지 검증하지 않으므로, 운영 스냅샷에 대한 검증 결과와 구분한다.
-
-
-2026-11-07 검증에서는 Node 24.22.2의 compiled 서버를 1 CPU, `memory.max=512 MiB`,
-스왑 없음, 외부 네트워크 없음으로 실행했다. 원본 합성 DB 복사부터 스냅샷 게시·API·
-로컬 준비·백테스트를 같은 cgroup에 넣었다. 2,583,000개 저장 봉에서 120회 선정한
-6,000개 멤버(합집합 533종목)를 준비한 뒤 EMA 전략과 최대 50포지션으로 1,390,597개
-실행 봉을 처리했다.
-
-| 구간 | 완료 시간 | 계산 자식 최대 RSS | 시작 시 RSS 예산 |
-| --- | ---: | ---: | ---: |
-| 유니버스 준비 전체 | 69.1초 | 195.8 MiB | 256 MiB |
-| 백테스트와 결과 저장 | 107.1초 | 223.0 MiB | 256 MiB |
-
-API 부모 최대 RSS는 168.2 MiB였고 상태 확인 475회가 모두 HTTP 200으로 응답했다.
-cgroup 최대 점유는 파일 캐시를 포함해 512 MiB에 닿았지만 `oom`과 `oom_kill`은 모두
-0이었다. 이는 해당 합성 데이터와 전략의 측정값이며, 실제 운영 스냅샷이나 다른 전략의
-메모리를 보증하는 수치는 아니다. 운영의 `MemoryHigh=512M`·`MemoryMax=640M` 설정은
-이 변경으로 올리지 않는다.
+10년 규모의 합성 DB를 반복 생성하는 유니버스·재무·수집 메모리 검사와 전용 fixture는 제거했다.
+일반 회귀 검사는 `pnpm test:all`, 실제 배포 패키지의 준비·계산·결과 반영 검사는
+`pnpm test:agent-package`로 실행한다. CPU·메모리 예산과 순차/병렬 동작의 작은 단위 검사는 유지한다.

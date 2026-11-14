@@ -147,9 +147,23 @@ local_deploy() {
 }
 
 wait_for_ready() {
-  local attempt
+  local attempt pid endpoint
   for ((attempt=1; attempt<=60; attempt++)); do
-    if curl -fsS http://127.0.0.1:3000/api/v1/health/ready >/dev/null 2>&1; then return 0; fi
+    # systemd가 적용한 실제 프로세스 환경에서 필요한 두 값만 읽는다.
+    pid="$(sudo systemctl show quant-platform --property=MainPID --value 2>/dev/null || true)"
+    if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
+      endpoint="$(sudo /usr/local/bin/node -e '
+        const fs = require("node:fs");
+        const net = require("node:net");
+        const env = Object.fromEntries(fs.readFileSync(`/proc/${process.argv[1]}/environ`, "utf8").split("\0").filter(Boolean).map(s => { const i = s.indexOf("="); return [s.slice(0, i), s.slice(i + 1)]; }));
+        const host = env.APP_BIND_ADDRESS || "127.0.0.1";
+        const port = env.APP_PORT || "3000";
+        if ((!net.isIP(host) && host !== "localhost") || !/^[0-9]+$/.test(port) || +port < 1 || +port > 65535) process.exit(1);
+        const address = host === "0.0.0.0" ? "127.0.0.1" : host === "::" ? "::1" : host;
+        process.stdout.write(`http://${net.isIP(address) === 6 ? `[${address}]` : address}:${port}/api/v1/health/ready`);
+      ' "$pid" 2>/dev/null || true)"
+      if [[ -n "$endpoint" ]] && curl --noproxy '*' --connect-timeout 2 --max-time 5 -fsS "$endpoint" >/dev/null 2>&1; then return 0; fi
+    fi
     if ((attempt<60)); then sleep 2; fi
   done
   return 1

@@ -4,7 +4,7 @@
 
 이 문서는 **개발 시작, 서버 초기 설정·배포, 에이전트 설치·사용, 유지보수 명령**을 안내한다. 아키텍처·보안·데이터·운영 원칙은 [SPEC](docs/SPEC.md)을 따른다.
 
-> 명령 검토 기준: `main@27e12610ec8627718a19c5f562633dfa7b541e80` · 2026-09-17
+**운영 설치 1번 옵션:** [Docker 서버 운영](docs/DOCKER_SERVER.md). Ubuntu 26.04 LTS의 G3 미니 PC에서 서버를 Compose로 실행하고 기존 Traefik에 연결하며, 기본 한도는 CPU 3개·RAM 10GiB다. 호스트 Node.js 설치는 필요 없다. 기존 systemd 프로비저닝은 아래의 2번 옵션으로 유지한다.
 
 ## 목차
 
@@ -19,12 +19,12 @@
 | 실행 위치 | 용도·전제 |
 | --- | --- |
 | **개발·배포 PC** | 저장소를 내려받아 개발·검증·배포한다. 아래 셸 명령은 Linux/WSL2의 Bash 기준이며, 서버 배포는 Linux에서 실행한다. |
-| **운영 서버** | 프로비저닝된 서버에 SSH로 접속해 실행한다. 서버 CLI는 배포된 JavaScript를 `quant` 사용자·그룹과 운영 환경설정으로 실행한다. |
+| **운영 서버** | 기본은 Docker Compose와 `scripts/server.sh`로 운영한다. 선택적 systemd 설치에서만 `quant` 사용자·그룹과 호스트 운영 환경설정을 사용한다. |
 | **에이전트 장치** | Windows Docker Desktop에서 Linux 컨테이너로 실행한다. Linux/WSL2 네이티브 설치는 제공하지 않는다. |
 
-개발·배포 PC에는 **Node.js 24 (`>=24 <25`)**, Git, Bash, SSH/SCP, curl, tar가 필요하다. CI·Agent 이미지·서버 초기 설치는 [.node-version](.node-version)의 **24.22.2 LTS**로 맞춘다. pnpm 버전은 [package.json](package.json)의 `packageManager`를 따른다. Node는 [공식 설치 안내](https://nodejs.org/en/download)에서 24 계열을 선택한다. 에이전트 이미지는 Node와 의존성을 포함하므로 **계산 장치에는 Node·pnpm을 별도로 설치하지 않는다.**
+로컬 개발·systemd 배포 PC에는 **Node.js 24 (`>=24 <25`)**, Git, Bash, SSH/SCP, curl, tar가 필요하다. CI·Agent 이미지·서버 초기 설치는 [.node-version](.node-version)의 **24.22.2 LTS**로 맞춘다. pnpm 버전은 [package.json](package.json)의 `packageManager`를 따른다. Node는 [공식 설치 안내](https://nodejs.org/en/download)에서 24 계열을 선택한다. 에이전트 이미지는 Node와 의존성을 포함하므로 **계산 장치에는 Node·pnpm을 별도로 설치하지 않는다.**
 
-기존 운영 서버의 Node는 일반 앱 배포로 교체되지 않는다. [기존 서버의 Node 업데이트](docs/GITHUB_ACTIONS_DEPLOY.md#기존-서버의-node-업데이트)를 먼저 수행한다.
+Docker 서버의 Node는 이미지에 포함된다. 기존 systemd 서버의 호스트 Node는 일반 앱 배포로 교체되지 않으므로 `.node-version`에 맞춰 별도 관리한다.
 
 예시의 `203.0.113.10`, `quant.example.com`, `ubuntu`, `~/.ssh/quant.pem`은 실제 서버 IP·도메인·SSH 계정·키 경로로 바꾼다. 앱 주소·포트·경로를 별도로 변경한 환경에서는 아래 기본 경로도 맞춰야 한다.
 
@@ -124,11 +124,13 @@ pnpm dev:web
 
 <a id="first-deployment"></a>
 
-## 3. 운영 서버 최초 설정
+## 3. 운영 서버 최초 설정 — systemd 선택 옵션
+
+기본 Docker 설치는 [Docker 서버 운영](docs/DOCKER_SERVER.md)을 따른다. 아래는 기존 호스트 프로비저닝을 선택할 때만 사용하는 절차다.
 
 ### 3.1 서버와 접속 준비
 
-[SPEC의 클라우드·네트워크 구성](docs/SPEC.md#9-클라우드와-퍼블릭-네트워크)에 맞게 Ubuntu 24.04 서버, 고정 IP, DNS A 레코드와 방화벽을 먼저 준비한다. 현재 프로비저닝 스크립트의 Node 다운로드 대상은 **Linux x64**다. ARM 서버를 같은 절차로 지원한다고 가정하지 않는다.
+[SPEC의 클라우드·네트워크 구성](docs/SPEC.md#9-클라우드와-퍼블릭-네트워크)에 맞게 Ubuntu 26.04 LTS 서버, DNS와 방화벽을 준비한다. 공인 IP 설정은 이 절차에 포함하지 않는다. 현재 프로비저닝 스크립트의 Node 다운로드 대상은 **Linux x64**다. ARM 서버를 같은 절차로 지원한다고 가정하지 않는다.
 
 SSH 공개키가 등록되어 있어야 하고, 접속 계정은 `sudo -n true`를 수행할 수 있어야 한다. 키에 암호가 있으면 SSH agent에 먼저 등록한다.
 
@@ -148,16 +150,34 @@ ssh -i "$HOME/.ssh/quant.pem" -o IdentitiesOnly=yes \
 
 ### 3.2 프로비저닝
 
+기존 **Traefik 3.7.16** 컨테이너가 `infra-proxy` bridge 네트워크에 연결되어 있어야 한다. Traefik은 독립 실행 파일이므로 Node 패키지가 필요 없다. systemd 앱에는 Docker label이 없으므로 **file provider**로 연결한다. 먼저 호스트에 `sudo mkdir -p /etc/traefik/dynamic`을 실행하고 기존 Traefik Compose 설정에 다음 항목을 추가한다. 이미 다른 동적 설정 디렉터리를 사용한다면 기존 파일도 유지하면서 이 디렉터리로 통합한다.
+
+```yaml
+# 기존 Traefik 서비스의 command·volumes에 추가
+command:
+  - --providers.file.directory=/etc/traefik/dynamic
+  - --providers.file.watch=true
+volumes:
+  - /etc/traefik/dynamic:/etc/traefik/dynamic:ro
+```
+
+기존 `websecure` entryPoint와 `letsencrypt` resolver는 유지하고 Traefik 스택에 변경을 적용한다. 단일 파일 대신 디렉터리를 마운트해야 설정 파일 교체도 감지한다. 초기 설정 스크립트는 이 경로에 `quant-platform.yaml`을 생성하며 Traefik 자체를 설치하거나 재시작하지 않는다.
+
+기존 systemd 앱을 전환한다면 유지보수 시간에 먼저 중지한다. 실행 중인 앱이 있으면 초기 설정은 변경 전에 중단된다. 기존 Caddy를 사용하던 호스트에서는 Caddy를 중지·비활성화하여 Traefik이 80/443을 사용할 수 있게 한다. Docker 앱과 systemd 앱을 같은 도메인으로 동시에 활성화하지 않는다.
+
 **개발·배포 PC — 저장소 루트:**
 
 ```bash
 SSH_KEY="$HOME/.ssh/quant.pem" \
 HOST=ubuntu@203.0.113.10 \
 DOMAIN=quant.example.com \
+TRAEFIK_NETWORK=infra-proxy \
+TRAEFIK_HTTPS_ENTRYPOINT=websecure \
+TRAEFIK_CERT_RESOLVER=letsencrypt \
 ./scripts/bootstrap.sh
 ```
 
-이 단계는 호스트의 패키지·SSH·방화벽·Caddy·systemd를 구성하므로 전용 서버에서 수행한다. 앱 배포 전 HTTPS 확인에 `502`가 나오는 것은 앱이 아직 실행되지 않았기 때문일 수 있다. **배포 후의 502는 정상 완료가 아니다.** 부트스트랩 로그는 로컬 `.logs/`에 남는다.
+이 단계는 호스트의 패키지·SSH·방화벽·Traefik 라우트·systemd를 구성하므로 호스트 설정 변경이 가능한 서버에서 수행한다. 앱은 `infra-proxy`의 호스트 IPv4 gateway에만 바인딩하고, 해당 bridge subnet에서 3000번 포트로 오는 연결을 허용한다. Traefik 컨테이너의 `127.0.0.1`은 호스트 앱 주소가 아니다. 앱 배포 전 HTTPS 확인에 `502`가 나오는 것은 앱이 아직 실행되지 않았기 때문일 수 있다. **배포 후의 502는 정상 완료가 아니다.** 부트스트랩 로그는 로컬 `.logs/`에 남는다.
 
 ### 3.3 운영 환경설정
 
@@ -175,6 +195,8 @@ sudo chmod 600 /etc/quant-platform/app.env
 ```
 
 프로비저닝이 생성한 `SESSION_SECRET`과 운영 경로는 유지하고, 사용할 공급자 자격증명과 실제 승인 만료일만 입력한다. 필요한 설정의 용도는 [로컬 환경설정](#22-로컬-환경설정), 전체 예시는 [app.env.example](infra/app.env.example)을 참고한다. 선택적 키는 미사용 시 주석으로 남기며 `DART_API_KEY=`처럼 빈 값으로 활성화하지 않는다. 이 파일은 `systemd`가 읽는 설정이지 실행할 셸 스크립트가 아니다.
+
+네트워크 설정은 별도 `/etc/quant-platform/network.env`에 저장하며 systemd가 `app.env` 뒤에 읽는다. 기존 비밀값은 보존된다. 선택적으로 bootstrap에 `TRAEFIK_IP=<Traefik 내부 IPv4>`를 전달하면 해당 프록시의 전달 IP 헤더만 신뢰한다. 생략하면 로그인 기록에는 프록시 주소가 남는다. 공인 IP와 관계없는 내부 주소이며 네트워크를 재생성해 gateway가 달라지면 앱을 중지하고 설정을 갱신해야 한다. 기본 서비스 제한은 CPU 3개·RAM 10GiB다.
 
 ### 3.4 첫 배포
 
@@ -201,7 +223,7 @@ SSH_HOST_KEY=accept-new
 
 ```bash
 git status --short --branch
-pnpm run deploy
+pnpm run deploy:systemd
 ```
 
 배포할 수정사항을 먼저 커밋해 **작업 트리가 깨끗한 상태**여야 한다. 배포는 현재 체크아웃한 커밋을 사용하며, 원격 `main`을 자동으로 가져오지 않는다. 이 명령은 서버 검증·빌드·SSH 배포를 수행하며 사용자용 Agent image 빌드는 GitHub Actions production workflow에서 처리한다.
@@ -247,8 +269,9 @@ TOTP 등록에서는 방금 만든 사용자 이름을 입력하고 인증 앱�
 
 ```bash
 sudo systemctl status quant-platform --no-pager
-curl -fsS --retry 15 --retry-delay 1 --retry-connrefused \
-  http://127.0.0.1:3000/api/v1/health/ready
+APP_ADDRESS=$(sudo sed -n 's/^APP_BIND_ADDRESS=//p' /etc/quant-platform/network.env)
+curl --noproxy '*' -fsS --retry 15 --retry-delay 1 --retry-connrefused \
+  "http://${APP_ADDRESS}:3000/api/v1/health/ready"
 sudo journalctl -u quant-platform -n 100 --no-pager
 ```
 
@@ -271,13 +294,13 @@ curl -fsS https://quant.example.com/api/v1/health/ready
 
 운영 웹의 **설정 → Agent**에서 장치 이름을 입력해 연결 토큰을 발급한다. 토큰을 발급하면 해당 장치용 **Windows Docker Desktop 설치 파일**을 다운로드할 수 있다. 토큰은 한 번만 표시되며 설치 파일 안에 포함되므로 파일과 토큰을 안전하게 보관한다.
 
-다운로드한 `quant-agent-windows.cmd`를 Windows에서 실행한다. 설치기는 Docker Desktop을 설치하거나 시작하고, Linux 엔진을 확인한 뒤 GHCR의 최신 이미지를 내려받아 Agent 컨테이너를 시작한다. Windows 기능 설정, UAC, Docker Desktop 최초 약관 동의 또는 재부팅 안내가 나오면 해당 절차를 마친 뒤 **같은 CMD 파일을 다시 실행**한다. Windows x64와 ARM64를 지원하며 장치에 맞는 Linux amd64 또는 arm64 이미지를 선택한다.
+다운로드한 `quant-agent-windows.cmd`를 Windows에서 실행한다. 설치기는 Docker Desktop을 설치하거나 시작하고, Linux 엔진을 확인한 뒤 설치 파일에 지정된 GHCR 이미지를 내려받아 Agent 컨테이너를 시작한다. Windows 기능 설정, UAC, Docker Desktop 최초 약관 동의 또는 재부팅 안내가 나오면 해당 절차를 마친 뒤 **같은 CMD 파일을 다시 실행**한다. Windows x64와 ARM64를 지원하며 장치에 맞는 Linux amd64 또는 arm64 이미지를 선택한다.
 
 장치가 운영 서버의 HTTPS 주소에 접근할 수 있어야 한다. 인바운드 포트는 필요 없다. 설치기와 컨테이너 동작은 [Windows 설치·이미지 관리 상세](docs/AGENT_OPERATIONS.md#windows-docker-desktop)를 참고한다.
 
 ### 4.2 업데이트와 상태 확인
 
-업데이트할 때 처음 받은 같은 `quant-agent-windows.cmd` 파일을 다시 실행한다. 설치기는 latest를 다시 내려받아 컨테이너를 교체하며 named volume의 데이터 캐시와 미전송 결과는 유지한다. 설치 파일을 잃었거나 토큰을 교체해야 할 때는 기존 장치를 해제하고 새 토큰과 설치 파일을 발급받는다.
+서버 업데이트 후 버전이 바뀌면 설정 → Agent의 ‘저장한 기존 연결 토큰’에 보관한 활성 토큰을 입력하여 `quant-agent-windows.cmd`를 다시 내려받아 실행한다. 같은 토큰을 사용하면 기존 캐시 볼륨을 유지한다. 같은 파일을 재실행하면 파일에 지정된 이미지를 다시 받아 컨테이너를 교체하며 named volume의 데이터 캐시와 미전송 결과는 유지한다. 설치 파일을 잃었거나 토큰을 교체해야 할 때는 기존 장치를 해제하고 새 토큰과 설치 파일을 발급받는다.
 
 Docker Desktop이 실행 중일 때 컨테이너는 자동 재시작한다. Windows 로그인 시 Docker Desktop 자동 시작을 켜 둔다. Windows 절전·종료나 Docker Desktop 종료 중에는 계산할 수 없다. 연결 상태는 운영 웹의 설정 → Agent 화면에서 확인한다. 로컬 진단은 PowerShell에서 다음 명령을 사용한다.
 
@@ -309,11 +332,10 @@ pnpm build
 | 명령 | 범위와 실행 시점 |
 | --- | --- |
 | `pnpm test` | 단위·일반 통합·아키텍처 회귀 검사. 개발 중 기본 실행 |
-| `pnpm test:resources` | `tests/resources`의 대용량 메모리 검사. 파일 하나씩 실행 |
-| `pnpm test:all` | 일반 회귀 검사 후 대용량 메모리 검사. `devel` 병합 전 전체 검증과 서버 배포의 필수 검사 |
+| `pnpm test:all` | 전체 일반 회귀 검사의 릴리스 진입점(`pnpm test`). `devel` 병합 전과 서버 배포에서 필수 실행 |
 
-대용량 검사 3개는 기존 입력 규모·결과·메모리 상한을 유지한다. 일반 회귀 검사에
-대용량 DB 생성과 반복 계산을 섞지 않되, 배포 스크립트는 `test:all`로 모두 실행한다.
+10년 규모의 합성 DB를 생성하는 장기간 부하 검사와 전용 fixture는 제거했다.
+일반 회귀·자원 배정 정책·패키지 검증은 유지한다.
 새 테스트의 추가·통합·삭제 기준은 [AGENTS.md](AGENTS.md)의 검증 정책을 따른다.
 
 UI 동작은 별도로 E2E를 실행한다. 브라우저와 OS 의존성 설치는 해당 환경에서 최초 1회 필요하다.
@@ -334,7 +356,7 @@ pnpm exec vitest run tests/architecture
 pnpm exec vitest run tests/integration/job-queue.test.ts
 ```
 
-이는 **개발 중 선택 실행**이며 배포의 전체 검증을 대체하지 않는다. 현재 `pnpm run deploy`는 변경 영향별 테스트 선택 기능을 제공하지 않는다.
+이는 **개발 중 선택 실행**이며 배포의 전체 검증을 대체하지 않는다. systemd의 `pnpm run deploy:systemd`와 이미지 게시 CI는 전체 필수 검증을 실행한다.
 
 ### 5.2 스키마 변경
 
@@ -352,26 +374,18 @@ pnpm cli db:prepare
 
 ### 5.3 재배포
 
-`devel`에서 작업한 변경을 `main`에 merge하면 GitHub Actions가 자동으로 운영 배포한다. `devel` push는 배포하지 않는다. 수동 재배포와 환경 설정은 [GitHub Actions 배포 설정](docs/GITHUB_ACTIONS_DEPLOY.md)을 따른다.
+`main`에 merge하면 GitHub Actions가 검증한 서버·Agent 이미지를 GHCR에 게시한다. `devel` push는 게시·배포하지 않는다. 일반 push는 서버에 SSH 배포하지 않는다. 세부 설정은 [GitHub Actions 이미지 게시와 배포](docs/GITHUB_ACTIONS_DEPLOY.md)를 따른다.
 
-**개발·배포 PC — 저장소 루트:** 배포하려는 커밋을 체크아웃하고 `deploy.env`의 대상 서버를 확인한 뒤 실행한다.
+**Docker 서버:** 체크아웃을 릴리스에 맞춘 뒤 `bash scripts/server.sh update`를 실행한다. 호스트 pnpm을 사용하는 경우 `pnpm deploy`도 같은 명령이다. 다운로드와 DB 준비·기동 확인을 수행하며 성공한 digest를 고정한다. 실패 시 서버를 중지하고 미완료 업데이트를 기록하며 DB·이미지를 자동 복원하지 않는다. 자세한 절차는 [Docker 업데이트](docs/DOCKER_SERVER.md#업데이트와-실패-처리)를 따른다.
 
-```bash
-git status --short --branch
-git log -1 --oneline
-pnpm run deploy
-```
-
-명령 내부에서 **의존성 설치 → lint → typecheck → 전체 Vitest(`test:all`) → 서버·웹 빌드 → SSH 배포**를 수행한다. GitHub Actions production workflow는 Agent 내부 runtime과 workload를 검증한 뒤 GHCR multi-arch image를 빌드·게시하고 서버 배포 성공 후 latest로 승격한다. E2E는 자동 포함되지 않는다. 완료 후 [정상 동작 확인](#36-정상-동작-확인과-첫-실행)을 반복하며, 기존 관리자를 다시 생성하지 않는다.
-
-실패 시 오류 출력을 먼저 확인한다. commit 단계 전 실패하면 코드·DB 복원을 시도하지만, **복원 실패나 finalize 실패까지 모두 이전 상태로 되돌아갔다고 가정하지 않는다.** 서비스·로그·실제 배포 버전을 확인한 뒤 후속 작업을 결정한다. 명령의 기준은 [build-release.sh](scripts/build-release.sh)와 [deploy.sh](scripts/deploy.sh)다.
+**systemd 선택 경로 — 개발·배포 PC:** 배포할 커밋과 `deploy.env`의 대상을 확인하고 `pnpm run deploy:systemd`를 실행한다. 기존 스크립트는 의존성 설치 → lint → typecheck → 전체 Vitest → 빌드 → SSH 배포를 수행한다. 실패한 복구가 모두 이전 상태로 되돌아갔다고 가정하지 말고 서비스·로그·실제 버전을 확인한다. GitHub 수동 workflow에서 `runtime=systemd`를 선택할 수도 있다. E2E는 별도 실행한다.
 
 ---
 
 <a id="maintenance"></a>
 ## 6. 서버 관리와 복구
 
-이 절은 **운영 서버에 SSH로 접속한 뒤 실행**한다. DB 변경 작업은 배포·다른 유지보수 CLI와 동시에 실행하지 않는다. 아래 예시는 기본 운영 경로를 기준으로 한다.
+이 절은 **systemd 운영 서버에 SSH로 접속한 뒤 실행**한다. Docker 서버의 상태·로그·CLI는 [Docker 서버 운영](docs/DOCKER_SERVER.md)을 따른다. DB 변경 작업은 배포·다른 유지보수 CLI와 동시에 실행하지 않는다. 아래 예시는 기본 운영 경로를 기준으로 한다.
 
 ### 6.1 상태·로그·재시작
 
@@ -382,7 +396,7 @@ pnpm run deploy
 | 실시간 앱 로그 | `sudo journalctl -u quant-platform -f` |
 | 앱 재시작 | `sudo systemctl restart quant-platform` |
 | 앱 중지 / 시작 | `sudo systemctl stop quant-platform` / `sudo systemctl start quant-platform` |
-| 프록시 상태·로그 | `sudo systemctl status caddy --no-pager` / `sudo journalctl -u caddy -n 100 --no-pager` |
+| 프록시 상태·로그 | `docker ps` / `docker logs --tail 100 <Traefik 컨테이너 이름>` |
 | 현재 릴리스 | `readlink -f /opt/quant-platform/current` |
 | 디스크·메모리 | `df -h /var/lib/quant-platform` / `free -h` |
 
@@ -393,8 +407,9 @@ pnpm run deploy
 ```bash
 sudoedit /etc/quant-platform/app.env
 sudo systemctl restart quant-platform
-curl -fsS --retry 15 --retry-delay 1 --retry-connrefused \
-  http://127.0.0.1:3000/api/v1/health/ready
+APP_ADDRESS=$(sudo sed -n 's/^APP_BIND_ADDRESS=//p' /etc/quant-platform/network.env)
+curl --noproxy '*' -fsS --retry 15 --retry-delay 1 --retry-connrefused \
+  "http://${APP_ADDRESS}:3000/api/v1/health/ready"
 sudo journalctl -u quant-platform -n 100 --no-pager
 ```
 
@@ -535,7 +550,7 @@ sudo systemd-run --pipe --wait --collect \
 | 개발 웹의 API 요청이 실패한다 | `pnpm dev`가 실행 중인지 확인한다. 기본 Vite 프록시는 `127.0.0.1:3000`을 사용한다. |
 | 운영 CLI가 권한·환경변수·모듈 오류로 실패한다 | 개발용 `pnpm cli` 대신 이 문서의 전체 `systemd-run` 명령을 사용한다. `app.env`를 일반 사용자에게 읽기 가능하게 바꾸지 않는다. |
 | `ConfigError`가 난다 | 앱 로그에서 변수명을 확인한다. 활성화한 빈 키, TOSS 자격증명 한쪽 누락, KRX 설정을 점검한다. 로그 공유 전 비밀값을 제거한다. |
-| HTTPS 502 또는 readiness 실패 | 앱 상태·로그와 로컬 readiness를 먼저 확인하고, 이어 Caddy 로그를 확인한다. 인증서 확인만으로 앱 배포가 완료된 것은 아니다. |
+| HTTPS 502 또는 readiness 실패 | 앱 상태·로그와 로컬 readiness를 먼저 확인하고, 이어 Traefik 로그와 Docker label 또는 systemd용 file-provider 라우트를 확인한다. 인증서 확인만으로 앱 배포가 완료된 것은 아니다. |
 | 준비가 대기 상태다 | 화면의 데이터 수집·호출 한도·실행 장치 상태를 확인한다. 원인을 보지 않고 반복 제출하거나 재시작하지 않는다. |
 | Agent가 연결되지 않는다 | Docker Desktop Linux 엔진, 컨테이너 상태·로그, 설치 파일에 포함된 토큰, 서버 HTTPS 접근을 확인한다. 필요하면 같은 설치 파일을 다시 실행한다. |
 | 배포가 작업 트리 오류로 중단된다 | `git status --short --branch`로 배포할 변경을 확인·커밋한다. 오류를 없애려고 사용자 변경을 강제로 지우지 않는다. |

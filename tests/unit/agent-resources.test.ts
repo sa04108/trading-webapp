@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { calculateResources } from '../../src/agent/resources.js';
 import { agentSettingsSchema } from '../../src/agent/config.js';
+import { universeHelperBudget } from '../../src/agent/universe-tasks.js';
 const GIB = 1024 ** 3;
 
 describe('에이전트 자동 자원 배정', () => {
@@ -69,6 +70,14 @@ describe('에이전트 자동 자원 배정', () => {
     expect(result.heapMb).toBe(291);
     expect(result.slots).toBe(1);
     expect(result.memoryPressure).toBe(false);
+    expect(universeHelperBudget(result.budgetBytes)).toEqual({ budgetBytes: 320 * MIB, heapMb: 128 });
+  });
+  it('10 GiB 서버는 단일 작업에 최대 5 GiB를 주고 보조 계산에도 제한된 예산을 준다', () => {
+    const result = calculateResources({ cpus: 3, total: 10 * GIB, available: 9 * GIB, load: 0,
+      parentRss: GIB, hardAvailable: 9 * GIB }, 0, 0, false, 0, true);
+    expect(result.slots).toBe(1);
+    expect(result.budgetBytes).toBe(5 * GIB);
+    expect(universeHelperBudget(result.budgetBytes)).toEqual({ budgetBytes: 2 * GIB, heapMb: 819 });
   });
   it('부모가 절반을 넘거나 effective/hard 가용량이 하한 아래면 새 로컬 작업을 막는다', () => {
     const MIB = 1024 ** 2;

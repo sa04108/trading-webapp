@@ -8,8 +8,8 @@
 #         SSH_KEY=~/.ssh/your-key SSH_USER=ubuntu HOST=203.0.113.10 \
 #           DOMAIN=quant.example.com ./scripts/bootstrap.sh
 #
-#   DOMAIN        서비스 도메인 (예: quant.example.com). A 레코드가 운영 서버의 고정 공인
-#                    IP 를 가리키고 있어야 한다 — Caddy 가 이 이름으로 인증서를 받는다.
+#   DOMAIN        서비스 도메인 (예: quant.example.com). A 레코드가 Traefik의 공개
+#                    진입점을 가리켜야 한다 — Traefik 이 이 이름으로 인증서를 받는다.
 #   HOST      운영 서버 주소, `[user@]host` 형식
 #   SSH_USER      로그인 사용자명. HOST 에 `user@` 가 없을 때만 쓴다
 #   SSH_PORT      SSH 포트 (미지정이면 22)
@@ -74,9 +74,9 @@ fi
   echo "도메인이 필요합니다 — 비대화형이면 DOMAIN 으로 지정하세요" >&2
   exit 1
 }
-# 이 값은 아래에서 원격 root 셸의 명령줄에 들어가고, provision.sh 안에서는 Caddyfile
+# 이 값은 아래에서 원격 root 셸의 명령줄에 들어가고, provision.sh 안에서는 Traefik 설정
 # heredoc 으로 흘러간다. 호스트명 문법을 여기서 강제해 `;`·백틱·`$(...)`·공백이
-# 명령이나 Caddy 지시자로 해석될 여지를 없앤다 (원격 실행 전에 막는 게 요점).
+# 명령이나 Traefik 지시자로 해석될 여지를 없앤다 (원격 실행 전에 막는 게 요점).
 case "${DOMAIN}" in
   *[!a-zA-Z0-9.-]* | -* | .* | *. | *..*)
     echo "도메인 형식이 올바르지 않습니다: ${DOMAIN}" >&2
@@ -89,6 +89,16 @@ case "${DOMAIN}" in
   *) echo "도메인에 점이 없습니다: ${DOMAIN} — FQDN 을 입력하세요 (예: quant.example.com)" >&2
      exit 1 ;;
 esac
+
+# 원격 셸에 전달할 네트워크 설정은 안전한 문자만 허용한다.
+TRAEFIK_NETWORK="${TRAEFIK_NETWORK:-infra-proxy}"
+TRAEFIK_HTTPS_ENTRYPOINT="${TRAEFIK_HTTPS_ENTRYPOINT:-websecure}"
+TRAEFIK_CERT_RESOLVER="${TRAEFIK_CERT_RESOLVER:-letsencrypt}"
+TRAEFIK_IP="${TRAEFIK_IP:-}"
+for value in "$TRAEFIK_NETWORK" "$TRAEFIK_HTTPS_ENTRYPOINT" "$TRAEFIK_CERT_RESOLVER"; do
+  case "$value" in ''|*[!a-zA-Z0-9_.-]*) echo 'Traefik 설정 이름이 올바르지 않습니다' >&2; exit 1;; esac
+done
+case "$TRAEFIK_IP" in *[!0-9.]*) echo 'Traefik IP는 IPv4 주소여야 합니다' >&2; exit 1;; esac
 
 # ── 여기서부터 모든 출력을 로그 파일에도 남긴다 ───────────────────────────────
 # 화면에 의존하지 않는 것이 요점이다 — 터미널 종류·스크롤백 한도·창 크기와 무관하게
@@ -248,9 +258,9 @@ scp "${SSH_OPTS[@]}" "${REPO_ROOT}/infra/provision.sh" \
 ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo -n true" \
   || { echo "sudo 에 비밀번호가 필요합니다 — 이 계정에 passwordless sudo 를 설정한 뒤 재실행하세요" >&2; exit 1; }
 
-echo "==> 프로비저닝 (패키지·Node·UFW·sshd·Caddy·app.env·systemd)"
+echo "==> 프로비저닝 (패키지·Node·UFW·sshd·Traefik·app.env·systemd)"
 # 원격 셸이 한 번 더 파싱하므로 인용한다 — 위 검증과 이중 방어다
-ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo sh ${REMOTE_DIR}/provision.sh '${DOMAIN}'"
+ssh "${SSH_OPTS[@]}" "${TARGET}" "sudo sh ${REMOTE_DIR}/provision.sh '${DOMAIN}' '${TRAEFIK_NETWORK}' '${TRAEFIK_HTTPS_ENTRYPOINT}' '${TRAEFIK_CERT_RESOLVER}' '${TRAEFIK_IP}'"
 
 # provision.sh 가 sshd 를 재시작했다 — 새 연결로 즉시 재검증해 하드닝이 SSH 를
 # 깨뜨렸다면 지금 크게 알린다 (퍼블릭 22 는 열려 있으므로 락아웃은 아니고,
@@ -267,9 +277,9 @@ echo "==> HTTPS 검증: https://${DOMAIN}"
 CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://${DOMAIN}/" || true)"
 if [ "${CODE}" = "000" ] || [ -z "${CODE}" ]; then
   echo "https://${DOMAIN} 에 TLS 로 접속하지 못했습니다." >&2
-  echo "  - A 레코드가 운영 서버 고정 IP 를 가리키는지, DNS 전파가 끝났는지 확인" >&2
+  echo "  - DNS가 Traefik의 공개 진입점을 가리키는지 확인" >&2
   echo "  - 클라우드 방화벽에서 TCP 80·443 이 열려 있는지 확인" >&2
-  echo "  - 운영 서버에서: journalctl -u caddy --no-pager -n 50" >&2
+  echo "  - 운영 서버에서: docker logs <traefik-container>" >&2
   exit 1
 fi
 echo "TLS 응답 확인 (HTTP ${CODE} — 앱 배포 전에는 502 가 정상)"
@@ -279,7 +289,7 @@ cat <<MSG
 부트스트랩 완료: https://${DOMAIN}
 
 다음 단계:
-  1) deploy.env 작성 후 앱과 에이전트 배포 파일 게시: pnpm run deploy
+  1) deploy.env 작성 후 앱과 에이전트 배포 파일 게시: pnpm run deploy:systemd
   2) 관리자 생성 + TOTP 등록 (운영 서버에서, 순서대로):
      ssh ${SSH_FLAGS}${TARGET}
      sudo systemd-run --pty --uid=quant --gid=quant \\

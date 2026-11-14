@@ -20,6 +20,23 @@ function totpToken(secret: string): string {
 }
 
 describe('auth flow (스펙 §14, §16)', () => {
+  it('로그인 기록은 지정한 프록시의 전달 IP만 신뢰한다', async ({ apps }) => {
+    const ctx = await apps.create({ env: {
+      TRUST_PROXY_LOOPBACK: 'false', TRUST_PROXY_ADDRESSES: '172.30.83.2',
+    } });
+    for (const remoteAddress of ['172.30.83.2', '172.30.83.99']) {
+      const response = await ctx.app.inject({
+        method: 'POST', url: '/api/v1/auth/login', remoteAddress,
+        headers: { 'x-forwarded-for': '198.51.100.42' },
+        payload: { username: 'proxy-check', password: 'incorrect-password' },
+      });
+      expect(response.statusCode).toBe(401);
+    }
+    expect(ctx.container.database.sqlite.prepare(
+      'SELECT ip FROM login_attempts WHERE username = ? ORDER BY id',
+    ).all('proxy-check')).toEqual([{ ip: '198.51.100.42' }, { ip: '172.30.83.99' }]);
+  });
+
   it('rejects unauthenticated /auth/me and /system/info', async ({ ctx }) => {
     const me = await ctx.app.inject({ method: 'GET', url: '/api/v1/auth/me' });
     expect(me.statusCode).toBe(401);

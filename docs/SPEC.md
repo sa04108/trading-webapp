@@ -31,7 +31,7 @@
 | 영속성 | SQLite, better-sqlite3, Drizzle 스키마·마이그레이션 |
 | 웹 | React·Vite, React Router, shadcn/ui·Tailwind CSS, TanStack Query·Table, React Hook Form, Recharts |
 | 인증·검증 | Argon2id, TOTP, Vitest, Playwright, dependency-cruiser |
-| 운영 | Linux, systemd, Caddy, SSH 기반 배포 |
+| 운영 | Linux, Docker Compose·기존 Traefik 기본, systemd·SSH 선택 옵션, 두 경로 모두 Traefik 사용 |
 
 정확한 패키지 버전은 [package.json](../package.json)과 잠금 파일을 따른다. 웹 빌드 결과는 Fastify가 제공하며 별도의 퍼블릭 프론트엔드 서비스로 분리하지 않는다.
 
@@ -42,7 +42,7 @@
 ### 실행 구조
 
 ```text
-브라우저 ── HTTPS ──> Caddy ── 127.0.0.1:3000 ──> Fastify
+브라우저 ── HTTPS ──> Traefik ── Docker 내부 :3000 ──> Fastify
                                                    ├─ 인증·REST·SSE·정적 웹
                                                    ├─ 작업·참조·결과 관리 ── 운영 DB
                                                    ├─ 외부 데이터 수집 ──── 계산 데이터 DB
@@ -158,49 +158,51 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 
 ## 9. 클라우드와 퍼블릭 네트워크
 
-운영 기준은 **AWS Lightsail 서울(`ap-northeast-2`)·Ubuntu 24.04의 단일 서버**다. RAM 1GB 이상·스토리지 40GB 이상, 월 10 USD 미만을 목표로 하며 실제 요금·사용량은 운영 계정에서 확인한다. 클라우드는 교체 가능하다.
+기본 운영 대상은 **Ubuntu 26.04 LTS·GMKtec NucBox G3(N100, RAM 16GB, NVMe 256GB)의 Docker Compose 서버**다. 서버 컨테이너 기본 한도는 CPU 3개·메모리 10GiB다. systemd 프로비저닝도 같은 G3 자원 한도의 선택 옵션으로 유지한다(D-114).
 
 | 항목 | 운영 구성 |
 | --- | --- |
-| 퍼블릭 도메인 | 서비스 도메인의 DNS A 레코드가 서버의 고정 공인 IPv4를 가리킨다. 도메인은 프로비저닝 입력으로 전달하고 `/etc/caddy/Caddyfile`에서 관리한다. |
-| HTTPS·프록시 | Caddy가 TLS 인증서 발급·갱신과 HTTPS 진입을 맡고 `127.0.0.1:3000`으로 전달한다. 앱 포트와 DB를 인터넷에 직접 노출하지 않는다. |
-| 클라우드 방화벽 | 인바운드는 TCP **22·80·443만 허용**한다. IPv4·IPv6 규칙을 각각 확인한다. 22는 SSH, 80은 인증서 발급·HTTPS 리다이렉트, 443은 웹·에이전트 통신용이다. |
-| 호스트 방화벽·SSH | UFW 인바운드 기본 거부, 아웃바운드 허용, 22 rate limit, 80·443 허용. SSH는 공개키 인증을 사용하고 root·비밀번호 로그인을 금지한다. |
+| 퍼블릭 도메인 | 서비스 도메인을 서버의 공개 진입점에 연결한다. Docker는 `server.env`의 `DOMAIN`, systemd는 프로비저닝 입력으로 도메인을 관리한다. 공인 IP 설정은 별도 운영 범위다. |
+| HTTPS·프록시 | Docker는 기존 Traefik의 `infra-proxy`·`websecure`·`letsencrypt`를 사용하고 내부 서버 3000번 포트로 전달한다. 선택적 systemd는 Traefik file provider가 같은 네트워크의 호스트 IPv4 gateway:3000으로 전달한다. Traefik 3.7.16을 기준으로 구성한다. 앱 포트와 DB를 인터넷에 직접 노출하지 않는다. |
+| 방화벽·포트 전달 | 웹 진입에는 TCP **80·443**을 사용한다. 관리용 SSH는 별도로 접근 범위를 정한다. Docker가 게시한 포트와 라우터·호스트·클라우드의 실제 노출 규칙을 함께 확인한다. |
+| systemd 프로비저닝 옵션 | UFW 인바운드 기본 거부, 아웃바운드 허용, 22 rate limit, 80·443 허용. SSH는 공개키 인증을 사용하고 root·비밀번호 로그인을 금지한다. Docker 경로는 호스트 SSH 설정을 변경하지 않는다. |
 | 계산 장치 | 서버로 아웃바운드 연결하므로 장치의 인바운드 포트 개방이나 장치별 SSH 배포가 필요하지 않다. |
-| 프로세스·파일 | systemd의 비특권 `quant` 사용자로 실행한다. 코드·설정과 `/var/lib/quant-platform`의 가변 데이터를 분리하고 메모리·프로세스 수 제한을 적용한다. |
+| 프로세스·파일 | Docker 서버는 비 root UID 1000·읽기 전용 이미지와 named volume을 사용한다. systemd는 비특권 `quant` 사용자다. 코드·설정과 `/var/lib/quant-platform`의 가변 데이터를 분리하고 메모리·프로세스 수 제한을 적용한다. |
 
 클라우드 방화벽·DNS는 별도 운영 설정이다. UFW 설정이 클라우드 방화벽을 대신하지 않는다. 출발 IP 등록이 필요한 외부 API는 실제 아웃바운드 IP와 등록값을 확인한다.
 
-구성 기준: [provision.sh](../infra/provision.sh), [quant-platform.service](../infra/systemd/quant-platform.service). 실제 도메인·인스턴스 식별값은 운영 설정에서 관리하며 추정값을 소스에 고정하지 않는다.
+구성 기준: [Docker 서버 운영](DOCKER_SERVER.md)·[compose.yaml](../compose.yaml), 선택적 [provision.sh](../infra/provision.sh), [quant-platform.service](../infra/systemd/quant-platform.service). 실제 도메인·인스턴스 식별값은 운영 설정에서 관리하며 추정값을 소스에 고정하지 않는다.
 
 ## 10. 환경변수와 설정
 
-**앱·배포 접속·인프라 설정을 분리한다.** 앱 설정은 `/etc/quant-platform/app.env`(`root:root`, `600`)에 두고 변경 후 재시작한다. 비밀값은 저장소·웹 번들·계산 패키지에 넣지 않는다.
+**앱·배포 접속·인프라 설정을 분리한다.** Docker는 저장소 루트의 `server.env`와 `app.env`(600)를 사용하고 셸로 평가하지 않는다. systemd의 앱 설정은 `/etc/quant-platform/app.env`(`root:root`, `600`)에 두고, 관리되는 바인딩·프록시 설정은 별도 `network.env`에서 덮어쓴다. 변경 후 재시작한다. 비밀값은 저장소·웹 번들·계산 패키지에 넣지 않는다.
 
 | 구분 | 주요 설정 |
 | --- | --- |
-| 실행·네트워크 | `NODE_ENV`, `APP_BIND_ADDRESS`, `APP_PORT`, `TRUST_PROXY_LOOPBACK` |
+| 실행·네트워크 | `NODE_ENV`, `APP_BIND_ADDRESS`, `APP_PORT`, `TRUST_PROXY_LOOPBACK`, `TRUST_PROXY_ADDRESSES` |
 | 저장 경로 | `DATABASE_PATH`, `DATA_ROOT`, `EXPORT_ROOT`, `TEMP_ROOT` |
 | 인증 | `SESSION_SECRET`는 production에서 필수. 세션 유휴·절대 만료는 `SESSION_*_TIMEOUT_SECONDS`로 설정한다. |
 | 데이터 공급자 | `KRX_API_KEY`·`KRX_APPROVAL_EXPIRY`, `DART_API_KEY`, `FRED_API_KEY`, `TOSS_CLIENT_ID`·`TOSS_CLIENT_SECRET` 및 공급자별 base URL |
 | 자원·운영 | `MAX_QUEUED_BACKTESTS`, `SYNC_MIN_FREE_DISK_MB`, `KRX_DAILY_CALL_BUDGET`, 로그 수준·보존 기간 |
 | 로컬 배포 접속 | 저장소 밖으로 유출하지 않는 로컬 `deploy.env`의 `HOST`·`SSH_*` 설정. 앱 API 키와 구분한다. |
 
-허용값·기본값·조합 검증은 [config.ts](../src/server/bootstrap/config.ts), 예시는 [app.env.example](../infra/app.env.example)·[deploy.env.example](../deploy.env.example)를 따른다. 선택적 비밀값은 미사용 시 생략하며 빈 문자열로 대체하지 않는다. 도메인 `DOMAIN`은 앱이 아닌 프로비저닝 입력이다.
+허용값·기본값·조합 검증은 [config.ts](../src/server/bootstrap/config.ts), 예시는 [app.env.example](../infra/app.env.example)·[deploy.env.example](../deploy.env.example)를 따른다. 선택적 비밀값은 미사용 시 생략하며 빈 문자열로 대체하지 않는다. 도메인 `DOMAIN`은 앱이 아닌 Compose 또는 프로비저닝 입력이다. Docker 예시는 [server.env.example](../server.env.example)과 [app.env.example](../infra/server/app.env.example)을 따른다.
 
 ## 11. 빌드·배포·복구
 
 저장소가 지정한 Node·pnpm으로 `pnpm install --frozen-lockfile`을 실행한다. 개발은 `pnpm dev`·`pnpm dev:web`, 서버·웹 빌드는 `pnpm build`다.
 
-초기 구성은 `scripts/bootstrap.sh`, 이후 배포는 **Linux에서 `pnpm run deploy`**다. standalone 배포는 깨끗한 작업 트리의 동일 스냅샷을 검증해 서버·웹과 체크섬을 게시한다. Native Linux agent 파일은 만들거나 배포하지 않는다. Agent용 내부 Linux archive는 `dist/agent-runtime/`에서 Docker image 구성과 hermetic workload 검증에만 사용하며 배포 archive에 포함하지 않는다.
+기본 Docker 경로는 `bash scripts/server.sh init`·`up`·`update`이며 `pnpm deploy`는 로컬 Docker 업데이트의 별칭이다. main workflow가 검증한 서버·Agent 이미지를 게시하고 서버는 선택한 digest를 고정한다. Docker 업데이트는 DB 준비와 readiness를 확인하며 백업·복원은 자동화하지 않는다. 미완료 업데이트는 이전 이미지의 재기동을 차단한다. 운영 절차는 [Docker 서버 운영](DOCKER_SERVER.md)을 따른다.
 
-배포 진입점은 독립 Bash 스크립트인 `scripts/deploy.sh` 하나다. 로컬 검증·전송 후 한 번의 원격 실행이 잠금을 잡고 배포를 끝낸다. `--remote`는 내부 호출용이며, 대상별 조정 계층·Node 조정 블록·호환 래퍼는 두지 않는다. `deploy.env`는 셸 코드로 평가하지 않는다. stdout·stderr를 화면과 `.logs/deploy-*.log`에 함께 기록하며 `LOG`로 위치를 지정할 수 있다.
+선택적 systemd 초기 구성은 `scripts/bootstrap.sh`, 이후 배포는 **Linux에서 `pnpm run deploy:systemd`**다. standalone 배포는 깨끗한 작업 트리의 동일 스냅샷을 검증해 서버·웹과 체크섬을 게시한다. Native Linux agent 파일은 만들거나 배포하지 않는다. Agent용 내부 Linux archive는 `dist/agent-runtime/`에서 Docker image 구성과 hermetic workload 검증에만 사용하며 배포 archive에 포함하지 않는다.
 
-배포는 SSH 전송 후 **체크섬 검증·staging 설치 → 서비스 중지·두 DB 백업 → 코드 전환·`db:prepare` → 기동 검증 → 성공 확정·정리**로 진행한다. 성공 확정 전 실패 시 코드와 DB 세트 복원을 시도한다. 코드만 롤백하고 DB 호환성을 방치하지 않으며, 성공 후 이력 정리 실패만으로 정상 배포를 되돌리지 않는다.
+systemd 배포 진입점은 독립 Bash 스크립트인 `scripts/deploy.sh`다. 로컬 검증·전송 후 한 번의 원격 실행이 잠금을 잡고 배포를 끝낸다. `--remote`는 내부 호출용이며, 대상별 조정 계층·Node 조정 블록·호환 래퍼는 두지 않는다. `deploy.env`는 셸 코드로 평가하지 않는다. stdout·stderr를 화면과 `.logs/deploy-*.log`에 함께 기록하며 `LOG`로 위치를 지정할 수 있다.
+
+systemd 배포는 SSH 전송 후 **체크섬 검증·staging 설치 → 서비스 중지·두 DB 백업 → 코드 전환·`db:prepare` → 기동 검증 → 성공 확정·정리**로 진행한다. 성공 확정 전 실패 시 코드와 DB 세트 복원을 시도한다. 코드만 롤백하고 DB 호환성을 방치하지 않으며, 성공 후 이력 정리 실패만으로 정상 배포를 되돌리지 않는다.
 
 백업·복원은 `db:backup`·`db:restore`를 사용하며 **두 DB와 백업 명세를 한 세트로 관리**한다. 유지보수 중 쓰기를 중지하고 여러 WAL DB 파일의 장애 원자성을 가정하지 않는다. 파일 누락·식별자 불일치·미완료 복원은 기동을 차단한다.
 
-실행 순서의 기준은 [build-release.sh](../scripts/build-release.sh)·[deploy.sh](../scripts/deploy.sh)다.
+systemd 실행 순서의 기준은 [build-release.sh](../scripts/build-release.sh)·[deploy.sh](../scripts/deploy.sh)다.
 
 ## 12. 테스트
 
@@ -208,8 +210,7 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 | --- | --- |
 | `pnpm lint`·`pnpm typecheck` | 정적 규칙과 서버·웹 타입 검사 |
 | `pnpm test` | 일반 회귀 검사: `tests/unit`, `tests/integration`, `tests/architecture` |
-| `pnpm test:resources` | `tests/resources`의 대용량 메모리 검사. 파일을 순차 실행하며 기존 입력·상한을 유지한다. |
-| `pnpm test:all` | 일반 회귀 검사 후 자원 검사. `devel` 병합 전 전체 검증과 서버 배포에서 필수 실행 |
+| `pnpm test:all` | 전체 일반 회귀 검사의 릴리스 진입점(`pnpm test`). `devel` 병합 전과 서버 배포에서 필수 실행 |
 | `pnpm test:e2e` | 빌드 후 Playwright 브라우저 검증. 기본 배포 스크립트와 별도로 실행한다. |
 | `pnpm test:agent-package` | 내부 runtime archive를 저장소 밖에서 실행해 구성·의존성·준비·계산·결과 저장 계약 검증. GHCR image workflow에서 Docker build/push 전에 실행 |
 
@@ -217,4 +218,4 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 
 회귀 검증은 계산·시점 정합성, 준비 결과 보존·재사용, 버전 호환성, 임대·취소·복구·결과 반영, 인증·모듈 경계를 포함한다. 계약 변경 시 해당 테스트도 변경한다.
 
-standalone 서버 배포 게이트는 **설치 → lint → typecheck → 전체 Vitest(`test:all`) → 서버·웹 build**다. GHCR Agent image workflow는 이미지 version 준비 단계에서 `pnpm test:agent-package`를 실행한 다음 multi-arch Docker build/push를 진행한다. 변경 영향별 테스트 선택 배포는 구현된 것으로 가정하지 않는다. 기준: [vitest.config.ts](../vitest.config.ts)·[vitest.resources.config.ts](../vitest.resources.config.ts), [test-fixtures.ts](../tests/helpers/test-fixtures.ts)·[test-app.ts](../tests/helpers/test-app.ts), [build-release.sh](../scripts/build-release.sh).
+standalone 서버 배포 게이트는 **설치 → lint → typecheck → 전체 Vitest(`test:all`) → 서버·웹 build**다. GHCR Agent image workflow는 이미지 version 준비 단계에서 `pnpm test:agent-package`를 실행한 다음 multi-arch Docker build/push를 진행한다. 변경 영향별 테스트 선택 배포는 구현된 것으로 가정하지 않는다. 기준: [vitest.config.ts](../vitest.config.ts), [test-fixtures.ts](../tests/helpers/test-fixtures.ts)·[test-app.ts](../tests/helpers/test-app.ts), [build-release.sh](../scripts/build-release.sh).

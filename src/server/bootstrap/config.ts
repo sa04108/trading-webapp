@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { isIP } from "node:net";
 import { z } from "zod";
 
 const booleanString = z
@@ -43,6 +44,15 @@ const envSchema = z.object({
     .enum(["fatal", "error", "warn", "info", "debug", "trace"])
     .default("info"),
   TRUST_PROXY_LOOPBACK: booleanString.default(true),
+  /** 별도 프록시 컨테이너의 IP/CIDR만 신뢰한다. 모든 발신자를 신뢰하는 값은 허용하지 않는다. */
+  TRUST_PROXY_ADDRESSES: z.string().optional().transform((value) =>
+    value?.split(",").map((entry) => entry.trim()).filter(Boolean) ?? [],
+  ).refine((entries) => entries.every((entry) => {
+    const [address, prefix, extra] = entry.split("/");
+    const family = isIP(address ?? "");
+    return family !== 0 && extra === undefined && (prefix === undefined ||
+      (/^\d+$/.test(prefix) && Number(prefix) > 0 && Number(prefix) <= (family === 4 ? 32 : 128)));
+  }), "TRUST_PROXY_ADDRESSES must contain explicit IP addresses or restricted CIDRs"),
   LIVE_TRADING_ENABLED: booleanString.default(false),
   /** 토스증권 Open API (D-018). 미설정이면 종목 이름 조회 어댑터는 비활성 */
   TOSS_BASE_URL: z.string().url().default("https://openapi.tossinvest.com"),
@@ -89,6 +99,7 @@ export interface AppConfig {
   readonly notificationRetentionDays: number;
   readonly logLevel: "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   readonly trustProxyLoopback: boolean;
+  readonly trustedProxyAddresses?: readonly string[];
   readonly liveTradingEnabled: boolean;
   readonly tossBaseUrl: string;
   readonly tossClientId: string | null;
@@ -157,6 +168,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     notificationRetentionDays: raw.NOTIFICATION_RETENTION_DAYS,
     logLevel: raw.LOG_LEVEL,
     trustProxyLoopback: raw.TRUST_PROXY_LOOPBACK,
+    trustedProxyAddresses: raw.TRUST_PROXY_ADDRESSES,
     liveTradingEnabled: raw.LIVE_TRADING_ENABLED,
     tossBaseUrl: raw.TOSS_BASE_URL,
     tossClientId: raw.TOSS_CLIENT_ID ?? null,
