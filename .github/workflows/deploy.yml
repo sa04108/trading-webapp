@@ -1,4 +1,4 @@
-name: Publish images
+name: Publish and deploy
 run-name: Publish and deploy · ${{ github.sha }}
 
 on:
