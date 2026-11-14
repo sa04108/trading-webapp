@@ -1,6 +1,6 @@
 # Docker 서버 운영
 
-기본 운영 대상은 Ubuntu 26.04 LTS의 GMKtec NucBox G3(N100 4코어, RAM 16GB, NVMe 256GB)다. 앱 Compose에는 `server` 하나만 두고 **기존 Traefik 3.7.16**으로 HTTPS를 제공한다. 공인 IP·호스트 준비와 DB 백업·이전은 운영자가 관리한다.
+기본 운영 대상은 Ubuntu 26.04 LTS의 GMKtec NucBox G3(N100 4코어, RAM 16GB, NVMe 256GB)다. 앱 Compose에는 `server` 하나만 두고 **기존 Traefik 3.7.19**로 HTTPS를 제공한다. 공인 IP·호스트 준비와 DB 백업·이전은 운영자가 관리한다.
 
 ## 준비
 
