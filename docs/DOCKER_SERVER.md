@@ -12,7 +12,7 @@
 
 ## 이미지 게시
 
-[Publish images](../.github/workflows/deploy.yml)는 `main` push 또는 `main`에서의 수동 실행에서 Windows 설치기, lint·typecheck·일반 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64·arm64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행을 검사한 뒤, 같은 Agent digest를 기본값으로 포함한 amd64 서버 이미지를 `ghcr.io/sa04108/quant-platform:sha-<커밋 SHA>`로 게시·검사한다. 두 이미지 검사가 성공하면 각각의 `latest` 별칭을 갱신한다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. 패키지를 로그인 없이 내려받으려면 GitHub Packages에서 두 패키지를 Public으로 설정하고 Actions에 패키지 쓰기 권한을 부여한다.
+서버 이전 중에는 `main` 병합·push에 따른 자동 게시 트리거를 주석 처리해 둔다. [Publish images](../.github/workflows/deploy.yml)를 `main`에서 수동 실행하면 Windows 설치기, lint·typecheck·일반 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64·arm64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행을 검사한 뒤, 같은 Agent digest를 기본값으로 포함한 amd64 서버 이미지를 `ghcr.io/sa04108/quant-platform:sha-<커밋 SHA>`로 게시·검사한다. 두 이미지 검사가 성공하면 각각의 `latest` 별칭을 갱신한다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. 패키지를 로그인 없이 내려받으려면 GitHub Packages에서 두 패키지를 Public으로 설정하고 Actions에 패키지 쓰기 권한을 부여한다.
 
 서버에 이미지를 적용하는 절차는 아래 운영 명령을 따른다. workflow의 동시 실행은 `quant-platform-production` 그룹으로 제한되고 실행 중인 작업은 새 실행 때문에 취소되지 않는다. 이전 서버·Agent 설치 파일이 참조하는 이미지는 자동 삭제하지 않는다.
 

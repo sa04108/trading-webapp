@@ -198,7 +198,7 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 
 저장소가 지정한 Node·pnpm으로 개발·검증하고 서버·웹은 `pnpm build`로 빌드한다. 서버 배포 산출물은 컨테이너 이미지다. Agent용 Linux archive는 `dist/agent-runtime/`에서 Agent 이미지와 hermetic workload 검증에만 사용한다.
 
-운영 명령은 `bash scripts/server.sh init`·`validate`·`up`·`update`·`stop`·`status`·`logs`·`cli`다. 호스트 Node는 필요 없다. `pnpm deploy`는 같은 Docker 업데이트의 별칭이다. main workflow는 서버/Agent 이미지를 검증·게시하며 서버 적용은 운영자가 수행한다.
+운영 명령은 `bash scripts/server.sh init`·`validate`·`up`·`update`·`stop`·`status`·`logs`·`cli`다. 호스트 Node는 필요 없다. `pnpm deploy`는 같은 Docker 업데이트의 별칭이다. 서버 이전 중 main 자동 게시 트리거는 일시 중지하고, main에서 수동 실행한 workflow로 서버/Agent 이미지를 검증·게시한다. 서버 적용은 운영자가 수행한다.
 
 원본 설정 변경은 검증 후 `up`으로 현재 고정 이미지에 적용한다. `update`는 후보 이미지를 먼저 확보하고 앱 설정 검증을 통과한 뒤 서비스를 중지해 DB 준비와 readiness를 확인한다. 성공 digest를 고정하고 미완료 업데이트는 이전 이미지의 `up`과 CLI를 차단한다. 설정/다운로드 실패는 실행 중인 앱을 유지하며, DB 준비 이후 실패는 중지 상태에서 같은 후보로 복구한다. 백업·복원을 자동화하지 않는다. 자세한 절차는 [Docker 서버 운영](DOCKER_SERVER.md)을 따른다.
 
