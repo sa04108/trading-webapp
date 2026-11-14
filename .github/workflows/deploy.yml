@@ -131,7 +131,7 @@ jobs:
       contents: read
       packages: read
     env:
-      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
       SERVER_IMAGE: ${{ needs.publish.outputs.server-image }}
     defaults:
       run:
