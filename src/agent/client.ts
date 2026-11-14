@@ -20,6 +20,7 @@ import {
   type BacktestExecutionTelemetry,
 } from "../runtime/modules/backtest/application/backtest-execution-telemetry.js";
 import { readRuntimeVersions } from "../runtime/shared/runtime-versions.js";
+import { preparationHeapMb } from "../runtime/shared/universe-resources.js";
 import { openDatabase } from "../runtime/shared/db/database.js";
 import { backtestJobs } from "../runtime/shared/db/schema.js";
 import {
@@ -515,11 +516,15 @@ export class AgentClient {
       lease.kind === "PREPARATION"
         ? `../runtime/workers/preparation-child.${ts ? "ts" : "js"}`
         : `../runtime/workers/backtest-child.${ts ? "ts" : "js"}`;
+    const cpuBudget = Math.max(1, Math.floor(this.admission.cpus / Math.max(1, this.admission.slots)));
+    const heapMb = lease.kind === "PREPARATION"
+      ? preparationHeapMb(this.admission.budgetBytes, cpuBudget, this.admission.heapMb)
+      : this.admission.heapMb;
     let child: ChildProcess;
     try {
       child = fork(fileURLToPath(new URL(target, import.meta.url)), [], {
         execArgv: [
-          `--max-old-space-size=${this.admission.heapMb}`,
+          `--max-old-space-size=${heapMb}`,
           ...(this.runtime
             ? ["--max-semi-space-size=4"]
             : []),
@@ -533,7 +538,7 @@ export class AgentClient {
           WORKER_MAX_BARS: String(this.maxBars()),
           WORKER_STREAM_BARS: this.runtime ? "1" : "0",
           WORKER_BUDGET_BYTES: String(this.admission.budgetBytes),
-          WORKER_CPU_BUDGET: String(Math.max(1, Math.floor(this.admission.cpus / Math.max(1, this.admission.slots)))),
+          WORKER_CPU_BUDGET: String(cpuBudget),
           BACKTEST_RESULT_PATH: path.join(directory, "result.sqlite"),
         },
         stdio: ["ignore", "pipe", "pipe", "ipc"],

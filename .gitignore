@@ -33,6 +33,14 @@ out/
 .env.local
 .env.*.local
 /deploy.env
+/server.env
+/app.env
+/.server-image
+/.server-image.previous
+/.server-update.lock
+/.server-image.tmp
+/.server-update-pending
+/.server-update-pending.tmp
 
 # npm cache directory
 .npm

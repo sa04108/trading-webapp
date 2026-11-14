@@ -29,13 +29,13 @@ export async function runAgentCli(
   const command = args[0] ?? "run";
   if (command !== "run")
     throw new Error(
-      "Docker에서는 run 명령만 사용합니다. 최신 이미지 설치 파일을 다시 실행해 업데이트하세요",
+      "Docker에서는 run 명령만 사용합니다. 저장한 토큰으로 현재 서버에서 새 설치 파일을 받아 업데이트하세요",
     );
   const settings = readEnvironmentSettings();
   const { AgentClient } = await import("./client.js");
   const client = new AgentClient(settings, state, async () => {
     console.log(
-      "서버에 맞는 최신 Docker 이미지가 필요합니다. Windows 설치 파일을 다시 실행하세요",
+      "서버에 맞는 최신 Docker 이미지가 필요합니다. 저장한 토큰으로 현재 서버에서 새 Windows 설치 파일을 받아 실행하세요",
     );
   });
   client.start();

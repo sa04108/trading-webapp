@@ -1,0 +1,25 @@
+# 서버 빌드에 필요한 파일만 전송한다. DB·설정·Git·기존 산출물은 포함하지 않는다.
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!tsconfig.server.json
+!tsconfig.web.json
+!tsconfig.build.json
+!tsconfig.agent.json
+!vite.config.ts
+!index.html
+!packages/
+!packages/agent/
+!packages/agent/package.json
+!packages/agent/pnpm-lock.yaml
+!packages/agent/pnpm-workspace.yaml
+!scripts/
+!scripts/build-runtime-versions.mjs
+!scripts/install-agent-windows.ps1
+!scripts/lib/
+!scripts/lib/runtime-graph.mjs
+!src/
+!src/**
+!migrations/
+!migrations/**

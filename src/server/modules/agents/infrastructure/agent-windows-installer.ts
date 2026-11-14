@@ -2,12 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 
 const DEFAULT_IMAGE = "ghcr.io/sa04108/quant-agent:latest";
-const GHCR_LATEST_IMAGE = /^ghcr\.io\/[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*:latest$/;
+const GHCR_AGENT_IMAGE = /^ghcr\.io\/[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*(?::(?:latest|v-[a-f0-9]{64})|@sha256:[a-f0-9]{64})$/;
 
 export function agentContainerImage(value = process.env.AGENT_CONTAINER_IMAGE): string {
   const image = value?.trim() || DEFAULT_IMAGE;
-  if (!GHCR_LATEST_IMAGE.test(image))
-    throw Object.assign(new Error("AGENT_CONTAINER_IMAGE는 ghcr.io의 소문자 이미지 경로와 :latest 태그여야 합니다"), { statusCode: 500 });
+  if (!GHCR_AGENT_IMAGE.test(image))
+    throw Object.assign(new Error("AGENT_CONTAINER_IMAGE는 ghcr.io의 소문자 이미지 경로와 latest, 버전 태그 또는 SHA-256 digest여야 합니다"), { statusCode: 500 });
   return image;
 }
 
@@ -34,7 +34,7 @@ export function buildWindowsAgentInstaller(input: {
 }): string {
   const template = fs.readFileSync(path.resolve("scripts/install-agent-windows.ps1"), "utf8");
   const image = input.image ?? agentContainerImage();
-  if (!GHCR_LATEST_IMAGE.test(image))
+  if (!GHCR_AGENT_IMAGE.test(image))
     throw Object.assign(new Error("컨테이너 이미지 설정이 올바르지 않습니다"), { statusCode: 500 });
   const config = Buffer.from(JSON.stringify({
     serverUrl: validateAgentServerOrigin(input.serverUrl),

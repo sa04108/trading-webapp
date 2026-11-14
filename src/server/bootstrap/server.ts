@@ -53,7 +53,10 @@ export async function buildServer(
 
   const app = Fastify({
     logger: buildPinoOptions(config),
-    trustProxy: config.trustProxyLoopback ? "127.0.0.1" : false,
+    trustProxy: [
+      ...(config.trustProxyLoopback ? ["127.0.0.1"] : []),
+      ...(config.trustedProxyAddresses ?? []),
+    ],
     bodyLimit: 10 * 1024 * 1024,
   });
   registerRequestObservability(app);

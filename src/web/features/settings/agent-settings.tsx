@@ -18,35 +18,34 @@ export function AgentSettings() {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [token, setToken] = useState<string | null>(null);
+  const [savedToken, setSavedToken] = useState("");
+  const [savedPending, setSavedPending] = useState(false);
+  const [savedError, setSavedError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState<string | null>(null);
-  const windowsInstaller = useMutation({
-    mutationFn: async (issuedToken: string) => {
-      const response = await fetch("/api/v1/agents/install/windows", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: issuedToken, serverUrl: window.location.origin }),
-      });
-      if (!response.ok) {
-        let message = "Windows 설치 파일을 만들지 못했습니다.";
-        try {
-          const result = (await response.json()) as { error?: string };
-          if (result.error) message = result.error;
-        } catch { /* 응답 본문이 JSON이 아니면 기본 메시지를 표시한다. */ }
-        throw new Error(message);
-      }
-      return response.blob();
-    },
-    onSuccess: (blob) => {
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = "quant-agent-windows.cmd";
-      anchor.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    },
-  });
+  const downloadInstaller = async (installerToken: string) => {
+    const response = await fetch("/api/v1/agents/install/windows", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: installerToken, serverUrl: window.location.origin }),
+    });
+    if (!response.ok) {
+      let message = "Windows 설치 파일을 만들지 못했습니다.";
+      try {
+        const result = (await response.json()) as { error?: string };
+        if (result.error) message = result.error;
+      } catch { /* 응답 본문이 JSON이 아니면 기본 메시지를 표시한다. */ }
+      throw new Error(message);
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "quant-agent-windows.cmd";
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const windowsInstaller = useMutation({ mutationFn: downloadInstaller });
   const { data, error } = useQuery({
     queryKey: ["agents"],
     queryFn: () => api<AgentList>("/agents"),
@@ -137,6 +136,29 @@ export function AgentSettings() {
             </div>
           </div>
         )}
+        <form
+          className="space-y-2 rounded-md border p-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setSavedPending(true);
+            setSavedError(null);
+            void downloadInstaller(savedToken.trim())
+              .then(() => setSavedToken(""))
+              .catch((failure: unknown) => setSavedError(failure instanceof Error ? failure.message : "Windows 설치 파일을 만들지 못했습니다."))
+              .finally(() => setSavedPending(false));
+          }}
+        >
+          <Label htmlFor="saved-agent-token">저장한 기존 연결 토큰</Label>
+          <p className="text-muted-foreground">기존 Agent를 업데이트하려면 활성 토큰으로 현재 서버의 설치 파일을 다시 받으세요.</p>
+          <div className="flex gap-2">
+            <Input id="saved-agent-token" type="password" autoComplete="off" value={savedToken}
+              onChange={(event) => setSavedToken(event.target.value)} />
+            <Button type="submit" disabled={!savedToken.trim() || savedPending}>
+              {savedPending ? "설치 파일 준비 중…" : "설치 파일 다시 받기"}
+            </Button>
+          </div>
+          {savedError && <p role="alert" className="text-destructive">{savedError}</p>}
+        </form>
         {copyError && (
           <p role="alert" className="text-destructive">
             {copyError}
