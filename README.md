@@ -190,8 +190,7 @@ pnpm build
 | `pnpm test` | 단위·일반 통합·아키텍처 회귀 검사. 개발 중 기본 실행 |
 | `pnpm test:all` | 전체 일반 회귀 검사의 릴리스 진입점(`pnpm test`). `devel` 병합 전과 서버 배포에서 필수 실행 |
 
-10년 규모의 합성 DB를 생성하는 장기간 부하 검사와 전용 fixture는 제거했다.
-일반 회귀·자원 배정 정책·패키지 검증은 유지한다.
+일반 회귀는 자원 배정 정책도 포함하며 패키지 검증은 별도 명령으로 실행한다.
 새 테스트의 추가·통합·삭제 기준은 [AGENTS.md](AGENTS.md)의 검증 정책을 따른다.
 
 UI 동작은 별도로 E2E를 실행한다. 브라우저와 OS 의존성 설치는 해당 환경에서 최초 1회 필요하다.
@@ -230,7 +229,7 @@ pnpm cli db:prepare
 
 ### 5.3 재배포
 
-`main`에 merge하면 GitHub Actions가 검증한 서버·Agent 이미지를 GHCR에 게시한다. `devel` push는 게시·배포하지 않는다. 이미지 게시 후 서버에서 업데이트한다. 세부 설정은 [GitHub Actions 이미지 게시와 배포](docs/GITHUB_ACTIONS_DEPLOY.md)를 따른다.
+`main`에 merge하면 GitHub Actions가 검증한 서버·Agent 이미지를 GHCR에 게시한다. `devel` push는 게시·배포하지 않는다. 이미지 게시 후 서버에서 업데이트한다. 게시 조건과 이미지 구성은 [이미지 게시](docs/DOCKER_SERVER.md#이미지-게시)를 따른다.
 
 **Docker 서버:** 체크아웃을 릴리스에 맞춘 뒤 `bash scripts/server.sh update`를 실행한다. 호스트 pnpm을 사용하는 경우 `pnpm deploy`도 같은 명령이다. 다운로드·설정 검증과 DB 준비·기동 확인을 수행하며 성공한 digest를 고정한다. 다운로드·설정 검증 실패는 기존 앱을 유지한다. DB 준비·기동 단계의 실패는 서버를 중지하고 미완료 업데이트를 기록하며 DB·이미지를 자동 복원하지 않는다. 자세한 절차는 [Docker 업데이트](docs/DOCKER_SERVER.md#업데이트와-실패-처리)를 따른다.
 
@@ -310,6 +309,6 @@ bash scripts/server.sh up
 | Agent가 연결되지 않는다 | Docker Desktop Linux 엔진, 컨테이너 상태·로그, 설치 파일에 포함된 토큰, 서버 HTTPS 접근을 확인한다. 필요하면 같은 설치 파일을 다시 실행한다. |
 | 복원 이후 앱이 기동하지 않는다 | 백업 세트·릴리스 호환성·미완료 복원 기록과 로그를 확인한다. 빈 DB를 새로 만들어 덮거나 복원 기록을 강제로 삭제하지 않는다. |
 
-설계 원칙은 [SPEC](docs/SPEC.md), 에이전트의 상세 진단·복구는 [AGENT_OPERATIONS](docs/AGENT_OPERATIONS.md), 계산 코드·버전 계약은 [AGENT_RUNTIME_BOUNDARY](docs/AGENT_RUNTIME_BOUNDARY.md), 설계 변경 배경은 [DECISIONS](docs/DECISIONS.md)를 참고한다. 개발 작업 규칙은 [AGENTS.md](AGENTS.md)를 따른다.
+설계 원칙과 현재 지원 한계는 [SPEC](docs/SPEC.md), 서버 운영은 [DOCKER_SERVER](docs/DOCKER_SERVER.md), 에이전트의 상세 진단·복구는 [AGENT_OPERATIONS](docs/AGENT_OPERATIONS.md), 계산 코드·버전 계약은 [AGENT_RUNTIME_BOUNDARY](docs/AGENT_RUNTIME_BOUNDARY.md)를 참고한다. 개발 작업 규칙은 [AGENTS.md](AGENTS.md)를 따른다.
 
 명령의 구현 기준은 [package.json](package.json), [서버 CLI](src/server/cli.ts), [서버 운영 스크립트](scripts/server.sh), [Windows 설치기](scripts/install-agent-windows.ps1)다.

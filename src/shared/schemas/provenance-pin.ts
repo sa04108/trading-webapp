@@ -5,7 +5,7 @@ import type {
 } from "./universe-rule.js";
 
 /**
- * 백테스트 실행의 유니버스 출처 pin (Task 12, REVIEW §9.2).
+ * 백테스트 실행의 유니버스 출처 pin.
  *
  * 서버가 제출 검증 시점에 조립해 저장한다 — 클라이언트가 보내는 값이 아니다.
  *
@@ -70,9 +70,8 @@ export interface OrderedUniversePipelineProvenancePin {
 /**
  * 순서형 파이프라인 이전(Task 1~10 이전) 완료 run 이 저장해 둔 모양이다.
  *
- * 기존 완료 백테스트 결과는 다시 쓰지 않는다(2026-08-10 결정, docs/DECISIONS.md
- * D-049) — 그래서 이 모양은 새 run 이 다시 쓰는 대상이 아니라, 옛 run 을 읽을 때만
- * 이 분기로 남는다. `selectionMethod` 는 옛 경로가 실제로 저장했던 값들
+ * 기존 완료 백테스트 결과는 다시 쓰지 않는다. 이 모양은 새 run 이 저장하는 대상이
+ * 아니라 옛 run 을 읽을 때만 사용하는 분기다. `selectionMethod` 는 옛 경로가 저장했던 값들
  * (`TOP_MARKET_CAP_N`·`MANUAL_FROM_KRX_SNAPSHOT` 등)을 가리지 않고 그대로 담는다.
  */
 export interface LegacyTopMarketCapProvenancePin {
