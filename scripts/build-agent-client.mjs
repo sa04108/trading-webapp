@@ -78,11 +78,8 @@ try {
       path.join(root, "packages/agent", file),
       path.join(temporary, file),
     );
-  run(
-    "pnpm",
-    ["install", "--prod", "--offline", "--frozen-lockfile"],
-    temporary,
-  );
+  // 새 빌드 환경에서도 pnpm 정책 검증에 필요한 레지스트리 메타데이터를 조회한다.
+  run("pnpm", ["install", "--prod", "--frozen-lockfile"], temporary);
   fs.copyFileSync(
     path.join(root, "dist/build-info.json"),
     path.join(temporary, "dist/build-info.json"),
