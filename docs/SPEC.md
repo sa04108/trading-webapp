@@ -173,7 +173,7 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 | 항목 | 운영 구성 |
 | --- | --- |
 | 퍼블릭 도메인 | `config.env`의 `DOMAIN`을 사용한다. 공인 IP·DNS·포트 전달은 별도 운영 범위다. |
-| HTTPS·프록시 | 기존 Traefik 3.7.16의 `infra-proxy`·`websecure`·`letsencrypt`를 재사용한다. 앱 Compose는 서버 서비스 하나이며 내부 3000번 포트를 호스트에 게시하지 않는다. |
+| HTTPS·프록시 | 기존 Traefik 3.7.19의 `infra-proxy`·`websecure`·`letsencrypt`를 재사용한다. 앱 Compose는 서버 서비스 하나이며 내부 3000번 포트를 호스트에 게시하지 않는다. |
 | 호스트 | Docker Engine과 Compose를 사전에 준비한다. 앱 도구는 Traefik·네트워크를 새로 설치하거나 호스트 SSH·방화벽을 변경하지 않는다. |
 | 계산 장치 | 서버로 아웃바운드 연결한다. 장치별 SSH 배포와 인바운드 포트 개방이 필요하지 않다. |
 | 프로세스·파일 | 비 root UID 1000·읽기 전용 이미지와 `/var/lib/quant-platform` named volume을 사용한다. 가변 데이터는 이미지와 분리한다. |
