@@ -508,7 +508,10 @@ function parseFinancialCoverageProtocol(
     return {
       version: parsed.version!,
       collectionVersion,
-      manifests,
+      // 정상 연도는 버전이 달라도 재사용한다. 이전 파서의 차단 오류가 남은 연도만
+      // 원문 재검증 대상으로 열고, 다른 연도 저장 시 새 버전으로 승격되지 않게 한다.
+      manifests: manifests.filter((manifest) =>
+        parsed.collectionVersion === collectionVersion || manifest.blockingGapCount === 0),
     };
   } catch {
     return null;

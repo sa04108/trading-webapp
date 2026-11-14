@@ -78,3 +78,31 @@ it('coverage와 문제 이력은 요청 종목 조건을 SQL에 전달한다', (
     for (const sql of reads) expect(sql).toMatch(/where.*(?:code|symbol).*in/i);
   } finally {spy.mockRestore();database.close();}
 });
+
+
+it('이전 수집 버전의 차단 오류 연도만 다시 열고 일부 복구가 나머지 오류를 새 버전으로 승인하지 않는다', () => {
+  const database = openDatabase(':memory:');
+  try {
+    database.db.insert(symbols).values({ code: '000240', market: 'KR', createdAtMs: 1 }).run();
+    for (const year of [2020, 2021, 2022]) {
+      database.db.insert(facts).values({ scope: 'SYMBOL', key: '000240', field: 'NET_INCOME', periodKey: `${year}Q1`, asOfTsMs: 1, value: 10, unit: 'KRW' }).run();
+    }
+    const gap = (year: number) => ({ symbol: '000240', periodKey: `${year}Q1`, field: 'NET_INCOME' as const,
+      reason: '계정 충돌', severity: 'BLOCKING' as const, kind: 'CONFLICT' as const });
+    const old = new SqliteFactCoverageStore(database.db, { collectionVersion: 'a'.repeat(64) });
+    old.addCoveredYears('000240', [2020], 1);
+    old.addCoverageResult('000240', [2021, 2022], [gap(2021), gap(2022)], 1);
+    expect(old.getCoverageState(['000240']).get('000240')?.blockingGapYears).toEqual([2021, 2022]);
+    const current = new SqliteFactCoverageStore(database.db, { collectionVersion: 'b'.repeat(64) });
+    expect(current.getCoveredYears(['000240']).get('000240')).toEqual([2020]);
+    expect(database.db.select().from(facts).all()).toHaveLength(3);
+    current.addCoveredYears('000240', [2021], 2);
+    expect(current.getCoveredYears(['000240']).get('000240')).toEqual([2020, 2021]);
+    current.addCoverageResult('000240', [2022], [gap(2022)], 3);
+    expect(current.getCoverageState(['000240']).get('000240')).toMatchObject({
+      verifiedYears: [2020, 2021, 2022], blockingGapYears: [2022],
+    });
+    expect(new SqliteFactCoverageStore(database.db, { collectionVersion: 'b'.repeat(64) })
+      .getCoverageState(['000240']).get('000240')?.blockingGapYears).toEqual([2022]);
+  } finally { database.close(); }
+});
