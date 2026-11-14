@@ -31,6 +31,16 @@ describe("daily decision", () => {
     try { expect((await run(warm.checkpoint, false, next)).orders).toHaveLength(1); } finally { bars.pop(); }
   });
   it("refuses missing latest data", async () => { await expect(run(null, true, "2026-11-14")).rejects.toThrow(/일봉/); });
+  it("워밍업 구간 중간의 거래 봉이 없으면 데이터 준비를 요구한다", async () => {
+    const incomplete = { ...runtime, candles: { getCandlesArray: async () => [bars[0]!, bars[2]!] } };
+    await expect(calculate(
+      { input: { deployment, portfolio: {}, checkpoint: null, warmupOnly: true }, date, bundlePath: "" } as never,
+      {} as never, bundle as never, incomplete as never,
+    )).rejects.toMatchObject({
+      message: expect.stringContaining("준비 구간의 종목 거래 봉이 누락"),
+      need: { priceRange: { to: date }, actions: { symbols: ["005930"] } },
+    });
+  });
   it("clears suppressed exit intents on missed bars for an actual held position", async () => {
     const actualDeployment = { ...deployment, strategyId: rangeBreakoutStrategy.id, version: rangeBreakoutStrategy.version, budgetKrw: 80, parameters: { lookbackBars: 2, atrPeriod: 2, stopAtrMultiplier: 0.1 } };
     const actualBundle = { ...bundle, getStrategy: () => rangeBreakoutStrategy, reconcileState };

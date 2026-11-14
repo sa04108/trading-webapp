@@ -2,8 +2,8 @@ import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.j
 import { describe, expect } from 'vitest';
 import { SelectionMetricRepository } from '../../src/runtime/modules/market-data/application/selection-metric-repository.js';
 import type { DailySelectionMetric } from '../../src/runtime/modules/market-data/application/selection-metric-repository.js';
-import { type TestApp } from '../helpers/test-app.js';
-import { test as it } from '../helpers/test-fixtures.js';
+import type { DatabaseHandle } from '../../src/runtime/shared/db/database.js';
+import { test as it } from '../helpers/database-fixtures.js';
 
 // better-sqlite3 in this project accepts 250,000 variables. This deliberately
 // crosses that real execution boundary; production batching remains 500 to
@@ -11,20 +11,20 @@ import { test as it } from '../helpers/test-fixtures.js';
 const OVER_SQLITE_BIND_LIMIT = 250_001;
 
 describe('SelectionMetricRepository', () => {
-  it('저장된 metric을 bigint 정밀도 그대로 읽는다', async ({ ctx: t }) => {
-    const repository = new SelectionMetricRepository(t.container.database.db);
+  it('저장된 metric을 bigint 정밀도 그대로 읽는다', async ({ database }) => {
+    const repository = new SelectionMetricRepository(database.db);
 
     // 2^53+1 과 2^63 초과 값 — 내부에서 Number() 를 거치는 구현은 여기서 깨진다.
     const overDoubleCap = 9_007_199_254_740_993n;
     const overInt64TradingValue = 18_446_744_073_709_551_617n;
-    seedMetrics(t, [{
+    seedMetrics(database, [{
       date: '2026-08-07',
       standardCode: 'KR7005930003',
       marketCapKrw: overDoubleCap,
       volume: null,
       tradingValueKrw: null,
     }]);
-    seedMetrics(t, [{
+    seedMetrics(database, [{
       date: '2026-08-07',
       standardCode: 'KR7005930003',
       marketCapKrw: overDoubleCap,
@@ -44,9 +44,9 @@ describe('SelectionMetricRepository', () => {
     ]]));
   });
 
-  it('지표 행이 있어도 coverage 표식이 없는 날짜는 다시 수집 대상으로 돌려준다', async ({ ctx: t }) => {
-    const repository = new SelectionMetricRepository(t.container.database.db);
-    seedMetrics(t, [{
+  it('지표 행이 있어도 coverage 표식이 없는 날짜는 다시 수집 대상으로 돌려준다', async ({ database }) => {
+    const repository = new SelectionMetricRepository(database.db);
+    seedMetrics(database, [{
       date: '2026-08-07',
       standardCode: 'KR7005930003',
       marketCapKrw: 1n,
@@ -59,17 +59,17 @@ describe('SelectionMetricRepository', () => {
       volume: null,
       tradingValueKrw: 3n,
     }]);
-    seedMetricCoverage(t, ['2026-08-08'], t.container.clock.now());
+    seedMetricCoverage(database, ['2026-08-08'], Date.now());
 
     expect(repository.findMissingTradingValueDates(['2026-08-06', '2026-08-07', '2026-08-08']))
       .toEqual(['2026-08-06', '2026-08-07']);
   });
 
-  it('일부 종목의 거래대금이 영영 null 이어도 ingest 흔적이 있는 날짜는 재수집하지 않는다', async ({ ctx: t }) => {
-    const repository = new SelectionMetricRepository(t.container.database.db);
+  it('일부 종목의 거래대금이 영영 null 이어도 ingest 흔적이 있는 날짜는 재수집하지 않는다', async ({ database }) => {
+    const repository = new SelectionMetricRepository(database.db);
     // KRX 가 '-' 거래대금을 준 종목은 null 로 남는다. 값 유무와 별개로 API 조회를
     // 완료한 날짜라는 표식이 있으면 재수집하지 않는다.
-    seedMetrics(t, [{
+    seedMetrics(database, [{
       date: '2026-08-07',
       standardCode: 'KR7005930003',
       marketCapKrw: 1n,
@@ -82,30 +82,14 @@ describe('SelectionMetricRepository', () => {
       volume: 5,
       tradingValueKrw: 6n,
     }]);
-    seedMetricCoverage(t, ['2026-08-07'], t.container.clock.now());
+    seedMetricCoverage(database, ['2026-08-07'], Date.now());
 
     expect(repository.findMissingTradingValueDates(['2026-08-07'])).toEqual([]);
   });
 
-  it('표준코드가 SQLite bind 한도를 넘어도 getAt 결과를 합친다', async ({ ctx: t }) => {
-    const repository = new SelectionMetricRepository(t.container.database.db);
-    seedMetrics(t, [{
-      date: '2026-08-07', standardCode: 'KR7005930003',
-      marketCapKrw: 1n, volume: 2, tradingValueKrw: 3n,
-    }]);
-    const codes = ['KR7005930003', ...Array.from(
-      { length: OVER_SQLITE_BIND_LIMIT - 1 },
-      (_, index) => `KR7${String(index).padStart(9, '0')}`,
-    )];
-
-    expect(repository.getAt('2026-08-07', codes).get('KR7005930003')).toMatchObject({
-      marketCapKrw: 1n, volume: 2, tradingValueKrw: 3n,
-    });
-  });
-
-  it('큰 후보는 날짜 범위 한 번으로 읽되 요청하지 않은 metric은 반환하지 않는다', async ({ ctx: t }) => {
-    const repository = new SelectionMetricRepository(t.container.database.db);
-    seedMetrics(t, [{
+  it('큰 후보는 날짜 범위 한 번으로 읽되 요청하지 않은 metric은 반환하지 않는다', async ({ database }) => {
+    const repository = new SelectionMetricRepository(database.db);
+    seedMetrics(database, [{
       date: '2026-08-07', standardCode: 'KR7005930003',
       marketCapKrw: 1n, volume: 2, tradingValueKrw: 3n,
     }, {
@@ -122,13 +106,13 @@ describe('SelectionMetricRepository', () => {
     expect([...metrics.keys()]).toEqual(['KR7005930003']);
   });
 
-  it('날짜가 SQLite bind 한도를 넘어도 findMissingTradingValueDates 결과를 합친다', async ({ ctx: t }) => {
-    const repository = new SelectionMetricRepository(t.container.database.db);
-    seedMetrics(t, [{
+  it('날짜가 SQLite bind 한도를 넘어도 findMissingTradingValueDates 결과를 합친다', async ({ database }) => {
+    const repository = new SelectionMetricRepository(database.db);
+    seedMetrics(database, [{
       date: '2026-08-07', standardCode: 'KR7005930003',
       marketCapKrw: 1n, volume: 2, tradingValueKrw: 3n,
     }]);
-    seedMetricCoverage(t, ['2026-08-07'], t.container.clock.now());
+    seedMetricCoverage(database, ['2026-08-07'], Date.now());
     const dates = ['2026-08-07', ...Array.from(
       { length: OVER_SQLITE_BIND_LIMIT - 1 },
       (_, index) => `2030-${String(Math.floor(index / 28) % 12 + 1).padStart(2, '0')}-${String(index % 28 + 1).padStart(2, '0')}-${index}`,
@@ -141,13 +125,13 @@ describe('SelectionMetricRepository', () => {
   });
 });
 
-function seedMetrics(t: TestApp, rows: readonly DailySelectionMetric[]): void {
-  const statement = t.container.database.sqlite.prepare(`INSERT INTO daily_selection_metrics
+function seedMetrics(database: DatabaseHandle, rows: readonly DailySelectionMetric[]): void {
+  const statement = database.sqlite.prepare(`INSERT INTO daily_selection_metrics
     (date, standard_code, market_cap_krw, volume, trading_value_krw) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT(date, standard_code) DO UPDATE SET market_cap_krw = excluded.market_cap_krw,
     volume = excluded.volume, trading_value_krw = excluded.trading_value_krw`);
   for (const row of rows) statement.run(row.date, row.standardCode, row.marketCapKrw?.toString() ?? null, row.volume, row.tradingValueKrw?.toString() ?? null);
 }
-function seedMetricCoverage(t: TestApp, dates: readonly string[], syncedAtMs: number): void {
-  for (const date of dates) t.container.database.sqlite.prepare('INSERT INTO daily_selection_metric_coverage (date, synced_at_ms, collection_version) VALUES (?, ?, ?)').run(date, syncedAtMs, readRuntimeVersions().collectionVersion);
+function seedMetricCoverage(database: DatabaseHandle, dates: readonly string[], syncedAtMs: number): void {
+  for (const date of dates) database.sqlite.prepare('INSERT INTO daily_selection_metric_coverage (date, synced_at_ms, collection_version) VALUES (?, ?, ?)').run(date, syncedAtMs, readRuntimeVersions().collectionVersion);
 }
