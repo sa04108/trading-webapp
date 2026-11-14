@@ -41,7 +41,7 @@ agent는 `migrations/agent`로 작업 DB를 만들고 서버가 게시한 계산
 ## 전용 빌드와 패키지
 
 `tsconfig.agent.json`의 진입점은 agent CLI와 세 계산 worker다. worker는 파일 경로로
-fork되므로 import 그래프 외에 명시적으로 등록한다. `scripts/build-agent-client.mjs`는 Docker 내부 런타임 builder로 `dist/agent-runtime/quant-agent-runtime-linux-{x64|arm64}.tar.gz`와 manifest를 만든다. 이 archive는 사용자 다운로드로 전달하지 않는다. `scripts/lib/runtime-graph.mjs`는
+fork되므로 import 그래프 외에 명시적으로 등록한다. `scripts/build-agent-client.mjs`는 Docker 내부 런타임 builder로 `dist/agent-runtime/quant-agent-runtime-linux-x64.tar.gz`와 manifest를 만든다. 이 archive는 사용자 다운로드로 전달하지 않는다. `scripts/lib/runtime-graph.mjs`는
 타입 전용 import를 제거한 실행 그래프를 추적한다. builder는 전용 컴파일 결과에서
 그 그래프에 속한 JS만 복사하고, 서버·웹 디렉터리가 들어오면 실패한다.
 소스맵과 서버 전용 worker도 제외한다.

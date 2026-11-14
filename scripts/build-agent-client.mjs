@@ -15,10 +15,10 @@ function run(command, args, cwd = process.cwd()) {
 }
 if (
   process.platform !== "linux" ||
-  !["x64", "arm64"].includes(process.arch) ||
+  process.arch !== "x64" ||
   Number(process.versions.node.split(".")[0]) !== 24
 ) {
-  throw new Error("Linux x64/arm64의 Node 24 환경에서 Docker용 Agent 런타임을 빌드하세요");
+  throw new Error("Linux x64의 Node 24 환경에서 Docker용 Agent 런타임을 빌드하세요");
 }
 if (!process.argv.includes("--prepared")) {
   fs.mkdirSync("dist", { recursive: true });
@@ -116,21 +116,14 @@ try {
   const sha256 = hash.digest("hex");
   fs.renameSync(stagedArchive, destination);
   const manifestPath = path.join(output, "manifest.json");
-  const previous = fs.existsSync(manifestPath)
-    ? JSON.parse(fs.readFileSync(manifestPath, "utf8"))
-    : { runtimes: [] };
-  const runtimes =
-    previous.runnerVersion === versions.agentVersion
-      ? previous.runtimes.filter((runtime) => runtime.arch !== process.arch)
-      : [];
-  runtimes.push({
+  const runtimes = [{
     buildGitSha: metadata.gitSha,
     arch: process.arch,
     file,
     sha256,
     bytes: fs.statSync(destination).size,
     minimumGlibc: process.report.getReport().header.glibcVersionRuntime,
-  });
+  }];
   fs.writeFileSync(
     `${manifestPath}.tmp`,
     JSON.stringify(
