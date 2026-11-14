@@ -22,6 +22,35 @@ export class SqliteDartPendingFilingStore implements DartPendingFilingStore {
   /** 폐기한 목록 재검증·게시 대기를 제거하고, 이전에 목록 부재로 제외했던 범위도 다시 조회한다. */
   recover(): void {
     this.sqlite.transaction(() => {
+      // 숫자 전용 종목코드 검사로 거부했던 공시만 저장 원문과 대조해 복구한다.
+      const legacy = this.sqlite.prepare(`SELECT identity, receipt_no, symbol, business_year, report_code, payload_json
+        FROM dart_discovered_filings WHERE status = 'UNRESOLVED' AND symbol GLOB '*[A-Z]*'`).all() as {
+          identity: string; receipt_no: string | null; symbol: string; business_year: number | null;
+          report_code: string | null; payload_json: string;
+        }[];
+      const restore = this.sqlite.prepare("UPDATE dart_discovered_filings SET status = 'PENDING' WHERE identity = ? AND status = 'UNRESOLVED'");
+      for (const row of legacy) {
+        if (!/^[0-9A-Z]{6}$/.test(row.symbol) || !row.receipt_no || !/^\d{14}$/.test(row.receipt_no) || row.identity !== row.receipt_no) continue;
+        let payload: Record<string, unknown>;
+        try {
+          const parsed: unknown = JSON.parse(row.payload_json);
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) continue;
+          payload = parsed as Record<string, unknown>;
+        } catch { continue; }
+        if (payload.stock_code !== row.symbol || payload.rcept_no !== row.receipt_no || typeof payload.report_nm !== "string") continue;
+        const period = /\((\d{4})\.(\d{2})\)/.exec(payload.report_nm);
+        const report = period && (
+          (payload.report_nm.includes("사업보고서") && period[2] === "12") ||
+          (payload.report_nm.includes("반기보고서") && period[2] === "06") ||
+          (payload.report_nm.includes("분기보고서") && ["03", "09"].includes(period[2]!))
+        ) ? ({ "03": "11013", "06": "11012", "09": "11014", "12": "11011" } as Record<string, string>)[period[2]!] : null;
+        if (!period || Number(period[1]) !== row.business_year || !report || report !== row.report_code) continue;
+        restore.run(row.identity);
+        this.sqlite.prepare(`INSERT INTO provider_input_issues(id, symbol, business_year, report_code, reason, evidence)
+          VALUES (?, ?, ?, ?, 'PENDING_FILING', ?)
+          ON CONFLICT(id) DO UPDATE SET reason = excluded.reason, evidence = excluded.evidence`)
+          .run(`dart-filing:${row.identity}`, row.symbol, row.business_year, row.report_code, row.receipt_no);
+      }
       this.sqlite.exec(`DELETE FROM dart_discovery_pages WHERE day LIKE 'verify:%';
         DELETE FROM dart_discovery_jobs WHERE day LIKE 'verify:%';
         INSERT INTO provider_input_issues(id, symbol, business_year, report_code, reason, evidence)
