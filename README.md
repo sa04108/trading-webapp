@@ -229,7 +229,7 @@ pnpm cli db:prepare
 
 ### 5.3 재배포
 
-`main`에 merge하면 GitHub Actions가 검증한 서버·Agent 이미지를 GHCR에 게시한다. `devel` push는 게시·배포하지 않는다. 이미지 게시 후 서버에서 업데이트한다. 게시 조건과 이미지 구성은 [이미지 게시](docs/DOCKER_SERVER.md#이미지-게시)를 따른다.
+서버 이전 중에는 `main` 병합·push에 따른 자동 이미지 게시를 일시 중지한다. 게시가 필요하면 GitHub Actions의 **Publish images**를 `main`에서 수동 실행한다. `devel` push는 게시·배포하지 않는다. 이미지 게시 후 서버에서 업데이트한다. 게시 조건과 이미지 구성은 [이미지 게시](docs/DOCKER_SERVER.md#이미지-게시)를 따른다.
 
 **Docker 서버:** 체크아웃을 릴리스에 맞춘 뒤 `bash scripts/server.sh update`를 실행한다. 호스트 pnpm을 사용하는 경우 `pnpm deploy`도 같은 명령이다. 다운로드·설정 검증과 DB 준비·기동 확인을 수행하며 성공한 digest를 고정한다. 다운로드·설정 검증 실패는 기존 앱을 유지한다. DB 준비·기동 단계의 실패는 서버를 중지하고 미완료 업데이트를 기록하며 DB·이미지를 자동 복원하지 않는다. 자세한 절차는 [Docker 업데이트](docs/DOCKER_SERVER.md#업데이트와-실패-처리)를 따른다.
 

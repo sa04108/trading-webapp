@@ -2,9 +2,10 @@ name: Publish images
 run-name: Publish images · ${{ github.sha }}
 
 on:
-  push:
-    branches:
-      - main
+  # 서버 이전 동안 main 병합·push에 따른 자동 이미지 게시를 중지한다.
+  # push:
+  #   branches:
+  #     - main
   workflow_dispatch:
 
 permissions:
