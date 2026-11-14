@@ -18,7 +18,7 @@
     "test:all": "pnpm test",
     "test:e2e": "pnpm build && playwright test",
     "build": "pnpm build:server && pnpm build:web",
-    "build:server": "node -e \"for(const p of ['dist/server','dist/runtime','dist/workers','dist/shared','dist/agent'])require('node:fs').rmSync(p,{recursive:true,force:true})\" && tsc -p tsconfig.build.json && node scripts/build-runtime-versions.mjs",
+    "build:server": "node -e \"for(const p of ['dist/server','dist/runtime','dist/workers','dist/shared','dist/agent'])require('node:fs').rmSync(p,{recursive:true,force:true})\" && tsc -p tsconfig.build.json && node scripts/build-runtime-versions.mjs && node scripts/build-trading-artifacts.mjs",
     "build:web": "vite build",
     "db:generate": "drizzle-kit generate --config drizzle.config.ts && drizzle-kit generate --config drizzle.data.config.ts && drizzle-kit generate --config drizzle.agent.config.ts",
     "cli": "tsx src/server/cli.ts",

@@ -7,6 +7,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
+import { TradingDashboardCard } from "../trading/trading-dashboard-card";
 import { useBacktests, useStrategies } from "../backtests/api";
 import { strategyLabel } from "../backtests/strategy-label";
 import { formatDateTime, formatSignedPct, pnlClass } from "@/lib/format";
@@ -56,6 +57,7 @@ export function DashboardPage() {
         </Button>
       </div>
 
+      <TradingDashboardCard />
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>

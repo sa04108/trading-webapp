@@ -5,10 +5,7 @@ import {
   type StockInfoBatchResult,
   type StockInfoSource,
 } from "../../../../../runtime/modules/market-data/application/ports.js";
-import {
-  RestClient,
-  type TokenProvider,
-} from "../../../../shared/rest-client.js";
+import { createTossClient, type TossClient } from "./toss-client.js";
 
 export interface TossConfig {
   readonly baseUrl: string; // https://openapi.tossinvest.com — 실전 환경만 제공 (모의 없음)
@@ -32,6 +29,7 @@ function optionalDecimal(value: unknown): number | null {
 export interface TossSourceOptions {
   readonly fetchImpl?: typeof fetch;
   readonly sleep?: (ms: number) => Promise<void>;
+  readonly client?: TossClient;
 }
 
 /**
@@ -56,47 +54,7 @@ export function createTossStockInfoSource(
     };
   }
 
-  const tokenProvider: TokenProvider = {
-    async issueToken(fetchImpl) {
-      const response = await fetchImpl(`${config.baseUrl}/oauth2/token`, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          grant_type: "client_credentials",
-          client_id: config.clientId,
-          client_secret: config.clientSecret,
-        }).toString(),
-      });
-      if (!response.ok) {
-        throw new Error(`toss token issue failed: ${response.status}`);
-      }
-      const body = (await response.json()) as {
-        access_token?: string;
-        expires_in?: number;
-      };
-      if (
-        typeof body.access_token !== "string" ||
-        typeof body.expires_in !== "number"
-      ) {
-        throw new Error(
-          "toss token 응답에 access_token/expires_in 이 없습니다",
-        );
-      }
-      return {
-        accessToken: body.access_token,
-        expiresAtMs: Date.now() + body.expires_in * 1000,
-      };
-    },
-  };
-
-  const client = new RestClient({
-    baseUrl: config.baseUrl,
-    tokenProvider,
-    logger,
-    fetchImpl: options.fetchImpl,
-    sleep: options.sleep,
-    groupMinIntervalMs: { stock: 220, default: 150 },
-  });
+  const client = options.client ?? createTossClient(config, logger, options);
 
   return {
     async getStockInfo(

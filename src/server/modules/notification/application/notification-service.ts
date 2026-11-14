@@ -5,7 +5,7 @@ import { notifications } from "../../../shared/db/notification-schema.js";
 import type { Clock } from "../../../../runtime/shared/clock.js";
 import { newId } from "../../../../runtime/shared/ids.js";
 
-export type NotificationType = "backtest" | "data-sync";
+export type NotificationType = "backtest" | "data-sync" | "trading";
 export type NotificationSeverity = "info" | "error";
 
 export interface NotificationInput {

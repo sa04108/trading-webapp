@@ -15,8 +15,8 @@ agent 최신 여부, 백테스트 결과의 호환성, 기간 검증의 일관�
 | `src/runtime/modules` | 엔진·전략, 유니버스 준비, 데이터 조회·coverage 검사, 결과 파일 작성 |
 | `src/runtime/workers` | `preparation-child`, `universe-child`, `backtest-child`, 준비 런타임과 취소 처리 |
 | `src/runtime/shared/db` | 계산 데이터 조회 스키마, agent에 필요한 작업 스키마와 DB 연결 |
-| `src/server` | HTTP·인증·수집 API, 작업 배정, 사용자별 미리보기 소유권, 결과 수신·저장 |
-| `src/workers` | 서버 전용 스냅샷 게시와 결과 import |
+| `src/server` | HTTP·인증·수집 API, 작업 배정, 사용자별 미리보기 소유권, 결과 수신·저장, 실매매 계좌·주문 실행 |
+| `src/workers` | 서버 전용 스냅샷 게시, 결과 import, 고정 전략의 실매매 신호 계산 |
 | `src/shared` | 요청·결과 스키마와 통신 계약 |
 
 준비 orchestrator는 수집과 미리보기 소유권 처리를 좁은 인터페이스로 받는다.
@@ -66,6 +66,8 @@ pnpm test:agent-package
 게시 workflow의 버전 준비 단계에서 Docker build/push 전에 수행한다. 서버 운영 도구는 패키지를 다시 빌드하지 않고 검증된 이미지를 사용한다.
 
 ## 독립 버전
+
+실매매 전략은 서버 빌드의 `dist/trading-artifacts`에서 코드·의존성·생명주기 어댑터를 단일 번들로 고정한다. 서버는 이를 데이터 볼륨의 `trading-artifacts/<hash>`에 보관하며 등록 전략은 해당 해시만 실행한다. 이 파일과 실매매 주문 실행기는 Agent 패키지에 들어가지 않는다. 백테스트의 `executionVersion`은 가져온 결과와 전략 코드의 일치를 확인하는 별도 기준이다.
 
 `scripts/build-runtime-versions.mjs`가 `dist/runtime-versions.json`을 생성한다.
 각 버전은 관련 실행 코드, 해당 잠금 의존성, Node·컴파일러와 코드 생성 설정을 정규화한

@@ -14,6 +14,7 @@ import { NotificationsPage } from "../features/notifications/notifications-page"
 import { SettingsPage } from "../features/settings/settings-page";
 import { SymbolMasterPanel } from "../features/symbol-master/symbol-master-panel";
 import { BenchmarkPanel } from "../features/datasets/benchmark-panel";
+import { TradingPage } from "../features/trading/trading-page";
 import { RequireAuth } from "./require-auth";
 import { AppShell } from "./shell";
 
@@ -27,6 +28,7 @@ export const router = createBrowserRouter([
         element: <AppShell />,
         children: [
           { index: true, element: <DashboardPage /> },
+          { path: "trading", element: <TradingPage /> },
           { path: "backtests", element: <BacktestsPage /> },
           { path: "backtests/new", element: <NewBacktestEntry /> },
           { path: "backtests/new/:step", element: <NewBacktestWizard /> },
