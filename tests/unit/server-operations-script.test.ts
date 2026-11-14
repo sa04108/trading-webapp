@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
 const roots: string[] = [];
 const oldImage = `ghcr.io/example/server@sha256:${'a'.repeat(64)}`;
-const candidate = `ghcr.io/example/server@sha256:${'b'.repeat(64)}`;
+const candidate = `sha256:${'b'.repeat(64)}`;
+const oldId = `sha256:${'a'.repeat(64)}`;
+const oldPending = `ghcr.io/example/server@sha256:${'c'.repeat(64)}`;
 interface Call {
   args: string[];
   appEnv?: string;
@@ -33,7 +35,11 @@ fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify({ args,
     directoryMode:fs.statSync(path.dirname(file)).mode & 0o777} : {}),
   domain:process.env.DOMAIN,memory:process.env.SERVER_MEMORY,trusted:process.env.TRAEFIK_TRUSTED_IPS })+'\n');
 if (args[0] === 'pull') process.exit(Number(process.env.PULL_EXIT || 0));
-if (args[0] === 'image') console.log(process.env.CANDIDATE);
+if (args[0] === 'image') {
+  if (process.env.MISSING_IMAGE === '1') process.exit(1);
+  const ref = args[args.length - 1];
+  console.log(ref === process.env.OLD_IMAGE ? process.env.OLD_ID : process.env.CANDIDATE);
+}
 if (args[0] === 'ps' && (process.env.SERVER_RUNNING === '1' || (args.includes('--all') && process.env.SERVER_EXISTS === '1'))) console.log('server-container-id');
 if (args[0] === 'logs') console.log('server log');
 if (args[0] === 'compose') {
@@ -46,7 +52,7 @@ if (args[0] === 'compose') {
   const run = (args: string[], env: Record<string, string | undefined> = {}) => {
     const result = spawnSync(bash, [path.resolve('scripts/server.sh'), ...args], {
       cwd: root, encoding: 'utf8', env: { ...process.env, DEPLOY_PATH: root,
-        PATH: `${bin}:${process.env.PATH}`, DOCKER_CALLS: log, CANDIDATE: candidate, ...env },
+        PATH: `${bin}:${process.env.PATH}`, DOCKER_CALLS: log, CANDIDATE: candidate, OLD_IMAGE: oldImage, OLD_ID: oldId, ...env },
     });
     const generated = path.join(root, '.server-runtime');
     if (fs.existsSync(generated)) expect(fs.readdirSync(generated)).toEqual([]);
@@ -85,10 +91,11 @@ describe('Docker 서버 설정과 업데이트', () => {
       expect(h.calls().some(call => call.args.includes('up'))).toBe(false);
     }
     h.clear();
-    expect(h.run(['update'], { CANDIDATE: oldImage }).status).not.toBe(0);
+    expect(h.run(['update', oldImage]).status).not.toBe(0);
     expect(h.calls().some(call => call.args.includes('db:prepare'))).toBe(false);
-    // 로컬 별칭 목록보다 게시 작업에서 검증된 digest를 우선한다.
-    expect(h.run(['update', candidate], { CANDIDATE: oldImage }).status).toBe(0);
+    // 이전 배포에서 남긴 digest도 같은 로컬 이미지면 재시도할 수 있다.
+    fs.writeFileSync(h.file('.server-update-pending'), `${oldPending}\n`);
+    expect(h.run(['update', 'quant-platform:release']).status).toBe(0);
     // runner checkout의 배포 구성을 사용하고 운영 폴더의 설정·상태는 보존한다.
     const composeCall = h.calls().find(call => call.args[0] === 'compose')!;
     expect(composeCall.args[composeCall.args.indexOf('-f') + 1]).toBe(path.resolve('compose.yaml'));
@@ -97,6 +104,24 @@ describe('Docker 서버 설정과 업데이트', () => {
     expect(fs.existsSync(h.file('.server-update-pending'))).toBe(false);
     expect(fs.readFileSync(h.file('.server-image'), 'utf8').trim()).toBe(candidate);
     expect(fs.readFileSync(h.file('.server-image.previous'), 'utf8').trim()).toBe(oldImage);
+  });
+
+  it('없는 로컬 이미지는 서버를 유지하고 태그는 이미지 ID로 고정하며 내려받지 않는다', () => {
+    const h = harness();
+    expect(h.run(['init']).status).toBe(0);
+    fs.writeFileSync(h.file('.server-image'), `${oldImage}\n`);
+    h.clear();
+    expect(h.run(['update', 'quant-platform:release'], { MISSING_IMAGE: '1', SERVER_RUNNING: '1' }).status).not.toBe(0);
+    expect(h.calls().some(call => call.args[0] === 'stop')).toBe(false);
+    expect(fs.existsSync(h.file('.server-update-pending'))).toBe(false);
+    h.clear();
+    expect(h.run(['update', 'quant-platform:release']).status).toBe(0);
+    expect(fs.readFileSync(h.file('.server-image'), 'utf8').trim()).toBe(candidate);
+    expect(fs.readFileSync(h.file('.server-image.previous'), 'utf8').trim()).toBe(oldImage);
+    expect(h.calls().some(call => call.args[0] === 'pull')).toBe(false);
+    const runs = h.calls().filter(call => call.args[0] === 'compose' && (call.args.includes('run') || call.args.includes('up')));
+    expect(runs.length).toBeGreaterThan(0);
+    expect(runs.every(call => call.args.includes('--pull') && call.args.includes('never'))).toBe(true);
   });
 
   it('원본의 특수문자·비밀값을 실행 없이 보존하고 앱 설정만 격리하여 전달한다', () => {

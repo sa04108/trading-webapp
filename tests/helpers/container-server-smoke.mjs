@@ -16,11 +16,15 @@ const env = { ...process.env, NODE_ENV: 'production', APP_BIND_ADDRESS: '127.0.0
   EXPORT_ROOT: path.join(data, 'exports'), TEMP_ROOT: path.join(data, 'temp') };
 execFileSync(process.execPath, ['dist/server/cli.js', 'db:prepare'], { cwd: root, env, stdio: 'pipe' });
 const { buildWindowsAgentInstaller, agentContainerImage } = await import(`${root}/dist/server/modules/agents/infrastructure/agent-windows-installer.js`);
-assert.match(buildWindowsAgentInstaller({ serverUrl: 'https://smoke.example.com', token: 't'.repeat(48), image: agentContainerImage() }), /powershell/i);
+const agentImage = agentContainerImage();
+assert.match(agentImage, /^ghcr\.io\/sa04108\/quant-agent@sha256:[a-f0-9]{64}$/, '서버는 검증한 Agent digest를 포함해야 한다');
+assert.match(buildWindowsAgentInstaller({ serverUrl: 'https://smoke.example.com', token: 't'.repeat(48), image: agentImage }), /powershell/i);
 const versions = JSON.parse(fs.readFileSync(`${root}/dist/runtime-versions.json`, 'utf8'));
 assert.match(versions.agentVersion, /^[a-f0-9]{64}$/);
 assert.equal(versions.agentVersion, process.env.EXPECTED_AGENT_VERSION, '서버 이미지와 함께 게시한 Agent의 실행 버전이 같아야 한다');
-assert.match(JSON.parse(fs.readFileSync(`${root}/dist/build-info.json`, 'utf8')).gitSha, /^[a-f0-9]{40,64}$/);
+const buildInfo = JSON.parse(fs.readFileSync(`${root}/dist/build-info.json`, 'utf8'));
+assert.match(buildInfo.gitSha, /^[a-f0-9]{40,64}$/);
+assert.equal(buildInfo.gitSha, process.env.EXPECTED_GIT_SHA, '검사하는 서버 이미지는 배포 커밋과 같아야 한다');
 const child = spawn(process.execPath, ['dist/server/bootstrap/main.js'], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
 let logs = '';
 child.stdout.on('data', chunk => { logs += chunk; });

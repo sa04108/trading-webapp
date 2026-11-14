@@ -188,7 +188,7 @@ pnpm build
 | 명령 | 범위와 실행 시점 |
 | --- | --- |
 | `pnpm test` | 단위·일반 통합·아키텍처 회귀 검사. 개발 중 기본 실행 |
-| `pnpm test:all` | 전체 일반 회귀 검사의 릴리스 진입점(`pnpm test`). `devel` 병합 전과 새 서버 이미지 게시에서 필수 실행 |
+| `pnpm test:all` | 전체 일반 회귀 검사의 릴리스 진입점(`pnpm test`). `devel` 병합 전과 서버 로컬 빌드·배포 workflow의 릴리스 게이트에서 필수 실행 |
 
 일반 회귀는 자원 배정 정책도 포함하며 패키지 검증은 별도 명령으로 실행한다.
 새 테스트의 추가·통합·삭제 기준은 [AGENTS.md](AGENTS.md)의 검증 정책을 따른다.
@@ -211,7 +211,7 @@ pnpm exec vitest run tests/architecture
 pnpm exec vitest run tests/integration/job-queue.test.ts
 ```
 
-이는 **개발 중 선택 실행**이며 배포의 전체 검증을 대체하지 않는다. 새 이미지 게시 CI는 전체 필수 검증을 실행하며 이미 검증·게시한 같은 커밋의 이미지는 재사용할 수 있다.
+이는 **개발 중 선택 실행**이며 배포의 전체 검증을 대체하지 않는다. 배포 workflow는 전체 필수 검증을 실행하며 검증된 같은 커밋의 로컬 서버 이미지는 재검사 후 재사용할 수 있다.
 
 ### 5.2 스키마 변경
 
@@ -229,9 +229,9 @@ pnpm cli db:prepare
 
 ### 5.3 재배포
 
-`main` push 또는 GitHub Actions의 **Publish images**를 `main`에서 수동 실행하면 검증·이미지 게시 후 미니 PC에 해당 서버 digest를 자동 적용한다. 이미 검증·게시한 같은 커밋의 이미지를 확인하면 빌드와 검증을 건너뛰고 해당 digest의 배포를 재시도한다. 배포 직전 최신 `main` 여부는 다시 확인한다. `devel` push는 게시·배포하지 않는다. 최초 runner와 운영 디렉터리 설정은 [Docker 서버 운영](docs/DOCKER_SERVER.md#자동-배포-설정)을 따른다.
+`main` push 또는 GitHub Actions의 **Publish and deploy**를 `main`에서 수동 실행하면 릴리스 검사 후 사용자 설치용 Agent 이미지만 GHCR에 게시한다. 서버 이미지는 미니 PC의 self-hosted runner에서 직접 빌드·검사하고 로컬 이미지 ID로 적용한다. 검증된 같은 커밋의 로컬 이미지가 있으면 재검사해 같은 ID로 배포를 재시도한다. 배포 직전 최신 `main` 여부는 다시 확인한다. `devel` push는 게시·배포하지 않는다. 최초 runner와 운영 디렉터리 설정은 [Docker 서버 운영](docs/DOCKER_SERVER.md#자동-배포-설정)을 따른다.
 
-**수동 복구 또는 업데이트:** 체크아웃을 릴리스에 맞춘 뒤 `bash scripts/server.sh update`를 실행한다. 호스트 pnpm을 사용하는 경우 `pnpm deploy`도 같은 명령이다. 다운로드·설정 검증과 DB 준비·기동 확인을 수행하며 성공한 digest를 고정한다. 다운로드·설정 검증 실패는 기존 앱을 유지한다. DB 준비·기동 단계의 실패는 서버를 중지하고 미완료 업데이트를 기록하며 DB·이미지를 자동 복원하지 않는다. 자세한 절차는 [Docker 업데이트](docs/DOCKER_SERVER.md#업데이트와-실패-처리)를 따른다.
+**수동 복구 또는 업데이트:** 릴리스에 맞는 서버 이미지를 로컬에서 빌드·검사한 뒤 `bash scripts/server.sh update <로컬 이미지>`를 실행한다. 호스트 pnpm을 사용하는 경우 `pnpm deploy`는 설정된 로컬 후보의 업데이트 별칭이다. 이미지 조회·설정 검증과 DB 준비·기동 확인을 수행하며 성공한 이미지 ID를 고정한다. 이미지 조회·설정 검증 실패는 기존 앱을 유지한다. DB 준비·기동 단계의 실패는 서버를 중지하고 미완료 업데이트를 기록하며 DB·이미지를 자동 복원하지 않는다. 자세한 절차는 [Docker 업데이트](docs/DOCKER_SERVER.md#업데이트와-실패-처리)를 따른다.
 
 
 ---

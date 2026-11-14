@@ -106,6 +106,7 @@ it('이전 목록 미관측 차단은 재조회로 복구하고 실제 해석 �
       { symbol: '206560', filing: 'UNLISTED', error: 'PENDING_PUBLICATION', resume: true },
       { symbol: '054670', filing: 'UNLISTED_PARTIAL', error: 'UNRESOLVED_FILING', resume: true },
       { symbol: '000660', filing: 'UNRESOLVED', error: 'UNRESOLVED_FILING', resume: false },
+      { symbol: '0126Z0', filing: 'UNRESOLVED', error: 'UNRESOLVED_FILING', resume: true },
       { symbol: '005930', filing: 'PENDING', error: 'RETRY_BACKOFF', resume: false },
       { symbol: '058970', filing: 'PENDING', error: 'DART 일일 호출 한도 대기', resume: false },
     ];
@@ -114,7 +115,8 @@ it('이전 목록 미관측 차단은 재조회로 복구하고 실제 해석 �
       database.sqlite.prepare("INSERT INTO symbols(code,market,created_at_ms) VALUES(?,'KR',1)").run(entry.symbol);
       database.sqlite.prepare(`INSERT INTO dart_discovered_filings
         (identity,receipt_no,symbol,business_year,report_code,payload_json,discovered_at_ms,status)
-        VALUES(?,?,?,2026,'11012','{}',1,?)`).run(receipt, receipt, entry.symbol, entry.filing);
+        VALUES(?,?,?,2026,'11012',?,1,?)`).run(receipt, receipt, entry.symbol,
+          JSON.stringify({ rcept_no: receipt, stock_code: entry.symbol, report_nm: '반기보고서 (2026.06)' }), entry.filing);
       database.sqlite.prepare(`INSERT INTO dart_filing_endpoint_checkpoints
         (receipt_no,endpoint,fs_div,status,retry_after_ms) VALUES(?,'SHARE_STATUS','NONE',?,?)`)
         .run(receipt, entry.filing === 'UNLISTED_PARTIAL' ? 'APPLIED' : 'PENDING_PUBLICATION', future);
@@ -136,7 +138,7 @@ it('이전 목록 미관측 차단은 재조회로 복구하고 실제 해석 �
     pending.recover();
     queue.recover();
     expect(database.sqlite.prepare('SELECT * FROM provider_input_issues ORDER BY id').all()).toEqual(issues);
-    expect(issues).toHaveLength(2);
+    expect(issues).toHaveLength(3);
     expect(database.sqlite.prepare('SELECT revision FROM dataset_state').get()).toEqual(revision);
     expect(database.sqlite.prepare('SELECT day FROM dart_discovery_jobs').all()).toEqual([{ day: 'ordinary' }]);
     expect(database.sqlite.prepare('SELECT * FROM dart_discovery_pages').all()).toEqual([]);

@@ -13,7 +13,7 @@ read_server_config() {
   local file="$1" line key value number=0
   local -A allowed=() seen=()
   for key in "${APP_CONFIG_KEYS[@]}" "${COMPOSE_CONFIG_KEYS[@]}"; do allowed[$key]=1; done
-  SETTINGS=([SERVER_IMAGE]=ghcr.io/sa04108/quant-platform:latest [SERVER_CPUS]=3.0 [SERVER_MEMORY]=10g
+  SETTINGS=([SERVER_IMAGE]=quant-platform:local [SERVER_CPUS]=3.0 [SERVER_MEMORY]=10g
     [TRAEFIK_NETWORK]=infra-proxy [TRAEFIK_HTTPS_ENTRYPOINT]=websecure
     [TRAEFIK_CERT_RESOLVER]=letsencrypt [TRAEFIK_TRUSTED_IPS]='')
   [[ -f "$file" ]] || { echo 'config.env가 없습니다. scripts/server.sh init을 실행하세요.' >&2; return 1; }

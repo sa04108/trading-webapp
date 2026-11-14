@@ -15,48 +15,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  plan:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      packages: read
-    outputs:
-      reuse: ${{ steps.image.outputs.reuse }}
-      server-image: ${{ steps.image.outputs.server-image }}
-    steps:
-      - name: Set up image inspection
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Find last verified build for commit
-        id: image
-        shell: bash
-        env:
-          GHCR_TOKEN: ${{ github.token }}
-          GHCR_USER: ${{ github.actor }}
-        run: |
-          set -euo pipefail
-          reuse=false
-          server_image=''
-          # latest는 모든 검사 후 갱신하므로 이미지 태그가 존재하는 것만으로 재사용하지 않는다.
-          if printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin &&
-            commit_digest="$(docker buildx imagetools inspect "ghcr.io/sa04108/quant-platform:sha-$GITHUB_SHA" --format '{{json .Manifest}}' | jq -r '.digest')" &&
-            verified_digest="$(docker buildx imagetools inspect ghcr.io/sa04108/quant-platform:latest --format '{{json .Manifest}}' | jq -r '.digest')" &&
-            [[ "$commit_digest" =~ ^sha256:[a-f0-9]{64}$ && "$commit_digest" == "$verified_digest" ]]; then
-            reuse=true
-            server_image="ghcr.io/sa04108/quant-platform@$commit_digest"
-            echo '같은 커밋의 마지막 검증 완료 이미지를 재사용합니다.'
-          else
-            echo '같은 커밋의 검증 완료 이미지를 확인하지 못해 전체 빌드를 수행합니다.'
-          fi
-          {
-            printf 'reuse=%s\n' "$reuse"
-            printf 'server-image=%s\n' "$server_image"
-          } >> "$GITHUB_OUTPUT"
-
   windows-installer:
-    needs: plan
-    if: ${{ !cancelled() && (needs.plan.result == 'skipped' || (needs.plan.result == 'success' && needs.plan.outputs.reuse != 'true')) }}
     runs-on: windows-latest
     timeout-minutes: 10
     permissions:
@@ -71,15 +30,17 @@ jobs:
         run: ./tests/windows/agent-installer.test.ps1
 
   publish:
-    needs: [plan, windows-installer]
-    if: github.ref == 'refs/heads/main' && needs.plan.outputs.reuse != 'true'
+    needs: windows-installer
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
       packages: write
     outputs:
-      server-image: ghcr.io/sa04108/quant-platform@${{ steps.server-build.outputs.digest }}
+      agent-image: ghcr.io/sa04108/quant-agent@${{ steps.agent-build.outputs.digest }}
+      agent-version: ${{ steps.versions.outputs.version }}
+      node-version: ${{ steps.versions.outputs.node }}
     defaults:
       run:
         shell: bash
@@ -137,43 +98,23 @@ jobs:
         env:
           AGENT_DIGEST: ${{ steps.agent-build.outputs.digest }}
         run: docker run --rm --init --mount "type=bind,source=$PWD/tests/helpers/container-agent-smoke.mjs,target=/tmp/container-agent-smoke.mjs,readonly" --entrypoint node "ghcr.io/sa04108/quant-agent@$AGENT_DIGEST" /tmp/container-agent-smoke.mjs
-      - name: Build server image
-        id: server-build
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: infra/server/Dockerfile
-          platforms: linux/amd64
-          push: true
-          tags: ghcr.io/sa04108/quant-platform:sha-${{ github.sha }}
-          build-args: |
-            NODE_VERSION=${{ steps.versions.outputs.node }}
-            BUILD_GIT_SHA=${{ github.sha }}
-            AGENT_CONTAINER_IMAGE=ghcr.io/sa04108/quant-agent@${{ steps.agent-build.outputs.digest }}
-      - name: Verify server container
-        env:
-          SERVER_DIGEST: ${{ steps.server-build.outputs.digest }}
-          EXPECTED_AGENT_VERSION: ${{ steps.versions.outputs.version }}
-        run: docker run --rm --init --env EXPECTED_AGENT_VERSION --mount "type=bind,source=$PWD/tests/helpers/container-server-smoke.mjs,target=/tmp/container-server-smoke.mjs,readonly" --entrypoint node "ghcr.io/sa04108/quant-platform@$SERVER_DIGEST" /tmp/container-server-smoke.mjs
-      - name: Promote verified image aliases
+      - name: Promote verified Agent alias
         env:
           AGENT_DIGEST: ${{ steps.agent-build.outputs.digest }}
-          SERVER_DIGEST: ${{ steps.server-build.outputs.digest }}
         run: |
           docker buildx imagetools create --tag ghcr.io/sa04108/quant-agent:latest "ghcr.io/sa04108/quant-agent@$AGENT_DIGEST"
-          docker buildx imagetools create --tag ghcr.io/sa04108/quant-platform:latest "ghcr.io/sa04108/quant-platform@$SERVER_DIGEST"
 
   deploy:
-    needs: [plan, publish]
-    if: ${{ !cancelled() && github.ref == 'refs/heads/main' && needs.plan.result == 'success' && (needs.publish.result == 'success' || (needs.publish.result == 'skipped' && needs.plan.outputs.reuse == 'true')) }}
+    needs: publish
+    if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, minipc]
-    timeout-minutes: 20
+    timeout-minutes: 60
     permissions:
       contents: read
-      packages: read
     env:
       DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-      SERVER_IMAGE: ${{ needs.publish.outputs.server-image || needs.plan.outputs.server-image }}
+      EXPECTED_AGENT_VERSION: ${{ needs.publish.outputs.agent-version }}
+      EXPECTED_GIT_SHA: ${{ github.sha }}
     defaults:
       run:
         shell: bash
@@ -215,17 +156,65 @@ jobs:
           else
             echo 'deploy=true' >> "$GITHUB_OUTPUT"
           fi
-      - name: Update server to verified image
+      - name: Find local release image
         if: steps.release.outputs.deploy == 'true'
-        env:
-          GHCR_TOKEN: ${{ github.token }}
-          GHCR_USER: ${{ github.actor }}
+        id: local-image
         run: |
           set -euo pipefail
-          # registry 인증은 이번 작업 동안만 보관한다.
-          registry_config="$(mktemp -d "$RUNNER_TEMP/quant-ghcr.XXXXXX")"
-          trap 'rm -rf -- "$registry_config"' EXIT
-          export DOCKER_CONFIG="$registry_config"
-          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
+          # 이 태그는 컨테이너 검사를 통과한 뒤에만 생성하며 재시도에도 같은 ID를 유지한다.
+          if image_id="$(docker image inspect --format '{{.Id}}' "quant-platform:sha-$GITHUB_SHA" 2>/dev/null)"; then
+            [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+            printf 'image=%s\n' "$image_id" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Set up local server builder
+        if: steps.release.outputs.deploy == 'true' && steps.local-image.outputs.image == ''
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          name: quant-server-build
+          # 운영 서버와 같은 PC에서 빌드하므로 빌더 자원을 제한하고 캐시는 재사용한다.
+          driver-opts: |
+            memory=4g
+            cpu-period=100000
+            cpu-quota=200000
+          keep-state: true
+      - name: Build server image locally
+        if: steps.release.outputs.deploy == 'true' && steps.local-image.outputs.image == ''
+        id: server-build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: infra/server/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          build-args: |
+            NODE_VERSION=${{ needs.publish.outputs.node-version }}
+            BUILD_GIT_SHA=${{ github.sha }}
+            AGENT_CONTAINER_IMAGE=${{ needs.publish.outputs.agent-image }}
+      - name: Verify local server container
+        if: steps.release.outputs.deploy == 'true'
+        env:
+          SERVER_IMAGE: ${{ steps.local-image.outputs.image || steps.server-build.outputs.imageid }}
+        run: |
+          set -euo pipefail
+          [[ "$SERVER_IMAGE" =~ ^sha256:[a-f0-9]{64}$ ]]
+          docker run --pull never --rm --init --memory 1g --cpus 1 \
+            --env EXPECTED_AGENT_VERSION --env EXPECTED_GIT_SHA \
+            --mount "type=bind,source=$PWD/tests/helpers/container-server-smoke.mjs,target=/tmp/container-server-smoke.mjs,readonly" \
+            --entrypoint node "$SERVER_IMAGE" /tmp/container-server-smoke.mjs
+          docker tag "$SERVER_IMAGE" "quant-platform:sha-$GITHUB_SHA"
+      - name: Update server to verified local image
+        if: steps.release.outputs.deploy == 'true'
+        env:
+          SERVER_IMAGE: ${{ steps.local-image.outputs.image || steps.server-build.outputs.imageid }}
+        run: |
+          set -euo pipefail
+          # 빌드 중 main이 변경됐으면 운영 서버를 이전 커밋으로 교체하지 않는다.
+          latest_main="$(git ls-remote --exit-code origin refs/heads/main | cut -f1)"
+          if [[ "$latest_main" != "$GITHUB_SHA" ]]; then
+            echo 'main이 갱신되어 이전 커밋의 서버 적용을 건너뜁니다.'
+            exit 0
+          fi
           bash scripts/server.sh update "$SERVER_IMAGE"
+          docker tag "$SERVER_IMAGE" quant-platform:local
           bash scripts/server.sh status

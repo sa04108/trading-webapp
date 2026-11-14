@@ -51,7 +51,7 @@ active_image() {
 }
 validate_app() {
   # 앱 스키마를 그대로 사용하며 컨테이너 안에서도 DB를 열지 않는다.
-  compose_image "$1" run --rm --no-deps --label traefik.enable=false -T server node --input-type=module -e '
+  compose_image "$1" run --pull never --rm --no-deps --label traefik.enable=false -T server node --input-type=module -e '
     import {loadConfig} from "./dist/server/bootstrap/config.js";
     import {agentContainerImage} from "./dist/server/modules/agents/infrastructure/agent-windows-installer.js";
     try { loadConfig(); agentContainerImage(); console.log("앱 설정 검증 완료 (비밀값 생략)"); }
@@ -78,20 +78,19 @@ stop_server() {
   fi
 }
 update() {
-  local requested="${1:-${SETTINGS[SERVER_IMAGE]}}" candidate previous=''
+  local requested="${1:-${SETTINGS[SERVER_IMAGE]}}" candidate pending previous=''
   [[ "$requested" =~ ^[a-z0-9][a-zA-Z0-9./:@_-]+$ ]] || { echo '이미지 주소가 올바르지 않습니다.' >&2; return 1; }
-  # 다운로드·설정 검증 실패는 실행 중인 서비스를 중지시키지 않는다.
-  docker pull "$requested"
-  if [[ "$requested" =~ @sha256:[a-f0-9]{64}$ ]]; then
-    # 게시 작업이 지정한 digest를 다른 로컬 이미지 참조로 바꾸지 않는다.
-    candidate="$requested"
-  else
-    candidate="$(docker image inspect --format '{{index .RepoDigests 0}}' "$requested")"
-  fi
-  [[ "$candidate" =~ @sha256:[a-f0-9]{64}$ ]] || { echo '이미지 digest를 확인할 수 없습니다.' >&2; return 1; }
-  if [[ -e .server-update-pending && "$(cat .server-update-pending)" != "$candidate" ]]; then
-    echo '미완료 업데이트와 다른 이미지입니다. DB 호환성을 수동 복구하기 전에는 전환할 수 없습니다.' >&2
-    return 1
+  # 로컬 이미지 ID로 고정하여 별칭 변경과 레지스트리 다운로드를 차단한다.
+  candidate="$(docker image inspect --format '{{.Id}}' "$requested")" || { echo '로컬 이미지를 찾을 수 없습니다.' >&2; return 1; }
+  [[ "$candidate" =~ ^sha256:[a-f0-9]{64}$ ]] || { echo '로컬 이미지 ID를 확인할 수 없습니다.' >&2; return 1; }
+  if [[ -e .server-update-pending ]]; then
+    pending="$(docker image inspect --format '{{.Id}}' "$(cat .server-update-pending)")" || {
+      echo '미완료 업데이트의 로컬 이미지를 확인할 수 없습니다.' >&2; return 1;
+    }
+    if [[ "$pending" != "$candidate" ]]; then
+      echo '미완료 업데이트와 다른 이미지입니다. DB 호환성을 수동 복구하기 전에는 전환할 수 없습니다.' >&2
+      return 1
+    fi
   fi
   validate_app "$candidate"
   if [[ -s .server-image ]]; then previous="$(cat .server-image)"; fi
@@ -99,7 +98,7 @@ update() {
   # DB 변경 전 기록한다. 실패·전원 차단 뒤 이전 이미지를 자동 기동하지 못하게 한다.
   printf '%s\n' "$candidate" > .server-update-pending.tmp
   mv .server-update-pending.tmp .server-update-pending
-  if ! compose_image "$candidate" run --rm --no-deps --label traefik.enable=false -T server node dist/server/cli.js db:prepare; then
+  if ! compose_image "$candidate" run --pull never --rm --no-deps --label traefik.enable=false -T server node dist/server/cli.js db:prepare; then
     echo 'DB 준비에 실패했습니다. 서버는 중지 상태이며 자동 복원하지 않습니다.' >&2
     return 1
   fi
@@ -172,7 +171,7 @@ case "$command" in
       echo 'CLI 실행 전 scripts/server.sh stop으로 서버를 중지하세요.' >&2; exit 1
     fi
     prepare_config
-    compose_image "$(active_image)" run --rm --no-deps --label traefik.enable=false server node dist/server/cli.js "$@"
+    compose_image "$(active_image)" run --pull never --rm --no-deps --label traefik.enable=false server node dist/server/cli.js "$@"
     ;;
   help|--help|-h)
     echo '사용법: scripts/server.sh init | validate | up | update [이미지] | stop | status | logs [server] | cli <명령>'

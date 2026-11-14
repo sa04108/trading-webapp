@@ -154,3 +154,30 @@ it('목록에 더 작은 접수가 새로 관측되어도 재조회하고 조회
     expect(db.sqlite.prepare('SELECT receipt_no FROM dart_filing_endpoint_checkpoints').all()).toEqual([{ receipt_no: older }]);
   } finally { db.close(); }
 });
+
+it.each([
+  ['정상 영숫자 공시', {}, 'PENDING'],
+  ['다른 종목 원문', { stock_code: '005930' }, 'UNRESOLVED'],
+  ['다른 접수번호 원문', { rcept_no: '20260814002991' }, 'UNRESOLVED'],
+  ['다른 사업연도', { report_nm: '반기보고서 (2025.06)' }, 'UNRESOLVED'],
+  ['다른 보고서 종류', { report_nm: '분기보고서 (2026.09)' }, 'UNRESOLVED'],
+  ['해석 불가 보고서', { report_nm: '기타보고서 (2026.06)' }, 'UNRESOLVED'],
+] as const)('과거 오분류 복구: %s', (_name, override, status) => {
+  const db = openDatabase(':memory:');
+  const receipt = '20260814002990';
+  const filingKey = { symbol: '0126Z0', businessYear: 2026, reportCode: '11012', endpoint: 'SHARE_STATUS', fsDiv: 'NONE' } as const;
+  try {
+    db.sqlite.prepare(`INSERT INTO dart_discovered_filings
+      (identity,receipt_no,symbol,business_year,report_code,payload_json,discovered_at_ms,status)
+      VALUES(?,?,'0126Z0',2026,'11012',?,1,'UNRESOLVED')`)
+      .run(receipt, receipt, JSON.stringify({ rcept_no: receipt, stock_code: '0126Z0', report_nm: '반기보고서 (2026.06)', ...override }));
+    const store = new SqliteDartPendingFilingStore(db.sqlite);
+    store.recover();
+    expect(store.get(filingKey)).toMatchObject({ receiptNo: receipt, status });
+    expect(db.sqlite.prepare('SELECT symbol,business_year,report_code,reason,evidence FROM provider_input_issues').all())
+      .toEqual(status === 'PENDING' ? [{ symbol: '0126Z0', business_year: 2026, report_code: '11012', reason: 'PENDING_FILING', evidence: receipt }] : []);
+    const before = db.sqlite.prepare('SELECT * FROM dart_discovered_filings').all();
+    store.recover();
+    expect(db.sqlite.prepare('SELECT * FROM dart_discovered_filings').all()).toEqual(before);
+  } finally { db.close(); }
+});
