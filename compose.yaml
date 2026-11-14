@@ -5,7 +5,7 @@ services:
     init: true
     restart: unless-stopped
     env_file:
-      - path: ./app.env
+      - path: ${APP_ENV_FILE:?scripts/server.sh로 실행하세요}
         format: raw
     environment:
       APP_BIND_ADDRESS: 0.0.0.0
@@ -28,7 +28,7 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=${TRAEFIK_NETWORK:-infra-proxy}
-      - traefik.http.routers.quant-platform.rule=Host(`${DOMAIN:?server.env에 DOMAIN을 설정하세요}`)
+      - traefik.http.routers.quant-platform.rule=Host(`${DOMAIN:?config.env에 DOMAIN을 설정하세요}`)
       - traefik.http.routers.quant-platform.entrypoints=${TRAEFIK_HTTPS_ENTRYPOINT:-websecure}
       - traefik.http.routers.quant-platform.tls=true
       - traefik.http.routers.quant-platform.tls.certresolver=${TRAEFIK_CERT_RESOLVER-letsencrypt}

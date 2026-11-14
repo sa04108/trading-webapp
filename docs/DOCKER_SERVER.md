@@ -1,6 +1,6 @@
 # Docker 서버 운영
 
-기본 운영 대상은 Ubuntu 26.04 LTS의 GMKtec NucBox G3(N100 4코어, RAM 16GB, NVMe 256GB)다. 앱 Compose에는 `server` 하나만 두고 **기존 Traefik 3.7.16**으로 HTTPS를 제공한다. Linux/systemd 설치는 [README의 선택 경로](../README.md#first-deployment)로 유지한다. 고정 공인 IP 설정과 DB 백업·이전 자동화는 포함하지 않는다.
+기본 운영 대상은 Ubuntu 26.04 LTS의 GMKtec NucBox G3(N100 4코어, RAM 16GB, NVMe 256GB)다. 앱 Compose에는 `server` 하나만 두고 **기존 Traefik 3.7.16**으로 HTTPS를 제공한다. 서버 배포는 컨테이너 방식만 제공하며 systemd·SSH 배포와 호스트 프로비저닝은 제거했다. 고정 공인 IP 설정과 DB 백업·이전 자동화는 포함하지 않는다.
 
 ## 준비
 
@@ -18,11 +18,11 @@
 git clone --branch main https://github.com/sa04108/trading-webapp.git
 cd trading-webapp
 bash scripts/server.sh init
-nano server.env
-nano app.env
+nano config.env
+bash scripts/server.sh validate
 ```
 
-`server.env`의 기본 구성은 다음과 같다. `DOMAIN`에는 URL 전체가 아닌 도메인만 입력한다.
+`config.env`의 기본 구성은 다음과 같다. `DOMAIN`에는 URL 전체가 아닌 도메인만 입력한다.
 
 ```dotenv
 DOMAIN=trading.hyunbbai.com
@@ -33,7 +33,13 @@ SERVER_CPUS=3.0
 SERVER_MEMORY=10g
 ```
 
-`app.env`는 앱 설정과 API 키다. `init`은 권한 600으로 파일을 만들고 `SESSION_SECRET`을 생성하며 기존 파일을 덮어쓰지 않는다. 기존 DB를 가져오는 경우 필요한 기존 `SESSION_SECRET`도 유지한다. `app.env`는 셸로 실행하지 않으며 Compose가 원문 값으로 읽는다. 값에 셸 따옴표를 붙이지 않고 `$`도 그대로 입력한다. 키를 이미지나 Git에 넣지 않는다.
+운영자가 편집하는 파일은 **`config.env` 하나**다. 도메인·자원·프록시·API 키·세션 설정을 함께 둔다. 전체 지원 키와 설명은 [config.env.example](../config.env.example)을 따른다. `init`은 권한 600으로 원본과 새 `SESSION_SECRET`을 만들며 이미 있는 원본은 덮어쓰지 않는다. 기존 `server.env`나 `app.env`가 있으면 새 비밀을 생성하지 않고 중단한다. 이전 값을 `config.env`로 옮기되 `NODE_ENV`, 앱 바인딩·내부 포트·데이터 경로는 자동 관리하므로 옮기지 않는다. `TRUST_PROXY_ADDRESSES`는 `TRAEFIK_TRUSTED_IPS`에 합치고 기존 DB의 `SESSION_SECRET`을 보존한다. 이관을 확인한 뒤 이전 파일을 정리하며, 도구는 이전 파일을 실행 설정으로 읽지 않는다.
+
+형식은 `KEY=value`이며 값을 셸로 평가하지 않는다. `$`, `#`, 따옴표, 역슬래시와 공백은 값 그대로다. 인용을 위해 따옴표를 덧붙이지 않고, 주석은 별도 `#` 행에 쓴다. 미사용 선택 키는 주석으로 두며 중복 키·지원하지 않는 키는 거부한다. SSH·systemd·Lightsail 설정은 받지 않는다. 외부 셸 변수나 개발용 `.env`가 이 원본을 덮어쓰지 않는다. 키와 원본을 Git·이미지에 넣지 않는다.
+
+도구는 한 번 읽은 원본에서 필요한 값만 추출한다. 도메인·이미지·자원·Traefik 설정은 Compose에 전달하고, API 키 등 앱 설정은 `.server-runtime/run.*/app.env`에 권한 600(디렉터리 700)으로 작성한다. 이 파일은 실행 중에만 사용하고 종료 시 정리하며 직접 편집하지 않는다. Compose의 `raw` 형식으로 값의 의미를 보존한다. 앱은 이 원본 파일이나 호스트 경로를 알지 못하고 기존 환경변수만 읽는다.
+
+`validate`는 선택된 이미지에서 실제 앱 설정 스키마와 Agent 이미지 참조를 검증한다. 필요한 이미지가 없으면 내려받지만 DB를 열거나 실행 중인 앱을 중지하지 않는다. 일회성 검사·CLI 컨테이너에는 `traefik.enable=false`를 적용한다. 출력에는 설정값을 나열하지 않는다. `config.env`를 수정한 뒤 `validate`와 `up`으로 현재 고정 이미지에 반영하고, 이미지까지 바꾸려면 `update`를 사용한다.
 
 새 DB인 경우 서버를 처음 공개하기 전에 관리자와 TOTP를 등록한다. 기존 DB에 이미 계정이 있으면 반복하지 않는다.
 
@@ -48,7 +54,7 @@ CLI는 같은 이미지와 데이터 볼륨을 사용한다. 모든 CLI 명령�
 
 ## 프록시와 전달 IP
 
-Compose는 `traefik.enable`, 도메인 Host 규칙, `websecure`, TLS, `letsencrypt`, 내부 서비스 포트 3000을 label로 설정한다. 사용자 환경의 이름이 다르면 `server.env`에서 변경한다. 외부에서 공급하는 인증서를 쓴다면 `TRAEFIK_CERT_RESOLVER=`로 비워 둘 수 있다.
+Compose는 `traefik.enable`, 도메인 Host 규칙, `websecure`, TLS, `letsencrypt`, 내부 서비스 포트 3000을 label로 설정한다. 사용자 환경의 이름이 다르면 `config.env`에서 변경한다. 외부에서 공급하는 인증서를 쓴다면 `TRAEFIK_CERT_RESOLVER=`로 비워 둘 수 있다.
 
 클라이언트 IP를 로그인 기록 등에 반영하려면 `TRAEFIK_TRUSTED_IPS`에 **Traefik의 정확한 Docker 내부 IP**를 입력한다. 공인 고정 IP와 별개의 설정이다. 값이 비어 있으면 전달 헤더를 신뢰하지 않으며 기록에는 직접 연결한 프록시 주소가 남는다. 공유 네트워크 전체를 무조건 신뢰하지 않는다. 여러 주소는 쉼표로 구분하며 CIDR은 신뢰할 프록시만 있는 전용 네트워크에 한해 사용한다. Traefik의 내부 IP가 바뀌면 설정을 갱신하고 `up`을 실행한다.
 
@@ -79,7 +85,7 @@ bash scripts/server.sh stop
 
 서버는 비 root UID 1000, 읽기 전용 이미지와 쓰기 가능한 데이터 볼륨·임시 디렉터리로 실행한다. `quant-platform_server_data` 볼륨의 `/var/lib/quant-platform`에 운영 DB `app.sqlite`, 계산 DB `app.data.sqlite`, 데이터·작업 상태를 보존한다. 컨테이너를 재생성해도 볼륨은 유지된다. 직접 데이터를 준비할 때 UID 1000이 읽고 쓸 수 있어야 한다. DB 파일뿐 아니라 기존 데이터 참조 경로도 확인한다. 이 도구는 백업·복원을 수행하지 않는다.
 
-`docker compose down -v`는 앱 데이터 볼륨을 삭제하므로 일반 중지에는 사용하지 않는다. 앱 로그는 Docker `local` 드라이버로 20MiB × 5개까지 회전한다. `unless-stopped`는 종료된 프로세스와 Docker 재기동에 대응하지만, healthcheck가 `unhealthy`인 것만으로 자동 재시작하지 않는다. 종료 유예는 120초다.
+`stop`·`status`·`logs`는 설정을 읽지 않고 고정된 프로젝트·서비스 label로 컨테이너를 찾으므로 원본에 오류가 있어도 사용할 수 있다. 운영은 helper를 통해 실행하며 원본이나 임시 파일을 직접 `docker compose --env-file`에 넘기지 않는다. 볼륨 삭제 명령은 일반 중지에 사용하지 않는다. 앱 로그는 Docker `local` 드라이버로 20MiB × 5개까지 회전한다. `unless-stopped`는 종료된 프로세스와 Docker 재기동에 대응하지만, healthcheck가 `unhealthy`인 것만으로 자동 재시작하지 않는다. 종료 유예는 120초다.
 
 ## 업데이트와 실패 처리
 
@@ -90,7 +96,7 @@ bash scripts/server.sh update
 bash scripts/server.sh update ghcr.io/sa04108/quant-platform:sha-<커밋SHA>
 ```
 
-업데이트는 서버 이미지 다운로드 → 앱 서비스 중지 → 후보 이미지의 `db:prepare` → readiness 확인 순서다. 성공한 서버 digest를 `.server-image`에 기록하여 이후 `up`이 같은 이미지를 실행한다. 기존 pin은 `.server-image.previous`에 남는다. `pnpm deploy`는 같은 업데이트 명령의 별칭이며, `pnpm deploy:systemd`는 기존 SSH 배포 경로다.
+업데이트는 서버 이미지 다운로드 → 후보 이미지의 설정 검증 → 앱 서비스 중지 → 후보 이미지의 `db:prepare` → readiness 확인 순서다. 다운로드·설정 검증 실패는 실행 중인 앱을 중지하지 않는다. 성공한 서버 digest를 `.server-image`에 기록하여 이후 `up`이 같은 이미지를 실행한다. 기존 pin은 `.server-image.previous`에 남는다. `pnpm deploy`는 같은 업데이트 명령의 별칭이다.
 
 DB 준비·기동 실패 시 앱은 중지 상태로 남고 `.server-update-pending`에 후보 digest를 보존한다. 일반 `up`과 CLI는 차단된다. 로그를 확인하고 **기록된 같은 digest**로 업데이트를 재시도한다.
 
@@ -102,3 +108,7 @@ bash scripts/server.sh update "$(cat .server-update-pending)"
 다른 버전으로 되돌릴 때는 운영자가 DB·데이터·이미지 호환성을 함께 확인하고 필요한 복원을 수행한다. 이전 이미지 기록만으로 자동 롤백하지 않는다. pending 파일은 복구 상태가 확인된 뒤에만 수동 정리하며, 직접 `docker compose up`으로 이 차단을 우회하지 않는다. 같은 프로젝트의 변경 작업은 helper의 잠금으로 직렬화한다.
 
 Docker 서버에는 같은 릴리스의 Agent 이미지 digest가 내장된다. 서버 업데이트 후 버전 불일치가 표시되면 설정 → Agent에서 저장한 기존 활성 토큰으로 Agent 설치 파일을 다시 내려받아 실행한다. 같은 토큰은 기존 장치와 캐시 볼륨을 유지한다. 토큰을 보관하지 않았다면 기존 장치를 해제하고 새 토큰을 발급하며, 이 경우 별도 캐시 볼륨을 사용한다. 이전 서버·설치 파일이 참조하는 이미지를 workflow에서 자동 삭제하지 않는다.
+
+## 향후 AWS 연동과 이전
+
+서버 이미지·앱 환경변수·영속 데이터 경로를 실행 환경과 분리한다. 부분 AWS 서비스 연동과 전체 서버 이전의 후보 및 SQLite 제약은 [AWS 확장 방향](AWS_DEPLOYMENT.md)을 따른다. 현재 AWS 배포 리소스나 연동 기능을 추가한 것은 아니다.
