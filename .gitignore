@@ -32,6 +32,9 @@ out/
 .env
 .env.local
 .env.*.local
+/config.env
+/.server-runtime/
+# 이전 운영 설정도 실수로 커밋되지 않도록 계속 제외한다.
 /deploy.env
 /server.env
 /app.env

@@ -446,7 +446,7 @@ async function main(): Promise<void> {
   if (!apiKey) {
     console.error('KRX_API_KEY 가 설정되지 않았습니다.');
     console.error('KRX Open API 인증키를 발급받고 KOSPI·KOSDAQ 종목기본정보·일별매매정보 네 API 이용 승인을 받은 뒤,');
-    console.error('KRX_API_KEY 환경변수로 설정하고 다시 실행하세요 (infra/app.env.example 참고).');
+    console.error('KRX_API_KEY 환경변수로 설정하고 다시 실행하세요 (config.env.example 참고).');
     console.error('선택: KRX_BASE_URL(기본 https://data-dbg.krx.co.kr), KRX_APPROVAL_EXPIRY(YYYY-MM-DD)도 함께 설정할 수 있습니다.');
     process.exitCode = 1;
     return;

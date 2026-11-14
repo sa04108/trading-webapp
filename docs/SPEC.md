@@ -31,7 +31,7 @@
 | 영속성 | SQLite, better-sqlite3, Drizzle 스키마·마이그레이션 |
 | 웹 | React·Vite, React Router, shadcn/ui·Tailwind CSS, TanStack Query·Table, React Hook Form, Recharts |
 | 인증·검증 | Argon2id, TOTP, Vitest, Playwright, dependency-cruiser |
-| 운영 | Linux, Docker Compose·기존 Traefik 기본, systemd·SSH 선택 옵션, 두 경로 모두 Traefik 사용 |
+| 운영 | Linux, Docker Compose·기존 Traefik, 컨테이너 이미지 배포 |
 
 정확한 패키지 버전은 [package.json](../package.json)과 잠금 파일을 따른다. 웹 빌드 결과는 Fastify가 제공하며 별도의 퍼블릭 프론트엔드 서비스로 분리하지 않는다.
 
@@ -158,51 +158,41 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 
 ## 9. 클라우드와 퍼블릭 네트워크
 
-기본 운영 대상은 **Ubuntu 26.04 LTS·GMKtec NucBox G3(N100, RAM 16GB, NVMe 256GB)의 Docker Compose 서버**다. 서버 컨테이너 기본 한도는 CPU 3개·메모리 10GiB다. systemd 프로비저닝도 같은 G3 자원 한도의 선택 옵션으로 유지한다(D-114).
+운영 대상은 **Ubuntu 26.04 LTS·GMKtec NucBox G3(N100, RAM 16GB, NVMe 256GB)의 Docker Compose 서버**다. 서버 전체(API·계산 자식 포함) 기본 상한은 CPU 3개·메모리 10GiB다. systemd·SSH 서버 배포와 Lightsail 프로비저닝은 제거한다(D-115).
 
 | 항목 | 운영 구성 |
 | --- | --- |
-| 퍼블릭 도메인 | 서비스 도메인을 서버의 공개 진입점에 연결한다. Docker는 `server.env`의 `DOMAIN`, systemd는 프로비저닝 입력으로 도메인을 관리한다. 공인 IP 설정은 별도 운영 범위다. |
-| HTTPS·프록시 | Docker는 기존 Traefik의 `infra-proxy`·`websecure`·`letsencrypt`를 사용하고 내부 서버 3000번 포트로 전달한다. 선택적 systemd는 Traefik file provider가 같은 네트워크의 호스트 IPv4 gateway:3000으로 전달한다. Traefik 3.7.16을 기준으로 구성한다. 앱 포트와 DB를 인터넷에 직접 노출하지 않는다. |
-| 방화벽·포트 전달 | 웹 진입에는 TCP **80·443**을 사용한다. 관리용 SSH는 별도로 접근 범위를 정한다. Docker가 게시한 포트와 라우터·호스트·클라우드의 실제 노출 규칙을 함께 확인한다. |
-| systemd 프로비저닝 옵션 | UFW 인바운드 기본 거부, 아웃바운드 허용, 22 rate limit, 80·443 허용. SSH는 공개키 인증을 사용하고 root·비밀번호 로그인을 금지한다. Docker 경로는 호스트 SSH 설정을 변경하지 않는다. |
-| 계산 장치 | 서버로 아웃바운드 연결하므로 장치의 인바운드 포트 개방이나 장치별 SSH 배포가 필요하지 않다. |
-| 프로세스·파일 | Docker 서버는 비 root UID 1000·읽기 전용 이미지와 named volume을 사용한다. systemd는 비특권 `quant` 사용자다. 코드·설정과 `/var/lib/quant-platform`의 가변 데이터를 분리하고 메모리·프로세스 수 제한을 적용한다. |
+| 퍼블릭 도메인 | `config.env`의 `DOMAIN`을 사용한다. 공인 IP·DNS·포트 전달은 별도 운영 범위다. |
+| HTTPS·프록시 | 기존 Traefik 3.7.16의 `infra-proxy`·`websecure`·`letsencrypt`를 재사용한다. 앱 Compose는 서버 서비스 하나이며 내부 3000번 포트를 호스트에 게시하지 않는다. |
+| 호스트 | Docker Engine과 Compose를 사전에 준비한다. 앱 도구는 Traefik·네트워크를 새로 설치하거나 호스트 SSH·방화벽을 변경하지 않는다. |
+| 계산 장치 | 서버로 아웃바운드 연결한다. 장치별 SSH 배포와 인바운드 포트 개방이 필요하지 않다. |
+| 프로세스·파일 | 비 root UID 1000·읽기 전용 이미지와 `/var/lib/quant-platform` named volume을 사용한다. 가변 데이터는 이미지와 분리한다. |
 
-클라우드 방화벽·DNS는 별도 운영 설정이다. UFW 설정이 클라우드 방화벽을 대신하지 않는다. 출발 IP 등록이 필요한 외부 API는 실제 아웃바운드 IP와 등록값을 확인한다.
-
-구성 기준: [Docker 서버 운영](DOCKER_SERVER.md)·[compose.yaml](../compose.yaml), 선택적 [provision.sh](../infra/provision.sh), [quant-platform.service](../infra/systemd/quant-platform.service). 실제 도메인·인스턴스 식별값은 운영 설정에서 관리하며 추정값을 소스에 고정하지 않는다.
+구성 기준은 [Docker 서버 운영](DOCKER_SERVER.md)·[compose.yaml](../compose.yaml)이다. AWS 일부 서비스 연동과 전체 이전은 [AWS 확장 방향](AWS_DEPLOYMENT.md)에 따라 컨테이너 실행·앱 기능·영속 저장소를 구분하여 추가한다. 현재 AWS 연동/배포 기능이 있다는 의미는 아니다.
 
 ## 10. 환경변수와 설정
 
-**앱·배포 접속·인프라 설정을 분리한다.** Docker는 저장소 루트의 `server.env`와 `app.env`(600)를 사용하고 셸로 평가하지 않는다. systemd의 앱 설정은 `/etc/quant-platform/app.env`(`root:root`, `600`)에 두고, 관리되는 바인딩·프록시 설정은 별도 `network.env`에서 덮어쓴다. 변경 후 재시작한다. 비밀값은 저장소·웹 번들·계산 패키지에 넣지 않는다.
+**운영자가 편집하는 원본은 `config.env` 하나**다. Git에서 제외하고 권한 600으로 관리한다. Docker와 앱의 설정 전달 범위는 도구 내부에서 구분한다. 형식은 줄 단위의 원문 `KEY=value`이며 source/eval·변수 확장을 하지 않는다. 중복·알 수 없는 키를 거부하며 외부 셸과 개발 `.env`의 같은 이름 값은 운영 원본을 덮어쓰지 않는다.
 
 | 구분 | 주요 설정 |
 | --- | --- |
-| 실행·네트워크 | `NODE_ENV`, `APP_BIND_ADDRESS`, `APP_PORT`, `TRUST_PROXY_LOOPBACK`, `TRUST_PROXY_ADDRESSES` |
-| 저장 경로 | `DATABASE_PATH`, `DATA_ROOT`, `EXPORT_ROOT`, `TEMP_ROOT` |
-| 인증 | `SESSION_SECRET`는 production에서 필수. 세션 유휴·절대 만료는 `SESSION_*_TIMEOUT_SECONDS`로 설정한다. |
+| Compose | `DOMAIN`, `SERVER_IMAGE`, `SERVER_CPUS`, `SERVER_MEMORY`, `TRAEFIK_*` |
+| 인증 | `SESSION_SECRET`, 세션 유휴·절대 만료 설정 |
 | 데이터 공급자 | `KRX_API_KEY`·`KRX_APPROVAL_EXPIRY`, `DART_API_KEY`, `FRED_API_KEY`, `TOSS_CLIENT_ID`·`TOSS_CLIENT_SECRET` 및 공급자별 base URL |
-| 자원·운영 | `MAX_QUEUED_BACKTESTS`, `SYNC_MIN_FREE_DISK_MB`, `KRX_DAILY_CALL_BUDGET`, 로그 수준·보존 기간 |
-| 로컬 배포 접속 | 저장소 밖으로 유출하지 않는 로컬 `deploy.env`의 `HOST`·`SSH_*` 설정. 앱 API 키와 구분한다. |
+| 앱 운영 | `MAX_QUEUED_BACKTESTS`, `SYNC_MIN_FREE_DISK_MB`, `KRX_DAILY_CALL_BUDGET`, 로그 수준·보존 기간, 선택적 `AGENT_CONTAINER_IMAGE` |
+| 자동 관리 | production 모드, `0.0.0.0:3000`, 이미지의 `/var/lib/quant-platform` 경로와 명시적 프록시 신뢰 설정 |
 
-허용값·기본값·조합 검증은 [config.ts](../src/server/bootstrap/config.ts), 예시는 [app.env.example](../infra/app.env.example)·[deploy.env.example](../deploy.env.example)를 따른다. 선택적 비밀값은 미사용 시 생략하며 빈 문자열로 대체하지 않는다. 도메인 `DOMAIN`은 앱이 아닌 Compose 또는 프로비저닝 입력이다. Docker 예시는 [server.env.example](../server.env.example)과 [app.env.example](../infra/server/app.env.example)을 따른다.
+[config.env.example](../config.env.example)이 운영 설정의 단일 예시다. [server-config.sh](../scripts/lib/server-config.sh)는 허용 키·기본값·파일 문법과 Compose 값을 검사한다. 앱 값과 조합은 선택된 이미지의 기존 [config.ts](../src/server/bootstrap/config.ts)로 검증한다. 선택적 키는 미사용 시 생략한다. API 키는 Compose label·명령 인자에 넣지 않으며 권한이 제한된 임시 앱 환경 파일에만 쓴다. 임시 파일은 종료 시 정리하고 사용자가 수정하지 않는다. 앱은 config.env를 직접 읽지 않으므로 다른 컨테이너 실행 환경에서도 같은 환경변수 계약을 사용한다.
 
 ## 11. 빌드·배포·복구
 
-저장소가 지정한 Node·pnpm으로 `pnpm install --frozen-lockfile`을 실행한다. 개발은 `pnpm dev`·`pnpm dev:web`, 서버·웹 빌드는 `pnpm build`다.
+저장소가 지정한 Node·pnpm으로 개발·검증하고 서버·웹은 `pnpm build`로 빌드한다. 서버 배포 산출물은 컨테이너 이미지다. Agent용 Linux archive는 `dist/agent-runtime/`에서 Agent 이미지와 hermetic workload 검증에만 사용한다.
 
-기본 Docker 경로는 `bash scripts/server.sh init`·`up`·`update`이며 `pnpm deploy`는 로컬 Docker 업데이트의 별칭이다. main workflow가 검증한 서버·Agent 이미지를 게시하고 서버는 선택한 digest를 고정한다. Docker 업데이트는 DB 준비와 readiness를 확인하며 백업·복원은 자동화하지 않는다. 미완료 업데이트는 이전 이미지의 재기동을 차단한다. 운영 절차는 [Docker 서버 운영](DOCKER_SERVER.md)을 따른다.
+운영 명령은 `bash scripts/server.sh init`·`validate`·`up`·`update`·`stop`·`status`·`logs`·`cli`다. 호스트 Node는 필요 없다. `pnpm deploy`는 같은 Docker 업데이트의 별칭이다. main workflow는 서버/Agent 이미지를 검증·게시하며 서버에 직접 배포하지 않는다. systemd 유닛·SSH 비밀과 tar 서버 릴리스는 사용하지 않는다.
 
-선택적 systemd 초기 구성은 `scripts/bootstrap.sh`, 이후 배포는 **Linux에서 `pnpm run deploy:systemd`**다. standalone 배포는 깨끗한 작업 트리의 동일 스냅샷을 검증해 서버·웹과 체크섬을 게시한다. Native Linux agent 파일은 만들거나 배포하지 않는다. Agent용 내부 Linux archive는 `dist/agent-runtime/`에서 Docker image 구성과 hermetic workload 검증에만 사용하며 배포 archive에 포함하지 않는다.
+원본 설정 변경은 검증 후 `up`으로 현재 고정 이미지에 적용한다. `update`는 후보 이미지를 먼저 확보하고 앱 설정 검증을 통과한 뒤 서비스를 중지해 DB 준비와 readiness를 확인한다. 성공 digest를 고정하고 미완료 업데이트는 이전 이미지의 `up`과 CLI를 차단한다. 설정/다운로드 실패는 실행 중인 앱을 유지하며, DB 준비 이후 실패는 중지 상태에서 같은 후보로 복구한다. 백업·복원을 자동화하지 않는다. 자세한 절차는 [Docker 서버 운영](DOCKER_SERVER.md)을 따른다.
 
-systemd 배포 진입점은 독립 Bash 스크립트인 `scripts/deploy.sh`다. 로컬 검증·전송 후 한 번의 원격 실행이 잠금을 잡고 배포를 끝낸다. `--remote`는 내부 호출용이며, 대상별 조정 계층·Node 조정 블록·호환 래퍼는 두지 않는다. `deploy.env`는 셸 코드로 평가하지 않는다. stdout·stderr를 화면과 `.logs/deploy-*.log`에 함께 기록하며 `LOG`로 위치를 지정할 수 있다.
-
-systemd 배포는 SSH 전송 후 **체크섬 검증·staging 설치 → 서비스 중지·두 DB 백업 → 코드 전환·`db:prepare` → 기동 검증 → 성공 확정·정리**로 진행한다. 성공 확정 전 실패 시 코드와 DB 세트 복원을 시도한다. 코드만 롤백하고 DB 호환성을 방치하지 않으며, 성공 후 이력 정리 실패만으로 정상 배포를 되돌리지 않는다.
-
-백업·복원은 `db:backup`·`db:restore`를 사용하며 **두 DB와 백업 명세를 한 세트로 관리**한다. 유지보수 중 쓰기를 중지하고 여러 WAL DB 파일의 장애 원자성을 가정하지 않는다. 파일 누락·식별자 불일치·미완료 복원은 기동을 차단한다.
-
-systemd 실행 순서의 기준은 [build-release.sh](../scripts/build-release.sh)·[deploy.sh](../scripts/deploy.sh)다.
+CLI는 배포와 같은 잠금을 사용하며 서버가 중지된 상태에서만 실행한다. 백업·복원이 필요하면 `db:backup`·`db:restore`를 사용하고 **두 DB와 백업 명세를 한 세트로 관리**한다. 유지보수 중 쓰기를 중지하고 여러 WAL DB 파일의 장애 원자성을 가정하지 않는다. 파일 누락·식별자 불일치·미완료 복원은 기동을 차단한다.
 
 ## 12. 테스트
 
@@ -218,4 +208,4 @@ systemd 실행 순서의 기준은 [build-release.sh](../scripts/build-release.s
 
 회귀 검증은 계산·시점 정합성, 준비 결과 보존·재사용, 버전 호환성, 임대·취소·복구·결과 반영, 인증·모듈 경계를 포함한다. 계약 변경 시 해당 테스트도 변경한다.
 
-standalone 서버 배포 게이트는 **설치 → lint → typecheck → 전체 Vitest(`test:all`) → 서버·웹 build**다. GHCR Agent image workflow는 이미지 version 준비 단계에서 `pnpm test:agent-package`를 실행한 다음 multi-arch Docker build/push를 진행한다. 변경 영향별 테스트 선택 배포는 구현된 것으로 가정하지 않는다. 기준: [vitest.config.ts](../vitest.config.ts), [test-fixtures.ts](../tests/helpers/test-fixtures.ts)·[test-app.ts](../tests/helpers/test-app.ts), [build-release.sh](../scripts/build-release.sh).
+이미지 게시 게이트는 **설치 → lint → typecheck → 전체 Vitest(`test:all`) → 서버·웹 및 Agent build → Agent 패키지 검사 → 이미지 build·실행 검사**다. 변경 영향별 테스트 선택 배포는 구현된 것으로 가정하지 않는다. 기준: [vitest.config.ts](../vitest.config.ts), [test-fixtures.ts](../tests/helpers/test-fixtures.ts)·[test-app.ts](../tests/helpers/test-app.ts), [게시 workflow](../.github/workflows/deploy.yml).

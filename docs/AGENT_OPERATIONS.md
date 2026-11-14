@@ -59,7 +59,7 @@ UID 1000과 `unless-stopped` 재시작 정책을 사용한다. Windows 로그인
 
 ## GHCR 이미지 게시와 보존
 
-서버 Docker 이미지는 같은 커밋에서 검증한 Agent 이미지의 `ghcr.io/sa04108/quant-agent@sha256:<digest>`를 기본값으로 포함한다. 설치 파일은 이 참조를 담으므로 서버가 바뀐 뒤에는 현재 서버에서 새 설치 파일을 받는다. 기존 systemd 설정은 `AGENT_CONTAINER_IMAGE`를 지정하지 않으면 `ghcr.io/sa04108/quant-agent:latest`를 사용한다. 설정값은 GHCR의 소문자 경로와 `latest`, `v-<agentVersion>` 또는 SHA-256 digest를 지원한다.
+서버 Docker 이미지는 같은 커밋에서 검증한 Agent 이미지의 `ghcr.io/sa04108/quant-agent@sha256:<digest>`를 기본값으로 포함한다. 설치 파일은 이 참조를 담으므로 서버가 바뀐 뒤에는 현재 서버에서 새 설치 파일을 받는다. 설정값은 GHCR의 소문자 경로와 `latest`, `v-<agentVersion>` 또는 SHA-256 digest를 지원한다.
 
 main push 또는 수동 실행의 **Publish images** workflow는 설치기와 Agent 패키지를 검증하고 amd64·arm64 Agent 이미지를 `v-<agentVersion>` 태그로 게시한다. Agent 실행 검사 후 그 digest를 서버 이미지에 포함하고 서버 실행 검사까지 성공하면 latest 별칭을 갱신한다. 일반 push는 서버에 SSH 배포하지 않는다. 최초 게시 후 로그인 없이 설치하려면 GitHub Packages에서 패키지 visibility를 Public으로 설정해야 한다.
 
@@ -97,9 +97,8 @@ docker --context desktop-linux logs --tail 100 <컨테이너 이름>
 다시 다운로드하지 않는다. 별도 설치, 장치 토큰 또는 worker.env 설정은 필요 없다.
 작업 상태와 전송 대기 결과는 계산 DB 옆 `server-agent/`에 보존한다.
 
-Docker·systemd G3 서버의 기본 한도는 CPU 3개·RAM 10GiB이며 계산 예산은 최대 약 5GiB다.
+Docker 서버의 기본 한도는 CPU 3개·RAM 10GiB이며 계산 예산은 최대 약 5GiB다.
 상세 운영·병렬도는 [Docker 서버 운영](DOCKER_SERVER.md#g3-기본-자원)을 따른다.
-systemd 서비스도 `CPUQuota=300%`, `MemoryHigh=10G`, `MemoryMax=10G`를 기본으로 사용한다. 1GB 호스트에는 이 기본값을 그대로 적용하지 말고 호스트 용량에 맞게 별도로 줄여야 한다.
 로컬 계산은 CPU 수와 관계없이 동시에 한 개다. 물리 RAM과 현재·상위 cgroup의
 `memory.high`/`memory.max` 중 작은 값을 운영 예산으로 보고 절반을 API에 남긴다.
 API의 현재 RSS는 가용량에서 이미 빠졌으므로, 추가 성장 여유
@@ -195,21 +194,10 @@ WSS는 TLS 위의 WebSocket 연결이다. PC에서 운영 서버의 HTTPS 포트
 
 ## DB 마이그레이션과 복원
 
-Docker 업데이트는 자동 백업·복원이나 다운그레이드를 수행하지 않는다. pending-update marker가 남으면 같은 후보로 재시도하거나 운영자가 데이터를 확인하고 복구해야 한다. 다음 자동 백업과 복구 설명은 기존 systemd 배포에 적용된다.
+Docker 업데이트는 자동 백업·복원이나 다운그레이드를 수행하지 않는다. pending-update marker가 남으면 같은 후보로 재시도하거나 운영자가 데이터를 확인하고 복구해야 한다. 운영 절차는 [Docker 서버 운영](DOCKER_SERVER.md)을 따른다.
 
 `DATABASE_PATH`는 운영 파일이며 계산 파일 경로는 자동으로 `*.data.sqlite`로 결정한다.
 각 파일은 `migrations/operations`, `migrations/data`의 독립 마이그레이션 이력을 가진다.
-배포는 서비스를 중지하고 두 DB를 백업한 뒤 새 릴리스의 `db:prepare`를 실행한다.
-`db:prepare`는 systemd oneshot 작업으로 실행하여 중단 신호를 배포 실패로 처리한다.
-SSH 연결 유지 패킷과 응답 제한으로 긴 검증 중 연결 단절도 감지한다.
-
-```bash
-# 운영 서버에서는 서비스 중지 및 app.env를 읽는 systemd-run 절차를 먼저 적용한다.
-pnpm cli db:backup /안전한경로/before.sqlite
-pnpm cli db:prepare
-# 복원이 필요하면 서비스를 멈춘 상태에서 실행한다.
-pnpm cli db:restore /안전한경로/before.sqlite
-```
 
 백업 세트는 `before.sqlite`, `before.sqlite.data`, `before.sqlite.json` 세 파일이다.
 복원은 모든 해시를 먼저 확인하고 임시 파일과 복원 기록으로 진행한다. 중단되면 같은
@@ -237,12 +225,9 @@ PENDING 상태의 종목 이력이 있으면 삭제하지 않고 중단한다. �
 pnpm build:agent       # Docker 구성·hermetic 검증용 내부 Linux 런타임 archive
 pnpm test:agent-package # archive 경계와 실제 준비·백테스트 workload 실행
 pnpm run deploy        # 로컬 Docker 서버 업데이트
-pnpm run deploy:systemd # 기존 systemd 서버 SSH 배포
 ```
 
-systemd 배포의 `deploy.env`에는 `HOST`·`SSH_*` 접속 설정만 있다. 공급자 API 키와 서비스 설정은 서버의
-`app.env`에 남는다. 옛 worker 환경변수, 장치별 SSH와 사용자용 native runtime 배포 경로는
-제거했다. Docker 이미지는 GHCR에 게시한다. 기존 systemd 배포의 실패 복구는 코드와 DB 백업 세트를 함께 다룬다.
+서버 설정과 공급자 API 키는 `config.env`에서 관리한다. Docker 이미지는 GHCR에 게시한다.
 
 
 ## 기존 명칭의 DB 이행

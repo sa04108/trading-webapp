@@ -4,7 +4,7 @@
 
 배포 Git SHA는 **어떤 커밋을 게시했는지 보여 주는 출처 정보**다. 데이터 캐시의 유효성,
 agent 최신 여부, 백테스트 결과의 호환성, 기간 검증의 일관성은 별도 버전으로 판단한다.
-공식 배포는 서버 코드와 GHCR Agent 이미지를 게시한다. standalone 서버 배포는 사용자용 native agent archive를 만들거나 게시하지 않는다.
+공식 배포는 서버와 Agent 컨테이너 이미지를 게시한다. 서버용 tar 배포와 사용자용 native Agent archive는 제공하지 않는다.
 웹 화면이나 인증 서비스만 바뀌면 기존 agent와 미리보기를 계속 사용할 수 있다.
 
 ## 물리적 경계
@@ -43,7 +43,7 @@ agent는 `migrations/agent`로 작업 DB를 만들고 서버가 게시한 계산
 권장 분리 순서에 따라 전용 진입점, 공유 코드 이동, 경계 검사, 내용 기반 버전을 적용했다.
 
 `tsconfig.agent.json`의 진입점은 agent CLI와 세 계산 worker다. worker는 파일 경로로
-fork되므로 import 그래프 외에 명시적으로 등록한다. `scripts/build-agent-client.mjs`는 Docker 내부 런타임 builder로 `dist/agent-runtime/quant-agent-runtime-linux-{x64|arm64}.tar.gz`와 manifest를 만든다. 이 archive는 서버 배포 archive나 사용자 다운로드로 전달하지 않는다. `scripts/lib/runtime-graph.mjs`는
+fork되므로 import 그래프 외에 명시적으로 등록한다. `scripts/build-agent-client.mjs`는 Docker 내부 런타임 builder로 `dist/agent-runtime/quant-agent-runtime-linux-{x64|arm64}.tar.gz`와 manifest를 만든다. 이 archive는 사용자 다운로드로 전달하지 않는다. `scripts/lib/runtime-graph.mjs`는
 타입 전용 import를 제거한 실행 그래프를 추적한다. builder는 전용 컴파일 결과에서
 그 그래프에 속한 JS만 복사하고, 서버·웹 디렉터리가 들어오면 실패한다.
 소스맵과 서버 전용 worker도 제외한다.
@@ -65,7 +65,7 @@ pnpm test:agent-package
 아키텍처 검사는 agent/runtime에서 server·web·서버 전용 worker로 향하는 import를 금지한다.
 `test:agent-package`는 내부 archive를 저장소 밖에 풀어 포함 파일·의존성·다섯 작업 테이블을
 검사하고, 동봉 Node와 compiled agent로 준비→백테스트→서버 결과 저장을 실행한다. GHCR 이미지
-게시 workflow의 버전 준비 단계에서 Docker build/push 전에 수행한다. standalone 서버 배포에는 포함하지 않는다.
+게시 workflow의 버전 준비 단계에서 Docker build/push 전에 수행한다. 서버 운영 도구는 패키지를 다시 빌드하지 않고 검증된 이미지를 사용한다.
 
 ## 독립 버전
 

@@ -11,7 +11,6 @@
     "dev": "tsx watch src/server/bootstrap/main.ts",
     "dev:web": "vite",
     "deploy": "bash scripts/server.sh update",
-    "deploy:systemd": "bash scripts/deploy.sh",
     "server": "bash scripts/server.sh",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.web.json --noEmit",
