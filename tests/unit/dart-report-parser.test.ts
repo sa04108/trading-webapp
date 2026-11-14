@@ -473,6 +473,16 @@ describe('parseFinancialRows — 누적값 차분', () => {
     }));
   });
 
+  it('영업이익 태그가 잘못 붙은 영업수익을 제외하고 실제 영업이익을 쓴다', () => {
+    const revenue = { ...incomeRow('11013', 648028374081), account_id: 'dart_OperatingIncomeLoss', account_nm: '영업수익' };
+    const income = { ...incomeRow('11013', 70517280416), account_id: '-표준계정코드 미사용-' };
+    const parsed = parseFinancialRows('089860', new Map([['11013', [revenue, income]]]));
+    expect(parsed.facts.filter((fact) => fact.field === 'OPERATING_INCOME').map((fact) => fact.value)).toEqual([70517280416]);
+    expect(parsed.gaps.some((gap) => gap.kind === 'CONFLICT')).toBe(false);
+    expect(parseFinancialRows('089860', new Map([['11013', [revenue]]])).facts
+      .filter((fact) => fact.field === 'OPERATING_INCOME')).toEqual([]);
+  });
+
   it('버킷 연도 불일치 gap 의 묶음 라벨은 값이 섞이지 않아 안정적이다 (CLI 사유별 집계)', () => {
     // CLI 는 첫 ':' 또는 '(' 앞까지를 버킷 라벨로 쓴다 — 앞부분에 연도·계정명이 섞이면
     // 같은 실패 유형이 값마다 다른 버킷으로 쪼개져 200종목 백필에서 리포트가 커진다.
