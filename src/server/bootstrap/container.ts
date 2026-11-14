@@ -59,6 +59,8 @@ import { CandleCoverageService } from "../../runtime/modules/market-data/applica
 import type { CandleRepository } from "../../runtime/modules/market-data/application/ports.js";
 import { createTossStockInfoSource } from "../modules/broker/infrastructure/toss/toss-stock-info-source.js";
 import { createTossClient } from "../modules/broker/infrastructure/toss/toss-client.js";
+import { createIntradayService } from "../modules/intraday/infrastructure/create-intraday-service.js";
+import type { IntradayService } from "../modules/intraday/application/intraday-service.js";
 import { createTossTradingBroker } from "../modules/broker/infrastructure/toss/toss-trading-broker.js";
 import { TradingService } from "../modules/trading/application/trading-service.js";
 import { StrategyArtifacts } from "../modules/trading/infrastructure/strategy-artifacts.js";
@@ -138,6 +140,7 @@ export interface Container {
   readonly symbolInfoService: SymbolInfoService;
   readonly strategyRegistry: StrategyRegistry;
   readonly tradingService: TradingService;
+  readonly intradayService: IntradayService;
   readonly backtestWizardDraftService: BacktestWizardDraftService;
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
@@ -361,6 +364,7 @@ export function createContainer(
     logger,
     symbolService,
   );
+  const intradayService = createIntradayService({ database, dataRoot: config.dataRoot, client: tossClient, symbolInfo: symbolInfoService });
 
   const fredSource = createFredBenchmarkSource(
     config.fredApiKey
@@ -703,6 +707,7 @@ export function createContainer(
     symbolInfoService,
     strategyRegistry,
     tradingService,
+    intradayService,
     backtestWizardDraftService,
     jobQueue,
     jobOrchestrator,
@@ -728,6 +733,7 @@ export function createContainer(
     close: () => {
       if (closing !== null) return closing;
       closing = (async () => {
+        await intradayService.close();
         await tradingService.close();
         await tradingDataPreparation.close();
         clearInterval(pruneTimer);

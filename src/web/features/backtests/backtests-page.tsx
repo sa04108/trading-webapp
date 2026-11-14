@@ -1,3 +1,4 @@
+import { IntradayNav } from "../intraday/pages";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Dices, Plus } from "lucide-react";
 import { useState } from "react";
@@ -121,7 +122,9 @@ export function BacktestJobCard({
                 <p className="text-xs text-muted-foreground">{progress}%</p>
               </>
             ) : null}
-            {activity ? <ExecutionProgressSummary progress={activity} compact /> : null}
+            {activity ? (
+              <ExecutionProgressSummary progress={activity} compact />
+            ) : null}
           </div>
         ) : null}
         {job.status === "COMPLETED" && job.metrics ? (
@@ -316,6 +319,7 @@ export function BacktestsPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-lg font-semibold">백테스트</h2>
+        <IntradayNav />
         <div className="flex flex-wrap items-center justify-end gap-2">
           {editing ? (
             <>

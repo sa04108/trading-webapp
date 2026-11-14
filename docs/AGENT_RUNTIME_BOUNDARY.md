@@ -16,7 +16,7 @@ agent 최신 여부, 백테스트 결과의 호환성, 기간 검증의 일관�
 | `src/runtime/workers` | `preparation-child`, `universe-child`, `backtest-child`, 준비 런타임과 취소 처리 |
 | `src/runtime/shared/db` | 계산 데이터 조회 스키마, agent에 필요한 작업 스키마와 DB 연결 |
 | `src/server` | HTTP·인증·수집 API, 작업 배정, 사용자별 미리보기 소유권, 결과 수신·저장, 실매매 계좌·주문 실행 |
-| `src/workers` | 서버 전용 스냅샷 게시, 결과 import, 고정 전략의 실매매 신호 계산 |
+| `src/workers` | 서버 전용 스냅샷 게시, 결과 import, 고정 전략의 실매매 신호 계산, 분봉 백테스트 계산 |
 | `src/shared` | 요청·결과 스키마와 통신 계약 |
 
 준비 orchestrator는 수집과 미리보기 소유권 처리를 좁은 인터페이스로 받는다.
@@ -36,6 +36,8 @@ agent 최신 여부, 백테스트 결과의 호환성, 기간 검증의 일관�
 
 agent는 `migrations/agent`로 작업 DB를 만들고 서버가 게시한 계산 DB를 읽기 전용으로
 연결한다. 서버의 `migrations/operations`, `migrations/data`는 agent 패키지에 넣지 않는다.
+
+초기 분봉은 서버 전용 자식에 필요한 종목·기간의 고정된 봉을 전달한다. Parquet 원본과 수집 권한은 서버가 관리하며 기존 일봉 agent 배정 프로토콜에 분봉 요청을 섞지 않는다. 분봉 계산 규칙도 `executionVersion`에 포함한다. 상세 보관·실행 계약은 [분봉 백테스트](INTRADAY_BACKTEST.md)에 기록한다.
 계산 DB 스키마가 바뀌면 서버에서 먼저 마이그레이션하고 호환되는 새 스냅샷을 게시한다.
 
 ## 전용 빌드와 패키지

@@ -21,6 +21,7 @@ import {
 import { registerSymbolRoutes } from "../modules/market-data/presentation/symbol-routes.js";
 import { registerStrategyRoutes } from "../modules/strategy/presentation/strategy-routes.js";
 import { registerTradingRoutes } from "../modules/trading/presentation/trading-routes.js";
+import { registerIntradayRoutes } from "../modules/intraday/presentation/intraday-routes.js";
 import { registerBacktestRoutes } from "../modules/backtest/presentation/backtest-routes.js";
 import { registerBacktestWizardDraftRoutes } from "../modules/backtest/presentation/backtest-wizard-draft-routes.js";
 import { registerBacktestPreparationRoutes } from "../modules/backtest/presentation/backtest-preparation-routes.js";
@@ -63,6 +64,7 @@ export async function buildServer(
   registerRequestObservability(app);
 
   app.addHook("preClose", async () => {
+    await container.intradayService.close();
     await container.tradingService.close();
     await container.submissionValidator?.stop();
     await container.agentCoordinator.stop();
@@ -118,6 +120,7 @@ export async function buildServer(
       registerSymbolRoutes(api, container.symbolInfoService, requireAuth);
       registerStrategyRoutes(api, container.strategyRegistry, requireAuth);
       registerTradingRoutes(api, container.tradingService, requireAuth);
+      registerIntradayRoutes(api, container.intradayService, requireAuth);
       registerBacktestWizardDraftRoutes(
         api,
         container.backtestWizardDraftService,

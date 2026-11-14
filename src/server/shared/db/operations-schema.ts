@@ -9,3 +9,4 @@ export * from "./backtest-validation-schema.js";
 export * from "./backtest-result-schema.js";
 export * from "./agent-schema.js";
 export * from "./trading-schema.js";
+export * from "./intraday-schema.js";
