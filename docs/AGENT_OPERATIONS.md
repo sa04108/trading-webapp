@@ -41,7 +41,7 @@ flowchart LR
 
 설치기는 로컬 `desktop-linux` 컨텍스트만 사용한다. 원격 Docker 호스트, Windows 컨테이너와
 HTTP 로컬 개발 서버는 지원하지 않는다. 운영 서버의 HTTPS 주소에 접근할 수 있어야 한다.
-인바운드 포트는 필요 없다. Windows x64/ARM64에서 각각 Linux amd64/arm64 이미지를 받는다.
+인바운드 포트는 필요 없다. Windows x64에서 Linux amd64 이미지를 받는다.
 
 설치 파일에 서버 주소·토큰이 포함되므로 공유하지 않는다. 토큰은 `docker run`에만
 `QUANT_AGENT_SERVER_URL`, `QUANT_AGENT_TOKEN` 환경변수로 전달하며 이미지나 캐시 볼륨의
@@ -61,7 +61,7 @@ UID 1000과 `unless-stopped` 재시작 정책을 사용한다. Windows 로그인
 
 서버 Docker 이미지는 같은 커밋에서 검증한 Agent 이미지의 `ghcr.io/sa04108/quant-agent@sha256:<digest>`를 기본값으로 포함한다. 설치 파일은 이 참조를 담으므로 서버가 바뀐 뒤에는 현재 서버에서 새 설치 파일을 받는다. 설정값은 GHCR의 소문자 경로와 `latest`, `v-<agentVersion>` 또는 SHA-256 digest를 지원한다.
 
-`main` push 또는 main에서 수동 실행한 **Publish and deploy** workflow는 설치기와 Agent 패키지를 검증하고 amd64·arm64 Agent 이미지를 `v-<agentVersion>` 태그로 게시한다. Agent 실행 검사 후 Agent latest 별칭을 갱신한다. 미니 PC runner는 해당 digest를 포함한 서버 이미지를 직접 빌드·검사하고 로컬 이미지 ID로 배포한다. 검증된 같은 커밋의 로컬 서버 이미지가 있으면 내장된 Agent digest를 그대로 유지해 재검사·사용하므로 실패한 업데이트를 같은 이미지로 재시도할 수 있다. 서버 이미지는 GHCR에 게시하지 않는다. 설정과 복구는 [Docker 서버 운영](DOCKER_SERVER.md)을 따른다. 최초 게시 후 로그인 없이 Agent를 설치하려면 GitHub Packages에서 `quant-agent` 패키지 visibility를 Public으로 설정해야 한다.
+`main` push 또는 main에서 수동 실행한 **Publish and deploy** workflow는 설치기와 Agent 패키지를 검증하고 amd64 Agent 이미지를 `v-<agentVersion>` 태그로 게시한다. Agent 실행 검사 후 Agent latest 별칭을 갱신한다. 미니 PC runner는 해당 digest를 포함한 서버 이미지를 직접 빌드·검사하고 로컬 이미지 ID로 배포한다. 검증된 같은 커밋의 로컬 서버 이미지가 있으면 내장된 Agent digest를 그대로 유지해 재검사·사용하므로 실패한 업데이트를 같은 이미지로 재시도할 수 있다. 서버 이미지는 GHCR에 게시하지 않는다. 설정과 복구는 [Docker 서버 운영](DOCKER_SERVER.md)을 따른다. 최초 게시 후 로그인 없이 Agent를 설치하려면 GitHub Packages에서 `quant-agent` 패키지 visibility를 Public으로 설정해야 한다.
 
 서버 이미지와 이미 내려받은 설치 파일이 이전 Agent digest를 참조할 수 있으므로 게시 workflow는 이전 이미지를 자동 삭제하지 않는다. `scripts/publish-agent-image.mjs`의 과거 promotion 및 pruning 명령은 오래된 digest를 삭제할 수 있으므로 사용 중인 서버의 핀을 보존하는 운영 절차로 사용하지 않는다.
 

@@ -81,6 +81,7 @@ afterAll(() => {
 describe('Docker 이미지 내부 Agent 런타임', () => {
   it('내부 archive checksum과 독립 실행 경계를 만족하고 서버·웹·수집 전용 코드를 포함하지 않는다', async () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(archive), 'manifest.json'), 'utf8')) as RuntimeArchiveManifest;
+    expect(manifest.runtimes.map((runtime) => runtime.arch)).toEqual(['x64']);
     const published = manifest.runtimes.find((runtime) => runtime.arch === process.arch);
     expect(published).toBeDefined();
     const hash = createHash('sha256');

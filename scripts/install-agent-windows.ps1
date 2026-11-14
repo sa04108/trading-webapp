@@ -46,6 +46,8 @@ function Get-DockerDesktopExecutable {
 }
 
 try {
+  $hostArchitecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+  if ($hostArchitecture -ne 'AMD64') { throw '이 Agent는 x64 Windows에서만 지원됩니다. ARM 또는 다른 아키텍처에서는 설치할 수 없습니다.' }
   $env:DOCKER_HOST = ''
   $env:DOCKER_CONTEXT = ''
   $env:DOCKER_TLS_VERIFY = ''
@@ -96,6 +98,12 @@ try {
     Start-Sleep -Seconds 3
   }
   if (-not $ready) { throw 'Docker Desktop Linux 엔진이 준비되지 않았습니다. Docker Desktop을 시작하고 Linux 컨테이너 설정을 마친 뒤 다시 실행하세요.' }
+
+  $architectureResult = Invoke-DockerQuery -Arguments @('info', '--format', '{{.Architecture}}')
+  $engineArchitecture = ($architectureResult.Output -join '').Trim()
+  if ($architectureResult.ExitCode -ne 0 -or $engineArchitecture -notin @('x86_64', 'amd64')) {
+    throw '이 Agent는 x64 Docker Linux 엔진에서만 지원됩니다. Docker 엔진 아키텍처를 확인하세요.'
+  }
 
   Write-Host '최신 Agent 이미지를 내려받습니다...'
   Invoke-Docker -Arguments @('pull', $config.image)

@@ -12,7 +12,7 @@
 
 ## 빌드와 이미지 게시
 
-`main` push 또는 [Publish and deploy](../.github/workflows/deploy.yml)를 `main`에서 수동 실행하면 GitHub 호스팅 runner에서 Windows 설치기, lint·typecheck·전체 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64·arm64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행 검사에 성공하면 Agent `latest` 별칭을 갱신한다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. Actions의 패키지 쓰기 권한은 Agent 게시 작업에만 필요하다.
+`main` push 또는 [Publish and deploy](../.github/workflows/deploy.yml)를 `main`에서 수동 실행하면 GitHub 호스팅 runner에서 Windows 설치기, lint·typecheck·전체 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행 검사에 성공하면 Agent `latest` 별칭을 갱신한다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. Actions의 패키지 쓰기 권한은 Agent 게시 작업에만 필요하다.
 
 이어 미니 PC의 self-hosted runner가 같은 커밋에서 서버 이미지를 직접 빌드하고 로컬 Docker에 적재한다. 서버 이미지에는 검증한 Agent digest가 내장된다. 빌더는 CPU 2개·메모리 4GiB로 제한하고 BuildKit 캐시를 유지한다. DB 준비·웹·readiness·정상 종료·Agent 버전·배포 SHA를 임시 컨테이너에서 검사한 뒤에만 `quant-platform:sha-<커밋 SHA>` 태그를 붙이고 정확한 이미지 ID로 서버를 교체한다. 성공 후 `quant-platform:local`도 같은 이미지로 지정한다. 서버 이미지는 레지스트리에 게시하거나 레지스트리에서 내려받지 않는다.
 

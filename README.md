@@ -150,7 +150,7 @@ bash scripts/server.sh logs
 
 운영 웹의 **설정 → Agent**에서 장치 이름을 입력해 연결 토큰을 발급한다. 토큰을 발급하면 해당 장치용 **Windows Docker Desktop 설치 파일**을 다운로드할 수 있다. 토큰은 한 번만 표시되며 설치 파일 안에 포함되므로 파일과 토큰을 안전하게 보관한다.
 
-다운로드한 `quant-agent-windows.cmd`를 Windows에서 실행한다. 설치기는 Docker Desktop을 설치하거나 시작하고, Linux 엔진을 확인한 뒤 설치 파일에 지정된 GHCR 이미지를 내려받아 Agent 컨테이너를 시작한다. Windows 기능 설정, UAC, Docker Desktop 최초 약관 동의 또는 재부팅 안내가 나오면 해당 절차를 마친 뒤 **같은 CMD 파일을 다시 실행**한다. Windows x64와 ARM64를 지원하며 장치에 맞는 Linux amd64 또는 arm64 이미지를 선택한다.
+다운로드한 `quant-agent-windows.cmd`를 Windows에서 실행한다. 설치기는 Docker Desktop을 설치하거나 시작하고, Linux 엔진을 확인한 뒤 설치 파일에 지정된 GHCR 이미지를 내려받아 Agent 컨테이너를 시작한다. Windows 기능 설정, UAC, Docker Desktop 최초 약관 동의 또는 재부팅 안내가 나오면 해당 절차를 마친 뒤 **같은 CMD 파일을 다시 실행**한다. Windows x64를 지원하며 Linux amd64 이미지를 사용한다.
 
 장치가 운영 서버의 HTTPS 주소에 접근할 수 있어야 한다. 인바운드 포트는 필요 없다. 설치기와 컨테이너 동작은 [Windows 설치·이미지 관리 상세](docs/AGENT_OPERATIONS.md#windows-docker-desktop)를 참고한다.
 

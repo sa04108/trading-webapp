@@ -5,7 +5,7 @@ $template = [IO.File]::ReadAllText($templatePath)
 $marker = '#__AGENT_POWERSHELL_PAYLOAD__'
 $root = Join-Path ([IO.Path]::GetTempPath()) ("quant-agent-installer-" + [guid]::NewGuid().ToString('N'))
 $savedEnvironment = @{}
-foreach ($key in @('ProgramFiles', 'LOCALAPPDATA', 'Path', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS_VERIFY', 'DOCKER_TLS', 'DOCKER_CERT_PATH', 'QUANT_AGENT_SERVER_URL', 'QUANT_AGENT_TOKEN', 'QUANT_AGENT_INSTALLER')) {
+foreach ($key in @('ProgramFiles', 'LOCALAPPDATA', 'Path', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS_VERIFY', 'DOCKER_TLS', 'DOCKER_CERT_PATH', 'QUANT_AGENT_SERVER_URL', 'QUANT_AGENT_TOKEN', 'QUANT_AGENT_INSTALLER', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITEW6432')) {
   $savedEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
 }
 
@@ -39,7 +39,10 @@ function docker {
       if ($script:ContextFailures -gt 0) { $script:ContextFailures--; $script:LASTEXITCODE = 1; return }
       return 'npipe:////./pipe/dockerDesktopLinuxEngine'
     }
-    'info --format' { return 'linux' }
+    'info --format' {
+      if ($parts -contains '{{.Architecture}}') { return $script:EngineArchitecture }
+      return 'linux'
+    }
     'pull ghcr.io/sa04108/quant-agent:latest' {
       if ($parts[-1] -ne 'ghcr.io/sa04108/quant-agent:latest') { throw "Pull must receive the configured image: $($parts -join ' ')" }
       if ($script:FailPull) { $script:LASTEXITCODE = 1 }
@@ -118,6 +121,8 @@ try {
   $env:DOCKER_CERT_PATH = 'C:\old-certs'
   $env:QUANT_AGENT_SERVER_URL = 'https://old.example'
   $env:QUANT_AGENT_TOKEN = 'old-token'
+  $env:PROCESSOR_ARCHITECTURE = 'x86'
+  $env:PROCESSOR_ARCHITEW6432 = 'AMD64'
   $installerEnvironment = @{}
   foreach ($key in @('Path', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_TLS_VERIFY', 'DOCKER_TLS', 'DOCKER_CERT_PATH', 'QUANT_AGENT_SERVER_URL', 'QUANT_AGENT_TOKEN')) {
     $installerEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
@@ -135,6 +140,7 @@ try {
   $script:ExistingContainer = $false
   $script:ExistingVolume = $false
   $script:FailPull = $false
+  $script:EngineArchitecture = 'x86_64'
   $script:ContextFailures = 2
   $script:RanContainer = $false
   $script:RunSawExpectedEnvironment = $false
@@ -159,6 +165,18 @@ try {
   if (-not $failedAsExpected) { throw 'A pull failure should stop the install.' }
   if ($script:Calls | Where-Object { $_ -match ' (stop|rm) quant-agent-' }) { throw 'A pull failure must preserve the existing container.' }
   if ($script:RanContainer) { throw 'A pull failure must prevent replacement container start.' }
+
+  foreach ($scenario in @('host', 'engine')) {
+    $script:Calls = @()
+    $script:FailPull = $false
+    $env:PROCESSOR_ARCHITEW6432 = ''
+    if ($scenario -eq 'host') { $env:PROCESSOR_ARCHITECTURE = 'ARM64' }
+    else { $env:PROCESSOR_ARCHITECTURE = 'AMD64'; $script:EngineArchitecture = 'aarch64' }
+    $message = ''
+    try { Invoke-InstallerFromHybrid $installerPath } catch { $message = $_.Exception.Message }
+    if ($message -notmatch 'x64') { throw "Unsupported $scenario architecture should produce an x64 error." }
+    if ($script:Calls | Where-Object { $_ -match ' (pull|stop|rm|run) ' }) { throw "Unsupported $scenario architecture must preserve the existing container and avoid pulling." }
+  }
 
   Write-Output 'Windows Agent installer mock scenarios passed.'
 } finally {
