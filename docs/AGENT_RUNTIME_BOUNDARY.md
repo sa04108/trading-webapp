@@ -4,7 +4,7 @@
 
 배포 Git SHA는 **어떤 커밋을 게시했는지 보여 주는 출처 정보**다. 데이터 캐시의 유효성,
 agent 최신 여부, 백테스트 결과의 호환성, 기간 검증의 일관성은 별도 버전으로 판단한다.
-공식 배포는 서버 코드와 GHCR Agent 이미지를 게시한다. standalone 서버 배포는 사용자용 native agent archive를 만들거나 게시하지 않는다.
+공식 배포는 서버와 Agent 컨테이너 이미지를 게시한다. 서버용 tar 배포와 사용자용 native Agent archive는 제공하지 않는다.
 웹 화면이나 인증 서비스만 바뀌면 기존 agent와 미리보기를 계속 사용할 수 있다.
 
 ## 물리적 경계
@@ -40,10 +40,8 @@ agent는 `migrations/agent`로 작업 DB를 만들고 서버가 게시한 계산
 
 ## 전용 빌드와 패키지
 
-권장 분리 순서에 따라 전용 진입점, 공유 코드 이동, 경계 검사, 내용 기반 버전을 적용했다.
-
 `tsconfig.agent.json`의 진입점은 agent CLI와 세 계산 worker다. worker는 파일 경로로
-fork되므로 import 그래프 외에 명시적으로 등록한다. `scripts/build-agent-client.mjs`는 Docker 내부 런타임 builder로 `dist/agent-runtime/quant-agent-runtime-linux-{x64|arm64}.tar.gz`와 manifest를 만든다. 이 archive는 서버 배포 archive나 사용자 다운로드로 전달하지 않는다. `scripts/lib/runtime-graph.mjs`는
+fork되므로 import 그래프 외에 명시적으로 등록한다. `scripts/build-agent-client.mjs`는 Docker 내부 런타임 builder로 `dist/agent-runtime/quant-agent-runtime-linux-{x64|arm64}.tar.gz`와 manifest를 만든다. 이 archive는 사용자 다운로드로 전달하지 않는다. `scripts/lib/runtime-graph.mjs`는
 타입 전용 import를 제거한 실행 그래프를 추적한다. builder는 전용 컴파일 결과에서
 그 그래프에 속한 JS만 복사하고, 서버·웹 디렉터리가 들어오면 실패한다.
 소스맵과 서버 전용 worker도 제외한다.
@@ -65,7 +63,7 @@ pnpm test:agent-package
 아키텍처 검사는 agent/runtime에서 server·web·서버 전용 worker로 향하는 import를 금지한다.
 `test:agent-package`는 내부 archive를 저장소 밖에 풀어 포함 파일·의존성·다섯 작업 테이블을
 검사하고, 동봉 Node와 compiled agent로 준비→백테스트→서버 결과 저장을 실행한다. GHCR 이미지
-게시 workflow의 버전 준비 단계에서 Docker build/push 전에 수행한다. standalone 서버 배포에는 포함하지 않는다.
+게시 workflow의 버전 준비 단계에서 Docker build/push 전에 수행한다. 서버 운영 도구는 패키지를 다시 빌드하지 않고 검증된 이미지를 사용한다.
 
 ## 독립 버전
 
@@ -108,10 +106,11 @@ CI와 이미지 빌드의 Node 버전은 `.node-version`으로 맞추고, 빌드
 서버 빌드에서 산출한 값과 다르면 게시하지 않는다. 이미지 digest는 배포 산출물 식별자이고
 agentVersion은 서버와의 실행 호환성 기준이다.
 
-컨테이너는 환경변수의 서버 주소·토큰으로 직접 `run`하며 systemd 설치나 실행 파일의
-자체 교체를 수행하지 않는다. UPDATE_REQUIRED를 받으면 기존 리스를 정리하고 최신 이미지
-설치를 기다린다. Windows CMD 설치기는 latest를 새로 pull한 뒤 컨테이너를 재생성한다. 토큰을 발급해야 설치 파일을 받을 수 있으며, 사용자는 같은 파일을 다시 실행해 업데이트한다. latest와 previous
-두 이미지 릴리스를 보존하되 복구 시 서버도 같은 agentVersion으로 맞춰야 한다.
+컨테이너는 환경변수의 서버 주소·토큰으로 직접 `run`하며 자체 교체를 수행하지 않는다.
+버전 불일치 시 리스를 정리하고 사용자가 현재 서버에서 받은 Windows CMD 설치 파일을
+실행할 때까지 기다린다. 서버 이미지는 함께 검증한 Agent 이미지 digest를 기본으로
+포함하며, 설치 파일은 생성 당시의 이미지 참조를 담는다. 운영 절차는
+[계산 에이전트 운영](AGENT_OPERATIONS.md)을 따른다.
 
 ## 수집 계약과 실제 데이터
 
@@ -120,19 +119,19 @@ agentVersion은 서버와의 실행 호환성 기준이다.
 `collectionVersion`을 별도로 기록한다. 수집 버전이 바뀌면 데이터 revision이 같아도
 새 스냅샷 명세를 게시한다. 이전 임대가 참조하는 스냅샷은 유지한다.
 
-D-096·D-098에 따라 NULL·이전 실행 해시 coverage도 완료 근거로 재사용한다. KRX 구간은
+NULL·이전 실행 해시 coverage도 완료 근거로 재사용한다. KRX 구간은
 겹침·인접 구간만 합치고 실제 미수집 날짜는 남긴다. DART는 구조가 호환되는 프로토콜을
 버전 번호와 무관하게 읽고 기존 manifest의 fact count/content hash·gap 검사를 유지한다.
 manifest가 없는 legacy 재무 coverage는 해당 연도의 실제 재무 fact가 있어야 재사용한다.
-D-109의 재무 프로토콜 3은 blocking gap의 계정·공시 시점·종류와 해시를 추가한다.
+재무 프로토콜 3은 blocking gap의 계정·공시 시점·종류와 해시를 추가한다.
 이 상세 정보가 없는 이전 blocking 연도만 저장 원문에서 한 번 재생하고 정상 manifest는
 재사용한다. 정상 결측은 전략·PER/ROE 선정의 사용 시점에 후보에서 건너뛰며, 수집 미완료·
 실제 무결성 오류와 분할 보정 오류의 검사는 유지한다.
 자본변동 legacy coverage는 기록된 완료 연도와 gap을 보존한다. 서버 수집 큐의 중복 제거 키는 실행 해시를 제외한 정규화 요청 범위다.
-D-099에 따라 필요한 원문 결손·손상·정정은 요청 키와 근거 fingerprint별로 자동 수집한다. 물리
+필요한 원문 결손·손상·정정은 요청 키와 근거 fingerprint별로 자동 수집한다. 물리
 시도 이력은 보존한다. 연결 실패·HTTP 5xx는 5회 전까지 지수 지연으로 자동 예약하며, 5회 뒤에는
 `WAITING_RETRY`와 `retry_after_ms`로 15분 후 다음 5회를 자동 예약한다. 목록과 본문의
-접수번호 차이로 `PENDING_PUBLICATION`을 만들지 않는다(D-102). 정체성 불일치·해석 불가
+접수번호 차이로 `PENDING_PUBLICATION`을 만들지 않는다. 정체성 불일치·해석 불가
 공시는 범위를 차단하고 호출 한도·네트워크 오류의 재시도 정책은 유지한다.
 
 기존 agent 패키지와 임대의 `collectionVersion`이 달라도 그 사실만으로 수집하지 않는다.
@@ -161,7 +160,7 @@ agent는 계산 DB의 이 사유만 읽고 운영 DB의 공시·endpoint 체크�
 게시 대기 체크포인트를 제거한다. 실제 해석 오류·호출 한도·네트워크 재시도는 유지한다.
 
 공시 목록 확인은 사용자의 미리보기 시작에서 `list.json` 최대 2회(실제 HTTP 시도 기준),
-총 5초로 제한한다(D-098). 서버는 먼저 `WAITING_DATA/FILING_DISCOVERY` 작업을 반환하고
+총 5초로 제한한다. 서버는 먼저 `WAITING_DATA/FILING_DISCOVERY` 작업을 반환하고
 목록 확인 종료 뒤 `QUEUED`로 옮긴다. 실패·시간 초과·남은 페이지는 경고와 checkpoint로
 남기고 기존 DB로 계산한다. 이 단계는 저장 원문·기업코드 XML을 읽거나 재파싱하지 않는다.
 이번 목록의 종목·연도·보고서에 해당하는 접수번호와 수집 시각 메타데이터만 대조한다.
@@ -173,19 +172,12 @@ agent는 계산 DB의 이 사유만 읽고 운영 DB의 공시·endpoint 체크�
 서버 종료 시 내부 타이머와 조회를 중단한다. 서버 시작만으로 새 외부 조회를 만들지는 않으며,
 다음 미리보기에서 저장된 미완료 목록도 다시 이어받는다. 별도 카드·수동 조작 없이 기존 진행률만 노출한다.
 
-## Git SHA 사용처 전수 점검 결과
+## 실행 결과의 출처와 무결성
 
-| 이전 사용처 | 현재 기준 |
-| --- | --- |
-| agent HELLO와 서버 요구 버전 비교 | 프로토콜 3의 `agentVersion` |
-| 최신 명세·설치 디렉터리·패키지 내부 버전 | `agentVersion` |
-| 백테스트 임대 및 결과 import의 SHA 일치 검사 | `executionVersion` |
-| 미리보기 `2:<git sha>` 캐시 표식 | `previewVersion` + 데이터 revision |
-| 기간 검증 생성·재개·하위 결과의 SHA 일치 검사 | `executionVersion`, `validationVersion` |
-| health·운영 화면의 배포 커밋 표시 | Git SHA 유지 |
-| 실행 결과·실험의 출처 기록 | 실제 실행 패키지의 Git SHA 유지 |
-| 서버 release 이름·배포 메타데이터 | Git SHA 유지 |
-| archive·데이터 무결성, 임대 토큰의 SHA-256 | 원래 목적 유지; Git 버전과 무관 |
+Git SHA는 상태 화면·실행 결과의 배포 출처에 사용한다. Agent 연결은 `agentVersion`,
+결과 반영은 `executionVersion`, 미리보기 재사용은 `previewVersion`과 데이터 revision,
+기간 검증은 `executionVersion`과 `validationVersion`을 기준으로 한다. 파일 checksum과
+임대 토큰의 SHA-256은 무결성·인증 용도이며 계산 코드 버전과 구분한다.
 
 `ENGINE_VERSION`, 전략의 명시적 버전, 데이터셋 ID/revision, DB 스키마 버전, 통신 규약 버전은
 각자의 의미를 유지한다. 실행 코드 해시는 명시적 버전을 올리지 않은 구현 변경도 감지한다.
@@ -198,18 +190,6 @@ manifest의 경고 요약은 최대 1,000개·항목당 4,000자를 유지한다
 다운로드한다. 과거 결과는 기존 `warnings_json`을 원문으로 제공한다.
 기존 결과·기간 검증의 새 컬럼은 NULL로 두어 출처를 만들어 내지 않는다. 과거 이력 조회는
 가능하지만 새 기간 검증은 현재 실행 버전으로 만든 원본에서 시작해야 한다.
-
-## 설치 기준
-
-외부 에이전트는 Windows Docker Desktop에서 GHCR의 Linux 컨테이너로 실행한다. 연결 토큰을
-발급한 사용자는 해당 토큰이 포함된 Windows CMD 설치 파일을 다운로드할 수 있다. 설치 파일은
-`QUANT_AGENT_SERVER_URL`·`QUANT_AGENT_TOKEN`을 컨테이너 환경변수로 전달하고 named volume을
-상태 경로로 연결한다. 사용자가 Linux/WSL2에 직접 설치·설정·업데이트하는 경로는 제공하지 않는다.
-
-이미지 안의 `agentVersion`은 서버와 통신할 실행 호환성 기준이며 이미지 digest는 배포 산출물의
-식별자다. 서버와 버전이 다르면 작업을 중단하고 최신 Windows CMD 설치 파일을 다시 실행하도록
-안내한다. 기존 native 패키지나 임대의 `collectionVersion`이 달라도 그 사실만으로 수집하지 않는다.
-
 
 ## 유니버스 선정 분산
 

@@ -1,12 +1,11 @@
 /**
- * KRX Open API 실응답 smoke test (REVIEW §11.4, §12-4 · Task 16).
+ * KRX Open API 실응답 smoke test.
  *
  *   pnpm exec tsx scripts/krx-smoke.ts --date 2016-01-04 --years 2010,2015,2020,2025
  *
  * 단위·통합 테스트는 고정 fixture 로 계약·필터·조인 로직을 검증하지만, KRX 실응답이
  * 그 fixture 와 실제로 같은 모양인지는 인증키가 있어야만 확인할 수 있다. 이 스크립트는
- * 그 마지막 게이트다 — 통과 전에는 과거 유니버스 기능을 실서비스에 열지 않는다
- * (REVIEW §12-4, docs/DECISIONS.md D-040).
+ * 실응답을 진단하는 별도 도구이며 실제 API 호출 예산을 사용한다.
  *
  * 계약 파싱(krx-contract.ts)과 분류 정책(krx-filter-policy.ts)은 그대로 import 해서
  * 쓴다 — 같은 로직을 이 파일에 다시 옮기면 두 곳이 갈라질 수 있다. 이 스크립트가
@@ -14,10 +13,8 @@
  * (2) 계약·정책이 통과시킨 뒤에도 남는 진단 정보(조인 무결성 개수, 연도별 분류값
  * 목록, 호출 수)를 세는 것뿐이다.
  *
- * 이 파일을 작성한 환경에는 KRX 인증키가 없어 실호출로 검증하지 못했다. 로컬에서
- * 확인한 것은 실행 구조뿐이다: `--help` 출력과 KRX_API_KEY 없이 실행했을 때의
- * 안내+exit 1. 실응답 대조는 인증키 발급 후 사람이 한 번 돌려 확인해야 한다
- * (남은 외부 게이트, REVIEW §12-2·4).
+ * 실행에는 유효한 KRX 인증키가 필요하다. 호출 대상과 날짜를 확인한 뒤 수동 실행하며,
+ * 인증키 없는 일반 회귀 테스트와 구분한다.
  */
 import { pino } from 'pino';
 import { createKrxHistoricalUniverseSource } from '../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
@@ -42,7 +39,7 @@ import { systemClock } from '../src/runtime/shared/clock.js';
 
 const MARKETS: readonly KrxMarket[] = ['KOSPI', 'KOSDAQ'];
 
-// REVIEW §4.2 — 완전한 거래소 휴장일 달력이 없어 이전 거래일 탐색을 최대 31일로 제한한다.
+// 실응답에서 이전 거래일을 찾는 탐색 범위는 최대 31일로 제한한다.
 // 운영 서비스(historical-universe-service.ts)의 규칙을 그대로 되풀이한 값이다.
 const MAX_TRADING_DAY_SEARCH = 31;
 
@@ -62,7 +59,7 @@ interface CheckResult {
 const USAGE = `사용법: pnpm exec tsx scripts/krx-smoke.ts [--date YYYY-MM-DD] [--years y1,y2,...]
 
 KRX Open API 네 서비스(KOSPI·KOSDAQ 종목기본정보·일별매매정보)의 실응답이 계약
-v1(krx-contract.ts)·필터 정책(krx-filter-policy.ts)과 맞는지 확인한다 (REVIEW §11.4).
+v1(krx-contract.ts)·필터 정책(krx-filter-policy.ts)과 맞는지 확인한다.
 
 옵션:
   --date <YYYY-MM-DD>   상장폐지 포함·조인 무결성을 확인할 기준일 (기본 2016-01-04)
@@ -72,7 +69,7 @@ v1(krx-contract.ts)·필터 정책(krx-filter-policy.ts)과 맞는지 확인한�
 필수 환경변수: KRX_API_KEY (없으면 즉시 안내하고 exit 1)
 선택 환경변수: KRX_BASE_URL(기본 https://data-dbg.krx.co.kr), KRX_APPROVAL_EXPIRY
 
-실패 항목이 하나라도 있으면 exit 1로 끝난다 — 통과 전에는 실서비스 사용을 열지 않는다.`;
+실패 항목이 하나라도 있으면 exit 1로 끝난다.`;
 
 interface Args {
   readonly date: string;
@@ -163,7 +160,7 @@ function mergeJoinSummaries(summaries: readonly JoinIntegritySummary[]): JoinInt
   };
 }
 
-/** REVIEW §4.2 — 최신 전 거래일 데이터는 다음 날 08시(KST) 이후 공개된다는 안내를 반영한다. */
+/** 최신 전 거래일 데이터는 다음 날 08시(KST) 이후 공개된다는 안내를 반영한다. */
 function publishedThroughDate(nowMs: number): string {
   const yesterday = addCalendarDays(kstDateOf(nowMs), -1);
   return kstHourOf(nowMs) < 8 ? addCalendarDays(yesterday, -1) : yesterday;
@@ -446,7 +443,7 @@ async function main(): Promise<void> {
   if (!apiKey) {
     console.error('KRX_API_KEY 가 설정되지 않았습니다.');
     console.error('KRX Open API 인증키를 발급받고 KOSPI·KOSDAQ 종목기본정보·일별매매정보 네 API 이용 승인을 받은 뒤,');
-    console.error('KRX_API_KEY 환경변수로 설정하고 다시 실행하세요 (infra/app.env.example 참고).');
+    console.error('KRX_API_KEY 환경변수로 설정하고 다시 실행하세요 (config.env.example 참고).');
     console.error('선택: KRX_BASE_URL(기본 https://data-dbg.krx.co.kr), KRX_APPROVAL_EXPIRY(YYYY-MM-DD)도 함께 설정할 수 있습니다.');
     process.exitCode = 1;
     return;
@@ -521,7 +518,7 @@ async function main(): Promise<void> {
     '6',
     '엔드포인트별 최다 호출 수',
     'INFO',
-    `오늘 최다 ${maxEndpointCalls}회 (엔드포인트당 일일 한도 10,000회, REVIEW §10)`,
+    `오늘 최다 ${maxEndpointCalls}회 (엔드포인트당 일일 한도 10,000회)`,
   );
 
   const failed = results.filter((result) => result.status === 'FAIL');

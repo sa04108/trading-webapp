@@ -11,6 +11,14 @@ interface Running {
   closed: Promise<void>; deadline: NodeJS.Timeout;
 }
 
+/** 작은 서버의 기존 한도를 유지하면서 큰 장치의 보조 계산 예산을 확장한다. */
+export function universeHelperBudget(budgetBytes: number): { budgetBytes: number; heapMb: number } {
+  const budget = budgetBytes <= 512 * 1024 ** 2
+    ? Math.min(budgetBytes, 320 * 1024 ** 2)
+    : Math.min(budgetBytes, 2 * 1024 ** 3);
+  return { budgetBytes: budget, heapMb: Math.max(128, Math.floor(budget * 0.4 / 1024 ** 2)) };
+}
+
 /** 작은 보조 계산도 슬롯·RSS·스냅샷 수명에 포함한다. 부모 준비 리스의 토큰은 전달하지 않는다. */
 export class AgentUniverseTasks {
   private readonly running = new Map<string, Running>();
@@ -36,11 +44,12 @@ export class AgentUniverseTasks {
       this.reply(task, { status: "UNAVAILABLE" });
       return;
     }
+    const helperBudget = universeHelperBudget(resources.budgetBytes);
     let child: ChildProcess;
     try {
       const ts = import.meta.url.endsWith(".ts");
       child = fork(fileURLToPath(new URL(`../runtime/workers/universe-child.${ts ? "ts" : "js"}`, import.meta.url)), [], {
-        execArgv: ["--max-old-space-size=128", "--max-semi-space-size=4", ...(ts ? ["--import", "tsx"] : [])],
+        execArgv: [`--max-old-space-size=${helperBudget.heapMb}`, "--max-semi-space-size=4", ...(ts ? ["--import", "tsx"] : [])],
         env: { NODE_ENV: "production" }, stdio: ["ignore", "ignore", "ignore", "ipc"],
       });
     } catch {
@@ -49,7 +58,7 @@ export class AgentUniverseTasks {
     }
     let pending: UniverseComputeReply | undefined;
     let complete!: () => void;
-    const running: Running = { task, child, budgetBytes: Math.min(resources.budgetBytes, 320 * 1024 ** 2), peakRss: 0,
+    const running: Running = { task, child, budgetBytes: helperBudget.budgetBytes, peakRss: 0,
       closed: new Promise<void>((resolve) => { complete = resolve; }),
       deadline: setTimeout(() => child.kill("SIGKILL"), Math.min(UNIVERSE_COMPUTE_TIMEOUT_MS, task.deadlineMs - Date.now())),
     };

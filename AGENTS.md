@@ -13,7 +13,7 @@ These instructions apply repository-wide.
 - Optimize total cost to a verified result, including delegation, retries, integration, and repair. Do not weaken correctness, security, compatibility, or required verification to reduce tokens.
 - For nontrivial work, establish scope, invariants, acceptance checks, and dependency order before editing. Keep planning proportional to uncertainty and failure impact; small tasks do not require separate planning documents.
 - Use deterministic tools for mechanical edits and generated files, and review their output. Read relevant code and documentation progressively. Save verbose logs and inspect summaries, failures, and necessary context without hiding errors.
-- Consult relevant sections of `docs/AGENT_RUNTIME_BOUNDARY.md` for product runtime/version changes, `docs/AGENT_OPERATIONS.md` for packaging/deployment, and `docs/SPEC.md` / `docs/DECISIONS.md` for requirements or compatibility decisions. These are lookup routes, not a mandatory reading list.
+- Consult relevant sections of `docs/AGENT_RUNTIME_BOUNDARY.md` for product runtime/version changes, `docs/AGENT_OPERATIONS.md` for agent operation and recovery, `docs/DOCKER_SERVER.md` for server deployment, and `docs/SPEC.md` for requirements and compatibility contracts. These are lookup routes, not a mandatory reading list.
 
 ## Subagents
 
@@ -51,6 +51,7 @@ These instructions apply repository-wide.
 - Stage only task-owned changes by explicit path or hunk, and inspect the entire staged diff before committing.
 - Exclude temporary verification code and generated data from commits; permanent test admission follows the criteria above.
 - Complete authorized implementation work through integration into `devel`, not just a task-branch push. Push the verified task branch, review the final diff, satisfy required checks and branch protections, and merge into `devel`. Do not bypass review requirements or failed checks. If no CI covers a required check, run it locally and report the evidence and limitation.
+- Prefer fast-forward integration into `devel` with `git merge --ff-only`, preserving individual commits. If histories diverge, rebase only the task branch onto the latest `origin/devel`, rerun affected checks, then fast-forward. Do not squash, create merge commits on `devel`, or rewrite published `devel` history.
 - Before merging, refresh `devel` and check for intervening changes. If integration changes tested inputs, resolve conflicts and rerun affected checks. If pushing or merging is blocked, preserve the work and report the concrete blocker.
 - After a confirmed merge, update the primary checkout to `devel` and remove this task's merged local/remote branches and clean dedicated worktrees. Verify merged commits and clean status before removal; preserve unrelated branches, worktrees, and uncommitted work, and never remove the primary workspace. Do not finish with an abandoned task branch when cleanup is possible.
 - Merging into `devel` does not itself authorize pushing to `main` or deploying production.

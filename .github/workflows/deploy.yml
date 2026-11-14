@@ -1,10 +1,11 @@
-name: Deploy production
-run-name: Deploy production · ${{ github.sha }}
+name: Publish images
+run-name: Publish images · ${{ github.sha }}
 
 on:
-  push:
-    branches:
-      - main
+  # 서버 이전 동안 main 병합·push에 따른 자동 이미지 게시를 중지한다.
+  # push:
+  #   branches:
+  #     - main
   workflow_dispatch:
 
 permissions:
@@ -30,58 +31,52 @@ jobs:
         shell: powershell
         run: ./tests/windows/agent-installer.test.ps1
 
-  deploy:
+  publish:
     needs: windows-installer
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    environment: env-for-deploy
     defaults:
       run:
         shell: bash
     steps:
-      - name: Checkout deployment commit
+      - name: Checkout release commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-
       - name: Set up Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: .node-version
           package-manager-cache: false
-
       - name: Activate repository package manager
         run: |
           npm install --global corepack@0.34.6
           corepack enable
-          node --version
-          pnpm --version
-
-      - name: Prepare Agent image version
-        id: agent-version
-        run: |
           pnpm install --frozen-lockfile
-          node -e 'const fs=require("node:fs"); const {execFileSync}=require("node:child_process"); const versions=JSON.parse(execFileSync(process.execPath,["scripts/build-runtime-versions.mjs","--print"],{encoding:"utf8"})); fs.appendFileSync(process.env.GITHUB_OUTPUT,`version=${versions.agentVersion}\nnode=${fs.readFileSync(".node-version","utf8").trim()}\n`);'
+      - name: Validate release
+        id: versions
+        run: |
+          pnpm lint
+          pnpm typecheck
+          pnpm test:all
+          pnpm build
           pnpm build:agent
           pnpm test:agent-package
-
+          node -e 'const fs=require("node:fs"); const {execFileSync}=require("node:child_process"); const versions=JSON.parse(execFileSync(process.execPath,["scripts/build-runtime-versions.mjs","--print"],{encoding:"utf8"})); fs.appendFileSync(process.env.GITHUB_OUTPUT,`version=${versions.agentVersion}\nnode=${fs.readFileSync(".node-version","utf8").trim()}\n`);'
       - name: Set up ARM image builds
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: arm64
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-
       - name: Authenticate to GHCR
         env:
           GHCR_TOKEN: ${{ github.token }}
           GHCR_USER: ${{ github.actor }}
         run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
-
-      - name: Build and stage Agent image
+      - name: Build Agent image
         id: agent-build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
@@ -89,89 +84,37 @@ jobs:
           file: infra/agent/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ghcr.io/sa04108/quant-agent:v-${{ steps.agent-version.outputs.version }}
+          tags: ghcr.io/sa04108/quant-agent:v-${{ steps.versions.outputs.version }}
           build-args: |
-            NODE_VERSION=${{ steps.agent-version.outputs.node }}
+            NODE_VERSION=${{ steps.versions.outputs.node }}
             BUILD_GIT_SHA=${{ github.sha }}
-            AGENT_VERSION=${{ steps.agent-version.outputs.version }}
-
-      - name: Verify final Agent container
+            AGENT_VERSION=${{ steps.versions.outputs.version }}
+      - name: Verify Agent container
         env:
           AGENT_DIGEST: ${{ steps.agent-build.outputs.digest }}
         run: docker run --rm --init --mount "type=bind,source=$PWD/tests/helpers/container-agent-smoke.mjs,target=/tmp/container-agent-smoke.mjs,readonly" --entrypoint node "ghcr.io/sa04108/quant-agent@$AGENT_DIGEST" /tmp/container-agent-smoke.mjs
-
-      - name: Prepare SSH deployment settings
+      - name: Build server image
+        id: server-build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: infra/server/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/sa04108/quant-platform:sha-${{ github.sha }}
+          build-args: |
+            NODE_VERSION=${{ steps.versions.outputs.node }}
+            BUILD_GIT_SHA=${{ github.sha }}
+            AGENT_CONTAINER_IMAGE=ghcr.io/sa04108/quant-agent@${{ steps.agent-build.outputs.digest }}
+      - name: Verify server container
         env:
-          DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ vars.DEPLOY_USER }}
-          DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        run: |
-          if [[ ! "$DEPLOY_HOST" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
-            echo '::error::DEPLOY_HOST에 호스트 이름 또는 IPv4 주소를 설정하세요.'
-            exit 1
-          fi
-          if [[ ! "$DEPLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]]; then
-            echo '::error::DEPLOY_USER에 SSH 접속 계정을 설정하세요.'
-            exit 1
-          fi
-          if [[ ! "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]] || ((10#$DEPLOY_PORT < 1 || 10#$DEPLOY_PORT > 65535)); then
-            echo '::error::DEPLOY_PORT는 1부터 65535 사이여야 합니다.'
-            exit 1
-          fi
-          if [[ -z "$DEPLOY_SSH_KEY" || -z "$DEPLOY_KNOWN_HOSTS" ]]; then
-            echo '::error::production 환경에 DEPLOY_SSH_KEY와 DEPLOY_KNOWN_HOSTS Secret을 설정하세요.'
-            exit 1
-          fi
-
-          umask 077
-          ssh_dir="$RUNNER_TEMP/quant-platform-deploy-ssh"
-          mkdir -p "$ssh_dir"
-          printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > "$ssh_dir/id_deploy"
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" | tr -d '\r' > "$ssh_dir/known_hosts"
-          chmod 600 "$ssh_dir/id_deploy" "$ssh_dir/known_hosts"
-          # 비대화형 배포에 사용할 수 있는 키인지, 대상 서버의 신원이 등록되어 있는지 확인한다.
-          ssh-keygen -y -P '' -f "$ssh_dir/id_deploy" > /dev/null
-          known_host="$DEPLOY_HOST"
-          if ((10#$DEPLOY_PORT != 22)); then
-            known_host="[$DEPLOY_HOST]:$((10#$DEPLOY_PORT))"
-          fi
-          if ! ssh-keygen -F "$known_host" -f "$ssh_dir/known_hosts" > /dev/null; then
-            echo '::error::DEPLOY_KNOWN_HOSTS에 배포 호스트와 포트에 맞는 서버 키가 없습니다.'
-            exit 1
-          fi
-
-          printf 'HOST=%s\nSSH_USER=%s\nSSH_KEY="%s"\nSSH_PORT=%s\nSSH_HOST_KEY=yes\nSSH_OPTS=-o UserKnownHostsFile="%s"\n' \
-            "$DEPLOY_HOST" "$DEPLOY_USER" "$ssh_dir/id_deploy" "$DEPLOY_PORT" "$ssh_dir/known_hosts" > deploy.env
-
-      - name: Verify, package and deploy
-        id: deploy-production
+          SERVER_DIGEST: ${{ steps.server-build.outputs.digest }}
+          EXPECTED_AGENT_VERSION: ${{ steps.versions.outputs.version }}
+        run: docker run --rm --init --env EXPECTED_AGENT_VERSION --mount "type=bind,source=$PWD/tests/helpers/container-server-smoke.mjs,target=/tmp/container-server-smoke.mjs,readonly" --entrypoint node "ghcr.io/sa04108/quant-platform@$SERVER_DIGEST" /tmp/container-server-smoke.mjs
+      - name: Promote verified image aliases
         env:
-          LOG: ${{ runner.temp }}/quant-platform-deploy.log
-        run: pnpm run deploy
-
-      - name: Publish latest Agent and retain previous release
-        id: agent-publish
-        env:
-          AGENT_IMAGE: ghcr.io/sa04108/quant-agent
-          GH_TOKEN: ${{ github.token }}
           AGENT_DIGEST: ${{ steps.agent-build.outputs.digest }}
-        run: node scripts/publish-agent-image.mjs --promote "$AGENT_DIGEST"
-
-      - name: Remove staged images after failed deployment
-        if: failure() && steps.agent-build.outcome == 'success' && steps.agent-publish.outcome == 'skipped'
-        env:
-          AGENT_IMAGE: ghcr.io/sa04108/quant-agent
-          GH_TOKEN: ${{ github.token }}
-        run: node scripts/publish-agent-image.mjs --prune-only
-
-      - name: Remove deployment credentials
-        if: ${{ always() }}
+          SERVER_DIGEST: ${{ steps.server-build.outputs.digest }}
         run: |
-          rm -f -- deploy.env \
-            "$RUNNER_TEMP/quant-platform-deploy-ssh/id_deploy" \
-            "$RUNNER_TEMP/quant-platform-deploy-ssh/known_hosts"
-          if [[ -d "$RUNNER_TEMP/quant-platform-deploy-ssh" ]]; then
-            rmdir -- "$RUNNER_TEMP/quant-platform-deploy-ssh"
-          fi
+          docker buildx imagetools create --tag ghcr.io/sa04108/quant-agent:latest "ghcr.io/sa04108/quant-agent@$AGENT_DIGEST"
+          docker buildx imagetools create --tag ghcr.io/sa04108/quant-platform:latest "ghcr.io/sa04108/quant-platform@$SERVER_DIGEST"

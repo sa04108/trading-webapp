@@ -1,9 +1,15 @@
 import fs from "node:fs";
+import { fork } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentClient, type AgentRuntimeAdapter } from "../../src/agent/client.js";
 import type { AgentLease, ServerAgentMessage } from "../../src/shared/agent-protocol.js";
+
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  fork: vi.fn(() => { throw new Error("test fork"); }),
+}));
 
 interface MemoryGuardRunning {
   cancellation: boolean;
@@ -159,6 +165,29 @@ describe("AgentClient 메모리 보호", () => {
       h.internals.capacity();
       expect(send.mock.calls.at(-1)?.[0]).toMatchObject({ type: "CAPACITY", slots: 1, maxBars: 2_000_000 });
     } finally { clock.mockRestore(); }
+  });
+
+  it("병렬 준비 자식에 스레드와 같은 힙 한도와 CPU 예산을 전달한다", () => {
+    const h = harness(true, false);
+    h.internals.running.clear();
+    h.runtime!.resources = () => ({ ...resources(false)(0), cpus: 3, slots: 1,
+      budgetBytes: 5 * 1024 ** 3, heapMb: 3328 });
+    vi.mocked(fork).mockClear();
+    h.internals.spawn(lease());
+    expect(fork).toHaveBeenCalledWith(expect.any(String), [], expect.objectContaining({
+      execArgv: expect.arrayContaining(["--max-old-space-size=426"]),
+      env: expect.objectContaining({ WORKER_BUDGET_BYTES: String(5 * 1024 ** 3), WORKER_CPU_BUDGET: "3" }),
+    }));
+    const sequential = harness(true, false);
+    sequential.internals.running.clear();
+    sequential.runtime!.resources = () => ({ ...resources(false)(0), cpus: 1, slots: 1,
+      budgetBytes: 5 * 1024 ** 3, heapMb: 3328 });
+    vi.mocked(fork).mockClear();
+    sequential.internals.spawn(lease());
+    expect(fork).toHaveBeenCalledWith(expect.any(String), [], expect.objectContaining({
+      execArgv: expect.arrayContaining(["--max-old-space-size=3328"]),
+      env: expect.objectContaining({ WORKER_CPU_BUDGET: "1" }),
+    }));
   });
 
   it("로컬 API 메모리 압력은 이미 취소 중인 워커도 즉시 종료한다", () => {

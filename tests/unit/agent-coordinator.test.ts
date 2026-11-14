@@ -11,6 +11,7 @@ import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.
 import type { AgentLease, ServerAgentMessage } from '../../src/shared/agent-protocol.js';
 import Fastify from 'fastify';
 import { registerAgentManagementRoutes } from '../../src/server/modules/agents/presentation/agent-routes.js';
+import { agentContainerImage, buildWindowsAgentInstaller } from '../../src/server/modules/agents/infrastructure/agent-windows-installer.js';
 
 function deferred<T = void>() {
   let resolve!: (value: T) => void;
@@ -317,6 +318,18 @@ describe('연결과 리스 수명 분리', () => {
 
   it('Windows 설치 파일은 웹 인증, 활성 Agent 토큰, HTTPS origin을 요구하고 비밀을 URL에 싣지 않는다', async ({ scenario }) => {
     const { ctx, id, token } = scenario;
+    const digestImage = `ghcr.io/sa04108/quant-agent@sha256:${'a'.repeat(64)}`;
+    const versionImage = `ghcr.io/sa04108/quant-agent:v-${'b'.repeat(64)}`;
+    for (const image of [digestImage, versionImage]) {
+      expect(agentContainerImage(image)).toBe(image);
+      const installer = buildWindowsAgentInstaller({ serverUrl: 'https://example.com', token, image });
+      const encoded = installer.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/)?.[1];
+      expect(JSON.parse(Buffer.from(encoded!, 'base64').toString('utf8')).image).toBe(image);
+    }
+    for (const image of ['ghcr.io/sa04108/quant-agent:other', `${digestImage};bad`, 'ghcr.io/sa04108/quant-agent@sha256:bad']) {
+      expect(() => agentContainerImage(image)).toThrow();
+      expect(() => buildWindowsAgentInstaller({ serverUrl: 'https://example.com', token, image })).toThrow();
+    }
     const unauthenticated = await ctx.app.inject({
       method: 'POST', url: '/api/v1/agents/install/windows',
       payload: { token, serverUrl: 'https://example.com' },

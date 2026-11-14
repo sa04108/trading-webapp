@@ -43,6 +43,9 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ APP_PORT: 'not-a-port' })).toThrow(ConfigError);
     expect(() => loadConfig({ APP_PORT: '99999' })).toThrow(ConfigError);
     expect(() => loadConfig({ LOG_LEVEL: 'verbose' })).toThrow(ConfigError);
+    for (const address of ['true', '*', '0.0.0.0/0', '::/0', '172.30.83.2/99']) {
+      expect(() => loadConfig({ TRUST_PROXY_ADDRESSES: address })).toThrow(ConfigError);
+    }
   });
 
 
@@ -50,9 +53,11 @@ describe('loadConfig', () => {
     const config = loadConfig({
       APP_PORT: '4100',
       LIVE_TRADING_ENABLED: 'true',
+      TRUST_PROXY_ADDRESSES: '172.30.83.2, 2001:db8::1/128',
     });
     expect(config.port).toBe(4100);
     expect(config.liveTradingEnabled).toBe(true);
+    expect(config.trustedProxyAddresses).toEqual(['172.30.83.2', '2001:db8::1/128']);
   });
 
   describe('DART 설정', () => {
