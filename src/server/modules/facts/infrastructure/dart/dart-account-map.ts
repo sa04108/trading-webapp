@@ -89,6 +89,8 @@ export function resolveAccount(
 ): DartAccountRule | null {
   // 일부 공시는 영업수익에 영업이익 태그를 잘못 사용한다.
   if (accountId.trim() === "dart_OperatingIncomeLoss" && accountName.replace(/\s/g, "") === "영업수익") return null;
+  // 계속·중단영업별 순이익은 전체 당기순이익이 아니므로 합계 태그가 붙어도 제외한다.
+  if (accountId.trim() === "ifrs-full_ProfitLoss" && /^(계속|중단)영업당기순이익(?:\(손실\))?$/.test(accountName.replace(/\s/g, ""))) return null;
   const byId = BY_ACCOUNT_ID[accountId.trim()];
   if (byId) return byId;
   return BY_ACCOUNT_NAME[accountName.replace(/\s/g, "")] ?? null;

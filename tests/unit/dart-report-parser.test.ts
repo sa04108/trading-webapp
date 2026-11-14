@@ -167,6 +167,30 @@ describe('parseFinancialRows — 누적값 차분', () => {
     ]);
   });
 
+  it('계속영업에 합계 태그가 붙어도 중단영업을 포함한 당기순이익으로 분기값을 계산한다', () => {
+    const partial = (report: DartReportCode, value: number): DartFinancialRow => ({
+      ...incomeRow(report, value), sj_div: 'CIS', account_id: 'ifrs-full_ProfitLoss', account_nm: '계속영업 당기순이익',
+    });
+    const total = (report: DartReportCode, value: number): DartFinancialRow => ({
+      ...partial(report, value), account_id: '-표준계정코드 미사용-', account_nm: '당기순이익',
+    });
+    const result = parseFinancialRows('000240', new Map([
+      ['11013', [partial('11013', 39851966905), total('11013', 42020542758)]],
+      ['11012', [total('11012', 141774715130), partial('11012', 139606139277)]],
+    ]));
+    expect(result.facts.filter(f => f.field === 'NET_INCOME').map(f => f.value)).toEqual([42020542758, 99754172372]);
+    expect(result.gaps.some(g => g.kind === 'CONFLICT')).toBe(false);
+    const taggedTotal = { ...partial('11013', 42020542758), account_nm: '계속영업과 중단영업 당기순이익' };
+    expect(parseFinancialRows('000240', new Map([['11013', [taggedTotal]]])).facts
+      .filter(f => f.field === 'NET_INCOME').map(f => f.value)).toEqual([42020542758]);
+    expect(parseFinancialRows('000240', new Map([['11013', [taggedTotal, total('11013', 42020542759)]]])).gaps)
+      .toContainEqual(expect.objectContaining({ field: 'NET_INCOME', kind: 'CONFLICT' }));
+    for (const name of ['계속영업 당기순이익', '중단영업 당기순이익']) {
+      expect(parseFinancialRows('000240', new Map([['11013', [{ ...partial('11013', 1), account_nm: name }]]])).facts
+        .filter(f => f.field === 'NET_INCOME')).toEqual([]);
+    }
+  });
+
   it('순이익은 IS 누적 차분을 거치고 자본총계는 BS 시점값으로 저장한다', () => {
     const netIncome = (report: DartReportCode, cumulative: number): DartFinancialRow => ({
       ...incomeRow(report, cumulative),
