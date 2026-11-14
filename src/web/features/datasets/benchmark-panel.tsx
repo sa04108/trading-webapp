@@ -10,6 +10,7 @@ import {
   YAxis,
 } from "recharts";
 import { toast } from "sonner";
+import { chartTooltipProps } from "@/components/chart-tooltip";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -248,13 +249,7 @@ export function BenchmarkPanel() {
                     domain={["auto", "auto"]}
                   />
                   <Tooltip
-                    contentStyle={{
-                      backgroundColor: "var(--popover)",
-                      border: "1px solid var(--border)",
-                      borderRadius: 8,
-                      color: "var(--popover-foreground)",
-                      fontSize: 12,
-                    }}
+                    {...chartTooltipProps}
                     formatter={(value) => [
                       Number(value).toLocaleString(),
                       "종가",

@@ -5,15 +5,15 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* 손익 색상 (KR 관례: 빨강=수익, 파랑=손실) — dataviz 검증 통과 쌍.
+/* 손익 색상 (KR 관례: 빨강=수익, 파랑=손실) — 본문·카드·보조 배경의 글자 대비를 확보한다.
    색상만으로 손익을 표현하지 않는다: 항상 부호·텍스트와 함께 사용 (스펙 §17). */
 :root {
-  --gain: #dc2626;
+  --gain: #b91c1c;
   --loss: #2563eb;
 }
 .dark {
-  --gain: #ef4444;
-  --loss: #3b82f6;
+  --gain: #f87171;
+  --loss: #60a5fa;
 }
 
 @theme inline {
@@ -41,6 +41,7 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -79,7 +80,8 @@
   --muted-foreground: oklch(0.556 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
+  --destructive: oklch(0.444 0.177 26.899);
+  --destructive-foreground: oklch(0.985 0 0);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
   --ring: oklch(0.708 0 0);
@@ -115,6 +117,7 @@
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  --destructive-foreground: oklch(0.145 0 0);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);

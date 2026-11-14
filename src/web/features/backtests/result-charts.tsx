@@ -21,6 +21,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { formatDate, formatKrw, formatSignedPct } from "@/lib/format";
+import { chartTooltipProps } from "@/components/chart-tooltip";
 import type { SeriesPoint } from "./types";
 
 const GAIN = "var(--gain)";
@@ -34,14 +35,6 @@ function compactKrw(value: number): string {
   if (Math.abs(value) >= 1e4) return `${(value / 1e4).toFixed(0)}만`;
   return String(Math.round(value));
 }
-
-const tooltipContentStyle = {
-  backgroundColor: "var(--popover)",
-  border: "1px solid var(--border)",
-  borderRadius: 8,
-  color: "var(--popover-foreground)",
-  fontSize: 12,
-} as const;
 
 /** 자산 곡선 — 단일 시리즈 라인 (범례 불필요, 제목이 시리즈를 명명) */
 export function EquityChart({
@@ -93,7 +86,7 @@ export function EquityChart({
                 domain={["auto", "auto"]}
               />
               <Tooltip
-                contentStyle={tooltipContentStyle}
+                {...chartTooltipProps}
                 labelFormatter={(ts) => formatDate(Number(ts))}
                 formatter={(value) => [formatKrw(Number(value)), "평가금액"]}
               />
@@ -184,7 +177,7 @@ export function BenchmarkComparisonChart({
                 domain={["auto", "auto"]}
               />
               <Tooltip
-                contentStyle={tooltipContentStyle}
+                {...chartTooltipProps}
                 labelFormatter={(ts) => formatDate(Number(ts))}
                 formatter={(value, name) => [
                   Number(value).toFixed(2),
@@ -273,7 +266,7 @@ export function DrawdownChart({
                 width={44}
               />
               <Tooltip
-                contentStyle={tooltipContentStyle}
+                {...chartTooltipProps}
                 labelFormatter={(ts) => formatDate(Number(ts))}
                 formatter={(value) => [`${Number(value).toFixed(2)}%`, "낙폭"]}
               />
@@ -355,7 +348,7 @@ export function MonthlyReturnsChart({
                 width={44}
               />
               <Tooltip
-                contentStyle={tooltipContentStyle}
+                {...chartTooltipProps}
                 formatter={(value) => [
                   formatSignedPct(Number(value)),
                   "수익률",

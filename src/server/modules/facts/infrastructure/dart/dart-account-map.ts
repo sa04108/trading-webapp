@@ -87,6 +87,8 @@ export function resolveAccount(
   accountId: string,
   accountName: string,
 ): DartAccountRule | null {
+  // 일부 공시는 영업수익에 영업이익 태그를 잘못 사용한다.
+  if (accountId.trim() === "dart_OperatingIncomeLoss" && accountName.replace(/\s/g, "") === "영업수익") return null;
   const byId = BY_ACCOUNT_ID[accountId.trim()];
   if (byId) return byId;
   return BY_ACCOUNT_NAME[accountName.replace(/\s/g, "")] ?? null;
