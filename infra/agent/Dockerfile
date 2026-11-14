@@ -16,7 +16,9 @@ RUN --mount=type=secret,id=proxy_ca \
 COPY . .
 ARG BUILD_GIT_SHA
 ARG AGENT_VERSION
-RUN node --input-type=module -e 'import fs from "node:fs"; const gitSha=process.env.BUILD_GIT_SHA; if(!/^[a-f0-9]{40,64}$/.test(gitSha??"")) throw new Error("BUILD_GIT_SHA is required"); fs.mkdirSync("dist",{recursive:true}); fs.writeFileSync("dist/build-info.json",JSON.stringify({gitSha,builtAt:new Date().toISOString()}));' \
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; fi; \
+    node --input-type=module -e 'import fs from "node:fs"; const gitSha=process.env.BUILD_GIT_SHA; if(!/^[a-f0-9]{40,64}$/.test(gitSha??"")) throw new Error("BUILD_GIT_SHA is required"); fs.mkdirSync("dist",{recursive:true}); fs.writeFileSync("dist/build-info.json",JSON.stringify({gitSha,builtAt:new Date().toISOString()}));' \
     && pnpm build:agent --prepared \
     && node --input-type=module -e 'import fs from "node:fs"; const v=JSON.parse(fs.readFileSync("dist/agent-runtime/manifest.json")).runnerVersion; if(v!==process.env.AGENT_VERSION) throw new Error("Server/container agent versions differ");' \
     && mkdir /agent \
