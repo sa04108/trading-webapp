@@ -191,6 +191,28 @@ describe('parseFinancialRows — 누적값 차분', () => {
     }
   });
 
+  it('귀속 순이익 구성 요소를 제외하고 전체 순이익으로 4분기를 계산한다', () => {
+    const total = (report: DartReportCode, value: number): DartFinancialRow => ({
+      ...incomeRow(report, value), bsns_year: '2024', account_id: 'ifrs-full_ProfitLoss', account_nm: '당기순이익',
+    });
+    const owners = { ...total('11011', 4_055_642_000_000), sj_div: 'CIS', account_id: 'ifrs-full_ProfitLossAttributableToOwnersOfParent' };
+    const noncontrolling = { ...total('11011', 4_519_000_000), sj_div: 'CIS', account_id: 'ifrs-full_ProfitLossAttributableToNoncontrollingInterests' };
+    const annual = total('11011', 4_060_161_000_000);
+    const result = parseFinancialRows('012330', new Map([
+      ['11014', [total('11014', 2_781_272_000_000)]],
+      ['11011', [annual, owners, noncontrolling]],
+    ]));
+    expect(result.facts.filter(f => f.field === 'NET_INCOME').map(f => [f.periodKey, f.value]))
+      .toContainEqual(['2024Q4', 1_278_889_000_000]);
+    expect(result.gaps.some(g => g.field === 'NET_INCOME' && g.kind === 'CONFLICT')).toBe(false);
+    expect(parseFinancialRows('012330', new Map([['11011', [owners, noncontrolling]]])).facts
+      .filter(f => f.field === 'NET_INCOME')).toEqual([]);
+    const conflictingTotal = { ...annual, sj_div: 'CIS', account_id: '-표준계정코드 미사용-', thstrm_add_amount: '4060161000001' };
+    expect(parseFinancialRows('012330', new Map([['11011', [annual, conflictingTotal]]])).gaps)
+      .toContainEqual(expect.objectContaining({ field: 'NET_INCOME', kind: 'CONFLICT', severity: 'BLOCKING' }));
+    expect(resolveAccount('custom_tag', '당기순이익')).toEqual({ field: 'NET_INCOME', statement: 'IS' });
+  });
+
   it('순이익은 IS 누적 차분을 거치고 자본총계는 BS 시점값으로 저장한다', () => {
     const netIncome = (report: DartReportCode, cumulative: number): DartFinancialRow => ({
       ...incomeRow(report, cumulative),

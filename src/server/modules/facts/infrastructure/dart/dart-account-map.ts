@@ -87,6 +87,8 @@ export function resolveAccount(
   accountId: string,
   accountName: string,
 ): DartAccountRule | null {
+  // 지배·비지배주주 귀속 순이익은 전체 순이익의 구성 요소다.
+  if (["ifrs-full_ProfitLossAttributableToOwnersOfParent", "ifrs-full_ProfitLossAttributableToNoncontrollingInterests"].includes(accountId.trim())) return null;
   // 일부 공시는 영업수익에 영업이익 태그를 잘못 사용한다.
   if (accountId.trim() === "dart_OperatingIncomeLoss" && accountName.replace(/\s/g, "") === "영업수익") return null;
   // 계속·중단영업별 순이익은 전체 당기순이익이 아니므로 합계 태그가 붙어도 제외한다.
