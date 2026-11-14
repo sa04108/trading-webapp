@@ -1,8 +1,8 @@
 import type { Market } from "./candle.js";
 
 /**
- * 거래소 정규 세션 정의. MVP 는 고정 UTC 오프셋만 지원한다 (KR: KST, DST 없음).
- * 미국 시장 DST 는 MVP 한계로 결과 화면에 명시한다 (docs/DECISIONS.md D-006).
+ * 거래소 정규 세션 정의. 한국 시장의 고정 UTC 오프셋만 지원한다 (KST, DST 없음).
+ * 세션이 없는 시장은 UnsupportedMarketSessionError로 거부한다.
  */
 export interface ExchangeSession {
   /** 거래소 현지 시간의 UTC 오프셋 (분). KST = +540 */

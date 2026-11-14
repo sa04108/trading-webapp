@@ -1,6 +1,6 @@
 # Docker 서버 운영
 
-기본 운영 대상은 Ubuntu 26.04 LTS의 GMKtec NucBox G3(N100 4코어, RAM 16GB, NVMe 256GB)다. 앱 Compose에는 `server` 하나만 두고 **기존 Traefik 3.7.16**으로 HTTPS를 제공한다. 서버 배포는 컨테이너 방식만 제공하며 systemd·SSH 배포와 호스트 프로비저닝은 제거했다. 고정 공인 IP 설정과 DB 백업·이전 자동화는 포함하지 않는다.
+기본 운영 대상은 Ubuntu 26.04 LTS의 GMKtec NucBox G3(N100 4코어, RAM 16GB, NVMe 256GB)다. 앱 Compose에는 `server` 하나만 두고 **기존 Traefik 3.7.16**으로 HTTPS를 제공한다. 공인 IP·호스트 준비와 DB 백업·이전은 운영자가 관리한다.
 
 ## 준비
 
@@ -8,7 +8,13 @@
 - 기존 Traefik의 Docker provider가 활성화되어 있고 `infra-proxy` 네트워크에 연결되어 있어야 한다. 앱은 같은 **external network**를 사용하며 이 네트워크나 Traefik을 생성·삭제하지 않는다. `docker network inspect infra-proxy`로 존재 여부를 확인한다.
 - HTTPS entryPoint는 `websecure`, 인증서 resolver는 `letsencrypt`를 사용한다. Traefik의 인증서 저장·갱신, TCP 80/443 게시와 HTTP→HTTPS 전환은 기존 Traefik 설정에서 관리한다.
 - `trading.hyunbbai.com`의 DNS와 공유기 포트 전달이 Traefik의 공개 진입점을 향해야 한다. 앱의 3000번 포트는 호스트에 게시하지 않는다.
-- [이미지 게시 workflow](GITHUB_ACTIONS_DEPLOY.md)가 `main`에서 성공하여 서버·Agent 이미지가 GHCR에 있어야 한다. **devel 병합만으로 이미지를 게시하거나 서버를 배포하지 않는다.** 공개 패키지 설정 전에는 GHCR 읽기 권한으로 로그인해야 한다.
+- [이미지 게시 workflow](../.github/workflows/deploy.yml)가 `main`에서 성공하여 서버·Agent 이미지가 GHCR에 있어야 한다. **devel 병합만으로 이미지를 게시하거나 서버를 배포하지 않는다.** 공개 패키지 설정 전에는 GHCR 읽기 권한으로 로그인해야 한다.
+
+## 이미지 게시
+
+[Publish images](../.github/workflows/deploy.yml)는 `main` push 또는 `main`에서의 수동 실행에서 Windows 설치기, lint·typecheck·일반 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64·arm64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행을 검사한 뒤, 같은 Agent digest를 기본값으로 포함한 amd64 서버 이미지를 `ghcr.io/sa04108/quant-platform:sha-<커밋 SHA>`로 게시·검사한다. 두 이미지 검사가 성공하면 각각의 `latest` 별칭을 갱신한다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. 패키지를 로그인 없이 내려받으려면 GitHub Packages에서 두 패키지를 Public으로 설정하고 Actions에 패키지 쓰기 권한을 부여한다.
+
+서버에 이미지를 적용하는 절차는 아래 운영 명령을 따른다. workflow의 동시 실행은 `quant-platform-production` 그룹으로 제한되고 실행 중인 작업은 새 실행 때문에 취소되지 않는다. 이전 서버·Agent 설치 파일이 참조하는 이미지는 자동 삭제하지 않는다.
 
 ## 최초 실행
 
@@ -35,7 +41,7 @@ SERVER_MEMORY=10g
 
 운영자가 편집하는 파일은 **`config.env` 하나**다. 도메인·자원·프록시·API 키·세션 설정을 함께 둔다. 전체 지원 키와 설명은 [config.env.example](../config.env.example)을 따른다. `init`은 권한 600으로 원본과 새 `SESSION_SECRET`을 만들며 이미 있는 원본은 덮어쓰지 않는다. 기존 `server.env`나 `app.env`가 있으면 새 비밀을 생성하지 않고 중단한다. 이전 값을 `config.env`로 옮기되 `NODE_ENV`, 앱 바인딩·내부 포트·데이터 경로는 자동 관리하므로 옮기지 않는다. `TRUST_PROXY_ADDRESSES`는 `TRAEFIK_TRUSTED_IPS`에 합치고 기존 DB의 `SESSION_SECRET`을 보존한다. 이관을 확인한 뒤 이전 파일을 정리하며, 도구는 이전 파일을 실행 설정으로 읽지 않는다.
 
-형식은 `KEY=value`이며 값을 셸로 평가하지 않는다. `$`, `#`, 따옴표, 역슬래시와 공백은 값 그대로다. 인용을 위해 따옴표를 덧붙이지 않고, 주석은 별도 `#` 행에 쓴다. 미사용 선택 키는 주석으로 두며 중복 키·지원하지 않는 키는 거부한다. SSH·systemd·Lightsail 설정은 받지 않는다. 외부 셸 변수나 개발용 `.env`가 이 원본을 덮어쓰지 않는다. 키와 원본을 Git·이미지에 넣지 않는다.
+형식은 `KEY=value`이며 값을 셸로 평가하지 않는다. `$`, `#`, 따옴표, 역슬래시와 공백은 값 그대로다. 인용을 위해 따옴표를 덧붙이지 않고, 주석은 별도 `#` 행에 쓴다. 미사용 선택 키는 주석으로 두며 중복 키·지원하지 않는 키는 거부한다. 외부 셸 변수나 개발용 `.env`가 이 원본을 덮어쓰지 않는다. 키와 원본을 Git·이미지에 넣지 않는다.
 
 도구는 한 번 읽은 원본에서 필요한 값만 추출한다. 도메인·이미지·자원·Traefik 설정은 Compose에 전달하고, API 키 등 앱 설정은 `.server-runtime/run.*/app.env`에 권한 600(디렉터리 700)으로 작성한다. 이 파일은 실행 중에만 사용하고 종료 시 정리하며 직접 편집하지 않는다. Compose의 `raw` 형식으로 값의 의미를 보존한다. 앱은 이 원본 파일이나 호스트 경로를 알지 못하고 기존 환경변수만 읽는다.
 
@@ -108,7 +114,3 @@ bash scripts/server.sh update "$(cat .server-update-pending)"
 다른 버전으로 되돌릴 때는 운영자가 DB·데이터·이미지 호환성을 함께 확인하고 필요한 복원을 수행한다. 이전 이미지 기록만으로 자동 롤백하지 않는다. pending 파일은 복구 상태가 확인된 뒤에만 수동 정리하며, 직접 `docker compose up`으로 이 차단을 우회하지 않는다. 같은 프로젝트의 변경 작업은 helper의 잠금으로 직렬화한다.
 
 Docker 서버에는 같은 릴리스의 Agent 이미지 digest가 내장된다. 서버 업데이트 후 버전 불일치가 표시되면 설정 → Agent에서 저장한 기존 활성 토큰으로 Agent 설치 파일을 다시 내려받아 실행한다. 같은 토큰은 기존 장치와 캐시 볼륨을 유지한다. 토큰을 보관하지 않았다면 기존 장치를 해제하고 새 토큰을 발급하며, 이 경우 별도 캐시 볼륨을 사용한다. 이전 서버·설치 파일이 참조하는 이미지를 workflow에서 자동 삭제하지 않는다.
-
-## 향후 AWS 연동과 이전
-
-서버 이미지·앱 환경변수·영속 데이터 경로를 실행 환경과 분리한다. 부분 AWS 서비스 연동과 전체 서버 이전의 후보 및 SQLite 제약은 [AWS 확장 방향](AWS_DEPLOYMENT.md)을 따른다. 현재 AWS 배포 리소스나 연동 기능을 추가한 것은 아니다.

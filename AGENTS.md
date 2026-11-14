@@ -13,7 +13,7 @@ These instructions apply repository-wide.
 - Optimize total cost to a verified result, including delegation, retries, integration, and repair. Do not weaken correctness, security, compatibility, or required verification to reduce tokens.
 - For nontrivial work, establish scope, invariants, acceptance checks, and dependency order before editing. Keep planning proportional to uncertainty and failure impact; small tasks do not require separate planning documents.
 - Use deterministic tools for mechanical edits and generated files, and review their output. Read relevant code and documentation progressively. Save verbose logs and inspect summaries, failures, and necessary context without hiding errors.
-- Consult relevant sections of `docs/AGENT_RUNTIME_BOUNDARY.md` for product runtime/version changes, `docs/AGENT_OPERATIONS.md` for packaging/deployment, and `docs/SPEC.md` / `docs/DECISIONS.md` for requirements or compatibility decisions. These are lookup routes, not a mandatory reading list.
+- Consult relevant sections of `docs/AGENT_RUNTIME_BOUNDARY.md` for product runtime/version changes, `docs/AGENT_OPERATIONS.md` for agent operation and recovery, `docs/DOCKER_SERVER.md` for server deployment, and `docs/SPEC.md` for requirements and compatibility contracts. These are lookup routes, not a mandatory reading list.
 
 ## Subagents
 

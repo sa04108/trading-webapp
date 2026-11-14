@@ -1,11 +1,11 @@
 # Quant Platform — 아키텍처 및 운영 원칙
 
 > **목적:** 사람과 AI가 프로젝트의 의도, 책임 경계, 변경 시 지켜야 할 원칙을 파악하는 기준 문서.
-> **검토일:** 2026-09-17 · **코드 기준:** `main@de9eea1f8bd3436d49842cadd4b62e1bf78a73d4`
+> **검토일:** 2026-11-14
 
 구조·보안 경계·데이터 계약을 바꿀 때 코드와 함께 갱신한다. 구현과 충돌하면 설계 변경인지 구현 결함인지 확인하고 정합성을 맞춘다. 기능 목록과 작업 이력은 담지 않는다.
 
-설계 배경은 [DECISIONS.md](DECISIONS.md), 개발 시작은 [README.md](../README.md), 계산 장치 운영·버전 계약은 [AGENT_OPERATIONS.md](AGENT_OPERATIONS.md)·[AGENT_RUNTIME_BOUNDARY.md](AGENT_RUNTIME_BOUNDARY.md)를 참조한다. 상세 필드·기본값·실행 순서는 해당 스키마와 스크립트를 기준으로 한다.
+개발 시작은 [README.md](../README.md), 서버 배포는 [DOCKER_SERVER.md](DOCKER_SERVER.md), 계산 장치 운영·버전 계약은 [AGENT_OPERATIONS.md](AGENT_OPERATIONS.md)·[AGENT_RUNTIME_BOUNDARY.md](AGENT_RUNTIME_BOUNDARY.md)를 참조한다. 상세 필드·기본값·실행 순서는 해당 스키마와 스크립트를 기준으로 한다.
 
 ---
 
@@ -13,7 +13,7 @@
 
 **단일 관리자가 모바일·데스크톱 브라우저에서 퀀트 백테스트를 준비·실행하고 결과를 비교·검증하는 개인용 플랫폼**이다. 데이터의 시점 정합성, 계산의 재현성, 제한된 서버 자원에서의 안정적인 운영을 우선한다. 공개 회원가입이나 다중 사용자 서비스를 전제로 하지 않는다.
 
-하나의 저장소와 제품으로 운영하는 **모듈러 모놀리스**다. 운영 서버가 인증·수집·작업·최종 결과의 기준점이며, Windows Docker Desktop의 외부 계산 장치는 계산 용량만 확장한다. 서버·웹·GHCR 컨테이너 이미지는 production workflow에서 배포하되, 계산 코드의 호환성은 배포 커밋과 별도로 관리한다.
+하나의 저장소와 제품으로 운영하는 **모듈러 모놀리스**다. 운영 서버가 인증·수집·작업·최종 결과의 기준점이며, Windows Docker Desktop의 외부 계산 장치는 계산 용량만 확장한다. GitHub Actions는 서버·웹을 포함한 서버 이미지와 Agent 이미지를 GHCR에 게시하고, 운영자는 서버에서 이미지를 적용한다. 계산 코드의 호환성은 배포 커밋과 별도로 관리한다.
 
 ## 2. 절대 원칙
 
@@ -81,7 +81,17 @@ KRX는 가격·과거 종목 구성, DART는 재무·자본변동, FRED는 추�
 
 실행 중인 스냅샷과 작업·미리보기가 참조하는 준비 결과는 보존한다. 참조 없는 종료 작업·캐시만 정리하며 **캐시 무효화와 과거 실행 근거 삭제를 구분**한다.
 
-Git SHA는 출처를 기록한다. `agentVersion`·`collectionVersion`·`previewVersion`·`executionVersion`·`validationVersion`은 배포 클라이언트·수집 실행 출처·미리보기·실행·기간 검증을 구분한다. 수집 실행 해시는 원천 재사용이나 외부 요청 허용 기준이 아니다(D-096). 데이터셋 ID·데이터 revision·게시 버전·스키마 버전·파일 해시는 이 코드 버전과 구분한다.
+Git SHA는 출처를 기록한다. `agentVersion`·`collectionVersion`·`previewVersion`·`executionVersion`·`validationVersion`은 배포 클라이언트·수집 실행 출처·미리보기·실행·기간 검증을 구분한다. 수집 실행 해시는 원천 재사용이나 외부 요청 허용 기준이 아니다. 데이터셋 ID·데이터 revision·게시 버전·스키마 버전·파일 해시는 이 코드 버전과 구분한다.
+
+준비 단계에서 수집 완료 후에도 특정 종목의 입력 결손이 확인되면 해당 종목을 전 기간 제외하고 같은 규칙으로 재선정하며 사유를 경고로 남긴다. 수집 미완료는 먼저 수집·재시도로 처리하고, 전체 응답 오류·종목 식별 충돌·빈 유니버스는 준비를 중단한다. 제출 후에는 고정된 유니버스 일정을 계산 중 임의로 바꾸지 않으며 데이터 불일치를 차단한다. 완료 실행의 규칙·일정 해시·진단·계산 출처는 이후 설정 변경으로 다시 쓰지 않는다.
+
+### 현재 백테스트의 지원 범위와 한계
+
+가격·재무 입력은 봉 시각·공시 접수일로 사용 시점을 제한한다. 자본변동은 KRX 주식수 변경에 정렬한 효력일로 적용하며 최초 공개시각까지 보장하지 않는다. 과거 지수 구성원 이력을 복원하는 기능은 없고, 지원하는 규칙과 당시 종목 이력·지표로 유니버스를 구성한다.
+
+일봉 전략의 손절은 종가 신호와 다음 봉 체결 모델을 따른다. 장중 스톱 주문의 체결을 재현하지 않는다.
+
+기간 검증은 홀드아웃·최적화 홀드아웃·워크포워드를 지원한다. 최적화 후보는 학습 구간 성과로만 선택하며 평가 구간 성과를 선택 함수에 전달하지 않는다. 여러 실험 중 좋은 결과를 고르는 선택 편향의 통계적 보정과 성과 신뢰구간은 제공하지 않는다. 계약과 구간·후보 제한은 [period-validation.ts](../src/shared/schemas/period-validation.ts)를 따른다.
 
 구현: [container.ts](../src/server/bootstrap/container.ts), [agent-coordinator.ts](../src/server/modules/agents/application/agent-coordinator.ts), [database.ts](../src/runtime/shared/db/database.ts).
 
@@ -103,7 +113,7 @@ src/
 └─ web/              앱 셸·기능별 화면·공통 UI
 migrations/          operations/ · data/ · agent/
 packages/agent/      컨테이너 런타임 전용 의존성·잠금 파일
-infra/ · scripts/    프로비저닝·빌드·배포·운영 도구
+infra/ · scripts/    컨테이너 이미지·빌드·배포·운영 도구
 tests/ · docs/       검증 코드·설계 및 운영 문서
 ```
 
@@ -158,7 +168,7 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 
 ## 9. 클라우드와 퍼블릭 네트워크
 
-운영 대상은 **Ubuntu 26.04 LTS·GMKtec NucBox G3(N100, RAM 16GB, NVMe 256GB)의 Docker Compose 서버**다. 서버 전체(API·계산 자식 포함) 기본 상한은 CPU 3개·메모리 10GiB다. systemd·SSH 서버 배포와 Lightsail 프로비저닝은 제거한다(D-115).
+운영 대상은 **Ubuntu 26.04 LTS·GMKtec NucBox G3(N100, RAM 16GB, NVMe 256GB)의 Docker Compose 서버**다. 서버 전체(API·계산 자식 포함) 기본 상한은 CPU 3개·메모리 10GiB다.
 
 | 항목 | 운영 구성 |
 | --- | --- |
@@ -168,7 +178,7 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 | 계산 장치 | 서버로 아웃바운드 연결한다. 장치별 SSH 배포와 인바운드 포트 개방이 필요하지 않다. |
 | 프로세스·파일 | 비 root UID 1000·읽기 전용 이미지와 `/var/lib/quant-platform` named volume을 사용한다. 가변 데이터는 이미지와 분리한다. |
 
-구성 기준은 [Docker 서버 운영](DOCKER_SERVER.md)·[compose.yaml](../compose.yaml)이다. AWS 일부 서비스 연동과 전체 이전은 [AWS 확장 방향](AWS_DEPLOYMENT.md)에 따라 컨테이너 실행·앱 기능·영속 저장소를 구분하여 추가한다. 현재 AWS 연동/배포 기능이 있다는 의미는 아니다.
+구성 기준은 [Docker 서버 운영](DOCKER_SERVER.md)·[compose.yaml](../compose.yaml)이다.
 
 ## 10. 환경변수와 설정
 
@@ -188,7 +198,7 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 
 저장소가 지정한 Node·pnpm으로 개발·검증하고 서버·웹은 `pnpm build`로 빌드한다. 서버 배포 산출물은 컨테이너 이미지다. Agent용 Linux archive는 `dist/agent-runtime/`에서 Agent 이미지와 hermetic workload 검증에만 사용한다.
 
-운영 명령은 `bash scripts/server.sh init`·`validate`·`up`·`update`·`stop`·`status`·`logs`·`cli`다. 호스트 Node는 필요 없다. `pnpm deploy`는 같은 Docker 업데이트의 별칭이다. main workflow는 서버/Agent 이미지를 검증·게시하며 서버에 직접 배포하지 않는다. systemd 유닛·SSH 비밀과 tar 서버 릴리스는 사용하지 않는다.
+운영 명령은 `bash scripts/server.sh init`·`validate`·`up`·`update`·`stop`·`status`·`logs`·`cli`다. 호스트 Node는 필요 없다. `pnpm deploy`는 같은 Docker 업데이트의 별칭이다. main workflow는 서버/Agent 이미지를 검증·게시하며 서버 적용은 운영자가 수행한다.
 
 원본 설정 변경은 검증 후 `up`으로 현재 고정 이미지에 적용한다. `update`는 후보 이미지를 먼저 확보하고 앱 설정 검증을 통과한 뒤 서비스를 중지해 DB 준비와 readiness를 확인한다. 성공 digest를 고정하고 미완료 업데이트는 이전 이미지의 `up`과 CLI를 차단한다. 설정/다운로드 실패는 실행 중인 앱을 유지하며, DB 준비 이후 실패는 중지 상태에서 같은 후보로 복구한다. 백업·복원을 자동화하지 않는다. 자세한 절차는 [Docker 서버 운영](DOCKER_SERVER.md)을 따른다.
 
@@ -201,7 +211,7 @@ CLI는 배포와 같은 잠금을 사용하며 서버가 중지된 상태에서�
 | `pnpm lint`·`pnpm typecheck` | 정적 규칙과 서버·웹 타입 검사 |
 | `pnpm test` | 일반 회귀 검사: `tests/unit`, `tests/integration`, `tests/architecture` |
 | `pnpm test:all` | 전체 일반 회귀 검사의 릴리스 진입점(`pnpm test`). `devel` 병합 전과 서버 배포에서 필수 실행 |
-| `pnpm test:e2e` | 빌드 후 Playwright 브라우저 검증. 기본 배포 스크립트와 별도로 실행한다. |
+| `pnpm test:e2e` | 빌드 후 Playwright 브라우저 검증. 이미지 게시 workflow와 별도로 실행한다. |
 | `pnpm test:agent-package` | 내부 runtime archive를 저장소 밖에서 실행해 구성·의존성·준비·계산·결과 저장 계약 검증. GHCR image workflow에서 Docker build/push 전에 실행 |
 
 자동 회귀 테스트는 운영 DB·실제 API 자격증명에 의존하지 않는다. 필요한 SQLite·자식 프로세스는 실제로 실행하되 외부 응답은 fixture·대체 서버로 제어한다. 앱·DB·가변 상태는 테스트별로 격리하고 실패해도 자원을 정리한다. 실서비스 API 점검은 별도다.
