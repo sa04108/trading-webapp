@@ -32,16 +32,16 @@ describe('에이전트 자동 자원 배정', () => {
     expect(large.slots).toBeLessThan(normal.slots);
     expect(large.maxBars).toBeGreaterThanOrEqual(8_000_000);
   });
-  it('운영 서버는 CPU와 메모리 여유분을 더 남기고 포화 시 새 계산을 받지 않는다', () => {
+  it('운영 서버는 오래된 호스트 부하로 유휴 코어를 막지 않는다', () => {
     const sample = { cpus: 8, total: 16 * GIB, available: 12 * GIB, load: 0 };
     const remote = calculateResources(sample, 0);
     const local = calculateResources(sample, 0, 0, true, 0, true);
-    expect(local.slots).toBeLessThan(remote.slots);
-    expect(local.reserveBytes).toBe(8 * GIB);
-    expect(calculateResources({ ...sample, load: 8 }, 0, 0, true, 0, true).slots).toBe(0);
+    expect(local.slots).toBe(remote.slots);
+    expect(local.reserveBytes).toBe(1.6 * GIB);
+    expect(calculateResources({ ...sample, load: 8 }, 0, 0, true, 0, true).slots).toBe(8);
     expect(calculateResources({ ...sample, available: GIB }, 1, 0, true, 0, true).slots).toBe(1);
   });
-  it('512 MiB 운영 ceiling에서 API 여유를 남기고 로컬 워커 하나에 256 MiB를 준다', () => {
+  it('512 MiB 운영 ceiling에서 API 여유를 남기고 전체 계산 예산을 256 MiB로 제한한다', () => {
     const MIB = 1024 ** 2;
     const sample = {
       cpus: 2, total: 512 * MIB, available: 320 * MIB, load: 0,
@@ -49,17 +49,17 @@ describe('에이전트 자동 자원 배정', () => {
     };
     const first = calculateResources(sample, 0, 0, false, 0, true);
     expect(first.reserveBytes).toBe(64 * MIB);
-    expect(first.slots).toBe(1);
+    expect(first.slots).toBe(2);
     expect(first.budgetBytes).toBe(256 * MIB);
     expect(first.heapMb).toBe(166);
     // 종료 유예 중인 기존 작업도 slot에서 빼지 않는다.
-    expect(calculateResources(sample, 1, 184 * MIB, true, 0, true).slots).toBe(1);
+    expect(calculateResources(sample, 1, 184 * MIB, true, 0, true).slots).toBe(2);
     // 로컬 분할 입력은 총 봉 수 대신 작업별 상주 메모리를 배정 시 검사한다.
     const largeRequest = calculateResources(sample, 0, 184 * MIB, true, 300_000, true);
-    expect(largeRequest.slots).toBe(1);
+    expect(largeRequest.slots).toBe(2);
     expect(largeRequest.budgetBytes).toBe(256 * MIB);
   });
-  it('1 GiB 서버는 부모 절반을 보전하고 CPU 수와 무관하게 로컬 워커 하나만 허용한다', () => {
+  it('1 GiB 서버는 부모 절반을 보전하며 메모리가 허용하는 슬롯만 연다', () => {
     const MIB = 1024 ** 2;
     const result = calculateResources({
       cpus: 8, total: 1024 * MIB, available: 768 * MIB, load: 0,
@@ -68,18 +68,18 @@ describe('에이전트 자동 자원 배정', () => {
     expect(result.reserveBytes).toBe(320 * MIB);
     expect(result.budgetBytes).toBe(448 * MIB);
     expect(result.heapMb).toBe(291);
-    expect(result.slots).toBe(1);
+    expect(result.slots).toBe(3);
     expect(result.memoryPressure).toBe(false);
     expect(universeHelperBudget(result.budgetBytes)).toEqual({ budgetBytes: 320 * MIB, heapMb: 128 });
   });
-  it('10 GiB 서버는 단일 작업에 최대 5 GiB를 주고 보조 계산에도 제한된 예산을 준다', () => {
+  it('10 GiB 서버는 CPU 세 개와 9 GiB 계산 예산을 활용한다', () => {
     const result = calculateResources({ cpus: 3, total: 10 * GIB, available: 9 * GIB, load: 0,
       parentRss: GIB, hardAvailable: 9 * GIB }, 0, 0, false, 0, true);
-    expect(result.slots).toBe(1);
-    expect(result.budgetBytes).toBe(5 * GIB);
+    expect(result.slots).toBe(3);
+    expect(result.budgetBytes).toBe(9 * GIB - 64 * 1024 ** 2);
     expect(universeHelperBudget(result.budgetBytes)).toEqual({ budgetBytes: 2 * GIB, heapMb: 819 });
   });
-  it('부모가 절반을 넘거나 effective/hard 가용량이 하한 아래면 새 로컬 작업을 막는다', () => {
+  it('API 예약량은 성장 여유이며 실제 effective/hard 메모리 압력만 계산을 막는다', () => {
     const MIB = 1024 ** 2;
     const parentHeavy = calculateResources({
       cpus: 2, total: 1024 * MIB, available: 700 * MIB, load: 0,
@@ -93,8 +93,8 @@ describe('에이전트 자동 자원 배정', () => {
       cpus: 2, total: 1024 * MIB, available: 700 * MIB, load: 0,
       parentRss: 128 * MIB, hardAvailable: 63 * MIB,
     }, 0, 0, true, 0, true);
-    expect(parentHeavy.memoryPressure).toBe(true);
-    expect(parentHeavy.slots).toBe(0);
+    expect(parentHeavy.memoryPressure).toBe(false);
+    expect(parentHeavy.slots).toBe(2);
     expect(lowAvailable.memoryPressure).toBe(true);
     expect(lowAvailable.slots).toBe(0);
     expect(lowHardAvailable.memoryPressure).toBe(true);
@@ -106,10 +106,10 @@ describe('에이전트 자동 자원 배정', () => {
       cpus: 2, total: 512 * MIB, available: 400 * MIB, load: 0,
       parentRss: 128 * MIB,
     }, 0, 280 * MIB, true, 0, true);
-    expect(result.slots).toBe(1);
+    expect(result.slots).toBe(2);
     expect(result.budgetBytes).toBe(256 * MIB);
   });
-  it('원격 에이전트 정책은 부모 RSS나 서버 한 작업 제한의 영향을 받지 않는다', () => {
+  it('원격 에이전트 정책은 서버의 API 예약이나 동시성 정책의 영향을 받지 않는다', () => {
     const MIB = 1024 ** 2;
     const result = calculateResources({
       cpus: 8, total: 1024 * MIB, available: 768 * MIB, load: 0,

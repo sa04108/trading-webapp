@@ -121,6 +121,25 @@ describe('RestClient (스펙 §13 공통 REST 클라이언트)', () => {
 
     expect(sleeps.some((ms) => ms > 0 && ms <= 350)).toBe(true);
   });
+
+  it('동시 요청도 시작 간격을 지키며 앞선 응답은 기다리지 않는다', async () => {
+    let now = 1000;
+    const starts: number[] = [];
+    let finishFirst!: (value: Response) => void;
+    const first = new Promise<Response>((resolve) => { finishFirst = resolve; });
+    const fetchImpl = vi.fn(() => {
+      starts.push(now);
+      return starts.length === 1 ? first : Promise.resolve(jsonResponse(200, {}));
+    });
+    const client = new RestClient({ baseUrl: 'https://broker.test', logger,
+      fetchImpl: fetchImpl as unknown as typeof fetch, clock: () => now,
+      sleep: async (ms) => { now += ms; }, groupMinIntervalMs: { default: 250 } });
+    const requests = ['/a', '/b', '/c'].map((path) => client.request('default', path));
+    await vi.waitFor(() => expect(starts).toHaveLength(3));
+    expect(starts).toEqual([1000, 1250, 1500]);
+    finishFirst(jsonResponse(200, {}));
+    await Promise.all(requests);
+  });
 });
 
 describe('tokenProvider 없는 인증 (쿼리 파라미터 방식)', () => {

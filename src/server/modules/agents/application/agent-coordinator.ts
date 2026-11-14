@@ -579,7 +579,7 @@ export class AgentCoordinator {
       detail: `입력 ${estimatedBars?.toLocaleString("ko-KR")}봉을 수용할 실행기를 기다립니다 · 연결된 실행기의 최대 용량 ${Math.max(...connected.map(([, connection]) => connection.maxBars)).toLocaleString("ko-KR")}봉` };
     const active = capable.reduce((count, [id]) => count + this.activeLeaseCount(id), 0);
     return { ...base, activity: "WAITING_FOR_SLOT",
-      detail: `실행 가능한 계산 슬롯을 기다립니다 · 연결된 실행기 ${capable.length}개 · 배정된 작업 ${active}개${local ? " · 운영 서버는 CPU·메모리 여유를 확보한 뒤 한 작업씩 실행합니다" : ""}` };
+      detail: `실행 가능한 계산 슬롯을 기다립니다 · 연결된 실행기 ${capable.length}개 · 배정된 작업 ${active}개${local ? " · 운영 서버의 CPU·메모리 예산이 사용 중이며 반환되면 자동으로 배정합니다" : ""}` };
   }
 
   /** 진행 알림만으로 배정 루프를 다시 깨우지 않는다. */
@@ -765,6 +765,8 @@ export class AgentCoordinator {
     while (connection.slots > active) {
       let lease: AgentLease | null;
       const local = clientId === LOCAL_AGENT_ID;
+      if (local) this.refreshLocalCapacity();
+      if (!this.available(clientId, connection)) return;
       const candidate = local ? await this.localBacktestCandidate(connection.maxBars, dataset) : null;
       // 집계 중 새 원격 슬롯이 생겼으면 로컬 claim 전에 우선 배정한다.
       if (local)
@@ -809,7 +811,7 @@ export class AgentCoordinator {
             "SELECT estimated_bars AS bars FROM backtest_jobs WHERE status = 'QUEUED' ORDER BY created_at_ms LIMIT 1",
           )
           .get() as { bars: number } | undefined;
-        // 로컬은 단일 슬롯·메모리 예산이 고정되어 큰 작업의 수요를 반영해도 용량이 늘지 않는다.
+        // 로컬은 봉 수 대신 개별 작업의 메모리 계획과 남은 전체 예산으로 판단한다.
         if (clientId !== LOCAL_AGENT_ID && waiting && waiting.bars > connection.maxBars)
           this.send(connection, {
             type: "DEMAND",
