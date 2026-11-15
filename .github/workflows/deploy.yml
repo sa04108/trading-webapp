@@ -157,9 +157,15 @@ jobs:
         id: local-image
         run: |
           set -euo pipefail
+          exec 8>"$DEPLOY_PATH/.server-build.lock"
+          flock 8
           # 이 태그는 컨테이너 검사를 통과한 뒤에만 생성하며 재시도에도 같은 ID를 유지한다.
           if image_id="$(docker image inspect --format '{{.Id}}' "quant-platform:sha-$GITHUB_SHA" 2>/dev/null)"; then
             [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+            mkdir -p "$DEPLOY_PATH/.server-build-candidates"
+            pin="$DEPLOY_PATH/.server-build-candidates/actions-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            printf '%s\n' "$image_id" > "$pin.tmp"
+            mv "$pin.tmp" "$pin"
             printf 'image=%s\n' "$image_id" >> "$GITHUB_OUTPUT"
           fi
       - name: Set up local server builder
@@ -167,7 +173,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           name: quant-server-build
-          # 운영 서버와 같은 PC에서 빌드하므로 빌더 자원을 제한하고 캐시는 재사용한다.
+          # 운영 서버와 같은 PC에서 빌더 자원을 제한한다. 성공 배포 뒤 미사용 캐시는 정리한다.
           driver-opts: |
             memory=4g
             cpu-period=100000
@@ -176,17 +182,26 @@ jobs:
       - name: Build server image locally
         if: steps.release.outputs.deploy == 'true' && steps.local-image.outputs.image == ''
         id: server-build
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: infra/server/Dockerfile
-          platforms: linux/amd64
-          load: true
-          push: false
-          build-args: |
-            NODE_VERSION=${{ needs.publish.outputs.node-version }}
-            BUILD_GIT_SHA=${{ github.sha }}
-            AGENT_CONTAINER_IMAGE=${{ needs.publish.outputs.agent-image }}
+        env:
+          NODE_VERSION: ${{ needs.publish.outputs.node-version }}
+          AGENT_CONTAINER_IMAGE: ${{ needs.publish.outputs.agent-image }}
+        run: |
+          set -euo pipefail
+          # Docker에 적재한 직후부터 검증 전 후보도 정리 대상에서 보호한다.
+          exec 8>"$DEPLOY_PATH/.server-build.lock"
+          flock 8
+          build_tag="quant-platform:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker buildx build --builder quant-server-build --load --platform linux/amd64 \
+            -f infra/server/Dockerfile -t "$build_tag" \
+            --build-arg NODE_VERSION="$NODE_VERSION" --build-arg BUILD_GIT_SHA="$GITHUB_SHA" \
+            --build-arg AGENT_CONTAINER_IMAGE="$AGENT_CONTAINER_IMAGE" .
+          image_id="$(docker image inspect --format '{{.Id}}' "$build_tag")"
+          [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]
+          mkdir -p "$DEPLOY_PATH/.server-build-candidates"
+          pin="$DEPLOY_PATH/.server-build-candidates/actions-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          printf '%s\n' "$image_id" > "$pin.tmp"
+          mv "$pin.tmp" "$pin"
+          printf 'imageid=%s\n' "$image_id" >> "$GITHUB_OUTPUT"
       - name: Verify local server container
         if: steps.release.outputs.deploy == 'true'
         env:
@@ -200,6 +215,7 @@ jobs:
             --entrypoint node "$SERVER_IMAGE" /tmp/container-server-smoke.mjs
           docker tag "$SERVER_IMAGE" "quant-platform:sha-$GITHUB_SHA"
       - name: Update server to verified local image
+        id: server-update
         if: steps.release.outputs.deploy == 'true'
         env:
           SERVER_IMAGE: ${{ steps.local-image.outputs.image || steps.server-build.outputs.imageid }}
@@ -214,3 +230,23 @@ jobs:
           bash scripts/server.sh update "$SERVER_IMAGE"
           docker tag "$SERVER_IMAGE" quant-platform:local
           bash scripts/server.sh status
+          echo 'applied=true' >> "$GITHUB_OUTPUT"
+      - name: Release server build candidate
+        if: always() && steps.release.outputs.deploy == 'true'
+        env:
+          UPDATE_APPLIED: ${{ steps.server-update.outputs.applied }}
+        run: |
+          set -euo pipefail
+          exec 8>"$DEPLOY_PATH/.server-build.lock"
+          flock 8
+          pin="$DEPLOY_PATH/.server-build-candidates/actions-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          rm -f -- "$pin" "$pin.tmp"
+          # 임시 태그는 검증된 sha 태그와 구분하며 이번 빌드의 것만 제거한다.
+          build_tag="quant-platform:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          if docker image inspect "$build_tag" >/dev/null 2>&1; then
+            docker image rm --no-prune "$build_tag" || echo '빌드 임시 태그 정리는 다음 배포에서 재시도합니다.' >&2
+          fi
+          exec 8>&-
+          if [[ "$UPDATE_APPLIED" == true ]]; then
+            bash scripts/server.sh cleanup || echo '저장 공간 정리는 다음 배포에서 재시도합니다.' >&2
+          fi

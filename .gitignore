@@ -44,6 +44,8 @@ out/
 /.server-image.tmp
 /.server-update-pending
 /.server-update-pending.tmp
+/.server-build.lock
+/.server-build-candidates/
 
 # npm cache directory
 .npm
