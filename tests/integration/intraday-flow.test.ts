@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import Fastify from "fastify";
@@ -134,6 +135,29 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
       .toEqual({ groups: [{ strategyId: "intraday-ema", total: 1 }] });
   });
 
+  // 이력 삭제는 인증·소유권과 실행 상태를 함께 검증하는 별도 경계다.
+  it("종료된 소유자 이력만 삭제하고 공유 분봉 데이터는 보존한다", async () => {
+    const { app, database, store } = await fixture();
+    await store.merge("005930", bars, now);
+    const ids = Object.fromEntries(["COMPLETED", "FAILED", "CANCELLED", "QUEUED", "PREPARING", "RUNNING"].map(status => [status, randomUUID()]));
+    for (const [status, id] of Object.entries(ids)) {
+      database.db.insert(intradayRuns).values({ id, ownerId: "owner", status, requestJson: JSON.stringify(request), resultJson: "invalid json", createdAtMs: now, updatedAtMs: now }).run();
+    }
+    const remove = (id: string, auth = headers) => app.inject({ method: "DELETE", url: `/intraday/history/${id}`, headers: auth });
+    expect((await app.inject({ method: "DELETE", url: `/intraday/history/${ids.COMPLETED}` })).statusCode).toBe(401);
+    expect((await remove(ids.COMPLETED!, { authorization: "other" })).statusCode).toBe(404);
+    expect((await remove(randomUUID())).statusCode).toBe(404);
+    expect((await remove("invalid")).statusCode).toBe(400);
+    for (const status of ["QUEUED", "PREPARING", "RUNNING"]) expect((await remove(ids[status]!)).statusCode).toBe(409);
+    for (const status of ["COMPLETED", "FAILED", "CANCELLED"]) {
+      const response = await remove(ids[status]!);
+      expect(response.statusCode).toBe(204);
+      expect(response.body).toBe("");
+      expect((await remove(ids[status]!)).statusCode).toBe(404);
+    }
+    expect((await store.list())[0]?.symbol).toBe("005930");
+  });
+
   it("인증·소유권을 검증하고 실제 Parquet 수집 뒤 별도 프로세스 결과를 보존한다", async () => {
     const { app, service } = await fixture();
     expect(
@@ -226,7 +250,7 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
           release = resolve;
         }),
     );
-    const { service } = await fixture(source);
+    const { service, app } = await fixture(source);
     expect(() =>
       service.submit("owner", {
         ...request,
@@ -241,13 +265,17 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
     ).toThrow("하루 전체");
     const run = service.submit("owner", request);
     await vi.waitFor(() => expect(source).toHaveBeenCalledOnce());
-    expect(service.cancelRun("owner", run.id).status).toBe("CANCELLED");
+    const cancel = await app.inject({ method: "DELETE", url: `/intraday/runs/${run.id}`, headers });
+    expect(cancel.statusCode).toBe(200);
+    expect(cancel.json().status).toBe("CANCELLED");
+    expect((await app.inject({ method: "DELETE", url: `/intraday/history/${run.id}`, headers })).statusCode).toBe(409);
     release(bars);
     await service.close();
     expect(service.getRun("owner", run.id)).toMatchObject({
       status: "CANCELLED",
     });
     expect(service.getRun("owner", run.id).result).toBeUndefined();
+    expect((await app.inject({ method: "DELETE", url: `/intraday/history/${run.id}`, headers })).statusCode).toBe(204);
   });
   it("가득 찬 실행 대기열도 내부 수집을 허용하고 취소한 대기 슬롯을 반환한다", async () => {
     let release!: (value: IntradayBar[]) => void;

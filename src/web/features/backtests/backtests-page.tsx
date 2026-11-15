@@ -17,6 +17,7 @@ import { api } from "@/lib/api-client";
 import { useStrategies } from "./api";
 import {
   HistoryPager,
+  HistorySelectionActions,
   HistoryStrategyGroup,
   HistoryToolbar,
   historyPeriod,
@@ -392,57 +393,26 @@ export function BacktestsPage() {
     <div className="space-y-4">
       <BacktestHeader
         mode="daily"
-        actions={
-          <>
-            {visibleJobs.length > 0 || editing ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setEditing(!editing);
-                  clear();
-                }}
-              >
-                {editing ? "완료" : "편집"}
-              </Button>
-            ) : null}
-            <NewBacktestButton mode="daily" />
-          </>
-        }
+        actions={<NewBacktestButton mode="daily" />}
       />
-      <HistoryToolbar controls={controls} onChange={clear} />
+      <HistoryToolbar
+        controls={controls}
+        onChange={clear}
+        editing={editing}
+        onEditingChange={visibleJobs.length > 0 || editing ? (value) => {
+          setEditing(value);
+          clear();
+        } : undefined}
+      />
       {editing ? (
-        <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1">
-          <label className="flex shrink-0 items-center gap-2 text-sm">
-            <Checkbox
-              checked={
-                deletableIds.length > 0 &&
-                selectedIds.length === deletableIds.length
-              }
-              onCheckedChange={() =>
-                setSelected(toggleAllBacktests(selected, deletableIds))
-              }
-              aria-label="현재 페이지 선택"
-            />
-            현재 페이지 선택
-          </label>
-          <Button
-            variant="destructive"
-            size="sm"
-            disabled={!selectedIds.length || remove.isPending}
-            onClick={() => remove.mutate(selectedIds)}
-          >
-            현재 페이지 선택 삭제 ({selectedIds.length})
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!deletableIds.length || remove.isPending}
-            onClick={() => remove.mutate(deletableIds)}
-          >
-            현재 페이지 전체 삭제
-          </Button>
-        </div>
+        <HistorySelectionActions
+          total={deletableIds.length}
+          selected={selectedIds.length}
+          pending={remove.isPending}
+          onToggleAll={() => setSelected(toggleAllBacktests(selected, deletableIds))}
+          onRemoveSelected={() => remove.mutate(selectedIds)}
+          onRemoveAll={() => remove.mutate(deletableIds)}
+        />
       ) : null}
       {batchQuery.isError ? (
         <p role="alert" className="text-sm text-destructive">

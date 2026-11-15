@@ -6,6 +6,7 @@ import {
   ChevronDown,
   ChevronRight,
   LayoutGrid,
+  Pencil,
   Table2,
 } from "lucide-react";
 import { InfoHint } from "@/components/info-hint";
@@ -15,6 +16,8 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Tooltip,
   TooltipContent,
@@ -209,13 +212,31 @@ export function HistoryToolbar({
   controls,
   intraday,
   onChange,
+  editing = false,
+  onEditingChange,
 }: {
   controls: HistoryControlsState;
   intraday?: boolean;
   onChange?: () => void;
+  editing?: boolean;
+  onEditingChange?: (editing: boolean) => void;
 }) {
   const viewLabel =
     controls.view === "table" ? "카드 보기로 전환" : "표 보기로 전환";
+  const sortLabels: Record<HistorySort, string> = {
+    createdAt: controls.dir === "desc" ? "최신순" : "오래된 순",
+    periodEnd: `종료일 · ${controls.dir === "desc" ? "최근순" : "과거순"}`,
+    duration: `기간 · ${controls.dir === "desc" ? "긴 순" : "짧은 순"}`,
+    returnPct: `수익률 · ${controls.dir === "desc" ? "높은 순" : "낮은 순"}`,
+    cagrPct: `CAGR · ${controls.dir === "desc" ? "높은 순" : "낮은 순"}`,
+  };
+  const compactSortLabels: Record<HistorySort, string> = {
+    createdAt: sortLabels.createdAt,
+    periodEnd: "종료일",
+    duration: "기간",
+    returnPct: "수익률",
+    cagrPct: "CAGR",
+  };
   return (
     <div
       className="flex items-center gap-1 sm:gap-2"
@@ -232,24 +253,17 @@ export function HistoryToolbar({
           aria-label="전략 내 기록 정렬"
           className="min-h-11 min-w-0 text-xs sm:min-h-8 sm:text-sm"
         >
-          <SelectValue />
+          <SelectValue>
+            <span className="sm:hidden">{compactSortLabels[controls.sort]}</span>
+            <span className="hidden sm:inline">{sortLabels[controls.sort]}</span>
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="createdAt">
-            {controls.dir === "desc" ? "최신순" : "오래된 순"}
-          </SelectItem>
-          <SelectItem value="periodEnd">
-            종료일 · {controls.dir === "desc" ? "최근순" : "과거순"}
-          </SelectItem>
-          <SelectItem value="duration">
-            기간 · {controls.dir === "desc" ? "긴 순" : "짧은 순"}
-          </SelectItem>
-          <SelectItem value="returnPct">
-            수익률 · {controls.dir === "desc" ? "높은 순" : "낮은 순"}
-          </SelectItem>
-          <SelectItem value="cagrPct" disabled={intraday}>
-            CAGR · {controls.dir === "desc" ? "높은 순" : "낮은 순"}
-          </SelectItem>
+          {sorts.map((sort) => (
+            <SelectItem key={sort} value={sort} disabled={intraday && sort === "cagrPct"}>
+              {sortLabels[sort]}
+            </SelectItem>
+          ))}
         </SelectContent>
       </Select>
       <Button
@@ -270,27 +284,41 @@ export function HistoryToolbar({
           <ArrowUp aria-hidden />
         )}
       </Button>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            size="icon"
-            className="ml-auto size-11 sm:size-8"
-            variant="outline"
-            aria-label={viewLabel}
-            onClick={() => {
-              controls.setView(controls.view === "table" ? "cards" : "table");
-              onChange?.();
-            }}
-          >
-            {controls.view === "table" ? (
-              <LayoutGrid aria-hidden />
-            ) : (
-              <Table2 aria-hidden />
-            )}
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>{viewLabel}</TooltipContent>
-      </Tooltip>
+      <div className="ml-auto flex shrink-0 items-center gap-2">
+        {onEditingChange ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon"
+                variant={editing ? "secondary" : "outline"}
+                className="size-11 sm:size-8"
+                aria-label="편집"
+                aria-pressed={editing}
+                onClick={() => onEditingChange(!editing)}
+              >
+                <Pencil aria-hidden />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{editing ? "편집 종료" : "백테스트 편집"}</TooltipContent>
+          </Tooltip>
+        ) : null}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Switch
+              className="h-11 w-20 aria-checked:bg-muted aria-[checked=false]:bg-muted sm:h-8 sm:w-14 [&_[data-slot=switch-thumb]]:size-9 sm:[&_[data-slot=switch-thumb]]:size-6"
+              aria-label="카드 보기"
+              checked={controls.view === "cards"}
+              onCheckedChange={(checked) => {
+                controls.setView(checked ? "cards" : "table");
+                onChange?.();
+              }}
+            >
+              {controls.view === "table" ? <Table2 aria-hidden /> : <LayoutGrid aria-hidden />}
+            </Switch>
+          </TooltipTrigger>
+          <TooltipContent>{viewLabel}</TooltipContent>
+        </Tooltip>
+      </div>
     </div>
   );
 }
@@ -335,6 +363,42 @@ export function HistoryPager({
         </Button>
       </div>
     </nav>
+  );
+}
+
+export function HistorySelectionActions({
+  total,
+  selected,
+  pending,
+  onToggleAll,
+  onRemoveSelected,
+  onRemoveAll,
+}: {
+  total: number;
+  selected: number;
+  pending: boolean;
+  onToggleAll: () => void;
+  onRemoveSelected: () => void;
+  onRemoveAll: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1">
+      <label className="flex shrink-0 items-center gap-2 text-sm">
+        <Checkbox
+          checked={total > 0 && selected === total}
+          disabled={pending || total === 0}
+          onCheckedChange={onToggleAll}
+          aria-label="현재 페이지 선택"
+        />
+        현재 페이지 선택
+      </label>
+      <Button variant="destructive" size="sm" disabled={!selected || pending} onClick={onRemoveSelected}>
+        현재 페이지 선택 삭제 ({selected})
+      </Button>
+      <Button variant="outline" size="sm" disabled={!total || pending} onClick={onRemoveAll}>
+        현재 페이지 전체 삭제
+      </Button>
+    </div>
   );
 }
 
