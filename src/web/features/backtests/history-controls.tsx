@@ -1,6 +1,13 @@
 import { useCallback, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronDown,
+  ChevronRight,
+  LayoutGrid,
+  Table2,
+} from "lucide-react";
 import { InfoHint } from "@/components/info-hint";
 import {
   Collapsible,
@@ -8,6 +15,11 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -164,11 +176,13 @@ export function HistoryStrategyGroup({
       <section className="space-y-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <h3 className="min-w-0 truncate font-semibold">{name}</h3>
-          {description ? (
-            <InfoHint label={`${name} 전략 설명`}>
-              <p>{description}</p>
-            </InfoHint>
-          ) : null}
+          <InfoHint
+            label={`${name} 전략 설명`}
+            className="flex size-8 shrink-0 items-center justify-center"
+          >
+            <p className="font-medium">{name}</p>
+            {description ? <p>{description}</p> : null}
+          </InfoHint>
           <span className="ml-1 shrink-0 text-xs text-muted-foreground">
             {total}건
           </span>
@@ -200,6 +214,8 @@ export function HistoryToolbar({
   intraday?: boolean;
   onChange?: () => void;
 }) {
+  const viewLabel =
+    controls.view === "table" ? "카드 보기로 전환" : "표 보기로 전환";
   return (
     <div
       className="flex items-center gap-1 sm:gap-2"
@@ -214,7 +230,7 @@ export function HistoryToolbar({
       >
         <SelectTrigger
           aria-label="전략 내 기록 정렬"
-          className="min-w-0 text-xs sm:text-sm"
+          className="min-h-11 min-w-0 text-xs sm:min-h-8 sm:text-sm"
         >
           <SelectValue />
         </SelectTrigger>
@@ -237,8 +253,9 @@ export function HistoryToolbar({
         </SelectContent>
       </Select>
       <Button
-        size="sm"
+        size="icon"
         variant="outline"
+        className="size-11 sm:size-8"
         aria-label={
           controls.dir === "desc" ? "오름차순으로 변경" : "내림차순으로 변경"
         }
@@ -247,38 +264,44 @@ export function HistoryToolbar({
           onChange?.();
         }}
       >
-        {controls.dir === "desc" ? "↓" : "↑"}
+        {controls.dir === "desc" ? (
+          <ArrowDown aria-hidden />
+        ) : (
+          <ArrowUp aria-hidden />
+        )}
       </Button>
-      <div
-        className="ml-auto flex shrink-0 gap-1"
-        role="group"
-        aria-label="보기 방식"
-      >
-        {(["table", "cards"] as const).map((view) => (
+      <Tooltip>
+        <TooltipTrigger asChild>
           <Button
-            key={view}
-            size="sm"
-            className="px-2 text-xs sm:px-3"
-            variant={controls.view === view ? "default" : "outline"}
-            aria-pressed={controls.view === view}
+            size="icon"
+            className="ml-auto size-11 sm:size-8"
+            variant="outline"
+            aria-label={viewLabel}
             onClick={() => {
-              controls.setView(view);
+              controls.setView(controls.view === "table" ? "cards" : "table");
               onChange?.();
             }}
           >
-            {view === "table" ? "표 보기" : "카드 보기"}
+            {controls.view === "table" ? (
+              <LayoutGrid aria-hidden />
+            ) : (
+              <Table2 aria-hidden />
+            )}
           </Button>
-        ))}
-      </div>
+        </TooltipTrigger>
+        <TooltipContent>{viewLabel}</TooltipContent>
+      </Tooltip>
     </div>
   );
 }
 export function HistoryPager({
+  strategyName,
   page,
   total,
   limit,
   onPage,
 }: {
+  strategyName: string;
   page: number;
   total: number;
   limit: number;
@@ -286,7 +309,10 @@ export function HistoryPager({
 }) {
   const pages = Math.max(1, Math.ceil(total / limit));
   return (
-    <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+    <nav
+      aria-label={`${strategyName} 이력 페이지`}
+      className="flex items-center justify-between gap-2 text-xs text-muted-foreground"
+    >
       <span>
         {total}건 · {page} / {pages}
       </span>
@@ -308,7 +334,7 @@ export function HistoryPager({
           다음
         </Button>
       </div>
-    </div>
+    </nav>
   );
 }
 

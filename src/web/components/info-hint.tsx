@@ -1,5 +1,6 @@
 import { Info } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { cn } from "@/lib/utils";
 import {
   Tooltip,
   TooltipContent,
@@ -16,9 +17,11 @@ import {
  */
 export function InfoHint({
   label,
+  className,
   children,
 }: {
   label: string;
+  className?: string;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -43,7 +46,10 @@ export function InfoHint({
           type="button"
           aria-label={label}
           aria-expanded={open}
-          className="rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className={cn(
+            "rounded-full text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            className,
+          )}
           onClick={() => setOpen((prev) => !prev)}
           onBlur={() => setOpen(false)}
           onKeyDown={(e) => {
@@ -56,7 +62,8 @@ export function InfoHint({
       <TooltipContent
         side="top"
         align="start"
-        className="max-w-xs flex-col items-start gap-1"
+        collisionPadding={8}
+        className="max-w-[min(20rem,calc(100vw-1rem))] flex-col items-start gap-1"
       >
         {children}
       </TooltipContent>

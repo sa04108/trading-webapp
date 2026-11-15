@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
+import { TooltipProvider } from '../../src/web/components/ui/tooltip.js';
 import {
   BacktestsPage,
   BacktestJobCard,
@@ -216,9 +217,11 @@ describe('백테스트 목록', () => {
 
     const html = renderToStaticMarkup(
       <QueryClientProvider client={client}>
-        <MemoryRouter>
-          <BacktestsPage />
-        </MemoryRouter>
+        <TooltipProvider>
+          <MemoryRouter>
+            <BacktestsPage />
+          </MemoryRouter>
+        </TooltipProvider>
       </QueryClientProvider>,
     );
 
