@@ -364,7 +364,10 @@ export function createContainer(
     logger,
     symbolService,
   );
-  const intradayService = createIntradayService({ database, dataRoot: config.dataRoot, client: tossClient, symbolInfo: symbolInfoService });
+  const intradayService = createIntradayService({ database, dataRoot: config.dataRoot, client: tossClient, symbolInfo: symbolInfoService,
+    onRecoveryFailure: () => safeNotify({ type: "data-sync", severity: "error", title: "분봉 작업을 자동으로 재개하지 못했습니다",
+      body: "작업 센터에서 본인 작업의 실패 사유를 확인하고 설정이나 연결 문제를 해결한 뒤 다시 실행해주세요.", link: "/jobs" }),
+  });
 
   const fredSource = createFredBenchmarkSource(
     config.fredApiKey

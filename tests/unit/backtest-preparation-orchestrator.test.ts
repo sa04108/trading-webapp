@@ -1796,6 +1796,31 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
     ctx.handle.close();
   });
 
+  it('공시 확인 중 서버가 재시작되면 같은 준비 작업을 확인 완료 뒤 이어간다', async () => {
+    const ctx = makeDeps();
+    const first = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const beforeShutdown = deferred<void>();
+    const job = first.start(INPUT, undefined, () => beforeShutdown.promise);
+    await Promise.resolve();
+    const closing = first.stop();
+    beforeShutdown.resolve();
+    await closing;
+    expect(first.get(job.id)).toMatchObject({ status: 'WAITING_DATA', phase: 'FILING_DISCOVERY' });
+    const restarted = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const afterRestart = deferred<void>();
+    let checks = 0;
+    const check = async () => { checks++; await afterRestart.promise; };
+    restarted.recoverOrphaned(check);
+    restarted.recoverOrphaned(check);
+    await Promise.resolve();
+    expect(checks).toBe(1);
+    expect(restarted.get(job.id)?.status).toBe('WAITING_DATA');
+    afterRestart.resolve();
+    await waitFor(() => restarted.get(job.id)?.status === 'COMPLETED');
+    await restarted.stop();
+    ctx.handle.close();
+  });
+
   it('공시 목록 실패로 FactSync가 ERROR를 반환하면 준비 잡도 FAILED가 된다', async () => {
     const ctx = makeDeps({
       resolver: {

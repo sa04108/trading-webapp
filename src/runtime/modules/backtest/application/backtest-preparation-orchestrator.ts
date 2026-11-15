@@ -337,6 +337,7 @@ export class BacktestPreparationOrchestrator {
   private runnerActive = false;
   private runnerPromise: Promise<void> | null = null;
   private readonly providerChecks = new Set<Promise<void>>();
+  private readonly providerChecking = new Set<string>();
   private stopping = false;
   private readonly dailyLimit: number;
   private readonly previewCache: PreparationPreviewCache;
@@ -407,24 +408,29 @@ export class BacktestPreparationOrchestrator {
 
     const created = this.persistAndEmit(selected.row.id, {});
     if (!created) throw new Error("준비 작업을 저장하지 못했습니다.");
-    if (beforeQueue) {
-      const check = Promise.resolve().then(async () => {
-        if (this.stopping || this.get(created.id)?.status !== "WAITING_DATA") return;
-        try {
-          await beforeQueue();
-          if (this.stopping) return;
-          this.persistAndEmit(created.id, (row) => row.cancelRequested || row.phase !== "FILING_DISCOVERY"
-            ? null : { status: "QUEUED", phase: "MARKET_DATA" }, ["WAITING_DATA"]);
-          this.queuePump();
-        } catch (error) {
-          this.persistAndEmit(created.id, {
-            status: "FAILED", error: error instanceof Error ? error.message : String(error),
-          }, ["WAITING_DATA"]);
-        }
-      }).finally(() => { this.providerChecks.delete(check); });
-      this.providerChecks.add(check);
-    } else this.queuePump();
+    if (beforeQueue) this.checkProviderBeforeQueue(created.id, beforeQueue);
+    else this.queuePump();
     return created;
+  }
+
+  private checkProviderBeforeQueue(jobId: string, beforeQueue: () => Promise<void>): void {
+    if (this.providerChecking.has(jobId)) return;
+    this.providerChecking.add(jobId);
+    const check = Promise.resolve().then(async () => {
+      if (this.stopping || this.get(jobId)?.status !== "WAITING_DATA") return;
+      try {
+        await beforeQueue();
+        if (this.stopping) return;
+        this.persistAndEmit(jobId, (row) => row.cancelRequested || row.phase !== "FILING_DISCOVERY"
+          ? null : { status: "QUEUED", phase: "MARKET_DATA" }, ["WAITING_DATA"]);
+        this.queuePump();
+      } catch (error) {
+        this.persistAndEmit(jobId, {
+          status: "FAILED", error: error instanceof Error ? error.message : String(error),
+        }, ["WAITING_DATA"]);
+      }
+    }).finally(() => { this.providerChecks.delete(check); this.providerChecking.delete(jobId); });
+    this.providerChecks.add(check);
   }
 
   bindWizard(userId: string, context: string, preparationJobId: string): void {
@@ -847,14 +853,17 @@ export class BacktestPreparationOrchestrator {
     if (job && this.isTerminal(job.status)) this.notifyFinished(jobId);
   }
 
-  recoverOrphaned(): void {
-    // 재시작만으로 공급자 조회를 재개하지 않는다. 사용자의 다음 미리보기로 다시 확인한다.
+  recoverOrphaned(beforeQueue?: () => Promise<void>): void {
+    // 공시 확인도 저장된 준비 작업을 이어간다. 서버가 공급자 확인 경로를 주입한다.
     const interruptedChecks = this.deps.database.sqlite.prepare(
       "SELECT id FROM backtest_preparation_jobs WHERE status = 'WAITING_DATA' AND phase = 'FILING_DISCOVERY'",
     ).all() as { id: string }[];
-    for (const { id } of interruptedChecks) this.persistAndEmit(id, {
-      status: "FAILED", error: "공시 확인 중 서버가 재시작되었습니다. 미리보기를 다시 시작하세요.",
-    }, ["WAITING_DATA"]);
+    for (const { id } of interruptedChecks) {
+      if (beforeQueue) this.checkProviderBeforeQueue(id, beforeQueue);
+      else this.persistAndEmit(id, {
+        status: "FAILED", error: "공시 확인을 자동 재개할 연결이 없습니다. 미리보기를 다시 시작하세요.",
+      }, ["WAITING_DATA"]);
+    }
     if (this.deps.agentManaged) {
       this.deps.database.sqlite
         .prepare(

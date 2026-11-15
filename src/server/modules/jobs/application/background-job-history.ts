@@ -21,12 +21,18 @@ export class BackgroundJobHistory {
     clock: Clock,
     logger: Logger,
     private readonly sources: readonly BackgroundJobSource[],
+    private readonly notifyInterrupted: (job: JobItem) => void = () => {},
   ) {
     const current = new Set(sources.map((source) => source.currentJob()?.id));
     const abandoned = database.sqlite.prepare("SELECT snapshot_json FROM background_job_history WHERE finished_at_ms IS NULL").all() as Array<{ snapshot_json: string }>;
     for (const row of abandoned) {
       const job = JSON.parse(row.snapshot_json) as JobItem;
-      if (!current.has(job.id)) this.save({ ...job, status: "INTERRUPTED", phase: "서버 재시작으로 중단됨", error: "서버가 재시작되어 수집이 중단되었습니다. 저장된 데이터는 유지되며 원본 화면에서 다시 시작할 수 있습니다.", updatedAtMs: clock.now(), finishedAtMs: clock.now(), cancellable: false });
+      if (!current.has(job.id)) {
+        const cancelled = job.status === "CANCELLING";
+        const recovered: JobItem = { ...job, status: cancelled ? "CANCELLED" : "INTERRUPTED", phase: cancelled ? "취소됨" : "서버 재시작으로 중단됨", error: cancelled ? null : "서버가 재시작되어 수집이 중단되었습니다. 저장된 데이터는 유지되며 원본 화면에서 다시 시작할 수 있습니다.", updatedAtMs: clock.now(), finishedAtMs: clock.now(), cancellable: false };
+        this.save(recovered);
+        if (!cancelled) this.notifyInterrupted(recovered);
+      }
     }
     for (const source of sources) {
       const listener = (job: JobItem): void => {
@@ -34,9 +40,13 @@ export class BackgroundJobHistory {
           const previous = this.lastSaved.get(job.id);
           // 캐시된 날짜를 빠르게 통과해도 상태 이력 때문에 날짜마다 DB를 쓰지 않는다.
           if (previous?.status === job.status && clock.now() - previous.atMs < 1000) return;
-          this.save(this.stopping.has(job.id) && isFinishedJob(job.status)
+          const interrupted = this.stopping.has(job.id) && job.status === "CANCELLED";
+          if (isFinishedJob(job.status)) this.stopping.delete(job.id);
+          const saved: JobItem = interrupted
             ? { ...job, status: "INTERRUPTED", phase: "서버 종료로 중단됨", error: "서버 종료로 수집을 중단했습니다. 저장된 데이터는 유지됩니다.", cancellable: false }
-            : job);
+            : job;
+          this.save(saved);
+          if (interrupted) this.notifyInterrupted(saved);
           if (isFinishedJob(job.status)) this.lastSaved.delete(job.id);
           else this.lastSaved.set(job.id, { status: job.status, atMs: clock.now() });
         }

@@ -699,10 +699,10 @@ export class JobQueue {
     return result.changes > 0;
   }
 
-  /** 에이전트 임대가 없는 과거 활성 작업을 서버 재시작 시 중단 처리한다. */
+  /** 임대 없는 미완료 계산을 재배정하되 사용자가 요청한 취소는 유지한다. */
   recoverUnleasedJobs(): string[] {
     const active = this.db
-      .select({ id: backtestJobs.id })
+      .select({ id: backtestJobs.id, status: backtestJobs.status })
       .from(backtestJobs)
       .where(
         and(
@@ -716,9 +716,23 @@ export class JobQueue {
       // 임대가 있는 작업은 에이전트의 heartbeat와 만료 시각으로 복구한다.
       const written = this.setStatus(
         job.id,
-        "INTERRUPTED",
+        job.status === "CANCELLING" ? "CANCELLED" : "QUEUED",
         {
-          error: "서버 재시작으로 작업이 중단되었습니다. 복제 후 재실행하세요.",
+          error: null,
+          pid: null,
+          leaseTokenHash: null,
+          leaseExpiresAtMs: null,
+          runnerVersion: null,
+          progressBars: null,
+          totalBars: null,
+          progressLabel: null,
+          executionActivity: null,
+          activityStartedAtMs: null,
+          lastProgressAtMs: null,
+          lastReceivedAtMs: null,
+          resultTransferBytes: null,
+          resultTransferTotalBytes: null,
+          completedAtMs: job.status === "CANCELLING" ? this.clock.now() : null,
         },
         ACTIVE_STATUSES,
       );

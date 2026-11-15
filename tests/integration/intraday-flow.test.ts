@@ -66,19 +66,28 @@ async function fixture(
     });
     return bars;
   },
+  options: { now?: number; closedDates?: string[]; onRecoveryFailure?: () => void; validateSymbol?: (symbol: string) => Promise<{ listDate: string; isinCode: string }> } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "intraday-flow-")),
     database = openDatabase(":memory:");
   const store = new ParquetIntradayStore(dir);
-  const service = new IntradayService({
+  const services: IntradayService[] = [];
+  const makeService = (sourceFetch: IntradaySource["fetch"]) => {
+    const instance = new IntradayService({
     db: database.db,
     store,
-    source: { fetch },
-    now: () => now,
-    calendar: { classify: () => ({ state: "OPEN" }) },
+    source: { fetch: sourceFetch },
+    onRecoveryFailure: options.onRecoveryFailure,
+    validateSymbol: options.validateSymbol,
+    now: () => options.now ?? now,
+    calendar: { classify: (date) => ({ state: options.closedDates?.includes(date) ? "CLOSED" : "OPEN" }) },
     execute: executeIntraday,
     search: async () => [{ symbol: "005930", name: "삼성전자" }],
-  });
+    });
+    services.push(instance);
+    return instance;
+  };
+  const service = makeService(fetch);
   const app = Fastify();
   registerIntradayRoutes(app, service, async (req, reply) => {
     if (!req.headers.authorization) {
@@ -88,12 +97,12 @@ async function fixture(
     req.authUser = { id: req.headers.authorization, username: "tester" };
   });
   cleanups.push(async () => {
-    await service.close();
+    for (const instance of services) await instance.close();
     await app.close();
     database.close();
     await fs.rm(dir, { recursive: true, force: true });
   });
-  return { app, service, database, store };
+  return { app, service, database, store, makeService };
 }
 const headers = { authorization: "owner" };
 describe("분봉 준비부터 격리 계산과 저장까지", () => {
@@ -156,6 +165,185 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
       expect((await remove(ids[status]!)).statusCode).toBe(404);
     }
     expect((await store.list())[0]?.symbol).toBe("005930");
+  });
+
+  // 기존 수집 흐름 검사는 저장된 분봉 재사용과 날짜별 요청 범위를 검증하지 않는다.
+  it("완전한 날짜와 휴장일을 건너뛰고 누락 날짜별로 수집한 뒤 반복 수집을 생략한다", async () => {
+    const dayBars = (day: string) => bars.map((bar) => ({
+      ...bar, endMs: bar.endMs + (Date.parse(`${day}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)),
+    }));
+    const fetch = vi.fn<IntradaySource["fetch"]>(async (_symbol, from, _to, options) => {
+      const day = new Date(from + 9 * 3_600_000).toISOString().slice(0, 10);
+      const result = dayBars(day);
+      options?.onProgress?.({ pages: 2, fetchedBars: result.length, oldestEndMs: result[0]!.endMs });
+      return result;
+    });
+    const { service, store } = await fixture(fetch, { closedDates: ["2026-11-11"] });
+    await store.merge("005930", dayBars("2026-11-10"), now);
+    const period = { from: "2026-11-09", to: date };
+    const first = service.collect("owner", { symbol: "005930", period });
+    await vi.waitFor(() => expect(service.getCollection("owner", first.id).status).toBe("COMPLETED"));
+    expect(fetch.mock.calls.map(([, from, to]) => [from, to])).toEqual(
+      ["2026-11-09", date].map((day) => [Date.parse(`${day}T00:00:00+09:00`), Date.parse(`${day}T23:59:59.999+09:00`)]),
+    );
+    expect(service.getCollection("owner", first.id)).toMatchObject({ pages: 4, fetchedBars: 760 });
+    const second = service.collect("owner", { symbol: "005930", period });
+    await vi.waitFor(() => expect(service.getCollection("owner", second.id).status).toBe("COMPLETED"));
+    expect(service.getCollection("owner", second.id)).toMatchObject({ pages: 0, fetchedBars: 0 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("오늘의 미확정 분봉은 누락으로 수집하지 않는다", async () => {
+    const today = "2026-11-14";
+    const current = Date.parse(`${today}T09:03:00+09:00`);
+    const fetch = vi.fn<IntradaySource["fetch"]>();
+    const { service, store } = await fixture(fetch, { now: current });
+    const available = bars.slice(0, 2).map((bar) => ({ ...bar, endMs: bar.endMs + 2 * 86_400_000 }));
+    await store.merge("005930", available, current);
+    const collection = service.collect("owner", { symbol: "005930", period: { from: today, to: today } });
+    await vi.waitFor(() => expect(service.getCollection("owner", collection.id).status).toBe("COMPLETED"));
+    expect(service.getCollection("owner", collection.id)).toMatchObject({ pages: 0, fetchedBars: 0 });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("나중 날짜 수집 실패 후 앞서 저장한 날짜를 재요청하지 않는다", async () => {
+    let fail = true;
+    const fetch = vi.fn<IntradaySource["fetch"]>(async (_symbol, from, _to, options) => {
+      const day = new Date(from + 9 * 3_600_000).toISOString().slice(0, 10);
+      if (day === date && fail) throw new Error("later day failed");
+      const result = bars.map((bar) => ({ ...bar, endMs: bar.endMs + (Date.parse(`${day}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) }));
+      options?.onProgress?.({ pages: 1, fetchedBars: result.length, oldestEndMs: result[0]!.endMs });
+      return result;
+    });
+    const { service } = await fixture(fetch, { closedDates: ["2026-11-11"] });
+    const period = { from: "2026-11-10", to: date };
+    const first = service.collect("owner", { symbol: "005930", period });
+    await vi.waitFor(() => expect(service.getCollection("owner", first.id).status).toBe("FAILED"));
+    expect(service.getCollection("owner", first.id)).toMatchObject({ pages: 1, fetchedBars: 380, error: "later day failed" });
+    fail = false;
+    const retry = service.collect("owner", { symbol: "005930", period });
+    await vi.waitFor(() => expect(service.getCollection("owner", retry.id).status).toBe("COMPLETED"));
+    expect(fetch.mock.calls.map(([, from]) => from)).toEqual(["2026-11-10", date, date].map((day) => Date.parse(`${day}T00:00:00+09:00`)));
+    expect(service.getCollection("owner", retry.id)).toMatchObject({ pages: 1, fetchedBars: 380 });
+  });
+
+  // 재시작은 중단한 수집의 식별자와 날짜별 영속화를 함께 보호한다.
+  it("종료 후 수집을 같은 ID로 복구하고 이미 저장한 날짜를 재요청하지 않는다", async () => {
+    const firstDay = bars.map((bar) => ({ ...bar, endMs: bar.endMs - 2 * 86_400_000 }));
+    const initial = vi.fn<IntradaySource["fetch"]>(async (_symbol, from, _to, options) => {
+      if (from === Date.parse("2026-11-10T00:00:00+09:00")) return firstDay;
+      return new Promise<IntradayBar[]>((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      });
+    });
+    const { service, makeService } = await fixture(initial, { closedDates: ["2026-11-11"] });
+    const collection = service.collect("owner", { symbol: "005930", period: { from: "2026-11-10", to: date } });
+    await vi.waitFor(() => expect(initial).toHaveBeenCalledTimes(2));
+    await service.close();
+    expect(service.getCollection("owner", collection.id)).toMatchObject({ status: "QUEUED", error: null });
+    const resumed = vi.fn<IntradaySource["fetch"]>(async () => bars);
+    const restarted = makeService(resumed);
+    await restarted.recover();
+    await restarted.recover();
+    await vi.waitFor(() => expect(restarted.getCollection("owner", collection.id).status).toBe("COMPLETED"));
+    expect(resumed).toHaveBeenCalledOnce();
+    expect(resumed.mock.calls[0]!.slice(0, 3)).toEqual(["005930", Date.parse(`${date}T00:00:00+09:00`), Date.parse(`${date}T23:59:59.999+09:00`)]);
+  });
+
+  it("사용자가 취소한 수집은 재시작해도 복구하지 않는다", async () => {
+    const initial = vi.fn<IntradaySource["fetch"]>(async (_symbol, _from, _to, options) =>
+      new Promise<IntradayBar[]>((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }),
+    );
+    const { service, makeService } = await fixture(initial);
+    const collection = service.collect("owner", { symbol: "005930", period: { from: date, to: date } });
+    await vi.waitFor(() => expect(initial).toHaveBeenCalledOnce());
+    service.cancelCollection("owner", collection.id);
+    await service.close();
+    const resumed = vi.fn<IntradaySource["fetch"]>(async () => bars);
+    const restarted = makeService(resumed);
+    await restarted.recover();
+    expect(restarted.getCollection("owner", collection.id).status).toBe("CANCELLED");
+    expect(resumed).not.toHaveBeenCalled();
+  });
+
+  it("잘못 저장된 복구 요청은 실패 처리하고 알림을 보낸다", async () => {
+    const notify = vi.fn();
+    const { service, database } = await fixture(undefined, { onRecoveryFailure: notify });
+    database.db.insert(intradayCollections).values({
+      id: "invalid-collection", ownerId: "owner", symbol: "005930", periodJson: "{",
+      status: "RUNNING", createdAtMs: now, updatedAtMs: now,
+    }).run();
+    database.db.insert(intradayRuns).values({
+      id: "expired-run", ownerId: "owner", status: "PREPARING",
+      requestJson: JSON.stringify({ ...request, period: { from: "2024-01-01", to: "2024-01-01" } }),
+      createdAtMs: now, updatedAtMs: now,
+    }).run();
+    service.recover();
+    expect(service.getCollection("owner", "invalid-collection").status).toBe("FAILED");
+    expect(service.getRun("owner", "expired-run").status).toBe("FAILED");
+    expect(notify).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenCalledWith();
+  });
+
+  it("복구한 백테스트는 기존 자식 수집을 사용하고 중복 생성하지 않는다", async () => {
+    const fetch = vi.fn<IntradaySource["fetch"]>(async () => bars);
+    const { service, database } = await fixture(fetch);
+    database.db.insert(intradayRuns).values({
+      id: "resumed-run", ownerId: "owner", status: "PREPARING", requestJson: JSON.stringify(request),
+      createdAtMs: now, updatedAtMs: now,
+    }).run();
+    database.db.insert(intradayCollections).values({
+      id: "resumed-child", ownerId: "owner", parentRunId: "resumed-run", symbol: "005930",
+      periodJson: JSON.stringify(request.period), status: "RUNNING", createdAtMs: now, updatedAtMs: now,
+    }).run();
+    service.recover();
+    await vi.waitFor(() => expect(service.getRun("owner", "resumed-run").status).toBe("COMPLETED"), { timeout: 15_000 });
+    expect(service.getCollection("owner", "resumed-child").status).toBe("COMPLETED");
+    expect(database.db.select().from(intradayCollections).all().map((row) => row.id)).toEqual(["resumed-child"]);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(service.getRun("owner", "resumed-run").result?.processedBars).toBe(380);
+  });
+
+  it("복구한 부모 실행을 준비 중 취소하면 자식 수집도 취소한다", async () => {
+    let release!: (instrument: { listDate: string; isinCode: string }) => void;
+    const pending = new Promise<{ listDate: string; isinCode: string }>((resolve) => { release = resolve; });
+    const validateSymbol = vi.fn(() => pending);
+    const fetch = vi.fn<IntradaySource["fetch"]>(async () => bars);
+    const { service, database } = await fixture(fetch, { validateSymbol });
+    database.db.insert(intradayRuns).values({
+      id: "cancel-parent", ownerId: "owner", status: "PREPARING", requestJson: JSON.stringify(request),
+      createdAtMs: now, updatedAtMs: now,
+    }).run();
+    database.db.insert(intradayCollections).values({
+      id: "cancel-child", ownerId: "owner", parentRunId: "cancel-parent", symbol: "005930",
+      periodJson: JSON.stringify(request.period), status: "QUEUED", createdAtMs: now, updatedAtMs: now,
+    }).run();
+    service.recover();
+    await vi.waitFor(() => expect(validateSymbol).toHaveBeenCalled());
+    service.cancelRun("owner", "cancel-parent");
+    expect(service.getCollection("owner", "cancel-child").status).toBe("CANCELLED");
+    release({ listDate: "2000-01-01", isinCode: "KR0000000000" });
+    await service.close();
+    expect(service.getRun("owner", "cancel-parent").status).toBe("CANCELLED");
+    expect(service.getCollection("owner", "cancel-child").status).toBe("CANCELLED");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("백테스트는 누락된 하루만 수집하고 병합된 전체 분봉으로 실행한다", async () => {
+    const previous = bars.map((bar) => ({ ...bar, endMs: bar.endMs - 2 * 86_400_000 }));
+    const fetch = vi.fn<IntradaySource["fetch"]>(async (_symbol, _from, _to, options) => {
+      options?.onProgress?.({ pages: 1, fetchedBars: bars.length, oldestEndMs: bars[0]!.endMs });
+      return bars;
+    });
+    const { service, store } = await fixture(fetch, { closedDates: ["2026-11-11"] });
+    await store.merge("005930", [...previous, ...bars.filter((_, index) => index !== 10)], now);
+    const run = service.submit("owner", { ...request, period: { from: "2026-11-10", to: date } });
+    await vi.waitFor(() => expect(service.getRun("owner", run.id).status).toBe("COMPLETED"), { timeout: 15_000 });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0]!.slice(0, 3)).toEqual(["005930", Date.parse(`${date}T00:00:00+09:00`), Date.parse(`${date}T23:59:59.999+09:00`)]);
+    expect(service.getRun("owner", run.id).result?.processedBars).toBe(760);
   });
 
   it("인증·소유권을 검증하고 실제 Parquet 수집 뒤 별도 프로세스 결과를 보존한다", async () => {
