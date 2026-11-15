@@ -35,12 +35,20 @@ fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify({ args,
     directoryMode:fs.statSync(path.dirname(file)).mode & 0o777} : {}),
   domain:process.env.DOMAIN,memory:process.env.SERVER_MEMORY,trusted:process.env.TRAEFIK_TRUSTED_IPS })+'\n');
 if (args[0] === 'pull') process.exit(Number(process.env.PULL_EXIT || 0));
-if (args[0] === 'image') {
-  if (process.env.MISSING_IMAGE === '1') process.exit(1);
+if (args[0] === 'image' && args[1] === 'inspect') {
+  if (process.env.MISSING_IMAGE === '1' || args[args.length - 1] === process.env.BAD_PIN) process.exit(1);
   const ref = args[args.length - 1];
-  console.log(ref === process.env.OLD_IMAGE ? process.env.OLD_ID : process.env.CANDIDATE);
+  console.log((JSON.parse(process.env.IMAGE_IDS || '{}'))[ref] || (ref === process.env.OLD_IMAGE ? process.env.OLD_ID : process.env.CANDIDATE));
 }
-if (args[0] === 'ps' && (process.env.SERVER_RUNNING === '1' || (args.includes('--all') && process.env.SERVER_EXISTS === '1'))) console.log('server-container-id');
+if (args[0] === 'image' && args[1] === 'ls') console.log(args.includes('--quiet') ? (process.env.DANGLING_IMAGES || '') : (process.env.TAGGED_IMAGES || ''));
+if (args[0] === 'image' && args[1] === 'rm') process.exit(Number(process.env.CLEANUP_EXIT || 0));
+if (args[0] === 'ps' && args.includes('--quiet')) console.log(process.env.CONTAINERS || '');
+else if (args[0] === 'ps' && (process.env.SERVER_RUNNING === '1' || (args.includes('--all') && process.env.SERVER_EXISTS === '1'))) console.log('server-container-id');
+if (args[0] === 'inspect') console.log(process.env.CONTAINER_IMAGES || '');
+if (args[0] === 'buildx' && args[1] === 'inspect') process.exit(args[2] === process.env.REGISTERED_BUILDER ? 0 : 1);
+if (args[0] === 'buildx' && args[1] === 'prune') process.exit(Number(process.env.CLEANUP_EXIT || 0));
+if (args[0] === 'volume' && args[1] === 'inspect') process.exit(args[2] === process.env.EXISTING_VOLUME ? 0 : 1);
+if (args[0] === 'volume' && args[1] === 'rm') process.exit(Number(process.env.CLEANUP_EXIT || 0));
 if (args[0] === 'logs') console.log('server log');
 if (args[0] === 'compose') {
   if (args.includes('up')) process.exit(Number(process.env.START_EXIT || 0));
@@ -49,8 +57,12 @@ if (args[0] === 'compose') {
 }
 `);
   fs.chmodSync(path.join(bin, 'docker'), 0o755);
-  const run = (args: string[], env: Record<string, string | undefined> = {}) => {
-    const result = spawnSync(bash, [path.resolve('scripts/server.sh'), ...args], {
+  const run = (args: string[], env: Record<string, string | undefined> = {}, holdBuildLock = false) => {
+    const command = [path.resolve('scripts/server.sh'), ...args];
+    const bashArgs = holdBuildLock
+      ? ['-c', 'exec 8>"$1"; flock 8; shift; "$@"; status=$?; exit "$status"', 'lock', path.join(root, '.server-build.lock'), ...command]
+      : command;
+    const result = spawnSync(bash, bashArgs, {
       cwd: root, encoding: 'utf8', env: { ...process.env, DEPLOY_PATH: root,
         PATH: `${bin}:${process.env.PATH}`, DOCKER_CALLS: log, CANDIDATE: candidate, OLD_IMAGE: oldImage, OLD_ID: oldId, ...env },
     });
@@ -69,6 +81,102 @@ afterEach(() => {
 });
 
 describe('Docker 서버 설정과 업데이트', () => {
+  it('정리는 핀과 정지 컨테이너 및 다른 서비스 이미지를 보호한다', () => {
+    const h = harness();
+    const previous = `sha256:${'c'.repeat(64)}`;
+    const pending = `sha256:${'d'.repeat(64)}`;
+    const container = `sha256:${'e'.repeat(64)}`;
+    const stale = `sha256:${'f'.repeat(64)}`;
+    const dangling = `sha256:${'1'.repeat(64)}`;
+    const buildCandidate = `sha256:${'2'.repeat(64)}`;
+    const untagged = `sha256:${'3'.repeat(64)}`;
+    const secondCandidate = `sha256:${'4'.repeat(64)}`;
+    fs.writeFileSync(h.file('.server-image'), `${candidate}\n`);
+    fs.writeFileSync(h.file('.server-image.previous'), `${previous}\n`);
+    fs.writeFileSync(h.file('.server-update-pending'), `${pending}\n`);
+    fs.mkdirSync(h.file('.server-build-candidates'));
+    fs.writeFileSync(h.file('.server-build-candidates/first'), `${buildCandidate}\n`);
+    fs.writeFileSync(h.file('.server-build-candidates/second'), `${secondCandidate}\n`);
+    const env = {
+      IMAGE_IDS: JSON.stringify({ [candidate]: candidate, [previous]: previous, [pending]: pending, [buildCandidate]: buildCandidate, [secondCandidate]: secondCandidate }),
+      CONTAINERS: 'stopped-container', CONTAINER_IMAGES: container,
+      TAGGED_IMAGES: [
+        `${candidate} quant-platform:current`, `${previous} quant-platform:previous`,
+        `${pending} quant-platform:pending`, `${container} quant-platform:in-use`,
+        `${buildCandidate} quant-platform:building`, `${secondCandidate} quant-platform:building-other`, `${untagged} quant-platform:<none>`,
+        `${stale} quant-platform:stale`, `${stale} ghcr.io/sa04108/quant-platform:stale`,
+        `${stale} other-service:latest`,
+      ].join('\n'),
+      DANGLING_IMAGES: dangling,
+    };
+    expect(h.run(['cleanup'], env).status).toBe(0);
+    expect(h.calls().filter(call => call.args[0] === 'image' && call.args[1] === 'rm').map(call => call.args)).toEqual([
+      ['image', 'rm', '--no-prune', untagged],
+      ['image', 'rm', '--no-prune', 'quant-platform:stale'],
+      ['image', 'rm', '--no-prune', 'ghcr.io/sa04108/quant-platform:stale'],
+      ['image', 'rm', '--no-prune', dangling],
+    ]);
+    const danglingQuery = h.calls().find(call => call.args[0] === 'image' && call.args.includes('dangling=true'))!;
+    expect(danglingQuery.args.join(' ')).toContain('label=org.opencontainers.image.source=https://github.com/sa04108/trading-webapp');
+    expect(danglingQuery.args.join(' ')).toContain('label=org.opencontainers.image.title=Quant Platform');
+  });
+
+  it('현재 핀이 없거나 이전 핀이 끊어진 링크면 이미지 삭제를 건너뛴다', () => {
+    const h = harness();
+    const env = { TAGGED_IMAGES: `${candidate} quant-platform:stale` };
+    expect(h.run(['cleanup'], env).status).toBe(0);
+    expect(h.calls().some(call => call.args[0] === 'image' && call.args[1] === 'rm')).toBe(false);
+    fs.writeFileSync(h.file('.server-image'), `${candidate}\n`);
+    fs.symlinkSync('missing-image-pin', h.file('.server-image.previous'));
+    h.clear();
+    expect(h.run(['cleanup'], env).status).toBe(0);
+    expect(h.calls().some(call => call.args[0] === 'image' && call.args[1] === 'rm')).toBe(false);
+  });
+
+  it('빌드 잠금을 다른 프로세스가 보유하면 모든 정리를 건너뛴다', () => {
+    const h = harness();
+    fs.writeFileSync(h.file('.server-image'), `${candidate}\n`);
+    const result = h.run(['cleanup'], {
+      TAGGED_IMAGES: `sha256:${'f'.repeat(64)} quant-platform:stale`,
+      REGISTERED_BUILDER: 'quant-server-build', EXISTING_VOLUME: 'buildx_buildkit_quant-server-manual0_state',
+    }, true);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain('빌드 중');
+    expect(h.calls().some(call =>
+      (call.args[0] === 'image' && call.args[1] === 'rm') ||
+      (call.args[0] === 'buildx' && call.args[1] === 'prune') ||
+      (call.args[0] === 'volume' && call.args[1] === 'rm'))).toBe(false);
+  });
+
+  it('복구 핀을 확인하지 못하면 모든 이미지 삭제를 건너뛴다', () => {
+    const h = harness();
+    fs.writeFileSync(h.file('.server-image'), 'missing-pin\n');
+    const result = h.run(['cleanup'], { BAD_PIN: 'missing-pin', TAGGED_IMAGES: `${candidate} quant-platform:stale` });
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('이미지 정리');
+    expect(h.calls().some(call => call.args[0] === 'image' && call.args[1] === 'rm')).toBe(false);
+  });
+
+  it('업데이트와 정리는 빌더 캐시를 보존하고 이미지 정리 실패에도 배포를 유지한다', () => {
+    const h = harness();
+    expect(h.run(['init']).status).toBe(0);
+    fs.writeFileSync(h.file('.server-image'), `${oldImage}\n`);
+    h.clear();
+    const env = {
+      REGISTERED_BUILDER: 'quant-server-build', EXISTING_VOLUME: 'buildx_buildkit_quant-server-manual0_state',
+      CLEANUP_EXIT: '1', TAGGED_IMAGES: `sha256:${'f'.repeat(64)} quant-platform:stale`,
+    };
+    const result = h.run(['update', 'quant-platform:release'], env);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain('정리 실패');
+    expect(fs.readFileSync(h.file('.server-image'), 'utf8').trim()).toBe(candidate);
+    expect(fs.readFileSync(h.file('.server-image.previous'), 'utf8').trim()).toBe(oldImage);
+    expect(fs.existsSync(h.file('.server-update-pending'))).toBe(false);
+    expect(h.run(['cleanup'], env).status).toBe(0);
+    expect(h.calls().some(call => call.args[0] === 'buildx' && call.args[1] === 'prune')).toBe(false);
+    expect(h.calls().some(call => call.args[0] === 'volume' && call.args[1] === 'rm')).toBe(false);
+  });
+
   it('설정 실패는 기존 서버를 유지하고 DB 준비·기동 실패는 같은 후보로만 복구한다', () => {
     const h = harness();
     expect(h.run(['init']).status).toBe(0);
@@ -83,7 +191,11 @@ describe('Docker 서버 설정과 업데이트', () => {
     expect(h.calls().some(call => call.args[0] === 'stop')).toBe(false);
     expect(fs.existsSync(h.file('.server-update-pending'))).toBe(false);
     for (const failure of [{ PREPARE_EXIT: '1' }, { START_EXIT: '1' }]) {
+      h.clear();
       expect(h.run(['update'], failure).status).not.toBe(0);
+      expect(h.calls().some(call => call.args[0] === 'buildx' && call.args[1] === 'prune')).toBe(false);
+      expect(h.calls().some(call => call.args[0] === 'image' && call.args[1] === 'rm')).toBe(false);
+      expect(h.calls().some(call => call.args[0] === 'volume' && call.args[1] === 'rm')).toBe(false);
       expect(fs.readFileSync(h.file('.server-image'), 'utf8').trim()).toBe(oldImage);
       expect(fs.readFileSync(h.file('.server-update-pending'), 'utf8').trim()).toBe(candidate);
       h.clear();

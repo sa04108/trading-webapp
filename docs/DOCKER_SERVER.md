@@ -14,9 +14,9 @@
 
 `main` push 또는 [Publish and deploy](../.github/workflows/deploy.yml)를 `main`에서 수동 실행하면 GitHub 호스팅 runner에서 Windows 설치기, lint·typecheck·전체 회귀, 서버·웹·Agent 빌드와 Agent 패키지를 검사한다. amd64 Agent 이미지를 `ghcr.io/sa04108/quant-agent:v-<agentVersion>`으로 게시하고 실행 검사에 성공하면 Agent `latest` 별칭을 갱신한다. 다른 브랜치에서 수동 실행하면 Windows 설치기 검사만 수행한다. Actions의 패키지 쓰기 권한은 Agent 게시 작업에만 필요하다.
 
-이어 미니 PC의 self-hosted runner가 같은 커밋에서 서버 이미지를 직접 빌드하고 로컬 Docker에 적재한다. 서버 이미지에는 검증한 Agent digest가 내장된다. 빌더는 CPU 2개·메모리 4GiB로 제한하고 BuildKit 캐시를 유지한다. DB 준비·웹·readiness·정상 종료·Agent 버전·배포 SHA를 임시 컨테이너에서 검사한 뒤에만 `quant-platform:sha-<커밋 SHA>` 태그를 붙이고 정확한 이미지 ID로 서버를 교체한다. 성공 후 `quant-platform:local`도 같은 이미지로 지정한다. 서버 이미지는 레지스트리에 게시하거나 레지스트리에서 내려받지 않는다.
+이어 미니 PC의 self-hosted runner가 같은 커밋에서 서버 이미지를 직접 빌드하고 로컬 Docker에 적재한다. 서버 이미지에는 검증한 Agent digest가 내장된다. 빌더는 CPU 2개·메모리 4GiB로 제한하고 다음 빌드에 사용할 BuildKit 캐시를 유지한다. DB 준비·웹·readiness·정상 종료·Agent 버전·배포 SHA를 임시 컨테이너에서 검사한 뒤에만 `quant-platform:sha-<커밋 SHA>` 태그를 붙이고 정확한 이미지 ID로 서버를 교체한다. 성공 후 `quant-platform:local`도 같은 이미지로 지정한다. 서버 이미지는 레지스트리에 게시하거나 레지스트리에서 내려받지 않는다.
 
-같은 커밋의 검증된 로컬 태그가 남아 있으면 서버를 다시 빌드하지 않고 같은 이미지 ID를 재검사해 사용한다. 이때 내장된 기존 Agent digest도 유지한다. 따라서 DB 준비·기동 실패 후 같은 커밋을 다시 실행해 같은 후보로 복구할 수 있다. 호스팅 runner의 릴리스 검사와 Agent 게이트는 매번 실행한다. 빌드 전과 적용 직전에 최신 `main`인지 확인하며 이전 커밋이면 적용을 건너뛴다. workflow는 `quant-platform-production` 그룹으로 직렬화하고 실행 중인 작업을 새 실행 때문에 취소하지 않는다. 이전 로컬 서버 이미지와 Agent 설치 파일이 참조하는 GHCR 이미지는 자동 삭제하지 않는다.
+같은 커밋의 검증된 로컬 태그가 남아 있으면 서버를 다시 빌드하지 않고 같은 이미지 ID를 재검사해 사용한다. 이때 내장된 기존 Agent digest도 유지한다. 따라서 DB 준비·기동 실패 후 같은 커밋을 다시 실행해 같은 후보로 복구할 수 있다. 호스팅 runner의 릴리스 검사와 Agent 게이트는 매번 실행한다. 빌드 전과 적용 직전에 최신 `main`인지 확인하며 이전 커밋이면 적용을 건너뛴다. workflow는 `quant-platform-production` 그룹으로 직렬화하고 실행 중인 작업을 새 실행 때문에 취소하지 않는다. 배포 성공 후 로컬 서버 이미지는 현재·직전·재시도 핀과 모든 컨테이너가 참조하는 이미지를 보존하고 나머지 과거 서버 태그 및 공식 서버의 미참조 임시 이미지를 정리한다. Agent 설치 파일이 참조하는 GHCR 이미지는 삭제하지 않는다.
 
 ## 자동 배포 설정
 
@@ -128,6 +128,9 @@ git pull --ff-only
 export AGENT_CONTAINER_IMAGE='ghcr.io/sa04108/quant-agent@sha256:<검증한 Agent digest>'
 export EXPECTED_AGENT_VERSION='<같은 릴리스의 agentVersion>'
 export EXPECTED_GIT_SHA="$(git rev-parse HEAD)"
+build_root="${DEPLOY_PATH:-$PWD}"
+exec 8>"$build_root/.server-build.lock"
+flock 8
 if ! docker buildx inspect quant-server-manual >/dev/null 2>&1; then
   docker buildx create --name quant-server-manual --driver docker-container \
     --driver-opt memory=4g,cpu-period=100000,cpu-quota=200000
@@ -142,12 +145,18 @@ docker run --pull never --rm --init --memory 1g --cpus 1 \
   --env EXPECTED_AGENT_VERSION --env EXPECTED_GIT_SHA \
   --mount "type=bind,source=$PWD/tests/helpers/container-server-smoke.mjs,target=/tmp/container-server-smoke.mjs,readonly" \
   --entrypoint node "$candidate" /tmp/container-server-smoke.mjs
+mkdir -p "$build_root/.server-build-candidates"
+candidate_pin="$(mktemp "$build_root/.server-build-candidates/manual.XXXXXX")"
+printf '%s\n' "$candidate" > "$candidate_pin"
+exec 8>&-
 ```
 
 최초 실행이면 위의 관리자 등록 절차로 이어간다. 기존 서버를 교체할 때는 검사를 통과한 후보를 적용한다.
 
 ```bash
 bash scripts/server.sh update "$candidate"
+rm -f -- "$candidate_pin"
+bash scripts/server.sh cleanup
 ```
 
 업데이트는 로컬 이미지 ID 확인 → 후보 이미지의 설정 검증 → 앱 서비스 중지 → 후보 이미지의 `db:prepare` → readiness 확인 순서다. 이미지 조회·설정 검증 실패는 실행 중인 앱을 중지하지 않는다. 성공한 서버 이미지 ID(`sha256:…`)를 `.server-image`에 기록하여 이후 `up`이 같은 이미지를 실행한다. 기존 pin은 `.server-image.previous`에 남는다. `pnpm deploy`는 같은 업데이트 명령의 별칭이다. 기본 후보는 `config.env`의 `SERVER_IMAGE`이며 새 기본값은 `quant-platform:local`이다.
@@ -161,6 +170,6 @@ bash scripts/server.sh update "$(cat .server-update-pending)"
 
 다른 버전으로 되돌릴 때는 운영자가 DB·데이터·이미지 호환성을 함께 확인하고 필요한 복원을 수행한다. 이전 이미지 기록만으로 자동 롤백하지 않는다. pending 파일은 복구 상태가 확인된 뒤에만 수동 정리하며, 직접 `docker compose up`으로 이 차단을 우회하지 않는다. 같은 프로젝트의 변경 작업은 helper의 잠금으로 직렬화한다.
 
-로컬 서버 이미지는 복구에도 사용하므로 `.server-image`, `.server-image.previous`, `.server-update-pending`이 참조하는 이미지와 검증된 커밋 태그를 보존한다. 이 이미지를 지우는 `docker image prune -a` 등의 정리를 하지 않는다. GHCR의 기존 `quant-platform` 패키지는 새 로컬 빌드 방식으로 첫 배포가 성공하고 필요한 이전 이미지가 미니 PC에 남아 있음을 확인한 뒤 운영자가 삭제할 수 있다. 사용자 설치에 필요한 `quant-agent` 패키지는 유지한다. 기존 `config.env`의 `SERVER_IMAGE`가 GHCR 주소라면 수동 업데이트를 위해 `quant-platform:local`로 바꾼다. 자동 배포는 명시적인 로컬 이미지 ID를 전달하므로 기존 설정값에 의존하지 않는다.
+로컬 서버 이미지는 복구에도 사용하므로 `.server-image`, `.server-image.previous`, `.server-update-pending`, `.server-build-candidates/`의 후보 핀 및 실행·정지한 컨테이너가 참조하는 이미지를 보존한다. 현재 운영 핀이 없으면 이미지 정리를 건너뛴다. 자동·수동 빌드는 후보별 파일을 유지해 서로 덮어쓰지 않는다. 자동 배포는 종료 시 자신의 후보 핀을 해제하며, 수동 업데이트가 실패하면 재시도 후 해당 핀을 해제한다. 빌드부터 후보 핀 저장까지 운영 디렉터리의 `.server-build.lock`을 공유하며, 빌드 중이면 전체 정리를 미룬다. `update`는 readiness 확인과 핀 저장에 성공한 뒤 이 보호 대상을 제외한 `quant-platform:*`, `ghcr.io/sa04108/quant-platform:*` 태그와 공식 source·title label이 있는 미참조 임시 이미지만 강제 없이 정리한다. 핀을 확인할 수 없으면 이미지 정리를 건너뛴다. 빌드 캐시와 빌더 상태 볼륨은 자동 삭제하지 않는다. Actions가 `keep-state: true`로 남긴 볼륨은 빌더 등록이 사라져도 다음 빌드에서 재사용하므로 고아 볼륨으로 간주하지 않는다. BuildKit의 미사용 캐시도 다음 빌드에 유용할 수 있어 일괄 prune하지 않는다. 다른 서비스의 빌더·볼륨과 Agent 이미지도 정리하지 않는다. 정리 실패는 경고로 남기며 성공한 배포를 되돌리지 않는다. 같은 정리는 서버를 중지하지 않고 `bash scripts/server.sh cleanup`으로 실행할 수 있다. DB 백업 파일은 이 자동 정리에 포함하지 않는다. `docker image prune -a`와 전체 볼륨 정리로 보호 대상을 우회하지 않는다. GHCR의 기존 `quant-platform` 패키지는 새 로컬 빌드 방식으로 첫 배포가 성공하고 필요한 이전 이미지가 미니 PC에 남아 있음을 확인한 뒤 운영자가 삭제할 수 있다. 사용자 설치에 필요한 `quant-agent` 패키지는 유지한다. 기존 `config.env`의 `SERVER_IMAGE`가 GHCR 주소라면 수동 업데이트를 위해 `quant-platform:local`로 바꾼다. 자동 배포는 명시적인 로컬 이미지 ID를 전달하므로 기존 설정값에 의존하지 않는다.
 
 Docker 서버에는 같은 릴리스의 Agent 이미지 digest가 내장된다. 서버 업데이트 후 버전 불일치가 표시되면 설정 → Agent에서 저장한 기존 활성 토큰으로 Agent 설치 파일을 다시 내려받아 실행한다. 같은 토큰은 기존 장치와 캐시 볼륨을 유지한다. 토큰을 보관하지 않았다면 기존 장치를 해제하고 새 토큰을 발급하며, 이 경우 별도 캐시 볼륨을 사용한다. 이전 서버·설치 파일이 참조하는 이미지를 workflow에서 자동 삭제하지 않는다.

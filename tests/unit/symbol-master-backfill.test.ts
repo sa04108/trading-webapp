@@ -68,6 +68,25 @@ function setTradingDay(fake: KrxFakeServer, basDd: string): void {
 }
 
 describe('SymbolMasterBackfill', () => {
+  it('마지막 날짜 수집 중 취소는 요청 종료까지 기다리며 새 작업을 보호한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
+    let release!: () => void;
+    const service = { ingestDate: vi.fn(() => new Promise<void>((resolve) => { release = resolve; })) } as unknown as SymbolMasterService;
+    const runner = new SymbolMasterBackfill({ service, source: ctx.source, clock: new MutableClock(kstNoonMs('2023-01-02')), logger: ctx.t.container.logger });
+    runner.start('2023-01-02', '2023-01-02');
+    const id = runner.currentJob()!.id;
+    expect(runner.cancelJob(id)).toBe(true);
+    expect(runner.currentJob()?.status).toBe('CANCELLING');
+    runner.start('2023-01-03', '2023-01-03');
+    expect(runner.currentJob()?.id).toBe(id);
+    release();
+    await vi.waitFor(() => expect(runner.currentJob()?.status).toBe('CANCELLED'));
+    runner.start('2023-01-03', '2023-01-03');
+    expect(runner.cancelJob(id)).toBe(false);
+    release();
+    await vi.waitFor(() => expect(runner.currentJob()?.status).toBe('COMPLETED'));
+  });
+
   it('3일 범위를 예산 안에서 끝까지 채우면 IDLE + cursorDate null 로 돌아온다', async ({ krxApps }) => {
     const ctx = await setup(krxApps);
     setTradingDay(ctx.fake, '20230102');

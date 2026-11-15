@@ -1,3 +1,6 @@
+import { EventEmitter } from "node:events";
+import { newId } from "../../../../runtime/shared/ids.js";
+import type { JobItem, JobStatus } from "../../../../shared/schemas/jobs.js";
 import { createHash } from "node:crypto";
 import { and, asc, eq, gte, lte } from "drizzle-orm";
 import {
@@ -71,6 +74,37 @@ function isCalendarRangeAccountedFor(
 }
 
 export class BenchmarkService {
+  readonly jobEvents = new EventEmitter();
+  private job: JobItem | null = null;
+  private stopRequested = false;
+
+  currentJob(): JobItem | null { return this.job; }
+
+  private updateJob(status: JobStatus, current: number | null, total: number | null, label: string | null, error: string | null = null): void {
+    if (!this.job) return;
+    const now = this.deps.clock.now();
+    const finished = ["COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"].includes(status);
+    this.job = { ...this.job, status, phase: label, error, updatedAtMs: now,
+      finishedAtMs: finished ? now : null, cancellable: status === "RUNNING",
+      progress: { current, total, percent: current !== null && total ? Math.min(100, current / total * 100) : null, label } };
+    for (const listener of this.jobEvents.rawListeners("job")) {
+      try { listener.call(this.jobEvents, this.job); } catch { /* 관찰자 오류가 수집을 중단하지 않는다. */ }
+    }
+  }
+
+  cancelJob(id: string): boolean {
+    if (!this.job || this.job.id !== id || this.job.status !== "RUNNING") return false;
+    this.stopRequested = true;
+    const p = this.job.progress!;
+    this.updateJob("CANCELLING", p.current, p.total, p.label);
+    return true;
+  }
+
+  private finishCancelled(): void {
+    this.backfill = { ...this.backfill, state: "IDLE", error: "사용자가 수집을 취소했습니다." };
+    const p = this.job!.progress!;
+    this.updateJob("CANCELLED", p.current, p.total, p.label, this.backfill.error);
+  }
   private backfill: BenchmarkBackfillStatus = {
     benchmarkId: null,
     state: "IDLE",
@@ -282,6 +316,10 @@ export class BenchmarkService {
     to: string,
   ): BenchmarkBackfillStatus {
     if (this.backfill.state === "RUNNING") return this.backfill;
+    this.stopRequested = false;
+    const now = this.deps.clock.now();
+    const total = isFredBenchmarkId(benchmarkId) ? null : Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / 86400000) + 1);
+    this.job = { id: `benchmark:${newId("sync")}`, kind: "benchmark", title: `${BENCHMARK_NAMES[benchmarkId]} 수집`, status: "RUNNING", phase: from, description: `${from} ~ ${to}`, progress: null, error: null, createdAtMs: now, updatedAtMs: now, finishedAtMs: null, cancellable: true, link: "/datasets/benchmarks" };
     this.backfill = {
       benchmarkId,
       state: "RUNNING",
@@ -290,6 +328,7 @@ export class BenchmarkService {
       to,
       error: null,
     };
+    this.updateJob("RUNNING", total === null ? null : 0, total, from);
     void this.runBackfill(benchmarkId, from, to);
     return this.backfill;
   }
@@ -312,6 +351,7 @@ export class BenchmarkService {
         );
         this.savePoints(benchmarkId, points);
         this.saveBenchmarkCoverage(benchmarkId, from, to);
+        if (this.stopRequested) { this.finishCancelled(); return; }
         this.backfill = {
           benchmarkId,
           state: "IDLE",
@@ -320,17 +360,23 @@ export class BenchmarkService {
           to,
           error: null,
         };
+        this.updateJob("COMPLETED", null, null, null);
         return;
       }
 
       const existingDates = new Set(
         this.list(benchmarkId, from, to).map(({ date }) => date),
       );
+      const total = this.job!.progress!.total!;
+      let completed = 0;
       for (let date = from; date <= to; date = addCalendarDays(date, 1)) {
+        if (this.stopRequested) { this.finishCancelled(); return; }
         this.backfill.cursorDate = date;
-        if (isWeekendDate(date) || existingDates.has(date)) continue;
-        await this.syncDate(benchmarkId, date);
+        if (!isWeekendDate(date) && !existingDates.has(date)) await this.syncDate(benchmarkId, date);
+        completed++;
+        this.updateJob(this.stopRequested ? "CANCELLING" : "RUNNING", completed, total, date);
       }
+      if (this.stopRequested) { this.finishCancelled(); return; }
       this.backfill = {
         benchmarkId,
         state: "IDLE",
@@ -339,7 +385,9 @@ export class BenchmarkService {
         to,
         error: null,
       };
+      this.updateJob("COMPLETED", completed, total, null);
     } catch (error) {
+      if (this.stopRequested) { this.finishCancelled(); return; }
       const originalMessage = error instanceof Error ? error.message : String(error);
       const cursorDate = this.backfill.cursorDate;
       const pendingEmpty = error instanceof ProviderRequestBlockedError &&
@@ -356,6 +404,8 @@ export class BenchmarkService {
         to,
         error: message,
       };
+      const p = this.job!.progress!;
+      this.updateJob("FAILED", p.current, p.total, cursorDate, message);
       this.deps.logger.error(
         {
           module: "market-data",

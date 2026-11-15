@@ -8,6 +8,7 @@ ROOT="${DEPLOY_PATH:-$RELEASE_ROOT}"
 cd "$ROOT"
 ROOT="$PWD"
 source "$SCRIPT_DIR/lib/server-config.sh"
+source "$SCRIPT_DIR/lib/server-storage.sh"
 command="${1:-help}"
 if (($#)); then shift; fi
 RENDER_DIR=''
@@ -112,6 +113,7 @@ update() {
   mv .server-image.tmp .server-image
   rm .server-update-pending
   printf '실행 이미지: %s\n' "$candidate"
+  cleanup_server_storage
 }
 
 case "$command" in
@@ -155,6 +157,10 @@ case "$command" in
     lock_operation
     stop_server
     ;;
+  cleanup)
+    lock_operation
+    cleanup_server_storage
+    ;;
   status)
     server_containers --all --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
     ;;
@@ -174,7 +180,7 @@ case "$command" in
     compose_image "$(active_image)" run --pull never --rm --no-deps --label traefik.enable=false server node dist/server/cli.js "$@"
     ;;
   help|--help|-h)
-    echo '사용법: scripts/server.sh init | validate | up | update [이미지] | stop | status | logs [server] | cli <명령>'
+    echo '사용법: scripts/server.sh init | validate | up | update [이미지] | cleanup | stop | status | logs [server] | cli <명령>'
     echo '운영 설정은 config.env 한 곳에서 관리합니다.'
     ;;
   *) echo "알 수 없는 명령: $command" >&2; exit 64 ;;

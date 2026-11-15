@@ -24,6 +24,7 @@ export const backtestValidations = sqliteTable(
     dataRevision: integer("data_revision"),
     error: text("error"),
     createdAtMs: integer("created_at_ms").notNull(),
+    completedAtMs: integer("completed_at_ms"),
   },
   (table) => [index("idx_validation_source").on(table.sourceJobId)],
 );

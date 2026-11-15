@@ -4,6 +4,7 @@ import { withDiagnostics, measureAsync } from "../../../../runtime/shared/diagno
 import { MAX_BACKTEST_BARS } from "../domain/bar-estimate.js";
 import { createSubmissionValidator, preparedPreviewToResolved, pinnedScheduleIdentityError, validateStaticSubmission as validateStatic, type FundamentalsRequirementIssue, type SubmissionValidator } from "../application/submission-validation.js";
 import type { PeriodValidationDto } from "../../../../shared/schemas/period-validation.js";
+import type { PeriodValidationService } from "../application/period-validation-service.js";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import { registerPeriodValidationRoutes } from "./period-validation-routes.js";
 import { PreparationReferenceService } from "../application/preparation-reference-service.js";
@@ -386,7 +387,7 @@ export function registerBacktestRoutes(
   app: FastifyInstance,
   deps: BacktestRouteDeps,
   requireAuth: PreHandler,
-): void {
+): PeriodValidationService {
   const {
     queue,
     orchestrator,
@@ -1632,4 +1633,5 @@ export function registerBacktestRoutes(
       });
     },
   );
+  return validations;
 }

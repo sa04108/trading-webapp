@@ -401,7 +401,7 @@ export class PeriodValidationService {
   ): void {
     const changed = this.deps.database.db
       .update(backtestValidations)
-      .set({ status })
+      .set({ status, completedAtMs: this.deps.clock.now() })
       .where(
         and(
           eq(backtestValidations.id, id),

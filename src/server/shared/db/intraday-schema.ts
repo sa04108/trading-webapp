@@ -6,6 +6,8 @@ export const intradayCollections = sqliteTable(
   {
     id: text("id").primaryKey(),
     ownerId: text("owner_id").notNull(),
+    /** 백테스트가 내부적으로 시작한 수집은 부모 작업에서 관찰·취소한다. */
+    parentRunId: text("parent_run_id"),
     symbol: text("symbol").notNull(),
     periodJson: text("period_json").notNull(),
     status: text("status").notNull(),
@@ -16,7 +18,10 @@ export const intradayCollections = sqliteTable(
     createdAtMs: integer("created_at_ms").notNull(),
     updatedAtMs: integer("updated_at_ms").notNull(),
   },
-  (t) => [index("intraday_collections_owner").on(t.ownerId, t.createdAtMs)],
+  (t) => [
+    index("intraday_collections_owner").on(t.ownerId, t.createdAtMs),
+    index("intraday_collections_parent").on(t.parentRunId),
+  ],
 );
 
 export const intradayRuns = sqliteTable(
