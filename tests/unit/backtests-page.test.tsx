@@ -118,7 +118,7 @@ describe('백테스트 목록', () => {
       </MemoryRouter>,
     );
 
-    expect(html).toContain('CAGR +12.34%');
+    expect(html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')).toContain('CAGR +12.34%');
     expect(html).toContain('매도 체결 3건');
   });
 
@@ -199,8 +199,9 @@ describe('백테스트 목록', () => {
     const source = job('source', 'COMPLETED');
     const childBatch = batch('seed-batch', source.id);
     const client = new QueryClient();
-    client.setQueryData(['backtests'], { jobs: [] });
-    client.setQueryData(['backtest-clone-batches'], {
+    client.setQueryData(['backtests', 'groups'], { groups: [{ strategyId: source.strategyId, total: 1 }] });
+    client.setQueryData(['backtests', 'history', 'strategyId=range-breakout&sort=createdAt&dir=desc&limit=6&offset=0'], { jobs: [source], total: 1 });
+    client.setQueryData(['backtest-clone-batches', 'sources', ['source']], {
       batches: [childBatch],
       sourceJobs: [source],
     });

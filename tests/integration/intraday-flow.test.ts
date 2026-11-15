@@ -11,6 +11,7 @@ import {
 import { executeIntraday } from "../../src/server/modules/intraday/application/forked-intraday-engine.js";
 import { ParquetIntradayStore } from "../../src/server/modules/intraday/infrastructure/parquet-intraday-store.js";
 import { registerIntradayRoutes } from "../../src/server/modules/intraday/presentation/intraday-routes.js";
+import { intradayRuns } from "../../src/server/shared/db/intraday-schema.js";
 import type {
   IntradayBar,
   IntradayRequest,
@@ -95,6 +96,44 @@ async function fixture(
 }
 const headers = { authorization: "owner" };
 describe("분봉 준비부터 격리 계산과 저장까지", () => {
+  // 기존 실행 흐름 검사는 100건 이후 이력과 목록 지표·정렬의 소유권 경계를 다루지 않는다.
+  it("전체 이력의 지표를 정렬하고 결과 본문 없이 소유자별 페이지와 개수를 반환한다", async () => {
+    const { app, database } = await fixture();
+    for (let i = 0; i < 103; i++) {
+      database.db.insert(intradayRuns).values({
+        id: `history-${String(i).padStart(3, "0")}`, ownerId: i === 102 ? "other" : "owner",
+        status: i === 100 ? "FAILED" : "COMPLETED", error: null,
+        requestJson: JSON.stringify({ ...request, strategyId: i === 101 ? "intraday-orb" : request.strategyId }),
+        createdAtMs: now + i, updatedAtMs: now + i,
+        resultJson: JSON.stringify({ metrics: { returnPct: i === 0 ? 500 : i, maxDrawdownPct: -5 }, equity: [{ endMs: now, equity: 123 }] }),
+      }).run();
+    }
+    const get = (query: string) => app.inject({ method: "GET", url: `/intraday/runs${query}`, headers });
+    expect((await get("/groups")).json()).toEqual({ groups: [
+      { strategyId: "intraday-ema", total: 101 },
+      { strategyId: "intraday-orb", total: 1 },
+    ] });
+    const legacy = (await get("")).json();
+    expect(legacy.runs).toHaveLength(100);
+    expect(legacy.total).toBe(102);
+    const query = "?strategyId=intraday-ema&sort=returnPct&dir=desc&limit=2";
+    const first = (await get(query)).json();
+    expect(first.total).toBe(101);
+    expect(first.runs.map((r: { id: string }) => r.id)).toEqual(["history-000", "history-099"]);
+    expect(first.runs[0].metrics).toEqual({ returnPct: 500, maxDrawdownPct: -5 });
+    expect(first.runs[0]).not.toHaveProperty("result");
+    for (const dir of ["asc", "desc"]) {
+      const tail = (await get(`?strategyId=intraday-ema&sort=returnPct&dir=${dir}&limit=2&offset=100`)).json();
+      expect(tail.runs).toEqual([expect.objectContaining({ id: "history-100", metrics: null })]);
+    }
+    expect((await get("?offset=200")).json()).toEqual({ runs: [], total: 102 });
+    expect((await get("?sort=cagrPct")).statusCode).toBe(400);
+    expect((await get("?limit=201")).statusCode).toBe(400);
+    expect((await app.inject({ method: "GET", url: "/intraday/runs/groups" })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: "/intraday/runs/groups", headers: { authorization: "other" } })).json())
+      .toEqual({ groups: [{ strategyId: "intraday-ema", total: 1 }] });
+  });
+
   it("인증·소유권을 검증하고 실제 Parquet 수집 뒤 별도 프로세스 결과를 보존한다", async () => {
     const { app, service } = await fixture();
     expect(

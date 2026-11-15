@@ -279,6 +279,11 @@ export interface IntradayRun {
   result?: IntradayResult;
 }
 
+/** 이력 목록에는 체결·자산 곡선을 전송하지 않고 필요한 지표만 포함한다. */
+export interface IntradayRunSummary extends IntradayRun {
+  metrics: { returnPct: number; maxDrawdownPct: number } | null;
+}
+
 export function intradayDate(endMs: number): string {
   return new Date(endMs + 9 * 3_600_000).toISOString().slice(0, 10);
 }

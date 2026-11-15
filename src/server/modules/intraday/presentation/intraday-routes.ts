@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { historyQuerySchema } from "../../../../shared/schemas/backtest-history.js";
 import {
   intradayPeriodSchema,
   intradaySymbolSchema,
@@ -10,6 +11,12 @@ import {
   type IntradayService,
 } from "../application/intraday-service.js";
 const idSchema = z.object({ id: z.string().uuid() }).strict();
+const runHistoryQuerySchema = historyQuerySchema
+  .extend({ limit: historyQuerySchema.shape.limit.default(100) })
+  .refine(
+    (q) => q.sort !== "cagrPct",
+    "분봉 백테스트의 CAGR은 아직 정의되지 않았습니다.",
+  );
 const chartSchema = z
   .object({
     symbol: intradaySymbolSchema,
@@ -78,8 +85,17 @@ export function registerIntradayRoutes(
       ),
     ),
   );
+  app.get("/intraday/runs/groups", auth, async (request, reply) =>
+    respond(reply, () => ({ groups: service.listRunGroups(request.authUser!.id) })),
+  );
   app.get("/intraday/runs", auth, async (request, reply) =>
-    respond(reply, () => ({ runs: service.listRuns(request.authUser!.id) })),
+    respond(reply, () => {
+      const query = runHistoryQuerySchema.parse(request.query ?? {});
+      return {
+        runs: service.listRuns(request.authUser!.id, query),
+        total: service.countRuns(request.authUser!.id, query.strategyId),
+      };
+    }),
   );
   app.post("/intraday/runs", auth, async (request, reply) =>
     respond(reply, () => {

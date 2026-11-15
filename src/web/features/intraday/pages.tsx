@@ -1,7 +1,20 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import { BacktestHeader } from "../backtests/backtest-header";
+import {
+  HistoryPager,
+  HistoryToolbar,
+  historyPeriod,
+  useHistoryControls,
+} from "../backtests/history-controls";
+import type { HistoryGroup } from "../../../shared/schemas/backtest-history";
+import { formatSignedPct, pnlClass } from "@/lib/format";
 import {
   Select,
   SelectContent,
@@ -30,6 +43,7 @@ import {
   type IntradayDataOverview,
   type IntradayRequest,
   type IntradayRun,
+  type IntradayRunSummary,
   type IntradaySignal,
   type IntradayFill,
   type IntradayTimeframe,
@@ -502,12 +516,56 @@ export function IntradayDataPage() {
   );
 }
 export function IntradayListPage() {
-  const runs = useQuery({
-    queryKey: ["intraday-runs"],
-    queryFn: () => api<{ runs: IntradayRun[] }>("/intraday/runs"),
-    refetchInterval: (q) =>
-      q.state.data?.runs.some((r) => active(r.status)) ? 1000 : false,
+  const controls = useHistoryControls(true);
+  const groups = useQuery({
+    queryKey: ["intraday-runs", "groups"],
+    queryFn: () => api<{ groups: HistoryGroup[] }>("/intraday/runs/groups"),
+    refetchInterval: 5_000,
   });
+  const limit = controls.view === "cards" ? 6 : 10;
+  const pages = useQueries({
+    queries: (groups.data?.groups ?? []).map((group) => {
+      const params = new URLSearchParams({
+        strategyId: group.strategyId,
+        sort: controls.sort,
+        dir: controls.dir,
+        limit: String(limit),
+        offset: String((controls.page(group.strategyId) - 1) * limit),
+      });
+      return {
+        queryKey: ["intraday-runs", "history", params.toString()],
+        queryFn: () =>
+          api<{ runs: IntradayRunSummary[]; total: number }>(
+            `/intraday/runs?${params}`,
+          ),
+        enabled: !controls.collapsed(group.strategyId),
+        refetchInterval: 5_000,
+      };
+    }),
+  });
+  const corrections = (groups.data?.groups ?? []).flatMap((group, index) => {
+    const query = pages[index];
+    if (
+      !query?.data ||
+      query.isFetching ||
+      controls.collapsed(group.strategyId)
+    )
+      return [];
+    const last = Math.max(1, Math.ceil(query.data.total / limit));
+    return controls.page(group.strategyId) > last
+      ? [{ id: group.strategyId, page: last }]
+      : [];
+  });
+  const correctionKey = JSON.stringify(corrections);
+  const { correctPages } = controls;
+  useEffect(() => {
+    const pending = JSON.parse(correctionKey) as Array<{
+      id: string;
+      page: number;
+    }>;
+    if (!pending.length) return;
+    correctPages(pending);
+  }, [correctionKey, correctPages]);
   return (
     <div className="space-y-4">
       <BacktestHeader
@@ -521,64 +579,212 @@ export function IntradayListPage() {
           </Button>
         }
       />
-      <section aria-label="분봉 전략" className="space-y-3">
-        <div>
-          <h3 className="font-semibold">분봉 전략</h3>
-          <p className="text-sm text-muted-foreground">
-            서로 다른 장세를 검증할 수 있는 기본 전략입니다. 현재 분봉
-            백테스트에서 사용할 수 있습니다.
-          </p>
-        </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          {INTRADAY_STRATEGIES.map((strategy) => (
-            <Card key={strategy.id}>
-              <CardContent className="flex h-full flex-col items-start gap-2 py-4">
-                <p className="text-xs text-muted-foreground">
-                  {strategy.regime}
-                </p>
-                <h4 className="font-semibold">{strategy.name}</h4>
-                <p className="text-sm">{strategy.description}</p>
-                <p className="text-sm text-muted-foreground">
-                  {strategy.caution}
-                </p>
-                <Button asChild size="sm" variant="outline" className="mt-auto">
-                  <Link
-                    to={`/backtests/intraday/new?strategy=${strategy.id}`}
-                    aria-label={`${strategy.name} 백테스트`}
+      <HistoryToolbar controls={controls} intraday />
+      <ErrorAlert error={groups.error} />
+      {groups.isLoading ? (
+        <p className="text-sm text-muted-foreground">
+          이력을 불러오는 중입니다.
+        </p>
+      ) : null}
+      {groups.data?.groups.length === 0 ? <p>백테스트가 없습니다.</p> : null}
+      {(groups.data?.groups ?? []).map((group, index) => {
+        const query = pages[index];
+        const name =
+          INTRADAY_STRATEGIES.find((s) => s.id === group.strategyId)?.name ??
+          group.strategyId;
+        return (
+          <section key={group.strategyId} className="space-y-3">
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 border-b py-2 text-left font-semibold"
+              aria-expanded={!controls.collapsed(group.strategyId)}
+              onClick={() => controls.toggle(group.strategyId)}
+            >
+              {name}{" "}
+              <span className="text-xs font-normal text-muted-foreground">
+                {group.total}건
+              </span>
+              <span className="ml-auto">
+                {controls.collapsed(group.strategyId) ? "▸" : "▾"}
+              </span>
+            </button>
+            {!controls.collapsed(group.strategyId) ? (
+              <>
+                <ErrorAlert error={query?.error} />
+                {controls.view === "cards" ? (
+                  <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
+                    {query?.data?.runs.map((run) => (
+                      <Link
+                        key={run.id}
+                        className="max-w-[360px]"
+                        to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
+                      >
+                        <Card>
+                          <CardContent className="space-y-2 py-4">
+                            <div className="flex justify-between gap-2 text-xs text-muted-foreground">
+                              <span>{statusLabel[run.status]}</span>
+                              <span>{time(run.createdAtMs)}</span>
+                            </div>
+                            <p className="whitespace-nowrap text-sm font-medium">
+                              {historyPeriod(
+                                run.request.period.from,
+                                run.request.period.to,
+                              )}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {run.request.symbol} · {run.request.timeframe}
+                            </p>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <p className="text-xs text-muted-foreground">
+                                  수익률
+                                </p>
+                                <p
+                                  className={`text-xl font-semibold tabular-nums ${pnlClass(run.metrics?.returnPct ?? null)}`}
+                                >
+                                  {formatSignedPct(
+                                    run.metrics?.returnPct ?? null,
+                                  )}
+                                </p>
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">
+                                  CAGR
+                                </p>
+                                <p className="text-xl font-semibold">—</p>
+                              </div>
+                            </div>
+                            <p className="border-t pt-2 text-xs text-muted-foreground">
+                              MDD{" "}
+                              {formatSignedPct(
+                                run.metrics?.maxDrawdownPct ?? null,
+                              )}
+                            </p>
+                            {run.error ? (
+                              <p className="break-words text-destructive">
+                                {run.error}
+                              </p>
+                            ) : null}
+                          </CardContent>
+                        </Card>
+                      </Link>
+                    ))}
+                  </div>
+                ) : (
+                  <table className="w-full table-fixed text-xs">
+                    <thead>
+                      <tr className="text-muted-foreground">
+                        <th className="w-[52%] py-2 text-left sm:w-[38%]">
+                          기간
+                        </th>
+                        <th className="text-right">수익률</th>
+                        <th className="text-right">CAGR</th>
+                        <th className="hidden text-right sm:table-cell">MDD</th>
+                        <th className="hidden text-right sm:table-cell">
+                          실행일
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {query?.data?.runs.map((run) => (
+                        <tr key={run.id} className="border-t">
+                          <td className="py-3">
+                            <Link
+                              className="whitespace-nowrap text-[11px] underline sm:text-xs"
+                              to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
+                            >
+                              {historyPeriod(
+                                run.request.period.from,
+                                run.request.period.to,
+                              )}
+                            </Link>
+                            <div className="text-muted-foreground">
+                              {statusLabel[run.status]} · {run.request.symbol}{" "}
+                              <span className="sm:hidden">
+                                · {time(run.createdAtMs)}
+                              </span>
+                            </div>
+                            {run.error ? (
+                              <p className="break-words text-destructive">
+                                {run.error}
+                              </p>
+                            ) : null}
+                          </td>
+                          <td
+                            className={`text-right ${pnlClass(run.metrics?.returnPct ?? null)}`}
+                          >
+                            {formatSignedPct(run.metrics?.returnPct ?? null)}
+                          </td>
+                          <td className="text-right">—</td>
+                          <td className="hidden text-right sm:table-cell">
+                            {formatSignedPct(
+                              run.metrics?.maxDrawdownPct ?? null,
+                            )}
+                          </td>
+                          <td className="hidden text-right sm:table-cell">
+                            {time(run.createdAtMs)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {query?.data ? (
+                  <HistoryPager
+                    page={controls.page(group.strategyId)}
+                    total={query.data.total}
+                    limit={limit}
+                    onPage={(page) => controls.setPage(group.strategyId, page)}
+                  />
+                ) : null}
+              </>
+            ) : null}
+          </section>
+        );
+      })}
+      <details className="space-y-3">
+        <summary className="cursor-pointer font-semibold">
+          분봉 전략 소개
+        </summary>
+        <section aria-label="분봉 전략" className="space-y-3">
+          <div>
+            <h3 className="font-semibold">분봉 전략</h3>
+            <p className="text-sm text-muted-foreground">
+              서로 다른 장세를 검증할 수 있는 기본 전략입니다. 현재 분봉
+              백테스트에서 사용할 수 있습니다.
+            </p>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2">
+            {INTRADAY_STRATEGIES.map((strategy) => (
+              <Card key={strategy.id}>
+                <CardContent className="flex h-full flex-col items-start gap-2 py-4">
+                  <p className="text-xs text-muted-foreground">
+                    {strategy.regime}
+                  </p>
+                  <h4 className="font-semibold">{strategy.name}</h4>
+                  <p className="text-sm">{strategy.description}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {strategy.caution}
+                  </p>
+                  <Button
+                    asChild
+                    size="sm"
+                    variant="outline"
+                    className="mt-auto"
                   >
-                    이 전략으로 설정
-                  </Link>
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </section>
-      <h3 className="font-semibold">실행 내역</h3>
-      <ErrorAlert error={runs.error} />
-      {runs.data?.runs.length === 0 && <p>백테스트가 없습니다.</p>}
-      {runs.data?.runs.map((run) => (
-        <Link
-          className="block"
-          to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
-          key={run.id}
-        >
-          <Card>
-            <CardContent className="space-y-1 py-4">
-              <p>
-                {getIntradayStrategy(run.request.strategyId).name} ·{" "}
-                {statusLabel[run.status]} · {run.request.symbol} ·{" "}
-                {run.request.timeframe}
-              </p>
-              <p className="text-sm text-muted-foreground">
-                {run.request.period.from} ~ {run.request.period.to} ·{" "}
-                {time(run.createdAtMs)}
-              </p>
-              {run.error && <p className="text-destructive">{run.error}</p>}
-            </CardContent>
-          </Card>
-        </Link>
-      ))}
+                    <Link
+                      to={`/backtests/intraday/new?strategy=${strategy.id}`}
+                      aria-label={`${strategy.name} 백테스트`}
+                    >
+                      이 전략으로 설정
+                    </Link>
+                  </Button>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </section>
+      </details>
     </div>
   );
 }

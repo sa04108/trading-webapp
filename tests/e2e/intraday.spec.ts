@@ -153,8 +153,11 @@ test("일봉과 분봉 경로를 오가며 결과와 체결 시각을 확인한�
   page,
 }) => {
   await login(page);
-  await page.route("**/api/v1/intraday/runs", (route) =>
-    route.fulfill({ json: { runs: [completed] } }),
+  await page.route("**/api/v1/intraday/runs/groups", (route) =>
+    route.fulfill({ json: { groups: [{ strategyId: "intraday-ema", total: 1 }] } }),
+  );
+  await page.route("**/api/v1/intraday/runs?**", (route) =>
+    route.fulfill({ json: { runs: [{ ...completed, metrics: result.metrics }], total: 1 } }),
   );
   await page.route("**/api/v1/intraday/runs/done", (route) =>
     route.fulfill({ json: completed }),
@@ -200,7 +203,7 @@ test("일봉과 분봉 경로를 오가며 결과와 체결 시각을 확인한�
   await page.getByRole("option", { name: "분봉" }).click();
   await expect(page).toHaveURL(/\/backtests\/intraday$/);
   await checkHeader();
-  await page.getByRole("link", { name: /005930/ }).click();
+  await page.locator('a[href="/backtests/intraday/done"]').click();
   await expect(page.getByText("12,000원")).toBeVisible();
   await expect(page.getByRole("img", { name: "자산 추이 차트" })).toBeVisible();
   const fillMarker = page.locator('circle[aria-label^="체결 BUY"]');
@@ -241,6 +244,7 @@ test("새 분봉 전략의 설정을 실행하고 복제한다", async ({ page }
     }
     return route.fulfill({ json: { runs: [] } });
   });
+  await page.route("**/api/v1/intraday/runs/groups", (route) => route.fulfill({ json: { groups: [] } }));
   await page.route("**/api/v1/intraday/runs/created", (route) =>
     route.fulfill({ json: { ...completed, id: "created", request: submitted, result: null } }),
   );
@@ -264,6 +268,7 @@ test("새 분봉 전략의 설정을 실행하고 복제한다", async ({ page }
   for (const strategy of strategies) {
     submitted = undefined;
     await page.goto("/backtests/intraday");
+    await page.getByText("분봉 전략 소개").click();
     await page.getByRole("link", { name: `${strategy.name} 백테스트` }).click();
     await expect(page.getByRole("combobox", { name: "분봉 전략" })).toContainText(strategy.name);
     for (const field of strategy.fields) await expect(page.getByLabel(field, { exact: true })).toBeVisible();

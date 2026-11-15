@@ -1,3 +1,4 @@
+import { historyQuerySchema } from "../../../../shared/schemas/backtest-history.js";
 import { datasetIdentity } from "../../../../runtime/shared/db/database-layout.js";
 import { withDiagnostics, measureAsync } from "../../../../runtime/shared/diagnostics.js";
 import { MAX_BACKTEST_BARS } from "../domain/bar-estimate.js";
@@ -898,22 +899,24 @@ export function registerBacktestRoutes(
     },
   );
 
+  app.get("/backtests/groups", { preHandler: requireAuth }, () => ({
+    groups: queue.listTopLevelGroups(),
+  }));
+
   app.get("/backtests", { preHandler: requireAuth }, async (request, reply) => {
-    const parsedQuery = z
-      .object({
-        limit: z.coerce.number().int().min(1).max(200).default(50),
-        offset: z.coerce.number().int().min(0).default(0),
-      })
-      .safeParse(request.query ?? {});
+    const parsedQuery = historyQuerySchema.safeParse(request.query ?? {});
     if (!parsedQuery.success) {
       return reply
         .code(400)
-        .send({ error: "쿼리 파라미터가 올바르지 않습니다 (limit/offset)" });
+        .send({
+          error: "이력 조회 조건이 올바르지 않습니다 (strategyId/sort/dir/limit/offset)",
+        });
     }
     const query = parsedQuery.data;
-    const jobs = queue.listTopLevelJobs(query.limit, query.offset);
+    const jobs = queue.listTopLevelJobs(query.limit, query.offset, query);
     return {
       jobs: jobs.map(serializeJobSummary),
+      total: queue.countTopLevelJobs(query.strategyId),
     };
   });
 
@@ -1386,8 +1389,19 @@ export function registerBacktestRoutes(
     },
   );
 
-  app.get("/backtest-clone-batches", { preHandler: requireAuth }, () => {
-    const batches = seedCloneBatches.list();
+  app.get("/backtest-clone-batches", { preHandler: requireAuth }, (request, reply) => {
+    const parsed = z.object({
+      sourceJobIds: z.string().max(10_000)
+        .transform((value) => value.split(","))
+        .pipe(z.array(z.string().min(1).max(200)).min(1).max(200))
+        .optional(),
+    }).safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "원본 백테스트 목록이 올바르지 않습니다" });
+    }
+    const batches = parsed.data.sourceJobIds
+      ? seedCloneBatches.listForSources(parsed.data.sourceJobIds)
+      : seedCloneBatches.list();
     const sourceJobIds = new Set(batches.map(({ batch }) => batch.sourceJobId));
     const sourceJobs = [...sourceJobIds].flatMap((sourceJobId) => {
       const source = queue.getJob(sourceJobId);
