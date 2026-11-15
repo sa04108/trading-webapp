@@ -1,3 +1,4 @@
+import { usePaginationPosition } from "@/components/use-pagination-position";
 import { useCallback, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
 import {
@@ -86,7 +87,7 @@ export function useHistoryControls(intraday = false) {
           fn(next);
           return next;
         },
-        { replace: true },
+        { replace: true, preventScrollReset: true },
       );
     },
     [setSearch],
@@ -336,17 +337,22 @@ export function HistoryPager({
   page,
   total,
   limit,
+  pending = false,
   onPage,
 }: {
   strategyName: string;
   page: number;
   total: number;
   limit: number;
+  pending?: boolean;
   onPage: (page: number) => void;
 }) {
+  const preservePosition = usePaginationPosition(page, pending);
   const pages = Math.max(1, Math.ceil(total / limit));
   return (
     <nav
+      data-pagination-controls
+      aria-busy={pending}
       aria-label={`${strategyName} 이력 페이지`}
       className="flex items-center justify-between gap-2 text-xs text-muted-foreground"
     >
@@ -357,16 +363,16 @@ export function HistoryPager({
         <Button
           size="sm"
           variant="outline"
-          disabled={page <= 1}
-          onClick={() => onPage(page - 1)}
+          disabled={pending || page <= 1}
+          onClick={(event) => { preservePosition(event.currentTarget); onPage(page - 1); }}
         >
           이전
         </Button>
         <Button
           size="sm"
           variant="outline"
-          disabled={page >= pages}
-          onClick={() => onPage(page + 1)}
+          disabled={pending || page >= pages}
+          onClick={(event) => { preservePosition(event.currentTarget); onPage(page + 1); }}
         >
           다음
         </Button>

@@ -5,6 +5,14 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* 페이지 내용 교체 시 브라우저가 유지된 페이지 버튼을 스크롤 기준으로 선택하게 한다. */
+[data-pagination-content] {
+  overflow-anchor: none;
+}
+[data-pagination-controls] {
+  overflow-anchor: auto;
+}
+
 /* 손익 색상 (KR 관례: 빨강=수익, 파랑=손실) — 본문·카드·보조 배경의 글자 대비를 확보한다.
    색상만으로 손익을 표현하지 않는다: 항상 부호·텍스트와 함께 사용 (스펙 §17). */
 :root {

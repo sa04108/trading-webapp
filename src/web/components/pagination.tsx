@@ -1,3 +1,4 @@
+import { usePaginationPosition } from "./use-pagination-position";
 import {
   ChevronLeft,
   ChevronRight,
@@ -23,6 +24,7 @@ export interface PaginationProps {
    */
   readonly maxPageNumbers?: number;
   readonly className?: string;
+  readonly pending?: boolean;
 }
 
 function usePageNumberLimit(): 5 | 7 | 9 {
@@ -47,7 +49,9 @@ export function Pagination({
   total,
   maxPageNumbers,
   className,
+  pending = false,
 }: PaginationProps) {
+  const preservePosition = usePaginationPosition(currentPage, pending);
   const widthLimit = usePageNumberLimit();
   const maxVisible = Math.max(
     1,
@@ -66,20 +70,23 @@ export function Pagination({
     safePageCount,
     maxVisible,
   );
-  const changePage = (nextPage: number): void => {
-    onPageChange(Math.min(Math.max(0, nextPage), safePageCount - 1));
+  const changePage = (nextPage: number, button: HTMLButtonElement): void => {
+    const target = Math.min(Math.max(0, nextPage), safePageCount - 1);
+    if (pending || target === safeCurrentPage) return;
+    preservePosition(button);
+    onPageChange(target);
   };
 
   return (
-    <nav aria-label={ariaLabel} className={cn("space-y-1.5", className)}>
+    <nav data-pagination-controls aria-busy={pending} aria-label={ariaLabel} className={cn("space-y-1.5", className)}>
       <div className="flex items-center justify-center gap-1">
         <Button
           type="button"
           variant="outline"
           size="icon"
           aria-label="첫 페이지"
-          disabled={safeCurrentPage === 0}
-          onClick={() => changePage(0)}
+          disabled={pending || safeCurrentPage === 0}
+          onClick={(event) => changePage(0, event.currentTarget)}
         >
           <ChevronsLeft aria-hidden />
         </Button>
@@ -88,8 +95,8 @@ export function Pagination({
           variant="outline"
           size="icon"
           aria-label="이전 페이지"
-          disabled={safeCurrentPage === 0}
-          onClick={() => changePage(safeCurrentPage - 1)}
+          disabled={pending || safeCurrentPage === 0}
+          onClick={(event) => changePage(safeCurrentPage - 1, event.currentTarget)}
         >
           <ChevronLeft aria-hidden />
         </Button>
@@ -108,9 +115,10 @@ export function Pagination({
                   ? `현재 ${pageNumber}페이지`
                   : `${pageNumber}페이지로 이동`
               }
+              disabled={pending}
               aria-current={isCurrent ? "page" : undefined}
               className={cn("text-xs tabular-nums", isCurrent && "font-bold")}
-              onClick={() => changePage(pageIndex)}
+              onClick={(event) => changePage(pageIndex, event.currentTarget)}
             >
               {pageNumber}
             </Button>
@@ -122,8 +130,8 @@ export function Pagination({
           variant="outline"
           size="icon"
           aria-label="다음 페이지"
-          disabled={safeCurrentPage === safePageCount - 1}
-          onClick={() => changePage(safeCurrentPage + 1)}
+          disabled={pending || safeCurrentPage === safePageCount - 1}
+          onClick={(event) => changePage(safeCurrentPage + 1, event.currentTarget)}
         >
           <ChevronRight aria-hidden />
         </Button>
@@ -132,8 +140,8 @@ export function Pagination({
           variant="outline"
           size="icon"
           aria-label="마지막 페이지"
-          disabled={safeCurrentPage === safePageCount - 1}
-          onClick={() => changePage(safePageCount - 1)}
+          disabled={pending || safeCurrentPage === safePageCount - 1}
+          onClick={(event) => changePage(safePageCount - 1, event.currentTarget)}
         >
           <ChevronsRight aria-hidden />
         </Button>
