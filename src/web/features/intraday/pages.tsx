@@ -9,6 +9,7 @@ import { Plus } from "lucide-react";
 import { BacktestHeader } from "../backtests/backtest-header";
 import {
   HistoryPager,
+  HistoryStrategyGroup,
   HistoryToolbar,
   historyPeriod,
   useHistoryControls,
@@ -589,157 +590,137 @@ export function IntradayListPage() {
       {groups.data?.groups.length === 0 ? <p>백테스트가 없습니다.</p> : null}
       {(groups.data?.groups ?? []).map((group, index) => {
         const query = pages[index];
-        const name =
-          INTRADAY_STRATEGIES.find((s) => s.id === group.strategyId)?.name ??
-          group.strategyId;
+        const strategy = INTRADAY_STRATEGIES.find(
+          (s) => s.id === group.strategyId,
+        );
+        const name = strategy?.name ?? group.strategyId;
         return (
-          <section key={group.strategyId} className="space-y-3">
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 border-b py-2 text-left font-semibold"
-              aria-expanded={!controls.collapsed(group.strategyId)}
-              onClick={() => controls.toggle(group.strategyId)}
-            >
-              {name}{" "}
-              <span className="text-xs font-normal text-muted-foreground">
-                {group.total}건
-              </span>
-              <span className="ml-auto">
-                {controls.collapsed(group.strategyId) ? "▸" : "▾"}
-              </span>
-            </button>
-            {!controls.collapsed(group.strategyId) ? (
-              <>
-                <ErrorAlert error={query?.error} />
-                {controls.view === "cards" ? (
-                  <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
-                    {query?.data?.runs.map((run) => (
-                      <Link
-                        key={run.id}
-                        className="max-w-[360px]"
-                        to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
-                      >
-                        <Card>
-                          <CardContent className="space-y-2 py-4">
-                            <div className="flex justify-between gap-2 text-xs text-muted-foreground">
-                              <span>{statusLabel[run.status]}</span>
-                              <span>{time(run.createdAtMs)}</span>
-                            </div>
-                            <p className="whitespace-nowrap text-sm font-medium">
-                              {historyPeriod(
-                                run.request.period.from,
-                                run.request.period.to,
-                              )}
-                            </p>
+          <HistoryStrategyGroup
+            key={group.strategyId}
+            name={name}
+            description={strategy?.description}
+            total={group.total}
+            collapsed={controls.collapsed(group.strategyId)}
+            onToggle={() => controls.toggle(group.strategyId)}
+          >
+            <ErrorAlert error={query?.error} />
+            {controls.view === "cards" ? (
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
+                {query?.data?.runs.map((run) => (
+                  <Link
+                    key={run.id}
+                    className="max-w-[360px]"
+                    to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
+                  >
+                    <Card>
+                      <CardContent className="space-y-2 py-4">
+                        <div className="flex justify-between gap-2 text-xs text-muted-foreground">
+                          <span>{statusLabel[run.status]}</span>
+                          <span>{time(run.createdAtMs)}</span>
+                        </div>
+                        <p className="whitespace-nowrap text-sm font-medium">
+                          {historyPeriod(
+                            run.request.period.from,
+                            run.request.period.to,
+                          )}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {run.request.symbol} · {run.request.timeframe}
+                        </p>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
                             <p className="text-xs text-muted-foreground">
-                              {run.request.symbol} · {run.request.timeframe}
+                              수익률
                             </p>
-                            <div className="grid grid-cols-2 gap-3">
-                              <div>
-                                <p className="text-xs text-muted-foreground">
-                                  수익률
-                                </p>
-                                <p
-                                  className={`text-xl font-semibold tabular-nums ${pnlClass(run.metrics?.returnPct ?? null)}`}
-                                >
-                                  {formatSignedPct(
-                                    run.metrics?.returnPct ?? null,
-                                  )}
-                                </p>
-                              </div>
-                              <div>
-                                <p className="text-xs text-muted-foreground">
-                                  CAGR
-                                </p>
-                                <p className="text-xl font-semibold">—</p>
-                              </div>
-                            </div>
-                            <p className="border-t pt-2 text-xs text-muted-foreground">
-                              MDD{" "}
-                              {formatSignedPct(
-                                run.metrics?.maxDrawdownPct ?? null,
-                              )}
-                            </p>
-                            {run.error ? (
-                              <p className="break-words text-destructive">
-                                {run.error}
-                              </p>
-                            ) : null}
-                          </CardContent>
-                        </Card>
-                      </Link>
-                    ))}
-                  </div>
-                ) : (
-                  <table className="w-full table-fixed text-xs">
-                    <thead>
-                      <tr className="text-muted-foreground">
-                        <th className="w-[52%] py-2 text-left sm:w-[38%]">
-                          기간
-                        </th>
-                        <th className="text-right">수익률</th>
-                        <th className="text-right">CAGR</th>
-                        <th className="hidden text-right sm:table-cell">MDD</th>
-                        <th className="hidden text-right sm:table-cell">
-                          실행일
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {query?.data?.runs.map((run) => (
-                        <tr key={run.id} className="border-t">
-                          <td className="py-3">
-                            <Link
-                              className="whitespace-nowrap text-[11px] underline sm:text-xs"
-                              to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
+                            <p
+                              className={`text-xl font-semibold tabular-nums ${pnlClass(run.metrics?.returnPct ?? null)}`}
                             >
-                              {historyPeriod(
-                                run.request.period.from,
-                                run.request.period.to,
-                              )}
-                            </Link>
-                            <div className="text-muted-foreground">
-                              {statusLabel[run.status]} · {run.request.symbol}{" "}
-                              <span className="sm:hidden">
-                                · {time(run.createdAtMs)}
-                              </span>
-                            </div>
-                            {run.error ? (
-                              <p className="break-words text-destructive">
-                                {run.error}
-                              </p>
-                            ) : null}
-                          </td>
-                          <td
-                            className={`text-right ${pnlClass(run.metrics?.returnPct ?? null)}`}
-                          >
-                            {formatSignedPct(run.metrics?.returnPct ?? null)}
-                          </td>
-                          <td className="text-right">—</td>
-                          <td className="hidden text-right sm:table-cell">
-                            {formatSignedPct(
-                              run.metrics?.maxDrawdownPct ?? null,
-                            )}
-                          </td>
-                          <td className="hidden text-right sm:table-cell">
-                            {time(run.createdAtMs)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-                {query?.data ? (
-                  <HistoryPager
-                    page={controls.page(group.strategyId)}
-                    total={query.data.total}
-                    limit={limit}
-                    onPage={(page) => controls.setPage(group.strategyId, page)}
-                  />
-                ) : null}
-              </>
+                              {formatSignedPct(run.metrics?.returnPct ?? null)}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">
+                              CAGR
+                            </p>
+                            <p className="text-xl font-semibold">—</p>
+                          </div>
+                        </div>
+                        <p className="border-t pt-2 text-xs text-muted-foreground">
+                          MDD{" "}
+                          {formatSignedPct(run.metrics?.maxDrawdownPct ?? null)}
+                        </p>
+                        {run.error ? (
+                          <p className="break-words text-destructive">
+                            {run.error}
+                          </p>
+                        ) : null}
+                      </CardContent>
+                    </Card>
+                  </Link>
+                ))}
+              </div>
+            ) : (
+              <table className="w-full table-fixed text-xs">
+                <thead>
+                  <tr className="text-muted-foreground">
+                    <th className="w-[52%] py-2 text-left sm:w-[38%]">기간</th>
+                    <th className="text-right">수익률</th>
+                    <th className="text-right">CAGR</th>
+                    <th className="hidden text-right sm:table-cell">MDD</th>
+                    <th className="hidden text-right sm:table-cell">실행일</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {query?.data?.runs.map((run) => (
+                    <tr key={run.id} className="border-t">
+                      <td className="py-3">
+                        <Link
+                          className="whitespace-nowrap text-[11px] underline sm:text-xs"
+                          to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
+                        >
+                          {historyPeriod(
+                            run.request.period.from,
+                            run.request.period.to,
+                          )}
+                        </Link>
+                        <div className="text-muted-foreground">
+                          {statusLabel[run.status]} · {run.request.symbol}{" "}
+                          <span className="sm:hidden">
+                            · {time(run.createdAtMs)}
+                          </span>
+                        </div>
+                        {run.error ? (
+                          <p className="break-words text-destructive">
+                            {run.error}
+                          </p>
+                        ) : null}
+                      </td>
+                      <td
+                        className={`text-right ${pnlClass(run.metrics?.returnPct ?? null)}`}
+                      >
+                        {formatSignedPct(run.metrics?.returnPct ?? null)}
+                      </td>
+                      <td className="text-right">—</td>
+                      <td className="hidden text-right sm:table-cell">
+                        {formatSignedPct(run.metrics?.maxDrawdownPct ?? null)}
+                      </td>
+                      <td className="hidden text-right sm:table-cell">
+                        {time(run.createdAtMs)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {query?.data ? (
+              <HistoryPager
+                page={controls.page(group.strategyId)}
+                total={query.data.total}
+                limit={limit}
+                onPage={(page) => controls.setPage(group.strategyId, page)}
+              />
             ) : null}
-          </section>
+          </HistoryStrategyGroup>
         );
       })}
       <details className="space-y-3">
