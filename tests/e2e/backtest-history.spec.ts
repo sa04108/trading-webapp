@@ -131,9 +131,7 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
   const other = page
     .locator("section")
     .filter({ has: page.getByRole("button", { name: /전략 B/ }) });
-  await expect(group.getByRole("button", { name: /전략 A/ })).toContainText(
-    "12건",
-  );
+  await expect(group).toContainText("12건");
   await expect(
     page.getByRole("button", {
       name: testInfo.project.name === "mobile" ? "표 보기" : "카드 보기",

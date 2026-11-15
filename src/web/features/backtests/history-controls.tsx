@@ -1,5 +1,12 @@
-import { useCallback } from "react";
+import { useCallback, type ReactNode } from "react";
 import { useSearchParams } from "react-router";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { InfoHint } from "@/components/info-hint";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -137,6 +144,53 @@ export function useHistoryControls(intraday = false) {
   };
 }
 export type HistoryControlsState = ReturnType<typeof useHistoryControls>;
+export function HistoryStrategyGroup({
+  name,
+  description,
+  total,
+  collapsed,
+  onToggle,
+  children,
+}: {
+  name: string;
+  description?: string;
+  total: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Collapsible open={!collapsed} onOpenChange={onToggle} asChild>
+      <section className="space-y-2">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <h3 className="min-w-0 truncate font-semibold">{name}</h3>
+          {description ? (
+            <InfoHint label={`${name} 전략 설명`}>
+              <p>{description}</p>
+            </InfoHint>
+          ) : null}
+          <span className="ml-1 shrink-0 text-xs text-muted-foreground">
+            {total}건
+          </span>
+          <CollapsibleTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="ml-auto"
+              aria-label={`${name} ${collapsed ? "펼치기" : "접기"}`}
+            >
+              {collapsed ? <ChevronRight /> : <ChevronDown />}
+            </Button>
+          </CollapsibleTrigger>
+        </div>
+        <CollapsibleContent className="space-y-3">
+          {children}
+        </CollapsibleContent>
+      </section>
+    </Collapsible>
+  );
+}
+
 export function HistoryToolbar({
   controls,
   intraday,

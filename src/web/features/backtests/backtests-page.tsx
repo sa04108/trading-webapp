@@ -8,7 +8,6 @@ import { Dices, Plus } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
-import { InfoHint } from "@/components/info-hint";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -18,6 +17,7 @@ import { api } from "@/lib/api-client";
 import { useStrategies } from "./api";
 import {
   HistoryPager,
+  HistoryStrategyGroup,
   HistoryToolbar,
   historyPeriod,
   useHistoryControls,
@@ -482,188 +482,158 @@ export function BacktestsPage() {
             />
           ));
         return (
-          <section key={group.strategyId} className="space-y-3">
-            <button
-              type="button"
-              className="flex w-full items-center gap-2 border-b py-2 text-left font-semibold"
-              aria-expanded={!controls.collapsed(group.strategyId)}
-              onClick={() => {
-                controls.toggle(group.strategyId);
-                clear();
-              }}
-            >
-              {name}{" "}
-              <span className="text-xs font-normal text-muted-foreground">
-                {group.total}건
-              </span>
-              <span className="ml-auto">
-                {controls.collapsed(group.strategyId) ? "▸" : "▾"}
-              </span>
-            </button>
-            {!controls.collapsed(group.strategyId) ? (
-              <>
-                {strategy?.description ? (
-                  <InfoHint label={`${name} 전략 설명`}>
-                    <p>{strategy.description}</p>
-                  </InfoHint>
-                ) : null}
-                {query?.isError ? (
-                  <p role="alert" className="text-destructive">
-                    이력을 불러오지 못했습니다.
-                  </p>
-                ) : null}
-                {query?.isLoading ? <Skeleton className="h-24 w-full" /> : null}
-                {controls.view === "cards" ? (
-                  <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
-                    {query?.data?.jobs.map((job) => (
-                      <div
-                        key={job.id}
-                        className="min-w-0 max-w-[360px] space-y-2"
-                      >
-                        <BacktestJobCard
-                          job={job}
-                          timeframe={resolveJobTimeframe(job)}
-                          editing={editing}
-                          selected={selected.has(job.id)}
-                          deletable={deletableIds.includes(job.id)}
-                          onToggle={() => toggleOne(job.id)}
-                        />
-                        <div className="space-y-2 border-l-2 pl-4">
-                          {batchCards(job)}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <table className="w-full table-fixed text-xs">
-                    <thead>
-                      <tr className="text-muted-foreground">
-                        <th className="w-[52%] py-2 text-left sm:w-[38%]">
-                          기간
-                        </th>
-                        <th className="text-right">수익률</th>
-                        <th className="text-right">CAGR</th>
-                        <th className="hidden text-right sm:table-cell">MDD</th>
-                        <th className="hidden text-right sm:table-cell">
-                          실행일
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {query?.data?.jobs.map((job) => (
-                        <Fragment key={job.id}>
-                          <tr className="border-t">
-                            <td className="py-3 align-top">
-                              {editing && deletableIds.includes(job.id) ? (
-                                <Checkbox
-                                  className="mr-1"
-                                  checked={selected.has(job.id)}
-                                  onCheckedChange={() => toggleOne(job.id)}
-                                  aria-label={`${formatDateTime(job.createdAtMs)} 백테스트 선택`}
-                                />
-                              ) : null}
-                              {editing ? (
-                                <span className="whitespace-nowrap text-[11px] sm:text-xs">
-                                  {historyPeriod(
-                                    job.request.period.from,
-                                    job.request.period.to,
-                                  )}
-                                </span>
-                              ) : (
-                                <Link
-                                  className="whitespace-nowrap text-[11px] underline sm:text-xs"
-                                  to={`/backtests/${job.id}`}
-                                >
-                                  {historyPeriod(
-                                    job.request.period.from,
-                                    job.request.period.to,
-                                  )}
-                                </Link>
-                              )}
-                              <div className="text-muted-foreground">
-                                <StatusBadge status={job.status} />{" "}
-                                <span className="sm:hidden">
-                                  {formatDateTime(job.createdAtMs)}
-                                </span>
-                              </div>
-                              {job.error ? (
-                                <p className="break-words text-destructive">
-                                  {job.error}
-                                </p>
-                              ) : null}
-                              {job.progress && !isTerminal(job.status) ? (
-                                <ExecutionProgressSummary
-                                  progress={job.progress}
-                                  compact
-                                />
-                              ) : null}
-                              {!job.progress &&
-                              !isTerminal(job.status) &&
-                              job.progressBars !== null &&
-                              job.totalBars !== null &&
-                              job.totalBars > 0 ? (
-                                <p className="text-muted-foreground">
-                                  진행률{" "}
-                                  {Math.round(
-                                    (job.progressBars / job.totalBars) * 100,
-                                  )}
-                                  %
-                                </p>
-                              ) : null}
-                            </td>
-                            <td
-                              className={`text-right ${pnlClass(job.metrics?.totalReturnPct ?? null)}`}
-                            >
-                              {formatSignedPct(
-                                job.metrics?.totalReturnPct ?? null,
-                              )}
-                            </td>
-                            <td
-                              className={`text-right ${pnlClass(job.metrics?.cagrPct ?? null)}`}
-                            >
-                              {formatSignedPct(job.metrics?.cagrPct ?? null)}
-                            </td>
-                            <td className="hidden text-right sm:table-cell">
-                              {formatSignedPct(
-                                job.metrics?.maxDrawdownPct ?? null,
-                              )}
-                            </td>
-                            <td className="hidden text-right sm:table-cell">
-                              {formatDateTime(job.createdAtMs)}
-                            </td>
-                          </tr>
-                          {(batchesBySource.get(job.id) ?? []).length ? (
-                            <tr>
-                              <td colSpan={3}>
-                                <div className="space-y-2 py-2">
-                                  {batchCards(job)}
-                                </div>
-                              </td>
-                              <td
-                                colSpan={2}
-                                className="hidden sm:table-cell"
-                              />
-                            </tr>
-                          ) : null}
-                        </Fragment>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-                {query?.data ? (
-                  <HistoryPager
-                    page={controls.page(group.strategyId)}
-                    total={query.data.total}
-                    limit={limit}
-                    onPage={(page) => {
-                      controls.setPage(group.strategyId, page);
-                      clear();
-                    }}
-                  />
-                ) : null}
-              </>
+          <HistoryStrategyGroup
+            key={group.strategyId}
+            name={name}
+            description={strategy?.description}
+            total={group.total}
+            collapsed={controls.collapsed(group.strategyId)}
+            onToggle={() => {
+              controls.toggle(group.strategyId);
+              clear();
+            }}
+          >
+            {query?.isError ? (
+              <p role="alert" className="text-destructive">
+                이력을 불러오지 못했습니다.
+              </p>
             ) : null}
-          </section>
+            {query?.isLoading ? <Skeleton className="h-24 w-full" /> : null}
+            {controls.view === "cards" ? (
+              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
+                {query?.data?.jobs.map((job) => (
+                  <div key={job.id} className="min-w-0 max-w-[360px] space-y-2">
+                    <BacktestJobCard
+                      job={job}
+                      timeframe={resolveJobTimeframe(job)}
+                      editing={editing}
+                      selected={selected.has(job.id)}
+                      deletable={deletableIds.includes(job.id)}
+                      onToggle={() => toggleOne(job.id)}
+                    />
+                    <div className="space-y-2 border-l-2 pl-4">
+                      {batchCards(job)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <table className="w-full table-fixed text-xs">
+                <thead>
+                  <tr className="text-muted-foreground">
+                    <th className="w-[52%] py-2 text-left sm:w-[38%]">기간</th>
+                    <th className="text-right">수익률</th>
+                    <th className="text-right">CAGR</th>
+                    <th className="hidden text-right sm:table-cell">MDD</th>
+                    <th className="hidden text-right sm:table-cell">실행일</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {query?.data?.jobs.map((job) => (
+                    <Fragment key={job.id}>
+                      <tr className="border-t">
+                        <td className="py-3 align-top">
+                          {editing && deletableIds.includes(job.id) ? (
+                            <Checkbox
+                              className="mr-1"
+                              checked={selected.has(job.id)}
+                              onCheckedChange={() => toggleOne(job.id)}
+                              aria-label={`${formatDateTime(job.createdAtMs)} 백테스트 선택`}
+                            />
+                          ) : null}
+                          {editing ? (
+                            <span className="whitespace-nowrap text-[11px] sm:text-xs">
+                              {historyPeriod(
+                                job.request.period.from,
+                                job.request.period.to,
+                              )}
+                            </span>
+                          ) : (
+                            <Link
+                              className="whitespace-nowrap text-[11px] underline sm:text-xs"
+                              to={`/backtests/${job.id}`}
+                            >
+                              {historyPeriod(
+                                job.request.period.from,
+                                job.request.period.to,
+                              )}
+                            </Link>
+                          )}
+                          <div className="text-muted-foreground">
+                            <StatusBadge status={job.status} />{" "}
+                            <span className="sm:hidden">
+                              {formatDateTime(job.createdAtMs)}
+                            </span>
+                          </div>
+                          {job.error ? (
+                            <p className="break-words text-destructive">
+                              {job.error}
+                            </p>
+                          ) : null}
+                          {job.progress && !isTerminal(job.status) ? (
+                            <ExecutionProgressSummary
+                              progress={job.progress}
+                              compact
+                            />
+                          ) : null}
+                          {!job.progress &&
+                          !isTerminal(job.status) &&
+                          job.progressBars !== null &&
+                          job.totalBars !== null &&
+                          job.totalBars > 0 ? (
+                            <p className="text-muted-foreground">
+                              진행률{" "}
+                              {Math.round(
+                                (job.progressBars / job.totalBars) * 100,
+                              )}
+                              %
+                            </p>
+                          ) : null}
+                        </td>
+                        <td
+                          className={`text-right ${pnlClass(job.metrics?.totalReturnPct ?? null)}`}
+                        >
+                          {formatSignedPct(job.metrics?.totalReturnPct ?? null)}
+                        </td>
+                        <td
+                          className={`text-right ${pnlClass(job.metrics?.cagrPct ?? null)}`}
+                        >
+                          {formatSignedPct(job.metrics?.cagrPct ?? null)}
+                        </td>
+                        <td className="hidden text-right sm:table-cell">
+                          {formatSignedPct(job.metrics?.maxDrawdownPct ?? null)}
+                        </td>
+                        <td className="hidden text-right sm:table-cell">
+                          {formatDateTime(job.createdAtMs)}
+                        </td>
+                      </tr>
+                      {(batchesBySource.get(job.id) ?? []).length ? (
+                        <tr>
+                          <td colSpan={3}>
+                            <div className="space-y-2 py-2">
+                              {batchCards(job)}
+                            </div>
+                          </td>
+                          <td colSpan={2} className="hidden sm:table-cell" />
+                        </tr>
+                      ) : null}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {query?.data ? (
+              <HistoryPager
+                page={controls.page(group.strategyId)}
+                total={query.data.total}
+                limit={limit}
+                onPage={(page) => {
+                  controls.setPage(group.strategyId, page);
+                  clear();
+                }}
+              />
+            ) : null}
+          </HistoryStrategyGroup>
         );
       })}
     </div>
