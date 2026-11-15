@@ -1,5 +1,6 @@
+import { getIntradayStrategy } from "../../../../shared/schemas/intraday-strategies.js";
+import { createIntradaySignalModel } from "./signal-model.js";
 import {
-  INTRADAY_STRATEGY_VERSION,
   MINUTE_MS,
   intradayBarSchema,
   intradayDate,
@@ -131,7 +132,7 @@ export function runIntradayBacktest(
   );
   const result: IntradayResult = {
     request,
-    strategyVersion: INTRADAY_STRATEGY_VERSION,
+    strategyVersion: getIntradayStrategy(request.strategyId).version,
     dataRevision: input.dataRevision,
     quoteScope: "TOSS_UNSPECIFIED",
     adjusted: false,
@@ -142,7 +143,7 @@ export function runIntradayBacktest(
     equity: [],
     warnings: [
       "토스 제공 시세의 거래소 구성은 확인되지 않았습니다. 지정 시간 구간을 사용하는 모의 체결입니다.",
-      "EMA는 매일 초기화합니다. 손절·익절은 확정된 신호 봉 종가로 판단하며 체결 지연·비용은 입력한 가정입니다.",
+      "지표와 시초 범위는 매일 초기화합니다. 손절·익절은 확정된 신호 봉 종가로 판단하며 체결 지연·비용은 입력한 가정입니다.",
       "미체결 매도 주문이 있으면 청산을 계속 시도하며 후속 신호로 주문 지연·만료 시간을 연장하지 않습니다.",
     ],
     processedBars: 0,
@@ -173,11 +174,8 @@ export function runIntradayBacktest(
     totalEntryCost = 0,
     tradeProceeds = 0,
     entryAt = 0;
-  let fast = 0,
-    slow = 0,
-    signalCount = 0,
-    previousDifference: number | null = null,
-    day = "",
+  const signalModel = createIntradaySignalModel(request);
+  let day = "",
     peak = cash;
   let holdingMinutes = 0,
     completedPnl = 0,
@@ -254,10 +252,6 @@ export function runIntradayBacktest(
     if (day !== barDay) {
       if (quantity > 0) break;
       day = barDay;
-      fast = 0;
-      slow = 0;
-      signalCount = 0;
-      previousDifference = null;
       previousVolume = 0;
       event("CANCELLED", openAt, "세션 종료로 주문을 취소했습니다.");
     }
@@ -336,19 +330,8 @@ export function runIntradayBacktest(
       }
     }
     const signalBar = aggregated.get(bar.endMs);
+    const decision = signalModel.onMinute(bar, signalBar);
     if (signalBar) {
-      signalCount++;
-      fast =
-        signalCount === 1
-          ? signalBar.close
-          : fast +
-            (2 / (request.parameters.fast + 1)) * (signalBar.close - fast);
-      slow =
-        signalCount === 1
-          ? signalBar.close
-          : slow +
-            (2 / (request.parameters.slow + 1)) * (signalBar.close - slow);
-      const diff = fast - slow;
       const pnl =
         averagePrice > 0 ? (signalBar.close / averagePrice - 1) * 100 : 0;
       let exitReason: IntradaySignal["reason"] | null = null;
@@ -356,12 +339,7 @@ export function runIntradayBacktest(
         exitReason = "STOP_LOSS";
       else if (quantity > 0 && pnl >= request.parameters.takeProfitPct)
         exitReason = "TAKE_PROFIT";
-      else if (
-        quantity > 0 &&
-        signalCount >= request.parameters.slow &&
-        diff < 0
-      )
-        exitReason = "EMA";
+      else if (quantity > 0) exitReason = decision.exit;
       if (exitReason) {
         if (pending?.signal.side === "BUY")
           event(
@@ -374,14 +352,10 @@ export function runIntradayBacktest(
         !quantity &&
         !pending &&
         minute < ENTRY_CUTOFF &&
-        signalCount >= request.parameters.slow &&
-        previousDifference !== null &&
-        previousDifference <= 0 &&
-        diff > 0
+        decision.entry
       ) {
-        order("BUY", bar.endMs, "EMA", bar.close, bar.volume);
+        order("BUY", bar.endMs, decision.entry, bar.close, bar.volume);
       }
-      previousDifference = diff;
     }
     if (minute >= EXIT) {
       if (pending?.signal.side === "BUY")

@@ -70,6 +70,8 @@ export const backtestRequestSchema = z
     risk: z
       .object({
         maxPositions: z.number().int().min(1).max(200).default(40),
+        /** 생략하면 무제한. 매수 후 총 평가자산 대비 종목별 보유 비중 상한이다. */
+        maxPositionWeightPercent: z.number().positive().max(100).optional(),
       })
       .default({ maxPositions: 40 }),
     randomSeed: z.number().int().min(0).max(MAX_RANDOM_SEED).default(42),

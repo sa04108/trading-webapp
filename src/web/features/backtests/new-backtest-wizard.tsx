@@ -210,6 +210,7 @@ export function NewBacktestWizard() {
   // topN 기본값(없음/10/20/최대 200)이 모두 이 값만으로 제출 게이트(topN > maxPositions
   // 422)를 통과한다.
   const [maxPositions, setMaxPositions] = useState(DEFAULT_MAX_POSITIONS);
+  const [maxPositionWeightPercent, setMaxPositionWeightPercent] = useState("");
   const [commissionProfileId, setCommissionProfileId] =
     useState("kr-equity-default");
   const [slippageProfileId, setSlippageProfileId] = useState("fixed-5bps");
@@ -405,6 +406,7 @@ export function NewBacktestWizard() {
     if (saved.capital) {
       setInitialCash(saved.capital.initialCash);
       setMaxPositions(saved.capital.maxPositions);
+      setMaxPositionWeightPercent(saved.capital.maxPositionWeightPercent ?? "");
       setCommissionProfileId(saved.capital.commissionProfileId);
       setSlippageProfileId(saved.capital.slippageProfileId);
       setRandomSeed(saved.capital.randomSeed);
@@ -468,6 +470,7 @@ export function NewBacktestWizard() {
     setTo(state.to);
     setInitialCash(state.initialCash);
     setMaxPositions(state.maxPositions);
+    setMaxPositionWeightPercent(state.maxPositionWeightPercent);
     setCommissionProfileId(state.commissionProfileId);
     setSlippageProfileId(state.slippageProfileId);
     setRandomSeed(state.randomSeed);
@@ -542,6 +545,12 @@ export function NewBacktestWizard() {
       return "동시 보유 종목 상한은 1~200 이어야 합니다";
     }
 
+    const weightText = maxPositionWeightPercent.trim();
+    const weight = Number(weightText);
+    if (weightText !== "" && (!Number.isFinite(weight) || weight <= 0 || weight > 100)) {
+      return "종목별 최대 비중은 0보다 크고 100 이하여야 합니다";
+    }
+
     if (typeof parsedParameters === "string") return parsedParameters;
     const seed = supportsRandomSeed ? Number(randomSeed) : 42;
     if (!Number.isInteger(seed) || seed < 0 || seed > MAX_RANDOM_SEED) {
@@ -563,7 +572,10 @@ export function NewBacktestWizard() {
         commissionProfileId,
         slippageProfileId,
       },
-      risk: { maxPositions: positions },
+      risk: {
+        maxPositions: positions,
+        ...(weightText === "" ? {} : { maxPositionWeightPercent: weight }),
+      },
       randomSeed: seed,
     };
   };
@@ -856,6 +868,13 @@ export function NewBacktestWizard() {
       setStepError(error);
       return;
     }
+    if (step === 3 && maxPositionWeightPercent.trim() !== "") {
+      const weight = Number(maxPositionWeightPercent);
+      if (!Number.isFinite(weight) || weight <= 0 || weight > 100) {
+        setStepError("종목별 최대 비중은 0보다 크고 100 이하여야 합니다");
+        return;
+      }
+    }
     if (benchmarkCheckActive && !(await verifyBenchmarkCoverage())) return;
     // 검토를 지났다는 사실을 여기서만 세운다 — 실행 단계 URL 의 유일한 열쇠다
     if (step === REVIEW_STEP) setReviewPassed(true);
@@ -937,6 +956,7 @@ export function NewBacktestWizard() {
     lastPreview: draftPreview,
     initialCash,
     maxPositions,
+    maxPositionWeightPercent,
     commissionProfileId,
     slippageProfileId,
     randomSeed,
@@ -1021,6 +1041,7 @@ export function NewBacktestWizard() {
       void saveBacktestWizardDraftStep(sourceJobId, "capital", {
         initialCash,
         maxPositions,
+        maxPositionWeightPercent,
         commissionProfileId,
         slippageProfileId,
         randomSeed,
@@ -1040,6 +1061,7 @@ export function NewBacktestWizard() {
     sourceJobId,
     initialCash,
     maxPositions,
+    maxPositionWeightPercent,
     commissionProfileId,
     slippageProfileId,
     randomSeed,
@@ -1089,6 +1111,7 @@ export function NewBacktestWizard() {
         {
           initialCash,
           maxPositions,
+          maxPositionWeightPercent,
           commissionProfileId,
           slippageProfileId,
           randomSeed,
@@ -1119,6 +1142,7 @@ export function NewBacktestWizard() {
     draftPreview,
     initialCash,
     maxPositions,
+    maxPositionWeightPercent,
     commissionProfileId,
     slippageProfileId,
     randomSeed,
@@ -1148,6 +1172,7 @@ export function NewBacktestWizard() {
         saveBacktestWizardDraftStep(saved.sourceJobId, "capital", {
           initialCash: saved.initialCash,
           maxPositions: saved.maxPositions,
+          maxPositionWeightPercent: saved.maxPositionWeightPercent,
           commissionProfileId: saved.commissionProfileId,
           slippageProfileId: saved.slippageProfileId,
           randomSeed: saved.randomSeed,
@@ -1626,6 +1651,25 @@ export function NewBacktestWizard() {
               />
             </div>
             <div className="space-y-1">
+              <Label htmlFor="max-position-weight">종목별 최대 비중 (%)</Label>
+              <Input
+                id="max-position-weight"
+                type="number"
+                inputMode="decimal"
+                className="h-11"
+                min={0}
+                max={100}
+                step="any"
+                value={maxPositionWeightPercent}
+                onChange={(e) => setMaxPositionWeightPercent(e.target.value)}
+                aria-describedby="max-position-weight-help"
+              />
+              <p id="max-position-weight-help" className="text-sm text-muted-foreground">
+                비우면 제한이 없습니다. 현금과 보유 종목 평가액을 합한 총 평가자산을 기준으로
+                기존 보유분을 포함한 매수 후 비중을 제한합니다. 1주를 살 수 없으면 매수하지 않습니다.
+              </p>
+            </div>
+            <div className="space-y-1">
               <Label htmlFor="seed">난수 시드</Label>
               <Input
                 id="seed"
@@ -1768,6 +1812,11 @@ export function NewBacktestWizard() {
                     초기 자본
                   </span>
                   <span>{formatKrw(request.capital.initialCash)}</span>
+                </div>
+                <Separator />
+                <div className="flex justify-between gap-3">
+                  <span className="shrink-0 text-muted-foreground">종목별 최대 비중</span>
+                  <span>{request.risk.maxPositionWeightPercent == null ? "제한 없음" : `${request.risk.maxPositionWeightPercent}%`}</span>
                 </div>
                 <Separator />
                 <div className="flex justify-between gap-3">

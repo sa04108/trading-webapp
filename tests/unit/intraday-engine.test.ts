@@ -1,3 +1,4 @@
+import { INTRADAY_STRATEGIES } from "../../src/shared/schemas/intraday-strategies.js";
 import { describe, expect, it } from "vitest";
 import {
   aggregateIntradayBars,
@@ -156,5 +157,97 @@ describe("분봉 정보 시각과 주문 생명주기", () => {
         parameters: { ...request().parameters, slow: 26 },
       }).success,
     ).toBe(false);
+  });
+  it.each([
+    {
+      strategyId: "intraday-orb",
+      reason: "ORB",
+      at: "09:06",
+      parameters: {
+        openingMinutes: 5,
+        entryWindowMinutes: 15,
+        breakoutBps: 0,
+        volumeMultiplier: 1,
+      },
+      closes: [1000, 1000, 1000, 1000, 1000, 1010],
+    },
+    {
+      strategyId: "intraday-vwap-reclaim",
+      reason: "VWAP",
+      at: "09:04",
+      parameters: { trendPeriod: 3, volumePeriod: 2, volumeMultiplier: 1 },
+      closes: [1000, 900, 800, 1000],
+    },
+    {
+      strategyId: "intraday-bollinger-rsi",
+      reason: "BOLLINGER_RSI",
+      at: "09:04",
+      parameters: { bandPeriod: 3, bandStdDev: 1, rsiPeriod: 2, oversold: 30 },
+      closes: [1000, 1000, 800, 850, 900],
+    },
+  ])("$strategyId의 신호를 지연 체결과 결과에 연결한다", (fixture) => {
+    const req = intradayRequestSchema.parse({
+      ...request(),
+      strategyId: fixture.strategyId,
+      parameters: {
+        ...fixture.parameters,
+        allocationPct: 95,
+        stopLossPct: 50,
+        takeProfitPct: 100,
+      },
+    });
+    const data = bars().map((b, i) => {
+      const close = fixture.closes[i] ?? fixture.closes.at(-1)!;
+      return { ...b, open: close, high: close, low: close, close };
+    });
+    const result = run(data, req);
+    expect(result.request.strategyId).toBe(fixture.strategyId);
+    expect(result.strategyVersion).toBe("1.0.0");
+    expect(result.signals[0]).toMatchObject({
+      reason: fixture.reason,
+      atMs: at(fixture.at),
+      side: "BUY",
+    });
+    expect(result.fills[0]).toMatchObject({
+      reason: fixture.reason,
+      atMs: at(fixture.at) + 60_000,
+      side: "BUY",
+    });
+    expect(result.position.quantity).toBe(0);
+    expect(result.metrics.pnl).toBe(0);
+  });
+  it("새 전략 기본값과 기존 EMA 요청을 보존하고 잘못 섞인 파라미터와 불가능한 준비 시간을 거부한다", () => {
+    for (const definition of INTRADAY_STRATEGIES) {
+      const parsed = intradayRequestSchema.parse({
+        ...request(),
+        timeframe: "5m",
+        strategyId: definition.id,
+        parameters: definition.defaults,
+      });
+      expect(parsed.parameters).toEqual(definition.defaults);
+    }
+    expect(intradayRequestSchema.parse(request())).toEqual(request());
+    expect(
+      intradayRequestSchema.safeParse({
+        ...request(),
+        strategyId: "intraday-orb",
+      }).success,
+    ).toBe(false);
+    const bb = INTRADAY_STRATEGIES.find(
+      (s) => s.id === "intraday-bollinger-rsi",
+    )!;
+    const boundary = {
+      ...request(),
+      timeframe: "15m",
+      strategyId: bb.id,
+      parameters: { ...bb.defaults, bandPeriod: 24 },
+    };
+    expect(intradayRequestSchema.safeParse(boundary).success).toBe(false);
+    expect(
+      intradayRequestSchema.safeParse({
+        ...boundary,
+        parameters: { ...boundary.parameters, bandPeriod: 23 },
+      }).success,
+    ).toBe(true);
   });
 });

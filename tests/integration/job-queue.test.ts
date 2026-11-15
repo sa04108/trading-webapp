@@ -1368,6 +1368,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
   it('재설정 및 복제 초안은 유니버스 준비와 무관하게 저장 요청을 복원한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     const request = buildRequest();
+    request.risk.maxPositionWeightPercent = 12.5;
     const job = ctx.container.jobQueue.enqueue(request);
 
     // 이 경계 아래는 전체 기간의 유니버스 해소와 coverage 검증이다. 초안 조회는 이
@@ -1663,12 +1664,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('새 난수 100개는 중복 없이 저장하고 기존 QUEUED 상한만큼 순차 투입한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
-    await scenario.prepare(buildRequest());
+    const request = buildRequest();
+    request.risk.maxPositionWeightPercent = 12.5;
+    await scenario.prepare(request);
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
       cookies: { session: cookie },
-      payload: buildRequest(),
+      payload: request,
     });
     expect(created.statusCode).toBe(201);
     const sourceId = created.json().job.id as string;
@@ -1723,7 +1726,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const child = afterSlot.items.find(({ job }) => job?.cloneBatchId === batchId)?.job;
     expect(child?.cloneSourceJobId).toBe(sourceId);
     const childRequest = JSON.parse(child!.requestJson) as BacktestRequest;
-    const { randomSeed: _sourceSeed, ...sourceSettings } = buildRequest();
+    const { randomSeed: _sourceSeed, ...sourceSettings } = request;
     const { randomSeed: _childSeed, ...childSettings } = childRequest;
     expect(childSettings).toEqual({ ...sourceSettings, benchmarkId: 'KOSPI', timeframe: '1d' });
 

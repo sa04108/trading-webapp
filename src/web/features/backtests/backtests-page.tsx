@@ -1,7 +1,11 @@
-import { IntradayNav } from "../intraday/pages";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Dices, Plus } from "lucide-react";
-import { useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 import { InfoHint } from "@/components/info-hint";
@@ -11,14 +15,21 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api-client";
-import { useBacktests, useSeedCloneBatches, useStrategies } from "./api";
+import { useStrategies } from "./api";
+import {
+  HistoryPager,
+  HistoryToolbar,
+  historyPeriod,
+  useHistoryControls,
+} from "./history-controls";
+import type { HistoryGroup } from "../../../shared/schemas/backtest-history";
+import { BacktestHeader } from "./backtest-header";
 import {
   formatDateTime,
   formatSignedPct,
   pnlClass,
   timeframeLabel,
 } from "@/lib/format";
-import { groupJobsByStrategy } from "./job-groups";
 import { resolveJobTimeframe } from "./job-timeframe";
 import { StatusBadge } from "./status-badge";
 import {
@@ -109,11 +120,13 @@ export function BacktestJobCard({
             {formatDateTime(job.createdAtMs)}
           </span>
         </div>
-        <div className="text-xs text-muted-foreground">
-          {formatUniverseRuleSummary(job.request.universeRule)} ·{" "}
-          {job.request.period.from} ~ {job.request.period.to}
+        <p className="whitespace-nowrap text-sm font-medium">
+          {historyPeriod(job.request.period.from, job.request.period.to)}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {formatUniverseRuleSummary(job.request.universeRule)}
           {timeframe ? ` · ${timeframeLabel(timeframe)}` : ""}
-        </div>
+        </p>
         {running && (progress !== null || activity) ? (
           <div className="space-y-1">
             {progress !== null ? (
@@ -128,23 +141,33 @@ export function BacktestJobCard({
           </div>
         ) : null}
         {job.status === "COMPLETED" && job.metrics ? (
-          <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-            <span className={pnlClass(job.metrics.totalReturnPct)}>
-              수익률 {formatSignedPct(job.metrics.totalReturnPct)}
-            </span>
-            <span className={pnlClass(job.metrics.cagrPct)}>
-              CAGR {formatSignedPct(job.metrics.cagrPct)}
-            </span>
-            <span className="text-muted-foreground">
-              MDD {formatSignedPct(job.metrics.maxDrawdownPct)}
-            </span>
-            <span className="text-muted-foreground">
-              매도 체결 {job.metrics.tradeCount}건
-            </span>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <p className="text-xs text-muted-foreground">수익률</p>
+                <p
+                  className={`text-xl font-semibold tabular-nums ${pnlClass(job.metrics.totalReturnPct)}`}
+                >
+                  {formatSignedPct(job.metrics.totalReturnPct)}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">CAGR</p>
+                <p
+                  className={`text-xl font-semibold tabular-nums ${pnlClass(job.metrics.cagrPct)}`}
+                >
+                  {formatSignedPct(job.metrics.cagrPct)}
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-between gap-2 border-t pt-2 text-xs text-muted-foreground">
+              <span>MDD {formatSignedPct(job.metrics.maxDrawdownPct)}</span>
+              <span>매도 체결 {job.metrics.tradeCount}건</span>
+            </div>
           </div>
         ) : null}
         {job.error ? (
-          <p className="text-xs text-destructive">{job.error}</p>
+          <p className="break-words text-xs text-destructive">{job.error}</p>
         ) : null}
       </CardContent>
     </Card>
@@ -253,28 +276,91 @@ export function SeedCloneBatchCard({
 }
 
 export function BacktestsPage() {
-  const queryClient = useQueryClient();
-  const { data, isLoading } = useBacktests(5_000);
-  const batchesQuery = useSeedCloneBatches(5_000);
+  const client = useQueryClient();
+  const controls = useHistoryControls();
   const strategies = useStrategies();
-  const strategyById = new Map(
-    (strategies.data?.strategies ?? []).map((s) => [s.id, s]),
-  );
-  const jobs = mergeBacktestSources(
-    (data?.jobs ?? []).filter((job) => !job.cloneBatchId),
-    batchesQuery.data?.sourceJobs ?? [],
-  );
-  const batches = batchesQuery.data?.batches ?? [];
-  const batchesBySource = groupSeedBatchesBySource(batches);
-  const deletableIds = deletableBacktestIds(jobs).filter(
-    (id) => !hasActiveSeedBatch(batchesBySource.get(id) ?? []),
-  );
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const clear = () => setSelected(new Set());
+  const groups = useQuery({
+    queryKey: ["backtests", "groups"],
+    queryFn: () => api<{ groups: HistoryGroup[] }>("/backtests/groups"),
+    refetchInterval: 5_000,
+  });
+  const limit = controls.view === "cards" ? 6 : 10;
+  const pages = useQueries({
+    queries: (groups.data?.groups ?? []).map((group) => {
+      const params = new URLSearchParams({
+        strategyId: group.strategyId,
+        sort: controls.sort,
+        dir: controls.dir,
+        limit: String(limit),
+        offset: String((controls.page(group.strategyId) - 1) * limit),
+      });
+      return {
+        queryKey: ["backtests", "history", params.toString()],
+        queryFn: () =>
+          api<{ jobs: JobSummary[]; total: number }>(`/backtests?${params}`),
+        enabled: !controls.collapsed(group.strategyId),
+        refetchInterval: 5_000,
+      };
+    }),
+  });
+  const visibleJobs = pages.flatMap((query, index) =>
+    controls.collapsed(groups.data?.groups[index]?.strategyId ?? "")
+      ? []
+      : (query.data?.jobs ?? []),
+  );
+  const sourceIds = visibleJobs.map((job) => job.id).sort();
+  const batchQuery = useQuery({
+    queryKey: ["backtest-clone-batches", "sources", sourceIds],
+    queryFn: () =>
+      api<{ batches: SeedCloneBatchSummary[]; sourceJobs: JobSummary[] }>(
+        `/backtest-clone-batches?${new URLSearchParams({ sourceJobIds: sourceIds.join(",") })}`,
+      ),
+    enabled: sourceIds.length > 0,
+    refetchInterval: 5_000,
+  });
+  const batchesBySource = groupSeedBatchesBySource(
+    batchQuery.data?.batches ?? [],
+  );
+  const batchReady =
+    sourceIds.length === 0 ||
+    (batchQuery.isSuccess && !batchQuery.isFetching && !batchQuery.isError);
+  const deletableIds = batchReady
+    ? deletableBacktestIds(visibleJobs).filter(
+        (id) => !hasActiveSeedBatch(batchesBySource.get(id) ?? []),
+      )
+    : [];
   const selectedIds = deletableIds.filter((id) => selected.has(id));
-  const allSelected =
-    deletableIds.length > 0 && selectedIds.length === deletableIds.length;
-
+  const corrections = (groups.data?.groups ?? []).flatMap((group, index) => {
+    const query = pages[index];
+    if (
+      !query?.data ||
+      query.isFetching ||
+      controls.collapsed(group.strategyId)
+    )
+      return [];
+    const last = Math.max(1, Math.ceil(query.data.total / limit));
+    return controls.page(group.strategyId) > last
+      ? [{ id: group.strategyId, page: last }]
+      : [];
+  });
+  const correctionKey = JSON.stringify(corrections);
+  const { correctPages } = controls;
+  useEffect(() => {
+    const pending = JSON.parse(correctionKey) as Array<{
+      id: string;
+      page: number;
+    }>;
+    if (!pending.length) return;
+    correctPages(pending);
+    setSelected((previous) => (previous.size ? new Set() : previous));
+  }, [correctionKey, correctPages]);
+  const invalidate = () => {
+    void client.invalidateQueries({ queryKey: ["backtests"] });
+    void client.invalidateQueries({ queryKey: ["backtest-clone-batches"] });
+  };
   const remove = useMutation({
     mutationFn: (ids: string[]) =>
       Promise.all(
@@ -282,31 +368,19 @@ export function BacktestsPage() {
       ),
     onSuccess: (_result, ids) => {
       toast.success(`백테스트 ${ids.length}개를 삭제했습니다`);
-      setSelected(new Set());
+      clear();
       setEditing(false);
     },
-    onError: (error) => toast.error(error.message),
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ["backtests"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["backtest-clone-batches"],
-      });
-    },
+    onError: (error: Error) => toast.error(error.message),
+    onSettled: invalidate,
   });
-
   const removeBatch = useMutation({
     mutationFn: (id: string) =>
       api(`/backtest-clone-batches/${id}`, { method: "DELETE" }),
     onSuccess: () => toast.success("난수 시드 실험을 삭제했습니다"),
-    onError: (error) => toast.error(error.message),
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: ["backtests"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["backtest-clone-batches"],
-      });
-    },
+    onError: (error: Error) => toast.error(error.message),
+    onSettled: invalidate,
   });
-
   const toggleOne = (id: string) =>
     setSelected((previous) => {
       const next = new Set(previous);
@@ -314,126 +388,284 @@ export function BacktestsPage() {
       else next.add(id);
       return next;
     });
-
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-semibold">백테스트</h2>
-        <IntradayNav />
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {editing ? (
-            <>
-              <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Checkbox
-                  checked={allSelected}
-                  onCheckedChange={() =>
-                    setSelected(toggleAllBacktests(selected, deletableIds))
-                  }
-                  aria-label="전체 선택"
-                />
-                전체 선택
-              </label>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={selectedIds.length === 0 || remove.isPending}
-                onClick={() => remove.mutate(selectedIds)}
-              >
-                선택 삭제 ({selectedIds.length})
-              </Button>
+      <BacktestHeader
+        mode="daily"
+        actions={
+          <>
+            {visibleJobs.length > 0 || editing ? (
               <Button
                 variant="outline"
                 size="sm"
-                disabled={deletableIds.length === 0 || remove.isPending}
-                onClick={() => remove.mutate(deletableIds)}
+                onClick={() => {
+                  setEditing(!editing);
+                  clear();
+                }}
               >
-                전체 삭제
+                {editing ? "완료" : "편집"}
               </Button>
-            </>
-          ) : null}
-          {jobs.length > 0 ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setEditing((previous) => !previous);
-                setSelected(new Set());
-              }}
-            >
-              {editing ? "완료" : "편집"}
+            ) : null}
+            <Button asChild className="h-11 w-11 px-0 sm:w-auto sm:px-4">
+              <Link to="/backtests/new" aria-label="새 백테스트">
+                <Plus data-icon="inline-start" />
+                <span className="hidden sm:inline">새 백테스트</span>
+              </Link>
             </Button>
-          ) : null}
-          <Button asChild className="h-11">
-            <Link to="/backtests/new">
-              <Plus data-icon="inline-start" />새 백테스트
-            </Link>
+          </>
+        }
+      />
+      <HistoryToolbar controls={controls} onChange={clear} />
+      {editing ? (
+        <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1">
+          <label className="flex shrink-0 items-center gap-2 text-sm">
+            <Checkbox
+              checked={
+                deletableIds.length > 0 &&
+                selectedIds.length === deletableIds.length
+              }
+              onCheckedChange={() =>
+                setSelected(toggleAllBacktests(selected, deletableIds))
+              }
+              aria-label="현재 페이지 선택"
+            />
+            현재 페이지 선택
+          </label>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={!selectedIds.length || remove.isPending}
+            onClick={() => remove.mutate(selectedIds)}
+          >
+            현재 페이지 선택 삭제 ({selectedIds.length})
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!deletableIds.length || remove.isPending}
+            onClick={() => remove.mutate(deletableIds)}
+          >
+            현재 페이지 전체 삭제
           </Button>
         </div>
-      </div>
-
-      {isLoading || batchesQuery.isLoading ? (
-        <div className="space-y-3">
-          <Skeleton className="h-24 w-full" />
-          <Skeleton className="h-24 w-full" />
-        </div>
-      ) : jobs.length > 0 ? (
-        <div className="space-y-6">
-          {groupJobsByStrategy(jobs).map((group) => {
-            const strategy = strategyById.get(group.strategyId);
-            return (
-              <section key={group.strategyId} className="space-y-3">
-                <div className="flex items-center gap-1.5">
-                  <h3 className="text-sm font-semibold">
-                    {strategy?.name ?? group.strategyId}
-                  </h3>
-                  {strategy?.description ? (
-                    <InfoHint label={`${strategy.name} 전략 설명`}>
-                      <p className="leading-relaxed">{strategy.description}</p>
-                    </InfoHint>
-                  ) : null}
-                </div>
-                {group.jobs.map((job) => {
-                  const sourceBatches = batchesBySource.get(job.id) ?? [];
-                  return (
-                    <div key={job.id} className="space-y-2">
-                      <BacktestJobCard
-                        job={job}
-                        timeframe={resolveJobTimeframe(job)}
-                        editing={editing}
-                        selected={selected.has(job.id)}
-                        deletable={deletableIds.includes(job.id)}
-                        onToggle={() => toggleOne(job.id)}
-                      />
-                      {sourceBatches.length > 0 ? (
-                        <div className="ml-4 space-y-2 border-l-2 border-muted pl-4 sm:ml-7">
-                          {sourceBatches.map((batch) => (
-                            <SeedCloneBatchCard
-                              key={batch.id}
-                              batch={batch}
-                              editing={editing}
-                              removing={
-                                removeBatch.isPending &&
-                                removeBatch.variables === batch.id
-                              }
-                              onRemove={() => removeBatch.mutate(batch.id)}
-                            />
-                          ))}
+      ) : null}
+      {batchQuery.isError ? (
+        <p role="alert" className="text-sm text-destructive">
+          시드 실험을 불러오지 못해 원본 삭제가 비활성화되었습니다.
+        </p>
+      ) : null}
+      {groups.isError ? (
+        <p role="alert" className="text-destructive">
+          이력 그룹을 불러오지 못했습니다.
+        </p>
+      ) : null}
+      {groups.isLoading ? <Skeleton className="h-24 w-full" /> : null}
+      {groups.data?.groups.length === 0 ? (
+        <p>백테스트가 없습니다. 새 백테스트를 실행해 보세요.</p>
+      ) : null}
+      {(groups.data?.groups ?? []).map((group, index) => {
+        const query = pages[index];
+        const strategy = strategies.data?.strategies.find(
+          (s) => s.id === group.strategyId,
+        );
+        const name = strategy?.name ?? group.strategyId;
+        const batchCards = (job: JobSummary) =>
+          (batchesBySource.get(job.id) ?? []).map((batch) => (
+            <SeedCloneBatchCard
+              key={batch.id}
+              batch={batch}
+              editing={editing}
+              removing={
+                removeBatch.isPending && removeBatch.variables === batch.id
+              }
+              onRemove={() => removeBatch.mutate(batch.id)}
+            />
+          ));
+        return (
+          <section key={group.strategyId} className="space-y-3">
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 border-b py-2 text-left font-semibold"
+              aria-expanded={!controls.collapsed(group.strategyId)}
+              onClick={() => {
+                controls.toggle(group.strategyId);
+                clear();
+              }}
+            >
+              {name}{" "}
+              <span className="text-xs font-normal text-muted-foreground">
+                {group.total}건
+              </span>
+              <span className="ml-auto">
+                {controls.collapsed(group.strategyId) ? "▸" : "▾"}
+              </span>
+            </button>
+            {!controls.collapsed(group.strategyId) ? (
+              <>
+                {strategy?.description ? (
+                  <InfoHint label={`${name} 전략 설명`}>
+                    <p>{strategy.description}</p>
+                  </InfoHint>
+                ) : null}
+                {query?.isError ? (
+                  <p role="alert" className="text-destructive">
+                    이력을 불러오지 못했습니다.
+                  </p>
+                ) : null}
+                {query?.isLoading ? <Skeleton className="h-24 w-full" /> : null}
+                {controls.view === "cards" ? (
+                  <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
+                    {query?.data?.jobs.map((job) => (
+                      <div
+                        key={job.id}
+                        className="min-w-0 max-w-[360px] space-y-2"
+                      >
+                        <BacktestJobCard
+                          job={job}
+                          timeframe={resolveJobTimeframe(job)}
+                          editing={editing}
+                          selected={selected.has(job.id)}
+                          deletable={deletableIds.includes(job.id)}
+                          onToggle={() => toggleOne(job.id)}
+                        />
+                        <div className="space-y-2 border-l-2 pl-4">
+                          {batchCards(job)}
                         </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </section>
-            );
-          })}
-        </div>
-      ) : (
-        <Card>
-          <CardContent className="py-8 text-center text-sm text-muted-foreground">
-            백테스트가 없습니다. 새 백테스트를 실행해 보세요.
-          </CardContent>
-        </Card>
-      )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <table className="w-full table-fixed text-xs">
+                    <thead>
+                      <tr className="text-muted-foreground">
+                        <th className="w-[52%] py-2 text-left sm:w-[38%]">
+                          기간
+                        </th>
+                        <th className="text-right">수익률</th>
+                        <th className="text-right">CAGR</th>
+                        <th className="hidden text-right sm:table-cell">MDD</th>
+                        <th className="hidden text-right sm:table-cell">
+                          실행일
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {query?.data?.jobs.map((job) => (
+                        <Fragment key={job.id}>
+                          <tr className="border-t">
+                            <td className="py-3 align-top">
+                              {editing && deletableIds.includes(job.id) ? (
+                                <Checkbox
+                                  className="mr-1"
+                                  checked={selected.has(job.id)}
+                                  onCheckedChange={() => toggleOne(job.id)}
+                                  aria-label={`${formatDateTime(job.createdAtMs)} 백테스트 선택`}
+                                />
+                              ) : null}
+                              {editing ? (
+                                <span className="whitespace-nowrap text-[11px] sm:text-xs">
+                                  {historyPeriod(
+                                    job.request.period.from,
+                                    job.request.period.to,
+                                  )}
+                                </span>
+                              ) : (
+                                <Link
+                                  className="whitespace-nowrap text-[11px] underline sm:text-xs"
+                                  to={`/backtests/${job.id}`}
+                                >
+                                  {historyPeriod(
+                                    job.request.period.from,
+                                    job.request.period.to,
+                                  )}
+                                </Link>
+                              )}
+                              <div className="text-muted-foreground">
+                                <StatusBadge status={job.status} />{" "}
+                                <span className="sm:hidden">
+                                  {formatDateTime(job.createdAtMs)}
+                                </span>
+                              </div>
+                              {job.error ? (
+                                <p className="break-words text-destructive">
+                                  {job.error}
+                                </p>
+                              ) : null}
+                              {job.progress && !isTerminal(job.status) ? (
+                                <ExecutionProgressSummary
+                                  progress={job.progress}
+                                  compact
+                                />
+                              ) : null}
+                              {!job.progress &&
+                              !isTerminal(job.status) &&
+                              job.progressBars !== null &&
+                              job.totalBars !== null &&
+                              job.totalBars > 0 ? (
+                                <p className="text-muted-foreground">
+                                  진행률{" "}
+                                  {Math.round(
+                                    (job.progressBars / job.totalBars) * 100,
+                                  )}
+                                  %
+                                </p>
+                              ) : null}
+                            </td>
+                            <td
+                              className={`text-right ${pnlClass(job.metrics?.totalReturnPct ?? null)}`}
+                            >
+                              {formatSignedPct(
+                                job.metrics?.totalReturnPct ?? null,
+                              )}
+                            </td>
+                            <td
+                              className={`text-right ${pnlClass(job.metrics?.cagrPct ?? null)}`}
+                            >
+                              {formatSignedPct(job.metrics?.cagrPct ?? null)}
+                            </td>
+                            <td className="hidden text-right sm:table-cell">
+                              {formatSignedPct(
+                                job.metrics?.maxDrawdownPct ?? null,
+                              )}
+                            </td>
+                            <td className="hidden text-right sm:table-cell">
+                              {formatDateTime(job.createdAtMs)}
+                            </td>
+                          </tr>
+                          {(batchesBySource.get(job.id) ?? []).length ? (
+                            <tr>
+                              <td colSpan={3}>
+                                <div className="space-y-2 py-2">
+                                  {batchCards(job)}
+                                </div>
+                              </td>
+                              <td
+                                colSpan={2}
+                                className="hidden sm:table-cell"
+                              />
+                            </tr>
+                          ) : null}
+                        </Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {query?.data ? (
+                  <HistoryPager
+                    page={controls.page(group.strategyId)}
+                    total={query.data.total}
+                    limit={limit}
+                    onPage={(page) => {
+                      controls.setPage(group.strategyId, page);
+                      clear();
+                    }}
+                  />
+                ) : null}
+              </>
+            ) : null}
+          </section>
+        );
+      })}
     </div>
   );
 }

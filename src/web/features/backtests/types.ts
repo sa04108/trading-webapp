@@ -36,7 +36,7 @@ export interface BacktestRequestBody {
     commissionProfileId: string;
     slippageProfileId: string;
   };
-  risk: { maxPositions: number };
+  risk: { maxPositions: number; maxPositionWeightPercent?: number };
   randomSeed: number;
 }
 

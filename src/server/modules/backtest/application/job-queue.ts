@@ -1,6 +1,13 @@
 import { assertSubmissionSnapshot, type SubmissionSnapshot } from "./submission-snapshot.js";
 import { EventEmitter } from "node:events";
-import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import {
+  and, asc, count, desc, eq, getTableColumns, inArray, isNull, or, sql,
+} from "drizzle-orm";
+import type {
+  HistoryGroup,
+  HistoryQuery,
+} from "../../../../shared/schemas/backtest-history.js";
+import { backtestMetrics } from "../../../shared/db/backtest-result-schema.js";
 import type {
   AppDatabase,
   DatabaseHandle,
@@ -598,19 +605,66 @@ export class JobQueue {
    * 일반 백테스트 목록용 최상위 작업. 난수 시드 배치 자식은 부모 묶음 화면에서만
    * 노출해야 100개 자식이 페이지 한도를 차지해 기존 작업을 밀어내지 않는다.
    */
-  listTopLevelJobs(limit = 50, offset = 0): BacktestJobRow[] {
-    return this.db
-      .select()
-      .from(backtestJobs)
-      .where(
-        and(
-          isNull(backtestJobs.cloneBatchId),
-          sql`NOT EXISTS (
+  private topLevelWhere(strategyId?: string) {
+    return and(
+      // 이전 버전에서 중첩 실험의 원본이 된 자식은 연결된 실험에 접근할 수 있게 남긴다.
+      or(isNull(backtestJobs.cloneBatchId), sql`EXISTS (
+        SELECT 1 FROM backtest_clone_batches b WHERE b.source_job_id = ${backtestJobs.id}
+      )`),
+      sql`NOT EXISTS (
         SELECT 1 FROM backtest_validation_trials v WHERE v.job_id = ${backtestJobs.id}
       )`,
-        ),
+      strategyId === undefined
+        ? undefined
+        : eq(backtestJobs.strategyId, strategyId),
+    );
+  }
+
+  listTopLevelGroups(): HistoryGroup[] {
+    return this.db
+      .select({ strategyId: backtestJobs.strategyId, total: count() })
+      .from(backtestJobs)
+      .where(this.topLevelWhere())
+      .groupBy(backtestJobs.strategyId)
+      .orderBy(asc(backtestJobs.strategyId))
+      .all();
+  }
+
+  countTopLevelJobs(strategyId?: string): number {
+    return this.db
+      .select({ total: count() })
+      .from(backtestJobs)
+      .where(this.topLevelWhere(strategyId))
+      .get()!.total;
+  }
+
+  listTopLevelJobs(
+    limit = 50,
+    offset = 0,
+    options: Partial<Pick<HistoryQuery, "strategyId" | "sort" | "dir">> = {},
+  ): BacktestJobRow[] {
+    const periodEnd = sql`json_extract(${backtestJobs.requestJson}, '$.period.to')`;
+    const duration = sql`julianday(${periodEnd}) - julianday(json_extract(${backtestJobs.requestJson}, '$.period.from'))`;
+    const columns = {
+      createdAt: backtestJobs.createdAtMs,
+      periodEnd,
+      duration,
+      returnPct: sql`CASE WHEN ${backtestJobs.status} = 'COMPLETED' THEN ${backtestMetrics.totalReturnPct} END`,
+      cagrPct: sql`CASE WHEN ${backtestJobs.status} = 'COMPLETED' THEN ${backtestMetrics.cagrPct} END`,
+    };
+    const column = columns[options.sort ?? "createdAt"];
+    return this.db
+      .select(getTableColumns(backtestJobs))
+      .from(backtestJobs)
+      .leftJoin(backtestMetrics, eq(backtestMetrics.jobId, backtestJobs.id))
+      .where(this.topLevelWhere(options.strategyId))
+      // 지표가 없는 작업은 방향과 무관하게 마지막, 동률은 실행일·ID로 고정한다.
+      .orderBy(
+        asc(sql`${column} IS NULL`),
+        options.dir === "asc" ? asc(column) : desc(column),
+        desc(backtestJobs.createdAtMs),
+        desc(backtestJobs.id),
       )
-      .orderBy(desc(backtestJobs.createdAtMs))
       .limit(limit)
       .offset(offset)
       .all();

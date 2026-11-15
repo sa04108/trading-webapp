@@ -29,7 +29,7 @@ const source: BacktestRequest = {
   universeRule: { markets: ['KOSPI'], stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 10 }], rebalanceInterval: { unit: 'MONTH', value: 1 } },
   period: { from: '2020-01-01', to: '2024-01-01' }, capital: { initialCash: 1_000_000, currency: 'KRW' },
   execution: { fillTiming: 'NEXT_BAR_OPEN', commissionProfileId: 'kr-equity-default', slippageProfileId: 'fixed-5bps' },
-  risk: { maxPositions: 5 }, randomSeed: 42,
+  risk: { maxPositions: 5, maxPositionWeightPercent: 12.5 }, randomSeed: 42,
 };
 const optimization = { axes: [{ key: 'window', values: [5, 20] }], objective: 'sharpe' as const, minTrades: 5, maxDrawdownPct: 30 };
 const optimized: PeriodValidationConfig = { mode: 'OPTIMIZED_HOLDOUT', splitDate: '2023-01-01', optimization };

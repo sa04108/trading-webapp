@@ -50,6 +50,8 @@ export interface BacktestRunInput {
   readonly randomSeed: number;
   /** 동시 보유 종목 상한 (리스크 검증 §9.2-6) */
   readonly maxPositions: number;
+  /** 생략하면 무제한. 매수 체결 후 총 평가자산 대비 종목별 비중 상한이다. */
+  readonly maxPositionWeightPercent?: number;
   /** 이 시각 전 봉은 전략 warm-up에만 쓰고 주문·체결·결과 스냅샷을 만들지 않는다. */
   readonly tradeFromTsMs?: number;
   /**
@@ -447,6 +449,7 @@ function* runBacktestSteps(
     recentHistoryBySymbol?.get(symbol)?.asArray() ??
     historyBySymbol?.get(symbol) ?? [];
   const lastCloseBySymbol = new Map<string, number>();
+  let currentExecutionBars: ReadonlyMap<string, Candle> = new Map();
   const positions = new Map<string, Position>();
   // Candle과 주문은 단축코드만 가지므로, 한 번 폐지 경계를 지난 코드를 새 발행사와
   // 안전하게 구분할 수 없다. 해당 실행의 남은 기간에는 신규 주문을 fail-closed한다.
@@ -483,6 +486,14 @@ function* runBacktestSteps(
   const buysDroppedByCap = new Map<string, number>();
   const liquidityLimitedOrders = new Map<string, number>();
   const liquidityRejectedOrders = new Map<string, number>();
+  let weightLimitedOrderCount = 0;
+  let weightRejectedOrderCount = 0;
+  const maxPositionWeight = input.maxPositionWeightPercent === undefined
+    ? undefined : input.maxPositionWeightPercent / 100;
+  if (maxPositionWeight !== undefined &&
+    (!Number.isFinite(maxPositionWeight) || maxPositionWeight <= 0 || maxPositionWeight > 1)) {
+    throw new Error("maxPositionWeightPercent는 0 초과 100 이하여야 합니다");
+  }
 
   const maxVolumeParticipationRate =
     input.execution.rules.maxVolumeParticipationRate;
@@ -675,6 +686,7 @@ function* runBacktestSteps(
 
     const allBarCount = allBarCountByTs.get(tsMs) ?? 0;
     const bars = executionBars(tsMs);
+    currentExecutionBars = bars;
     nonTradingNow = input.nonTradingSymbolsByTsMs?.get(tsMs);
     const delistingSymbolsThisBar = new Set<string>();
     while (
@@ -1328,6 +1340,13 @@ function* runBacktestSteps(
       `현금 부족으로 매수 주문 ${cashRejectedOrderCount}건이 거부되었습니다.`,
     );
   }
+  if (weightLimitedOrderCount > 0 || weightRejectedOrderCount > 0) {
+    warnings.push(
+      `종목별 투자 비중 상한(${input.maxPositionWeightPercent}%)으로 매수 주문 ` +
+      `${weightLimitedOrderCount}건의 수량이 축소되고 ${weightRejectedOrderCount}건이 거부되었습니다. ` +
+      "한도 내에서 최소 주문 수량을 살 수 없으면 매수하지 않습니다.",
+    );
+  }
   if (nonTradingRejectedSymbols.size > 0) {
     warnings.push(
       `거래정지·무거래로 매수할 수 없어 거부된 종목 ${nonTradingRejectedSymbols.size}개가 있습니다.`,
@@ -1743,6 +1762,44 @@ function* runBacktestSteps(
           input.execution,
           bar.venue,
         );
+      }
+
+      if (maxPositionWeight !== undefined) {
+        // 당일 종가는 아직 알 수 없다. 자본변동 반영 후 현재 시가로 평가하고,
+        // 거래 봉이 없는 보유분만 마지막 종가를 사용한다.
+        let equityAtOpen = cash;
+        for (const position of positions.values()) {
+          const price = currentExecutionBars.get(position.symbol)?.open
+            ?? lastCloseBySymbol.get(position.symbol) ?? position.avgEntryPrice;
+          equityAtOpen += position.quantity * price;
+        }
+        const heldValue = (positions.get(fill.symbol)?.quantity ?? 0) * basePrice;
+        // 매수 후 평가액 = 매수 전 평가액 - 수수료 - 시가 대비 체결 비용이다.
+        // 기존 보유분 + q주 평가액 <= 상한 × 매수 후 평가액을 q에 대해 푼다.
+        const costPerShare = fill.price * (1 + input.execution.cost.buyCommissionRate) - basePrice;
+        const targetValue = equityAtOpen * maxPositionWeight;
+        const valuePerShare = basePrice + maxPositionWeight * costPerShare;
+        const rawQuantity = (targetValue - heldValue) / valuePerShare;
+        // 정확히 한도인 1주가 0.9999999999999999로 계산되어 거부되지 않게 한다.
+        // 기존 보유액을 뺄 때의 상쇄 오차도 원래 금액 크기로 계산한다.
+        const quantityTolerance = 4 * Number.EPSILON * (
+          (Math.abs(targetValue) + Math.abs(heldValue)) / valuePerShare
+          + Math.abs(rawQuantity)
+        );
+        const allowedQuantity = Math.max(0, Math.floor(
+          rawQuantity + quantityTolerance,
+        ));
+        if (allowedQuantity < input.execution.rules.minOrderQty) {
+          weightRejectedOrderCount += 1;
+          return null;
+        }
+        if (allowedQuantity < fill.quantity) {
+          weightLimitedOrderCount += 1;
+          fill = simulateFill(
+            { ...volumeLimitedOrder, quantity: allowedQuantity },
+            basePrice, tsMs, input.execution, bar.venue,
+          );
+        }
       }
 
       cash -= requiredCashForBuy(fill);

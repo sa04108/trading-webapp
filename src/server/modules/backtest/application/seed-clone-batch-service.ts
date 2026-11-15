@@ -472,6 +472,19 @@ export class SeedCloneBatchService {
       .map((batch) => this.get(batch.id))
       .filter((detail): detail is SeedCloneBatchDetail => detail !== null);
   }
+
+  /** 현재 이력 페이지의 원본에 연결된 실험은 전역 최신 목록 한도로 누락하지 않는다. */
+  listForSources(sourceJobIds: string[]): SeedCloneBatchDetail[] {
+    if (sourceJobIds.length === 0) return [];
+    return this.database.db
+      .select()
+      .from(backtestCloneBatches)
+      .where(inArray(backtestCloneBatches.sourceJobId, sourceJobIds))
+      .orderBy(desc(backtestCloneBatches.createdAtMs), desc(backtestCloneBatches.id))
+      .all()
+      .map((batch) => this.get(batch.id))
+      .filter((detail): detail is SeedCloneBatchDetail => detail !== null);
+  }
 }
 
 function uniqueSeeds(count: number, excluded: number): number[] {

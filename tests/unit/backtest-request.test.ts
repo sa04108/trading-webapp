@@ -54,6 +54,19 @@ describe('randomSeed', () => {
   });
 });
 
+describe('종목별 투자 비중 상한', () => {
+  it('생략 시 무제한이며 0 초과 100 이하의 비율만 받는다', () => {
+    expect(backtestRequestSchema.parse(baseRequest()).risk).toEqual({ maxPositions: 20 });
+    for (const value of [2.5, 100]) {
+      expect(backtestRequestSchema.parse({ ...baseRequest(), risk: { maxPositionWeightPercent: value } }).risk)
+        .toEqual({ maxPositions: 40, maxPositionWeightPercent: value });
+    }
+    for (const value of [0, -1, 100.1, NaN, Infinity]) {
+      expect(backtestRequestSchema.safeParse({ ...baseRequest(), risk: { maxPositionWeightPercent: value } }).success).toBe(false);
+    }
+  });
+});
+
 /**
  * 단계형 유니버스 규칙은 1~5개의 기준을 순서대로 적용한다. 이후 단계는 앞 단계가
  * 남긴 후보 수를 늘릴 수 없고 같은 기준을 반복할 수 없다.

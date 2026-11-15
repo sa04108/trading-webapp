@@ -23,6 +23,7 @@ export interface WizardFormState {
   to: string;
   initialCash: string;
   maxPositions: string;
+  maxPositionWeightPercent: string;
   commissionProfileId: string;
   slippageProfileId: string;
   randomSeed: string;
@@ -101,6 +102,9 @@ export function requestToFormState(
       to: request.period.to,
       initialCash: String(request.capital.initialCash),
       maxPositions: String(request.risk.maxPositions),
+      maxPositionWeightPercent: request.risk.maxPositionWeightPercent == null
+        ? ""
+        : String(request.risk.maxPositionWeightPercent),
       commissionProfileId: request.execution.commissionProfileId,
       slippageProfileId: request.execution.slippageProfileId,
       randomSeed: String(request.randomSeed),

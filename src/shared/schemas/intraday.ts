@@ -45,24 +45,18 @@ export type IntradayBar = z.infer<typeof intradayBarSchema>;
 export const intradayCollectSchema = z
   .object({ symbol: intradaySymbolSchema, period: intradayPeriodSchema })
   .strict();
-export const intradayRequestSchema = z
+const riskParameters = {
+  allocationPct: z.number().min(1).max(100),
+  stopLossPct: z.number().min(0.1).max(50),
+  takeProfitPct: z.number().min(0.1).max(100),
+};
+const requestBase = z
   .object({
     mode: z.literal("intraday"),
-    strategyId: z.literal(INTRADAY_STRATEGY_ID),
     symbol: intradaySymbolSchema,
     period: intradayPeriodSchema,
     timeframe: intradayTimeframeSchema,
     initialCash: z.number().min(10_000).max(1_000_000_000),
-    parameters: z
-      .object({
-        fast: z.number().int().min(2).max(119),
-        slow: z.number().int().min(3).max(120),
-        allocationPct: z.number().min(1).max(100),
-        stopLossPct: z.number().min(0.1).max(50),
-        takeProfitPct: z.number().min(0.1).max(100),
-      })
-      .strict()
-      .refine((p) => p.fast < p.slow, "단기 EMA는 장기 EMA보다 작아야 합니다."),
     execution: z
       .object({
         holdingPolicy: z.literal("DAY_ONLY"),
@@ -75,11 +69,90 @@ export const intradayRequestSchema = z
       })
       .strict(),
   })
-  .strict()
-  .refine(
-    (r) => r.parameters.slow * Number.parseInt(r.timeframe, 10) < 370,
-    "매일 EMA를 초기화하므로 장기 EMA 준비 시간이 15:10 진입 마감 이전이어야 합니다. 15분봉은 24개 이하를 사용하세요.",
-  );
+  .strict();
+export const intradayRequestSchema = z
+  .discriminatedUnion("strategyId", [
+    requestBase.extend({
+      strategyId: z.literal("intraday-ema"),
+      parameters: z
+        .object({
+          ...riskParameters,
+          fast: z.number().int().min(2).max(119),
+          slow: z.number().int().min(3).max(120),
+        })
+        .strict()
+        .refine(
+          (p) => p.fast < p.slow,
+          "단기 EMA는 장기 EMA보다 작아야 합니다.",
+        ),
+    }),
+    requestBase.extend({
+      strategyId: z.literal("intraday-orb"),
+      parameters: z
+        .object({
+          ...riskParameters,
+          openingMinutes: z.number().int().min(5).max(60),
+          entryWindowMinutes: z.number().int().min(15).max(180),
+          breakoutBps: z.number().min(0).max(100),
+          volumeMultiplier: z.number().min(1).max(5),
+        })
+        .strict()
+        .refine(
+          (p) => p.openingMinutes < p.entryWindowMinutes,
+          "진입 제한 시간은 시초 범위 형성 시간보다 길어야 합니다.",
+        ),
+    }),
+    requestBase.extend({
+      strategyId: z.literal("intraday-vwap-reclaim"),
+      parameters: z
+        .object({
+          ...riskParameters,
+          trendPeriod: z.number().int().min(3).max(120),
+          volumePeriod: z.number().int().min(2).max(60),
+          volumeMultiplier: z.number().min(1).max(5),
+        })
+        .strict(),
+    }),
+    requestBase.extend({
+      strategyId: z.literal("intraday-bollinger-rsi"),
+      parameters: z
+        .object({
+          ...riskParameters,
+          bandPeriod: z.number().int().min(3).max(120),
+          bandStdDev: z.number().min(1).max(3),
+          rsiPeriod: z.number().int().min(2).max(60),
+          oversold: z.number().min(5).max(45),
+        })
+        .strict(),
+    }),
+  ])
+  .superRefine((r, ctx) => {
+    const minutes = Number.parseInt(r.timeframe, 10);
+    const warmup =
+      r.strategyId === "intraday-ema"
+        ? r.parameters.slow
+        : r.strategyId === "intraday-vwap-reclaim"
+          ? Math.max(r.parameters.trendPeriod, r.parameters.volumePeriod + 1)
+          : r.strategyId === "intraday-bollinger-rsi"
+            ? Math.max(r.parameters.bandPeriod + 1, r.parameters.rsiPeriod + 2)
+            : 0;
+    if (warmup * minutes >= 370)
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "매일 지표를 초기화하므로 준비 시간이 15:10 진입 마감 이전이어야 합니다. 봉 주기나 지표 기간을 줄여 주세요.",
+      });
+    if (
+      r.strategyId === "intraday-orb" &&
+      Math.floor(r.parameters.entryWindowMinutes / minutes) * minutes <=
+        r.parameters.openingMinutes
+    )
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "시초 범위 형성 이후 진입 제한 시간 안에 신호 봉이 하나 이상 있어야 합니다.",
+      });
+  });
 export type IntradayRequest = z.infer<typeof intradayRequestSchema>;
 export type IntradayTimeframe = z.infer<typeof intradayTimeframeSchema>;
 export type IntradayPeriod = z.infer<typeof intradayPeriodSchema>;
@@ -129,7 +202,14 @@ export interface IntradaySignal {
   id: string;
   atMs: number;
   side: "BUY" | "SELL";
-  reason: "EMA" | "STOP_LOSS" | "TAKE_PROFIT" | "DAY_EXIT";
+  reason:
+    | "EMA"
+    | "ORB"
+    | "VWAP"
+    | "BOLLINGER_RSI"
+    | "STOP_LOSS"
+    | "TAKE_PROFIT"
+    | "DAY_EXIT";
 }
 export interface IntradayFill {
   orderId: string;
@@ -197,6 +277,11 @@ export interface IntradayRun {
   createdAtMs: number;
   updatedAtMs: number;
   result?: IntradayResult;
+}
+
+/** 이력 목록에는 체결·자산 곡선을 전송하지 않고 필요한 지표만 포함한다. */
+export interface IntradayRunSummary extends IntradayRun {
+  metrics: { returnPct: number; maxDrawdownPct: number } | null;
 }
 
 export function intradayDate(endMs: number): string {

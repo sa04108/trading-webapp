@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
+import {
+  historyQuerySchema,
+  type HistoryGroup,
+  type HistoryQuery,
+} from "../../../../shared/schemas/backtest-history.js";
 import type { AppDatabase } from "../../../../runtime/shared/db/database.js";
 import {
   intradayCollections,
@@ -21,6 +26,7 @@ import {
   type IntradayRequest,
   type IntradayResult,
   type IntradayRun,
+  type IntradayRunSummary,
   type IntradaySymbolData,
   type IntradayTimeframe,
 } from "../../../../shared/schemas/intraday.js";
@@ -414,15 +420,64 @@ export class IntradayService {
       throw error;
     }
   }
-  listRuns(ownerId: string): IntradayRun[] {
+  listRunGroups(ownerId: string): HistoryGroup[] {
+    const strategyId = sql<string>`json_extract(${intradayRuns.requestJson}, '$.strategyId')`;
     return this.options.db
-      .select(runColumns)
+      .select({ strategyId, total: count() })
       .from(intradayRuns)
       .where(eq(intradayRuns.ownerId, ownerId))
-      .orderBy(desc(intradayRuns.createdAtMs))
-      .limit(100)
+      .groupBy(strategyId)
+      .orderBy(asc(strategyId))
+      .all();
+  }
+  private runHistoryWhere(ownerId: string, strategyId?: string) {
+    return and(
+      eq(intradayRuns.ownerId, ownerId),
+      strategyId === undefined ? undefined :
+        sql`json_extract(${intradayRuns.requestJson}, '$.strategyId') = ${strategyId}`,
+    );
+  }
+  countRuns(ownerId: string, strategyId?: string): number {
+    return this.options.db
+      .select({ total: count() })
+      .from(intradayRuns)
+      .where(this.runHistoryWhere(ownerId, strategyId))
+      .get()!.total;
+  }
+  listRuns(
+    ownerId: string,
+    query: HistoryQuery = historyQuerySchema.parse({ limit: 100 }),
+  ): IntradayRunSummary[] {
+    const periodEnd = sql`json_extract(${intradayRuns.requestJson}, '$.period.to')`;
+    const returnPct = sql<number | null>`CASE WHEN ${intradayRuns.status} = 'COMPLETED' THEN json_extract(${intradayRuns.resultJson}, '$.metrics.returnPct') END`;
+    const maxDrawdownPct = sql<number | null>`CASE WHEN ${intradayRuns.status} = 'COMPLETED' THEN json_extract(${intradayRuns.resultJson}, '$.metrics.maxDrawdownPct') END`;
+    const columns = {
+      createdAt: intradayRuns.createdAtMs,
+      periodEnd,
+      duration: sql`julianday(${periodEnd}) - julianday(json_extract(${intradayRuns.requestJson}, '$.period.from'))`,
+      returnPct,
+      cagrPct: sql`NULL`,
+    };
+    const column = columns[query.sort];
+    return this.options.db
+      .select({ ...runColumns, returnPct, maxDrawdownPct })
+      .from(intradayRuns)
+      .where(this.runHistoryWhere(ownerId, query.strategyId))
+      .orderBy(
+        asc(sql`${column} IS NULL`),
+        query.dir === "asc" ? asc(column) : desc(column),
+        desc(intradayRuns.createdAtMs),
+        desc(intradayRuns.id),
+      )
+      .limit(query.limit)
+      .offset(query.offset)
       .all()
-      .map((row) => this.run(row));
+      .map((row) => ({
+        ...this.run(row),
+        metrics: row.returnPct === null || row.maxDrawdownPct === null
+          ? null
+          : { returnPct: row.returnPct, maxDrawdownPct: row.maxDrawdownPct },
+      }));
   }
   getRun(ownerId: string, id: string): IntradayRun {
     const row = this.options.db
