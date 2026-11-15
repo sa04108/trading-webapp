@@ -208,15 +208,22 @@ function RangeFields({
         />
       </Field>
       <Field label="봉 주기">
-        <select
-          className="h-9 rounded-md border bg-background px-3"
+        <Select
           value={timeframe}
-          onChange={(e) => setTimeframe(e.target.value as IntradayTimeframe)}
+          onValueChange={(value) => setTimeframe(value as IntradayTimeframe)}
         >
-          <option value="1m">1분</option>
-          <option value="5m">5분</option>
-          <option value="15m">15분</option>
-        </select>
+          <SelectTrigger
+            className="h-9 w-full rounded-md bg-background px-3"
+            aria-label="봉 주기"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="1m">1분</SelectItem>
+            <SelectItem value="5m">5분</SelectItem>
+            <SelectItem value="15m">15분</SelectItem>
+          </SelectContent>
+        </Select>
       </Field>
     </div>
   );

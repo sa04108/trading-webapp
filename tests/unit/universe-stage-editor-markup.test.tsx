@@ -110,32 +110,6 @@ describe('단계 추가', () => {
   });
 });
 
-describe('방향 선택', () => {
-  it('기준마다 사람이 읽는 두 방향을 유리한 순서로 보여준다', () => {
-    const html = renderEditor([
-      { criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 },
-      { criterion: 'PER', direction: 'LOW', limit: 100 },
-      { criterion: 'DECLINE', direction: 'HIGH', limit: 50, lookbackTradingDays: 20 },
-    ]);
-    expect(html).toContain('id="stage-direction-0"');
-    for (const [index, expected] of [
-      [['HIGH', '상위', true], ['LOW', '하위', false]],
-      [['LOW', '낮음', true], ['HIGH', '높음', false]],
-      [['HIGH', '급상승', true], ['LOW', '급하락', false]],
-    ].entries()) {
-      const select = html.match(new RegExp(`<select\\b(?=[^>]*\\sid="stage-direction-${index}"(?=\\s|>))[^>]*>(.*?)</select>`));
-      expect(select?.[1]).toBeDefined();
-      const options = [...(select?.[1] ?? '').matchAll(/<option\b([^>]*)>([^<]*)<\/option>/g)]
-        .map(([, attributes = '', label]) => [
-          attributes.match(/\svalue="([^"]*)"(?=\s|$)/)?.[1],
-          label,
-          /\sselected(?:="[^"]*")?(?=\s|$)/.test(attributes),
-        ]);
-      expect(options).toEqual(expected);
-    }
-  });
-});
-
 describe('접근성', () => {
   it('위/아래 이동 버튼의 접근 가능한 이름과 drag handle 이 markup 에 있다', () => {
     const html = renderEditor(declineStages);

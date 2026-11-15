@@ -150,18 +150,25 @@ test('유니버스 정렬 방향을 기준별 문구로 명시해 고른다', as
   await page.getByLabel('종료일').fill('2026-12-31');
   await advanceFromPeriod(page);
 
-  await expect(page.locator('#stage-direction-0')).toHaveValue('HIGH');
-  await expect(page.locator('#stage-direction-0 option')).toHaveText(['상위', '하위']);
+  await expect(page.locator('#stage-direction-0')).toHaveText('상위');
+  await page.locator('#stage-direction-0').click();
+  await expect(page.getByRole('option')).toHaveText(['상위', '하위']);
+  await page.keyboard.press('Escape');
 
   await page.getByRole('button', { name: 'PER 단계 추가' }).click();
-  await expect(page.locator('#stage-direction-1')).toHaveValue('LOW');
-  await expect(page.locator('#stage-direction-1 option')).toHaveText(['낮음', '높음']);
-  await page.locator('#stage-direction-1').selectOption('HIGH');
-  await expect(page.locator('#stage-direction-1')).toHaveValue('HIGH');
+  await expect(page.locator('#stage-direction-1')).toHaveText('낮음');
+  await page.locator('#stage-direction-1').click();
+  await expect(page.getByRole('option')).toHaveText(['낮음', '높음']);
+  await page.keyboard.press('Escape');
+  await page.locator('#stage-direction-1').click();
+  await page.getByRole('option', { name: '높음', exact: true }).click();
+  await expect(page.locator('#stage-direction-1')).toHaveText('높음');
 
   await page.getByRole('button', { name: '가격 변동 단계 추가' }).click();
-  await expect(page.locator('#stage-direction-2')).toHaveValue('HIGH');
-  await expect(page.locator('#stage-direction-2 option')).toHaveText(['급상승', '급하락']);
+  await expect(page.locator('#stage-direction-2')).toHaveText('급상승');
+  await page.locator('#stage-direction-2').click();
+  await expect(page.getByRole('option')).toHaveText(['급상승', '급하락']);
+  await page.keyboard.press('Escape');
   const priceChangeLookback = page.getByLabel('가격 변동 산정기간(거래일)', { exact: true });
   await expect(priceChangeLookback).toHaveValue('20');
 
@@ -178,15 +185,18 @@ test('유니버스 정렬 방향을 기준별 문구로 명시해 고른다', as
   await priceChangeLookback.blur();
   await expect(priceChangeLookback).toHaveValue('60');
 
-  await page.locator('#stage-direction-2').selectOption('LOW');
-  await expect(page.locator('#stage-direction-2')).toHaveValue('LOW');
+  await page.locator('#stage-direction-2').click();
+  await page.getByRole('option', { name: '급하락', exact: true }).click();
+  await expect(page.locator('#stage-direction-2')).toHaveText('급하락');
 
   await page.getByRole('button', { name: '거래량 단계 추가' }).click();
   await page.getByRole('button', { name: '거래대금 단계 추가' }).click();
   await page.getByRole('button', { name: 'ROE 단계 추가' }).click();
   await expect(page.locator('[id^="stage-criterion-"]')).toHaveCount(6);
   await expect(page.getByRole('button', { name: /단계 추가/ })).toHaveCount(0);
-  await expect(page.locator('#stage-direction-5 option')).toHaveText(['높음', '낮음']);
+  await page.locator('#stage-direction-5').click();
+  await expect(page.getByRole('option')).toHaveText(['높음', '낮음']);
+  await page.keyboard.press('Escape');
 });
 
 test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초과 차단을 거쳐 준비→제출까지 완주한다', async ({
@@ -208,9 +218,9 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
   await page.locator('#stage-limit-0').fill('50');
   await page.getByRole('button', { name: 'PER 단계 추가' }).click();
   await page.getByRole('button', { name: '가격 변동 단계 추가' }).click();
-  await expect(page.locator('#stage-criterion-0')).toHaveValue('MARKET_CAP');
-  await expect(page.locator('#stage-criterion-1')).toHaveValue('PER');
-  await expect(page.locator('#stage-criterion-2')).toHaveValue('DECLINE');
+  await expect(page.locator('#stage-criterion-0')).toHaveText('시가총액');
+  await expect(page.locator('#stage-criterion-1')).toHaveText('PER');
+  await expect(page.locator('#stage-criterion-2')).toHaveText('가격 변동');
 
   // 2. N 기본 복사 — 새 단계는 직전 단계의 현재 N을 그대로 받는다(universe-pipeline.ts addStage).
   await expect(page.locator('#stage-limit-1')).toHaveValue('50');
@@ -226,12 +236,12 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
 
   // 3. 위/아래 버튼으로 순서를 바꾼다 — 가격 변동(3단계)을 PER(2단계) 앞으로 올린다.
   await page.getByRole('button', { name: '3단계 위로 이동' }).click();
-  await expect(page.locator('#stage-criterion-1')).toHaveValue('DECLINE');
-  await expect(page.locator('#stage-criterion-2')).toHaveValue('PER');
+  await expect(page.locator('#stage-criterion-1')).toHaveText('가격 변동');
+  await expect(page.locator('#stage-criterion-2')).toHaveText('PER');
   // 되돌린다 — 이후 단계 삭제 순서를 예측 가능하게 유지한다.
   await page.getByRole('button', { name: '2단계 아래로 이동' }).click();
-  await expect(page.locator('#stage-criterion-1')).toHaveValue('PER');
-  await expect(page.locator('#stage-criterion-2')).toHaveValue('DECLINE');
+  await expect(page.locator('#stage-criterion-1')).toHaveText('PER');
+  await expect(page.locator('#stage-criterion-2')).toHaveText('가격 변동');
 
   // 4. 리밸런싱 주기가 기간을 넘으면 차단한다 — 주기 단위를 '년'으로 바꾸면(자동 값 1)
   // 이 짧은 기간(10일)보다 항상 길다. shadcn Select 는 네이티브 select 가 아니라
@@ -253,9 +263,10 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
   // 보는 것이 목적이라, DART 재무 왕복 없이 곧바로 준비→제출까지 갈 수 있게 한다.
   await page.getByRole('button', { name: '2단계 삭제' }).click();
   await page.getByRole('button', { name: '2단계 삭제' }).click();
-  await expect(page.locator('#stage-criterion-0')).toHaveValue('MARKET_CAP');
+  await expect(page.locator('#stage-criterion-0')).toHaveText('시가총액');
   await expect(page.locator('#stage-limit-0')).toHaveValue('10');
-  await page.locator('#stage-direction-0').selectOption('LOW');
+  await page.locator('#stage-direction-0').click();
+  await page.getByRole('option', { name: '하위', exact: true }).click();
 
   // 6. 준비 진행률 → 완료 preview → 백테스트 제출.
   const initialPreview = page.waitForResponse(
@@ -329,7 +340,7 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
   await expect(page.getByRole('heading', { name: '재설정 및 복제' })).toBeVisible();
   await page.getByRole('button', { name: '다음' }).click();
   await expect(page).toHaveURL(new RegExp(`/backtests/new/universe\\?from=${jobId}$`));
-  await expect(page.locator('#stage-direction-0')).toHaveValue('LOW');
+  await expect(page.locator('#stage-direction-0')).toHaveText('하위');
   expect(clonePreviewRequests).toBe(0);
   await page.getByRole('button', { name: '다음' }).click();
   await page.getByRole('button', { name: '다음' }).click();
