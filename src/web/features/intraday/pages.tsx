@@ -5,8 +5,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Plus } from "lucide-react";
-import { BacktestHeader } from "../backtests/backtest-header";
+import { BacktestHeader, NewBacktestButton } from "../backtests/backtest-header";
 import {
   HistoryPager,
   HistoryStrategyGroup,
@@ -571,14 +570,7 @@ export function IntradayListPage() {
     <div className="space-y-4">
       <BacktestHeader
         mode="intraday"
-        actions={
-          <Button asChild className="h-11 w-11 px-0 sm:w-auto sm:px-4">
-            <Link to="/backtests/intraday/new" aria-label="새 백테스트">
-              <Plus data-icon="inline-start" />
-              <span className="hidden sm:inline">새 백테스트</span>
-            </Link>
-          </Button>
-        }
+        actions={<NewBacktestButton mode="intraday" />}
       />
       <HistoryToolbar controls={controls} intraday />
       <ErrorAlert error={groups.error} />
@@ -704,7 +696,7 @@ export function IntradayListPage() {
                       <td className="hidden text-right sm:table-cell">
                         {formatSignedPct(run.metrics?.maxDrawdownPct ?? null)}
                       </td>
-                      <td className="hidden text-right sm:table-cell">
+                      <td className="hidden pl-2 text-right sm:table-cell">
                         {time(run.createdAtMs)}
                       </td>
                     </tr>
@@ -714,6 +706,7 @@ export function IntradayListPage() {
             )}
             {query?.data ? (
               <HistoryPager
+                strategyName={name}
                 page={controls.page(group.strategyId)}
                 total={query.data.total}
                 limit={limit}

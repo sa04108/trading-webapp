@@ -196,6 +196,15 @@ test("일봉과 분봉 경로를 오가며 결과와 체결 시각을 확인한�
     expect(selector.x - (title.x + title.width)).toBeLessThanOrEqual(16);
     expect(Math.abs((selector.y + selector.height / 2) - (title.y + title.height / 2))).toBeLessThanOrEqual(2);
     expect(Math.abs((selector.y + selector.height / 2) - (newButton.y + newButton.height / 2))).toBeLessThanOrEqual(2);
+    // 기존 헤더 검사는 버튼 위치만 확인해 내부 + 아이콘의 비대칭 여백을 놓쳤다.
+    if (page.viewportSize()!.width < 640) {
+      const icon = await page.getByRole("link", { name: "새 백테스트" }).locator("svg").boundingBox();
+      if (!icon) throw new Error("추가 아이콘을 찾을 수 없습니다");
+      expect(newButton.width).toBeGreaterThanOrEqual(44);
+      expect(newButton.height).toBeGreaterThanOrEqual(44);
+      expect(Math.abs(icon.x + icon.width / 2 - newButton.x - newButton.width / 2)).toBeLessThanOrEqual(1);
+      expect(Math.abs(icon.y + icon.height / 2 - newButton.y - newButton.height / 2)).toBeLessThanOrEqual(1);
+    }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   };
   await checkHeader();

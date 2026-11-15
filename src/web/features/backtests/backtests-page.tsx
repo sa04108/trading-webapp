@@ -4,7 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Dices, Plus } from "lucide-react";
+import { Dices } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
@@ -23,7 +23,7 @@ import {
   useHistoryControls,
 } from "./history-controls";
 import type { HistoryGroup } from "../../../shared/schemas/backtest-history";
-import { BacktestHeader } from "./backtest-header";
+import { BacktestHeader, NewBacktestButton } from "./backtest-header";
 import {
   formatDateTime,
   formatSignedPct,
@@ -406,12 +406,7 @@ export function BacktestsPage() {
                 {editing ? "완료" : "편집"}
               </Button>
             ) : null}
-            <Button asChild className="h-11 w-11 px-0 sm:w-auto sm:px-4">
-              <Link to="/backtests/new" aria-label="새 백테스트">
-                <Plus data-icon="inline-start" />
-                <span className="hidden sm:inline">새 백테스트</span>
-              </Link>
-            </Button>
+            <NewBacktestButton mode="daily" />
           </>
         }
       />
@@ -603,7 +598,7 @@ export function BacktestsPage() {
                         <td className="hidden text-right sm:table-cell">
                           {formatSignedPct(job.metrics?.maxDrawdownPct ?? null)}
                         </td>
-                        <td className="hidden text-right sm:table-cell">
+                        <td className="hidden pl-2 text-right sm:table-cell">
                           {formatDateTime(job.createdAtMs)}
                         </td>
                       </tr>
@@ -624,6 +619,7 @@ export function BacktestsPage() {
             )}
             {query?.data ? (
               <HistoryPager
+                strategyName={name}
                 page={controls.page(group.strategyId)}
                 total={query.data.total}
                 limit={limit}

@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
+import { Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -7,6 +9,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+
+export function NewBacktestButton({ mode }: { mode: "daily" | "intraday" }) {
+  return (
+    <Button asChild size="icon" className="size-11 sm:w-auto sm:gap-1.5 sm:px-4">
+      <Link
+        to={mode === "daily" ? "/backtests/new" : "/backtests/intraday/new"}
+        aria-label="새 백테스트"
+      >
+        <Plus aria-hidden />
+        <span className="hidden sm:inline">새 백테스트</span>
+      </Link>
+    </Button>
+  );
+}
 
 export function BacktestHeader({
   title = "백테스트",
