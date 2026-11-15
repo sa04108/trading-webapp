@@ -95,8 +95,8 @@ async function historyFixture(page: Page) {
       },
     });
   });
-  await page.route(/\/api\/v1\/backtest-clone-batches(?:\?|$)/, (route) =>
-    route.fulfill({ json: { batches: [], sourceJobs: [] } }),
+  await page.route(/\/api\/v1\/backtests\/history-extras(?:\?|$)/, (route) =>
+    route.fulfill({ json: { summaries: new URL(route.request().url()).searchParams.get("jobIds")?.split(",").map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null } }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) ?? [] } }),
   );
   await page.route(/\/api\/v1\/backtests\/history-\d+$/, (route) => {
     const id = new URL(route.request().url()).pathname.split("/").at(-1)!;
@@ -145,6 +145,16 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
   expect(editBox.x + editBox.width).toBeLessThan(viewBox.x);
   expect(Math.abs(editBox.y + editBox.height / 2 - viewBox.y - viewBox.height / 2)).toBeLessThanOrEqual(1);
   await expect(group.locator("tbody > tr")).toHaveCount(10);
+  const firstRow = group.locator("tbody > tr").first();
+  await expect(firstRow.getByRole("link", { name: "난수", exact: true })).toHaveAttribute("href", "/backtests/history-0/seeds");
+  await expect(firstRow.getByRole("link", { name: "검증", exact: true })).toHaveAttribute("href", "/backtests/history-0/validations");
+  if (testInfo.project.name === "mobile") {
+    await expect(group.getByRole("columnheader", { name: /난수/ })).toBeHidden();
+  } else {
+    await expect(group.getByRole("columnheader", { name: /난수/ })).toBeVisible();
+    await expect(group.getByRole("columnheader", { name: /검증/ })).toBeVisible();
+  }
+
   await expect(other.locator("tbody > tr")).toHaveCount(1);
   await group.getByRole("button", { name: "다음", exact: true }).click();
   await expect(group.locator("tbody > tr")).toHaveCount(2);
@@ -169,9 +179,9 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
   ).toBe(true);
   await viewToggle.click();
   await expect(viewToggle).toBeChecked();
-  await expect(group.locator('a[href^="/backtests/history-"]')).toHaveCount(6);
+  await expect(group.locator('a[href^="/backtests/history-"]:not([href$="/seeds"]):not([href$="/validations"])')).toHaveCount(6);
   const boxes = await group
-    .locator('a[href^="/backtests/history-"]')
+    .locator('a[href^="/backtests/history-"]:not([href$="/seeds"]):not([href$="/validations"])')
     .evaluateAll((nodes) =>
       nodes.map((n) => {
         const r = n.getBoundingClientRect();
@@ -236,12 +246,12 @@ for (const view of ["table", "cards"] as const) {
     let entered!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });
     const started = new Promise<void>((resolve) => { entered = resolve; });
-    await page.route(/\/api\/v1\/backtest-clone-batches(?:\?|$)/, async (route) => {
+    await page.route(/\/api\/v1\/backtests\/history-extras(?:\?|$)/, async (route) => {
       if (holdResponse) {
         entered();
         await pending;
       }
-      await route.fulfill({ json: { batches: [], sourceJobs: [] } });
+      await route.fulfill({ json: { summaries: new URL(route.request().url()).searchParams.get("jobIds")?.split(",").map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null } }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) ?? [] } });
     });
     await page.goto(`/backtests?view=${view}&collapsed=strategy-b`);
     await page.getByRole("button", { name: "편집", exact: true }).click();
@@ -266,7 +276,7 @@ for (const view of ["table", "cards"] as const) {
       await expect(checkbox).toBeFocused();
       await expect(remove).toBeEnabled();
       expect(await checkbox.boundingBox()).toEqual(before);
-      const response = page.waitForResponse(/\/api\/v1\/backtest-clone-batches(?:\?|$)/);
+      const response = page.waitForResponse(/\/api\/v1\/backtests\/history-extras(?:\?|$)/);
       release();
       await response;
       await page.clock.runFor(50);

@@ -1,3 +1,4 @@
+import { ResultBreadcrumbs } from "../backtests/backtest-breadcrumbs";
 import {
   useMutation,
   useQueries,
@@ -1203,6 +1204,7 @@ export function IntradayDetailPage() {
   );
   return (
     <div className="space-y-4">
+      <ResultBreadcrumbs items={[{ label: "백테스트", href: "/backtests" }, { label: "분봉", href: "/backtests/intraday" }, { label: `직접 실행 ${id.slice(-6)}` }]} />
       <BacktestHeader mode="intraday" title="백테스트 결과" />
       {run.isLoading ? (
         <div role="status" aria-label="백테스트 불러오는 중" className="space-y-3">

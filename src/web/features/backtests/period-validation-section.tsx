@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
+import { InfoHint } from "@/components/info-hint";
+import { VALIDATION_MODE_HELP } from "./experiment-help";
 import { api } from "@/lib/api-client";
 import {
   formatDateTime,
@@ -51,12 +53,12 @@ import {
 } from "./param-specs";
 import type { BacktestRequestBody } from "./types";
 
-const MODE_LABELS = {
+export const MODE_LABELS = {
   HOLDOUT: "홀드아웃",
   OPTIMIZED_HOLDOUT: "최적화 홀드아웃",
   WALK_FORWARD: "워크포워드",
 };
-const STATUS_LABELS: Record<string, string> = {
+export const STATUS_LABELS: Record<string, string> = {
   ACTIVE: "진행 중",
   COMPLETED: "완료",
   FAILED: "실패",
@@ -75,7 +77,7 @@ const STATUS_LABELS: Record<string, string> = {
   PREPARATION_FAILED: "데이터 준비 실패",
   PREPARATION_CANCELLED: "데이터 준비 취소",
 };
-const active = (experiment: PeriodValidationDto): boolean =>
+export const active = (experiment: PeriodValidationDto): boolean =>
   ["ACTIVE", "CANCELLING"].includes(experiment.status);
 
 function parameterText(
@@ -113,14 +115,16 @@ function TrialLink({
   );
 }
 
-function ValidationResult({
+export function ValidationResult({
   experiment,
   specs,
   refresh,
+  onDeleted,
 }: {
   experiment: PeriodValidationDto;
   specs: NumberParamSpec[];
   refresh: () => Promise<void>;
+  onDeleted?: () => void;
 }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const mutation = useMutation({
@@ -131,9 +135,10 @@ function ValidationResult({
           method: action === "cancel" ? "POST" : "DELETE",
         },
       ),
-    onSuccess: async () => {
+    onSuccess: async (_data, action) => {
       setDeleteOpen(false);
       await refresh();
+      if (action === "delete") onDeleted?.();
     },
   });
   const completed = experiment.trials.filter(
@@ -150,6 +155,7 @@ function ValidationResult({
           <CardTitle className="text-base">
             {MODE_LABELS[experiment.config.mode]} ·{" "}
             {STATUS_LABELS[experiment.status]}
+            <InfoHint label={`${MODE_LABELS[experiment.config.mode]} 설명`} className="ml-2">{VALIDATION_MODE_HELP[experiment.config.mode]}</InfoHint>
           </CardTitle>
           {active(experiment) ? (
             <Button
@@ -486,6 +492,7 @@ export function PeriodValidationSection({
   const refresh = async (): Promise<void> => {
     await queryClient.invalidateQueries({ queryKey });
     await queryClient.invalidateQueries({ queryKey: ["backtests"] });
+    await queryClient.invalidateQueries({ queryKey: ["backtest-experiments"] });
   };
   const create = useMutation({
     mutationFn: (config: PeriodValidationConfig) =>
@@ -503,7 +510,7 @@ export function PeriodValidationSection({
     >
       <Card>
         <CardHeader>
-          <CardTitle>기간 검증</CardTitle>
+          <CardTitle>새 기간검증</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
@@ -518,7 +525,10 @@ export function PeriodValidationSection({
           </p>
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-2">
-              <Label htmlFor="validation-mode">검증 방식</Label>
+              <div className="flex items-center gap-1">
+                <Label htmlFor="validation-mode">검증 방식</Label>
+                <InfoHint label={`${MODE_LABELS[mode]} 설명`}>{VALIDATION_MODE_HELP[mode]}</InfoHint>
+              </div>
               <Select
                 value={mode}
                 onValueChange={(value) => setMode(value as typeof mode)}
@@ -758,17 +768,22 @@ export function PeriodValidationSection({
           </Button>
         </CardContent>
       </Card>
-      {experiments.data?.experiments
-        .slice()
-        .reverse()
-        .map((experiment) => (
-          <ValidationResult
-            key={experiment.id}
-            experiment={experiment}
-            specs={specs}
-            refresh={refresh}
-          />
+      <div className="space-y-2">
+        <h2 className="text-lg font-semibold">검증 실험 기록</h2>
+        {experiments.data?.experiments.length === 0 ? <p className="text-sm text-muted-foreground">아직 검증 실험이 없습니다.</p> : null}
+        {experiments.data?.experiments.slice().reverse().map((experiment) => (
+          <Card key={experiment.id}>
+            <CardContent className="flex flex-wrap items-center justify-between gap-2 pt-6">
+              <div>
+                <Link className="font-medium underline underline-offset-4" to={`/backtests/validations/${experiment.id}`}>{MODE_LABELS[experiment.config.mode]}</Link>{" "}
+                <InfoHint label={`${MODE_LABELS[experiment.config.mode]} 설명`}>{VALIDATION_MODE_HELP[experiment.config.mode]}</InfoHint>
+                <p className="text-sm text-muted-foreground">{formatDateTime(experiment.createdAtMs)} · {STATUS_LABELS[experiment.status] ?? experiment.status} · 실행 {experiment.trials.filter((trial) => trial.status === "COMPLETED").length}/{experiment.plan.totalRuns}회 완료</p>
+              </div>
+              <Button asChild variant="outline" size="sm"><Link to={`/backtests/validations/${experiment.id}`}>상세 보기</Link></Button>
+            </CardContent>
+          </Card>
         ))}
+      </div>
     </section>
   );
 }

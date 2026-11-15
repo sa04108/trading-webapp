@@ -4,17 +4,18 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Dices } from "lucide-react";
-import { Fragment, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { InfoHint } from "@/components/info-hint";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api-client";
 import { useStrategies } from "./api";
+import { useBacktestHistoryExtras } from "./experiment-api";
 import {
   HistoryPager,
   HistorySelectionActions,
@@ -41,43 +42,10 @@ import { formatUniverseRuleSummary } from "./universe-summary";
 import {
   isTerminal,
   type JobSummary,
-  type SeedCloneBatchSummary,
 } from "./types";
 
 export function deletableBacktestIds(jobs: readonly JobSummary[]): string[] {
   return jobs.filter((job) => isTerminal(job.status)).map((job) => job.id);
-}
-
-export function groupSeedBatchesBySource(
-  batches: readonly SeedCloneBatchSummary[],
-): ReadonlyMap<string, readonly SeedCloneBatchSummary[]> {
-  const grouped = new Map<string, SeedCloneBatchSummary[]>();
-  for (const batch of batches) {
-    const sourceBatches = grouped.get(batch.sourceJobId) ?? [];
-    sourceBatches.push(batch);
-    grouped.set(batch.sourceJobId, sourceBatches);
-  }
-  return grouped;
-}
-
-export function hasActiveSeedBatch(
-  batches: readonly SeedCloneBatchSummary[],
-): boolean {
-  return batches.some(
-    (batch) => batch.status === "ACTIVE" || batch.status === "CANCELLING",
-  );
-}
-
-/** 기본 50개 목록 밖 원본도 배치 API가 돌려준 요약으로 복원한다. */
-export function mergeBacktestSources(
-  listedJobs: readonly JobSummary[],
-  batchSourceJobs: readonly JobSummary[],
-): JobSummary[] {
-  const merged = new Map(listedJobs.map((job) => [job.id, job]));
-  for (const source of batchSourceJobs) {
-    if (!merged.has(source.id)) merged.set(source.id, source);
-  }
-  return [...merged.values()];
 }
 
 export function toggleAllBacktests(
@@ -87,6 +55,19 @@ export function toggleAllBacktests(
   const allSelected =
     deletableIds.length > 0 && deletableIds.every((id) => selected.has(id));
   return allSelected ? new Set() : new Set(deletableIds);
+}
+
+function ExperimentLinks({ jobId }: { jobId: string }) {
+  return (
+    <span className="relative z-10 inline-flex gap-1">
+      <Button asChild variant="outline" size="sm" className="h-5 px-2 text-xs"><Link to={`/backtests/${jobId}/seeds`}>난수</Link></Button>
+      <Button asChild variant="outline" size="sm" className="h-5 px-2 text-xs"><Link to={`/backtests/${jobId}/validations`}>검증</Link></Button>
+    </span>
+  );
+}
+
+function distribution(count: number | undefined, stddev: number | null | undefined): string {
+  return count === undefined ? "—" : `${count} (${stddev == null ? "—" : `${stddev.toFixed(2)}%p`})`;
 }
 
 export function BacktestJobCard({
@@ -113,17 +94,22 @@ export function BacktestJobCard({
   const progress = activity ? executionProgressPercent(activity) : barsProgress;
 
   const card = (
-    <Card className="transition-colors hover:bg-muted/40">
+    <Card className="relative transition-colors hover:bg-muted/40">
       <CardContent className="space-y-2 py-4">
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-start justify-between gap-2">
           <StatusBadge status={job.status} />
-          <span className="ml-auto text-xs text-muted-foreground">
-            {formatDateTime(job.createdAtMs)}
-          </span>
+          <div className="text-right">
+            {!editing ? <ExperimentLinks jobId={job.id} /> : null}
+            <p className="mt-1 text-xs text-muted-foreground">{formatDateTime(job.completedAtMs ?? job.createdAtMs)}</p>
+          </div>
         </div>
-        <p className="whitespace-nowrap text-sm font-medium">
-          {historyPeriod(job.request.period.from, job.request.period.to)}
-        </p>
+        {editing ? (
+          <p className="whitespace-nowrap text-sm font-medium">{historyPeriod(job.request.period.from, job.request.period.to)}</p>
+        ) : (
+          <Link className="block whitespace-nowrap text-sm font-medium underline after:absolute after:inset-0" to={`/backtests/${job.id}`}>
+            {historyPeriod(job.request.period.from, job.request.period.to)}
+          </Link>
+        )}
         <p className="text-xs text-muted-foreground">
           {formatUniverseRuleSummary(job.request.universeRule)}
           {timeframe ? ` · ${timeframeLabel(timeframe)}` : ""}
@@ -175,11 +161,7 @@ export function BacktestJobCard({
   );
 
   if (!editing) {
-    return (
-      <Link to={`/backtests/${job.id}`} className="block">
-        {card}
-      </Link>
-    );
+    return card;
   }
 
   if (!(deletable ?? isTerminal(job.status))) {
@@ -204,74 +186,6 @@ export function BacktestJobCard({
       <label htmlFor={checkboxId} className="min-w-0 flex-1 cursor-pointer">
         {card}
       </label>
-    </div>
-  );
-}
-
-export function SeedCloneBatchCard({
-  batch,
-  editing = false,
-  removing = false,
-  onRemove,
-}: {
-  batch: SeedCloneBatchSummary;
-  editing?: boolean;
-  removing?: boolean;
-  onRemove?: () => void;
-}) {
-  const terminal =
-    batch.completedCount +
-    batch.failedCount +
-    batch.cancelledCount +
-    batch.interruptedCount +
-    batch.deletedCount;
-  const progress = Math.round((terminal / batch.totalCount) * 100);
-  const card = (
-    <Card className="transition-colors hover:bg-muted/40">
-      <CardContent className="space-y-2 py-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Dices className="size-4" />
-          <span className="font-medium">난수 시드 {batch.totalCount}개</span>
-          <span className="ml-auto text-xs text-muted-foreground">
-            {formatDateTime(batch.createdAtMs)}
-          </span>
-        </div>
-        <Progress
-          value={progress}
-          aria-label={`난수 시드 실험 진행률 ${progress}%`}
-        />
-        <p className="text-xs text-muted-foreground">
-          완료 {batch.completedCount} · 실행 {batch.runningCount} · 실행 대기{" "}
-          {batch.queuedCount}
-          {" · "}묶음 대기 {batch.pendingCount} · 실패 {batch.failedCount}
-        </p>
-      </CardContent>
-    </Card>
-  );
-  if (!editing) {
-    return (
-      <Link to={`/backtests/batches/${batch.id}`} className="block">
-        {card}
-      </Link>
-    );
-  }
-  const active = batch.status === "ACTIVE" || batch.status === "CANCELLING";
-  return (
-    <div className="flex items-center gap-2">
-      <div className="min-w-0 flex-1">{card}</div>
-      <Button
-        variant="destructive"
-        size="sm"
-        disabled={active || removing}
-        title={
-          active
-            ? "실행 중인 실험은 취소 완료 후 삭제할 수 있습니다"
-            : undefined
-        }
-        onClick={onRemove}
-      >
-        실험 삭제
-      </Button>
     </div>
   );
 }
@@ -313,26 +227,15 @@ export function BacktestsPage() {
       : (query.data?.jobs ?? []),
   );
   const sourceIds = visibleJobs.map((job) => job.id).sort();
-  const batchQuery = useQuery({
-    queryKey: ["backtest-clone-batches", "sources", sourceIds],
-    queryFn: () =>
-      api<{ batches: SeedCloneBatchSummary[]; sourceJobs: JobSummary[] }>(
-        `/backtest-clone-batches?${new URLSearchParams({ sourceJobIds: sourceIds.join(",") })}`,
-      ),
-    enabled: sourceIds.length > 0,
-    refetchInterval: 5_000,
-  });
-  const batchesBySource = groupSeedBatchesBySource(
-    batchQuery.data?.batches ?? [],
-  );
-  // 재조회 중에는 직전 성공 결과를 유지해 편집 체크박스와 선택 상태가 흔들리지 않게 한다.
-  const batchReady =
-    sourceIds.length === 0 ||
-    (batchQuery.isSuccess && !batchQuery.isError);
-  const deletableIds = batchReady
-    ? deletableBacktestIds(visibleJobs).filter(
-        (id) => !hasActiveSeedBatch(batchesBySource.get(id) ?? []),
-      )
+  const extrasQuery = useBacktestHistoryExtras(sourceIds);
+  const extrasBySource = new Map(extrasQuery.data?.summaries.map((item) => [item.jobId, item]) ?? []);
+  // 재조회 중에는 직전 성공 결과를 유지해 체크박스와 선택 상태가 흔들리지 않게 한다.
+  const extrasReady = sourceIds.length === 0 || (extrasQuery.isSuccess && !extrasQuery.isError);
+  const deletableIds = extrasReady
+    ? deletableBacktestIds(visibleJobs).filter((id) => {
+        const extras = extrasBySource.get(id);
+        return extras !== undefined && extras.seed.activeCount === 0 && extras.validation.experimentCount === 0;
+      })
     : [];
   const selectedIds = deletableIds.filter((id) => selected.has(id));
   const corrections = (groups.data?.groups ?? []).flatMap((group, index) => {
@@ -361,7 +264,7 @@ export function BacktestsPage() {
   }, [correctionKey, correctPages]);
   const invalidate = () => {
     void client.invalidateQueries({ queryKey: ["backtests"] });
-    void client.invalidateQueries({ queryKey: ["backtest-clone-batches"] });
+    void client.invalidateQueries({ queryKey: ["backtest-experiments"] });
   };
   const remove = useMutation({
     mutationFn: (ids: string[]) =>
@@ -373,13 +276,6 @@ export function BacktestsPage() {
       clear();
       setEditing(false);
     },
-    onError: (error: Error) => toast.error(error.message),
-    onSettled: invalidate,
-  });
-  const removeBatch = useMutation({
-    mutationFn: (id: string) =>
-      api(`/backtest-clone-batches/${id}`, { method: "DELETE" }),
-    onSuccess: () => toast.success("난수 시드 실험을 삭제했습니다"),
     onError: (error: Error) => toast.error(error.message),
     onSettled: invalidate,
   });
@@ -415,9 +311,12 @@ export function BacktestsPage() {
           onRemoveAll={() => remove.mutate(deletableIds)}
         />
       ) : null}
-      {batchQuery.isError ? (
+      {editing && [...extrasBySource.values()].some((item) => item.validation.experimentCount > 0) ? (
+        <p className="text-sm text-muted-foreground">기간검증이 연결된 기록은 검증 실험을 먼저 삭제해야 선택할 수 있습니다.</p>
+      ) : null}
+      {extrasQuery.isError ? (
         <p role="alert" className="text-sm text-destructive">
-          시드 실험을 불러오지 못해 원본 삭제가 비활성화되었습니다.
+          실험 정보를 불러오지 못해 원본 삭제가 비활성화되었습니다.
         </p>
       ) : null}
       {groups.isError ? (
@@ -435,18 +334,6 @@ export function BacktestsPage() {
           (s) => s.id === group.strategyId,
         );
         const name = strategy?.name ?? group.strategyId;
-        const batchCards = (job: JobSummary) =>
-          (batchesBySource.get(job.id) ?? []).map((batch) => (
-            <SeedCloneBatchCard
-              key={batch.id}
-              batch={batch}
-              editing={editing}
-              removing={
-                removeBatch.isPending && removeBatch.variables === batch.id
-              }
-              onRemove={() => removeBatch.mutate(batch.id)}
-            />
-          ));
         return (
           <HistoryStrategyGroup
             key={group.strategyId}
@@ -477,9 +364,6 @@ export function BacktestsPage() {
                       deletable={deletableIds.includes(job.id)}
                       onToggle={() => toggleOne(job.id)}
                     />
-                    <div className="space-y-2 border-l-2 pl-4">
-                      {batchCards(job)}
-                    </div>
                   </div>
                 ))}
               </div>
@@ -487,17 +371,24 @@ export function BacktestsPage() {
               <table className="w-full table-fixed text-xs">
                 <thead>
                   <tr className="text-muted-foreground">
-                    <th className="w-[52%] py-2 text-left sm:w-[38%]">기간</th>
+                    <th className="w-[48%] py-2 text-left sm:w-[32%] lg:w-[25%]">기간</th>
                     <th className="text-right">수익률</th>
                     <th className="text-right">CAGR</th>
                     <th className="hidden text-right sm:table-cell">MDD</th>
+                    <th className="hidden text-right md:table-cell">
+                      난수 <InfoHint label="난수 시드 통계 설명">건수는 난수 시드 실험 수이며 괄호는 완료된 실행 중 유효한 수익률의 표본 표준편차입니다.</InfoHint>
+                    </th>
+                    <th className="hidden text-right md:table-cell">
+                      검증 <InfoHint label="기간 검증 통계 설명">건수는 기간 검증 실험 수이며 괄호는 완료된 실험별 OOS 평균 수익률 분포의 표본 표준편차입니다.</InfoHint>
+                    </th>
+                    <th className="hidden text-right lg:table-cell">초과수익률</th>
+                    <th className="hidden text-right lg:table-cell">Sharpe</th>
                     <th className="hidden text-right sm:table-cell">실행일</th>
                   </tr>
                 </thead>
                 <tbody>
                   {query?.data?.jobs.map((job) => (
-                    <Fragment key={job.id}>
-                      <tr className="border-t">
+                    <tr key={job.id} className="border-t">
                         <td className="py-3 align-top">
                           {editing && deletableIds.includes(job.id) ? (
                             <Checkbox
@@ -527,6 +418,7 @@ export function BacktestsPage() {
                           )}
                           <div className="text-muted-foreground">
                             <StatusBadge status={job.status} />{" "}
+                            {!editing ? <ExperimentLinks jobId={job.id} /> : null}{" "}
                             <span className="sm:hidden">
                               {formatDateTime(job.createdAtMs)}
                             </span>
@@ -569,21 +461,14 @@ export function BacktestsPage() {
                         <td className="hidden text-right sm:table-cell">
                           {formatSignedPct(job.metrics?.maxDrawdownPct ?? null)}
                         </td>
+                        <td className="hidden text-right md:table-cell">{distribution(extrasBySource.get(job.id)?.seed.batchCount, extrasBySource.get(job.id)?.seed.returns.sampleStdDev)}</td>
+                        <td className="hidden text-right md:table-cell">{distribution(extrasBySource.get(job.id)?.validation.experimentCount, extrasBySource.get(job.id)?.validation.returns.sampleStdDev)}</td>
+                        <td className="hidden text-right lg:table-cell">{formatSignedPct(extrasBySource.get(job.id)?.benchmarkExcessReturnPct ?? null)}</td>
+                        <td className="hidden text-right lg:table-cell">{job.metrics?.sharpe == null ? "—" : job.metrics.sharpe.toFixed(2)}</td>
                         <td className="hidden pl-2 text-right sm:table-cell">
                           {formatDateTime(job.createdAtMs)}
                         </td>
                       </tr>
-                      {(batchesBySource.get(job.id) ?? []).length ? (
-                        <tr>
-                          <td colSpan={3}>
-                            <div className="space-y-2 py-2">
-                              {batchCards(job)}
-                            </div>
-                          </td>
-                          <td colSpan={2} className="hidden sm:table-cell" />
-                        </tr>
-                      ) : null}
-                    </Fragment>
                   ))}
                 </tbody>
               </table>

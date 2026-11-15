@@ -1,4 +1,6 @@
-import { PeriodValidationSection } from "./period-validation-section";
+import { ExperimentSummary } from "./experiment-summary";
+import { BacktestBreadcrumbs } from "./backtest-breadcrumbs";
+import { useBacktestLineage } from "./experiment-api";
 import {
   ExecutionProgressSummary,
   executionProgressPercent,
@@ -716,6 +718,7 @@ function RunMetadataCard({
 export function BacktestDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  const lineage = useBacktestLineage(id);
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [seedCloneOpen, setSeedCloneOpen] = useState(false);
@@ -788,6 +791,7 @@ export function BacktestDetailPage() {
       ),
     onSuccess: (data) => {
       setSeedCloneOpen(false);
+      void queryClient.invalidateQueries({ queryKey: ["backtest-experiments"] });
       void queryClient.invalidateQueries({ queryKey: ["backtests"] });
       void queryClient.invalidateQueries({
         queryKey: ["backtest-clone-batches"],
@@ -877,11 +881,13 @@ export function BacktestDetailPage() {
 
   return (
     <div className="space-y-4">
+      <BacktestBreadcrumbs jobId={id} />
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-lg font-semibold">
           {strategyName ?? job.strategyId}
         </h2>
         <StatusBadge status={job.status} />
+        {lineage.data ? <Badge variant="outline">{lineage.data.roleLabel}</Badge> : null}
         {completed ? <Button variant="outline" onClick={() => void navigate(`/trading?sourceJobId=${encodeURIComponent(id)}`)}>이 설정으로 매매 준비</Button> : null}
         <div
           className={cn(
@@ -983,7 +989,7 @@ export function BacktestDetailPage() {
       {completed && metrics ? (
         <>
           <MetricCards metrics={metrics} benchmark={benchmark} />
-          <PeriodValidationSection key={id} jobId={id} request={job.request} />
+          <ExperimentSummary jobId={id} />
 
           {benchmark && !benchmark.available ? (
             <Alert>
