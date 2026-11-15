@@ -173,7 +173,7 @@ jobs:
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         with:
           name: quant-server-build
-          # 운영 서버와 같은 PC에서 빌더 자원을 제한한다. 성공 배포 뒤 미사용 캐시는 정리한다.
+          # 운영 서버와 같은 PC에서 빌더 자원을 제한하고 다음 빌드를 위해 캐시는 재사용한다.
           driver-opts: |
             memory=4g
             cpu-period=100000

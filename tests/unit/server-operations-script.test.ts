@@ -157,26 +157,24 @@ describe('Docker 서버 설정과 업데이트', () => {
     expect(h.calls().some(call => call.args[0] === 'image' && call.args[1] === 'rm')).toBe(false);
   });
 
-  it('빌더 캐시는 지정 범위만 정리하고 정리 실패에도 배포를 유지한다', () => {
+  it('업데이트와 정리는 빌더 캐시를 보존하고 이미지 정리 실패에도 배포를 유지한다', () => {
     const h = harness();
     expect(h.run(['init']).status).toBe(0);
     fs.writeFileSync(h.file('.server-image'), `${oldImage}\n`);
     h.clear();
-    const result = h.run(['update', 'quant-platform:release'], {
+    const env = {
       REGISTERED_BUILDER: 'quant-server-build', EXISTING_VOLUME: 'buildx_buildkit_quant-server-manual0_state',
       CLEANUP_EXIT: '1', TAGGED_IMAGES: `sha256:${'f'.repeat(64)} quant-platform:stale`,
-    });
+    };
+    const result = h.run(['update', 'quant-platform:release'], env);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain('정리 실패');
     expect(fs.readFileSync(h.file('.server-image'), 'utf8').trim()).toBe(candidate);
     expect(fs.readFileSync(h.file('.server-image.previous'), 'utf8').trim()).toBe(oldImage);
     expect(fs.existsSync(h.file('.server-update-pending'))).toBe(false);
-    expect(h.calls().filter(call => call.args[0] === 'buildx' && call.args[1] === 'prune').map(call => call.args)).toEqual([
-      ['buildx', 'prune', '--builder', 'quant-server-build', '--all', '--force'],
-    ]);
-    expect(h.calls().filter(call => call.args[0] === 'volume' && call.args[1] === 'rm').map(call => call.args)).toEqual([
-      ['volume', 'rm', 'buildx_buildkit_quant-server-manual0_state'],
-    ]);
+    expect(h.run(['cleanup'], env).status).toBe(0);
+    expect(h.calls().some(call => call.args[0] === 'buildx' && call.args[1] === 'prune')).toBe(false);
+    expect(h.calls().some(call => call.args[0] === 'volume' && call.args[1] === 'rm')).toBe(false);
   });
 
   it('설정 실패는 기존 서버를 유지하고 DB 준비·기동 실패는 같은 후보로만 복구한다', () => {

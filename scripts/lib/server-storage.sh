@@ -58,24 +58,6 @@ prune_server_images() {
   done <<< "$dangling"
 }
 
-# 실행 중인 빌드 기록은 BuildKit이 보존하며 다른 서비스의 빌더는 건드리지 않는다.
-prune_server_build_cache() {
-  local builder volume
-  for builder in quant-server-build quant-server-manual; do
-    if docker buildx inspect "$builder" >/dev/null 2>&1; then
-      docker buildx prune --builder "$builder" --all --force ||
-        echo "서버 빌드 캐시 정리 실패: $builder" >&2
-    else
-      # Actions가 빌더를 제거하고 keep-state로 남긴 전용 볼륨만 정리한다.
-      # 사용 중인 볼륨은 Docker가 삭제를 거부하므로 강제 삭제하지 않는다.
-      volume="buildx_buildkit_${builder}0_state"
-      if docker volume inspect "$volume" >/dev/null 2>&1; then
-        docker volume rm "$volume" || echo "서버 빌드 캐시 볼륨 정리 실패: $volume" >&2
-      fi
-    fi
-  done
-}
-
 cleanup_server_storage() {
   # 빌드부터 후보 핀 저장까지의 구간과 겹치면 다음 정리로 미룬다.
   exec 8>.server-build.lock
@@ -85,7 +67,6 @@ cleanup_server_storage() {
     return 0
   fi
   prune_server_images || echo '서버 이미지 정리를 완료하지 못했습니다.' >&2
-  prune_server_build_cache || echo '서버 빌드 캐시 정리를 완료하지 못했습니다.' >&2
   exec 8>&-
   # 정리 실패가 이미 성공한 배포를 실패 상태로 바꾸지 않는다.
   return 0
