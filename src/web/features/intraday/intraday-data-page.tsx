@@ -93,7 +93,7 @@ export function IntradayDataPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h3 className="text-xl font-semibold">분봉 시세</h3><p className="text-sm text-muted-foreground">관심 종목의 움직임을 원하는 주기로 살펴보세요.</p></div>
+        <div><h3 className="text-xl font-semibold">최근 시세</h3><p className="text-sm text-muted-foreground">최근 1년 시세를 분·시간·일·주·월 단위로 살펴보세요.</p></div>
         <div className="ml-auto flex flex-col items-end gap-2">
           <div role="status" aria-label="분봉 수집 상태" className="flex h-5 items-center gap-1.5 text-sm text-muted-foreground">
             {activeCollections.length > 0 && <><LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /><span>{collecting ? "수집 중" : "수집 대기"} · {activeCollections.length}건</span></>}
@@ -132,9 +132,12 @@ export function IntradayDataPage() {
           </>}
         </aside>
         <section className="min-w-0 flex-1 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div><h4 className="text-lg font-semibold">{selected?.name ?? (symbol || "종목을 선택하세요")}</h4>{symbol && <p className="text-sm text-muted-foreground">{symbol}{selected?.market ? ` · ${selected.market}` : ""}</p>}</div>
-            {symbol && <Button variant="ghost" size="sm" disabled={updateLibrary.isPending} aria-pressed={selectedFavorite} onClick={() => updateLibrary.mutate({ code: symbol, favorite: !selectedFavorite })}><Star className={selectedFavorite ? "fill-amber-400 text-amber-400" : ""} />{selectedFavorite ? "관심 종목 해제" : "관심 종목 추가"}</Button>}
+          <div>
+            <div className="flex min-w-0 items-center gap-1">
+              <h4 className="min-w-0 truncate text-lg font-semibold" title={selected?.name}>{selected?.name ?? (symbol || "종목을 선택하세요")}</h4>
+              {symbol && <Button variant="ghost" size="icon-sm" disabled={updateLibrary.isPending} aria-label={selectedFavorite ? "관심 종목 해제" : "관심 종목 추가"} title={selectedFavorite ? "관심 종목 해제" : "관심 종목 추가"} aria-pressed={selectedFavorite} onClick={() => updateLibrary.mutate({ code: symbol, favorite: !selectedFavorite })}><Star aria-hidden="true" className={selectedFavorite ? "fill-amber-400 text-amber-400" : "text-muted-foreground"} /></Button>}
+            </div>
+            {symbol && <p className="text-sm text-muted-foreground">{symbol}{selected?.market ? ` · ${selected.market}` : ""}</p>}
           </div>
           <div className="flex flex-wrap gap-1" aria-label="봉 주기">{timeframes.map(([value, label]) => <Button key={value} variant={timeframe === value ? "secondary" : "ghost"} size="sm" aria-pressed={timeframe === value} onClick={() => setTimeframe(value)}>{label}</Button>)}</div>
           <div className="flex flex-wrap items-end gap-2">

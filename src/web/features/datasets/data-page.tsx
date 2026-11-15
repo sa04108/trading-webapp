@@ -15,7 +15,7 @@ export function DataPage() {
         {(
           [
             ["/datasets/master", "종목 마스터"],
-            ["/datasets/intraday", "분봉 시세"],
+            ["/datasets/intraday", "최근 시세"],
             ["/datasets/benchmarks", "벤치마크"],
           ] as const
         ).map(([to, label]) => (
