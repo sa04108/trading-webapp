@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   createBacktestNotificationListener,
+  createIntradayNotificationListener,
   createSeedCloneBatchNotificationListener,
 } from '../../src/server/bootstrap/notification-wiring.js';
 import type { NotificationInput } from '../../src/server/modules/notification/application/notification-service.js';
@@ -10,6 +11,40 @@ import { createLogger } from '../../src/server/shared/logger.js';
 import { loadConfig } from '../../src/server/bootstrap/config.js';
 
 const logger = createLogger(loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'error' }));
+
+describe('createIntradayNotificationListener', () => {
+  it('분봉 수집의 완료와 실패를 작업 상세에 연결한다', () => {
+    const created: NotificationInput[] = [];
+    const listener = createIntradayNotificationListener({ notify: (input) => created.push(input), logger });
+    const collection = { kind: 'collection' as const, id: 'c1', ownerId: 'user', symbol: '005930',
+      period: { from: '2026-01-01', to: '2026-01-02' }, error: null };
+    listener({ ...collection, status: 'COMPLETED' });
+    listener({ ...collection, status: 'FAILED', error: '수집 오류' });
+    expect(created).toEqual([
+      expect.objectContaining({ type: 'data-sync', severity: 'info', link: '/jobs/intraday-collection%3Ac1', body: expect.stringContaining('005930') }),
+      expect.objectContaining({ type: 'data-sync', severity: 'error', link: '/jobs/intraday-collection%3Ac1', body: expect.stringContaining('수집 오류') }),
+    ]);
+  });
+
+  it('분봉 백테스트의 결과와 오류를 결과 화면에 연결한다', () => {
+    const created: NotificationInput[] = [];
+    const listener = createIntradayNotificationListener({ notify: (input) => created.push(input), logger });
+    const run = { kind: 'run' as const, id: 'r1', ownerId: 'user', symbol: '005930', strategyId: 'intraday-orb',
+      period: { from: '2026-01-01', to: '2026-01-02' }, error: null, returnPct: 1.25 };
+    listener({ ...run, status: 'COMPLETED' });
+    listener({ ...run, status: 'FAILED', error: '실행 오류', returnPct: null });
+    expect(created).toEqual([
+      expect.objectContaining({ type: 'backtest', severity: 'info', link: '/backtests/intraday/r1', body: expect.stringContaining('수익률 +1.25%') }),
+      expect.objectContaining({ type: 'backtest', severity: 'error', link: '/backtests/intraday/r1', body: expect.stringContaining('실행 오류') }),
+    ]);
+  });
+
+  it('알림 저장 실패를 작업 실행 경로로 전파하지 않는다', () => {
+    const listener = createIntradayNotificationListener({ notify: () => { throw new Error('insert failed'); }, logger });
+    expect(() => listener({ kind: 'collection', id: 'c1', ownerId: 'user', symbol: '005930',
+      period: { from: '2026-01-01', to: '2026-01-02' }, status: 'FAILED', error: '실패' })).not.toThrow();
+  });
+});
 
 function fakeJob(overrides: Partial<BacktestJobRow>): BacktestJobRow {
   return {

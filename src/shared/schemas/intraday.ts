@@ -22,6 +22,9 @@ export const intradayPeriodSchema = z
   .strict()
   .refine((p) => p.from <= p.to, "종료일은 시작일 이후여야 합니다.");
 export const intradayTimeframeSchema = z.enum(["1m", "5m", "15m"]);
+/** 시세 표시 주기는 전략의 신호 주기와 별도로 확장한다. */
+export const intradayChartTimeframeSchema = z.enum(["1m", "5m", "10m", "15m", "30m", "1h", "1d", "1w", "1mo"]);
+export type IntradayChartTimeframe = z.infer<typeof intradayChartTimeframeSchema>;
 export const intradayBarSchema = z
   .object({
     endMs: z
@@ -191,7 +194,7 @@ export interface IntradayGap {
 }
 export interface IntradayChart {
   symbol: string;
-  timeframe: IntradayTimeframe;
+  timeframe: IntradayChartTimeframe;
   bars: IntradayBar[];
   revision: string;
   gaps: IntradayGap[];

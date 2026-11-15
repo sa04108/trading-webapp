@@ -8,6 +8,7 @@ import { openDatabase } from "../../src/runtime/shared/db/database.js";
 import {
   IntradayService,
   type IntradaySource,
+  type IntradayTerminalEvent,
 } from "../../src/server/modules/intraday/application/intraday-service.js";
 import { executeIntraday } from "../../src/server/modules/intraday/application/forked-intraday-engine.js";
 import { ParquetIntradayStore } from "../../src/server/modules/intraday/infrastructure/parquet-intraday-store.js";
@@ -66,18 +67,20 @@ async function fixture(
     });
     return bars;
   },
-  options: { now?: number; closedDates?: string[]; onRecoveryFailure?: () => void; validateSymbol?: (symbol: string) => Promise<{ listDate: string; isinCode: string }> } = {},
+  options: { now?: number; closedDates?: string[]; onRecoveryFailure?: () => void; onTerminal?: (event: IntradayTerminalEvent) => void; validateSymbol?: (symbol: string) => Promise<{ listDate: string; isinCode: string }> } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "intraday-flow-")),
     database = openDatabase(":memory:");
   const store = new ParquetIntradayStore(dir);
   const services: IntradayService[] = [];
+  const terminalEvents: IntradayTerminalEvent[] = [];
   const makeService = (sourceFetch: IntradaySource["fetch"]) => {
     const instance = new IntradayService({
     db: database.db,
     store,
     source: { fetch: sourceFetch },
     onRecoveryFailure: options.onRecoveryFailure,
+    onTerminal: (event) => { terminalEvents.push(event); options.onTerminal?.(event); },
     validateSymbol: options.validateSymbol,
     now: () => options.now ?? now,
     calendar: { classify: (date) => ({ state: options.closedDates?.includes(date) ? "CLOSED" : "OPEN" }) },
@@ -102,10 +105,27 @@ async function fixture(
     database.close();
     await fs.rm(dir, { recursive: true, force: true });
   });
-  return { app, service, database, store, makeService };
+  return { app, service, database, store, makeService, terminalEvents };
 }
 const headers = { authorization: "owner" };
 describe("분봉 준비부터 격리 계산과 저장까지", () => {
+  // 과거 2,000봉 제한으로 1년 보관 자료를 앞부분부터 탐색할 수 없던 회귀를 보호한다.
+  it("시세 API는 저장된 전체 기간과 확장 주기를 반환하며 실행 주기 제한은 유지한다", async () => {
+    const { app, store } = await fixture();
+    const first = Date.parse("2026-11-02T09:00:00+09:00");
+    const storedBars = Array.from({ length: 6 }, (_, day) => bars.map((b, minute) => ({ ...b, endMs: first + day * 86_400_000 + (minute + 1) * 60_000 }))).flat();
+    await store.merge("005930", storedBars, now);
+    const get = (timeframe: string) => app.inject({ method: "GET", url: `/intraday/chart?symbol=005930&from=2026-11-02&to=2026-11-07&timeframe=${timeframe}`, headers });
+    const raw = (await get("1m")).json();
+    expect(raw.bars).toHaveLength(2280);
+    expect(raw.truncated).toBe(false);
+    for (const [tf, count] of [["10m", 228], ["30m", 78], ["1h", 42], ["1d", 6], ["1w", 1], ["1mo", 1]] as const) {
+      const response = await get(tf);
+      expect(response.statusCode).toBe(200);
+      expect(response.json().bars).toHaveLength(count);
+    }
+    expect((await app.inject({ method: "POST", url: "/intraday/runs", headers, payload: { ...request, timeframe: "1h" } })).statusCode).toBe(400);
+  });
   // 기존 실행 흐름 검사는 100건 이후 이력과 목록 지표·정렬의 소유권 경계를 다루지 않는다.
   it("전체 이력의 지표를 정렬하고 결과 본문 없이 소유자별 페이지와 개수를 반환한다", async () => {
     const { app, database } = await fixture();
@@ -206,6 +226,14 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it("알림 전달 오류가 완료된 수집의 상태를 실패로 바꾸지 않는다", async () => {
+    const onTerminal = vi.fn(() => { throw new Error("notification unavailable"); });
+    const { service } = await fixture(undefined, { onTerminal });
+    const collection = service.collect("owner", { symbol: "005930", period: { from: date, to: date } });
+    await vi.waitFor(() => expect(onTerminal).toHaveBeenCalledOnce());
+    expect(service.getCollection("owner", collection.id).status).toBe("COMPLETED");
+  });
+
   it("나중 날짜 수집 실패 후 앞서 저장한 날짜를 재요청하지 않는다", async () => {
     let fail = true;
     const fetch = vi.fn<IntradaySource["fetch"]>(async (_symbol, from, _to, options) => {
@@ -215,7 +243,7 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
       options?.onProgress?.({ pages: 1, fetchedBars: result.length, oldestEndMs: result[0]!.endMs });
       return result;
     });
-    const { service } = await fixture(fetch, { closedDates: ["2026-11-11"] });
+    const { service, terminalEvents } = await fixture(fetch, { closedDates: ["2026-11-11"] });
     const period = { from: "2026-11-10", to: date };
     const first = service.collect("owner", { symbol: "005930", period });
     await vi.waitFor(() => expect(service.getCollection("owner", first.id).status).toBe("FAILED"));
@@ -225,6 +253,9 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
     await vi.waitFor(() => expect(service.getCollection("owner", retry.id).status).toBe("COMPLETED"));
     expect(fetch.mock.calls.map(([, from]) => from)).toEqual(["2026-11-10", date, date].map((day) => Date.parse(`${day}T00:00:00+09:00`)));
     expect(service.getCollection("owner", retry.id)).toMatchObject({ pages: 1, fetchedBars: 380 });
+    expect(terminalEvents.map(({ id, status }) => ({ id, status }))).toEqual([
+      { id: first.id, status: "FAILED" }, { id: retry.id, status: "COMPLETED" },
+    ]);
   });
 
   // 재시작은 중단한 수집의 식별자와 날짜별 영속화를 함께 보호한다.
@@ -236,17 +267,19 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
         options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
       });
     });
-    const { service, makeService } = await fixture(initial, { closedDates: ["2026-11-11"] });
+    const { service, makeService, terminalEvents } = await fixture(initial, { closedDates: ["2026-11-11"] });
     const collection = service.collect("owner", { symbol: "005930", period: { from: "2026-11-10", to: date } });
     await vi.waitFor(() => expect(initial).toHaveBeenCalledTimes(2));
     await service.close();
     expect(service.getCollection("owner", collection.id)).toMatchObject({ status: "QUEUED", error: null });
+    expect(terminalEvents).toEqual([]);
     const resumed = vi.fn<IntradaySource["fetch"]>(async () => bars);
     const restarted = makeService(resumed);
     await restarted.recover();
     await restarted.recover();
     await vi.waitFor(() => expect(restarted.getCollection("owner", collection.id).status).toBe("COMPLETED"));
     expect(resumed).toHaveBeenCalledOnce();
+    expect(terminalEvents).toEqual([expect.objectContaining({ kind: "collection", id: collection.id, status: "COMPLETED" })]);
     expect(resumed.mock.calls[0]!.slice(0, 3)).toEqual(["005930", Date.parse(`${date}T00:00:00+09:00`), Date.parse(`${date}T23:59:59.999+09:00`)]);
   });
 
@@ -256,7 +289,7 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
         options?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
       }),
     );
-    const { service, makeService } = await fixture(initial);
+    const { service, makeService, terminalEvents } = await fixture(initial);
     const collection = service.collect("owner", { symbol: "005930", period: { from: date, to: date } });
     await vi.waitFor(() => expect(initial).toHaveBeenCalledOnce());
     service.cancelCollection("owner", collection.id);
@@ -266,11 +299,12 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
     await restarted.recover();
     expect(restarted.getCollection("owner", collection.id).status).toBe("CANCELLED");
     expect(resumed).not.toHaveBeenCalled();
+    expect(terminalEvents).toEqual([]);
   });
 
   it("잘못 저장된 복구 요청은 실패 처리하고 알림을 보낸다", async () => {
     const notify = vi.fn();
-    const { service, database } = await fixture(undefined, { onRecoveryFailure: notify });
+    const { service, database, terminalEvents } = await fixture(undefined, { onRecoveryFailure: notify });
     database.db.insert(intradayCollections).values({
       id: "invalid-collection", ownerId: "owner", symbol: "005930", periodJson: "{",
       status: "RUNNING", createdAtMs: now, updatedAtMs: now,
@@ -280,16 +314,25 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
       requestJson: JSON.stringify({ ...request, period: { from: "2024-01-01", to: "2024-01-01" } }),
       createdAtMs: now, updatedAtMs: now,
     }).run();
+    database.db.insert(intradayCollections).values({
+      id: "orphan-collection", ownerId: "owner", parentRunId: "missing-parent", symbol: "005930", periodJson: JSON.stringify(request.period),
+      status: "RUNNING", createdAtMs: now, updatedAtMs: now,
+    }).run();
     service.recover();
     expect(service.getCollection("owner", "invalid-collection").status).toBe("FAILED");
     expect(service.getRun("owner", "expired-run").status).toBe("FAILED");
-    expect(notify).toHaveBeenCalledTimes(2);
-    expect(notify).toHaveBeenCalledWith();
+    expect(notify).toHaveBeenCalledTimes(3);
+    expect(notify).toHaveBeenCalledWith(true);
+    expect(notify).toHaveBeenCalledWith(false);
+    expect(terminalEvents).toEqual([
+      expect.objectContaining({ kind: "collection", id: "invalid-collection", status: "FAILED" }),
+      expect.objectContaining({ kind: "run", id: "expired-run", status: "FAILED" }),
+    ]);
   });
 
   it("복구한 백테스트는 기존 자식 수집을 사용하고 중복 생성하지 않는다", async () => {
     const fetch = vi.fn<IntradaySource["fetch"]>(async () => bars);
-    const { service, database } = await fixture(fetch);
+    const { service, database, terminalEvents } = await fixture(fetch);
     database.db.insert(intradayRuns).values({
       id: "resumed-run", ownerId: "owner", status: "PREPARING", requestJson: JSON.stringify(request),
       createdAtMs: now, updatedAtMs: now,
@@ -304,6 +347,7 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
     expect(database.db.select().from(intradayCollections).all().map((row) => row.id)).toEqual(["resumed-child"]);
     expect(fetch).toHaveBeenCalledOnce();
     expect(service.getRun("owner", "resumed-run").result?.processedBars).toBe(380);
+    expect(terminalEvents).toEqual([expect.objectContaining({ kind: "run", id: "resumed-run", status: "COMPLETED" })]);
   });
 
   it("복구한 부모 실행을 준비 중 취소하면 자식 수집도 취소한다", async () => {
@@ -410,7 +454,7 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
     );
   });
   it("수집 실패를 실행 실패로 종료하고 같은 결과 조회에 원인을 전달한다", async () => {
-    const { service, app } = await fixture(async () => {
+    const { service, app, terminalEvents } = await fixture(async () => {
       throw new Error("토스 요청 실패 (429)");
     });
     const run = service.submit("owner", request);
@@ -429,6 +473,7 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
       status: "FAILED",
       error: "토스 요청 실패 (429)",
     });
+    expect(terminalEvents).toEqual([expect.objectContaining({ kind: "run", id: run.id, status: "FAILED", error: "토스 요청 실패 (429)" })]);
   });
   it("준비 취소 뒤 도착한 데이터는 실행하지 않으며 만료 기간은 거부한다", async () => {
     let release!: (value: IntradayBar[]) => void;

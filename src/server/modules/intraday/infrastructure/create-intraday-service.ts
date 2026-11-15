@@ -7,6 +7,7 @@ import { createOfficialKrxTradingCalendar } from "../../market-data/infrastructu
 import {
   IntradayError,
   IntradayService,
+  type IntradayTerminalEvent,
 } from "../application/intraday-service.js";
 import { executeIntraday } from "../application/forked-intraday-engine.js";
 import { ParquetIntradayStore } from "./parquet-intraday-store.js";
@@ -26,7 +27,9 @@ export function createIntradayService(options: {
   dataRoot: string;
   client?: TossClient;
   symbolInfo: SymbolInfoService;
-  onRecoveryFailure?: () => void;
+  search?: (query: string) => Promise<{ symbol: string; name: string }[]>;
+  onRecoveryFailure?: (terminalNotificationExpected: boolean) => void;
+  onTerminal?: (event: IntradayTerminalEvent) => void;
 }): IntradayService {
   const instrumentCache = new Map<
     string,
@@ -39,6 +42,7 @@ export function createIntradayService(options: {
     calendar: createOfficialKrxTradingCalendar(),
     execute: executeIntraday,
     onRecoveryFailure: options.onRecoveryFailure,
+    onTerminal: options.onTerminal,
     validateSymbol: async (symbol) => {
       const cached = instrumentCache.get(symbol);
       if (cached && cached.expires > Date.now()) return cached.value;
@@ -68,7 +72,7 @@ export function createIntradayService(options: {
       instrumentCache.set(symbol, { value, expires: Date.now() + 3_600_000 });
       return value;
     },
-    search: async (query) => {
+    search: options.search ?? (async (query) => {
       if (/^\d{6}$/.test(query)) {
         const result = await options.symbolInfo.lookup([query]);
         return [{ symbol: query, name: result[0]?.name ?? query }];
@@ -83,6 +87,6 @@ export function createIntradayService(options: {
         name: string;
       }[];
       return rows.filter((r) => /^\d{6}$/.test(r.symbol));
-    },
+    }),
   });
 }

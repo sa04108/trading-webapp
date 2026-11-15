@@ -19,6 +19,7 @@ import {
   registerAuthRoutes,
 } from "../modules/auth/presentation/auth-routes.js";
 import { registerSymbolRoutes } from "../modules/market-data/presentation/symbol-routes.js";
+import { registerSymbolLibraryRoutes } from "../modules/market-data/presentation/symbol-library-routes.js";
 import { registerStrategyRoutes } from "../modules/strategy/presentation/strategy-routes.js";
 import { registerTradingRoutes } from "../modules/trading/presentation/trading-routes.js";
 import { registerIntradayRoutes } from "../modules/intraday/presentation/intraday-routes.js";
@@ -119,6 +120,7 @@ export async function buildServer(
       );
       registerAuthRoutes(api, authDeps);
       registerSymbolRoutes(api, container.symbolInfoService, requireAuth);
+      registerSymbolLibraryRoutes(api, container.symbolLibraryService, requireAuth);
       registerStrategyRoutes(api, container.strategyRegistry, requireAuth);
       registerTradingRoutes(api, container.tradingService, requireAuth);
       registerIntradayRoutes(api, container.intradayService, requireAuth);

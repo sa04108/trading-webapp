@@ -29,13 +29,13 @@ import {
   type IntradayRun,
   type IntradayRunSummary,
   type IntradaySymbolData,
-  type IntradayTimeframe,
+  type IntradayChartTimeframe,
 } from "../../../../shared/schemas/intraday.js";
 import {
-  aggregateIntradayBars,
   intradayGaps,
   type IntradayEngineInput,
 } from "../../../../runtime/modules/intraday/domain/engine.js";
+import { aggregateChartBars } from "./chart-bars.js";
 
 export class IntradayError extends Error {
   constructor(
@@ -74,6 +74,17 @@ export interface IntradaySource {
     },
   ): Promise<IntradayBar[]>;
 }
+export type IntradayTerminalEvent = {
+  id: string;
+  ownerId: string;
+  symbol: string;
+  period: IntradayPeriod;
+  status: "COMPLETED" | "FAILED";
+  error: string | null;
+} & (
+  | { kind: "collection" }
+  | { kind: "run"; strategyId: string; returnPct: number | null }
+);
 interface Options {
   db: AppDatabase;
   store: IntradayStore;
@@ -88,7 +99,8 @@ interface Options {
     symbol: string,
   ) => Promise<{ listDate: string; isinCode: string }>;
   search: (query: string) => Promise<{ symbol: string; name: string }[]>;
-  onRecoveryFailure?: () => void;
+  onRecoveryFailure?: (terminalNotificationExpected: boolean) => void;
+  onTerminal?: (event: IntradayTerminalEvent) => void;
 }
 type CollectionRow = typeof intradayCollections.$inferSelect;
 type RunRow = Omit<typeof intradayRuns.$inferSelect, "resultJson"> & {
@@ -126,6 +138,38 @@ export class IntradayService {
     }, 3_600_000);
     this.timer.unref();
   }
+  /** 저장된 종료 상태만 전달하며 알림 오류는 작업 결과에 영향을 주지 않는다. */
+  private notifyTerminal(kind: "collection" | "run", id: string): void {
+    if (!this.options.onTerminal) return;
+    try {
+      const safeObject = (json: string | null): Record<string, unknown> => {
+        try {
+          const value: unknown = JSON.parse(json ?? "null");
+          return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+        } catch { return {}; }
+      };
+      const safePeriod = (value: unknown): IntradayPeriod => {
+        const period = typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+        return { from: typeof period.from === "string" ? period.from : "기간 정보 없음", to: typeof period.to === "string" ? period.to : "기간 정보 없음" };
+      };
+      if (kind === "collection") {
+        const row = this.options.db.select().from(intradayCollections).where(eq(intradayCollections.id, id)).get();
+        if (!row || row.parentRunId !== null || (row.status !== "COMPLETED" && row.status !== "FAILED")) return;
+        this.options.onTerminal({ kind, id, ownerId: row.ownerId, symbol: row.symbol,
+          period: safePeriod(safeObject(row.periodJson)), status: row.status, error: row.error });
+      } else {
+        const row = this.options.db.select().from(intradayRuns).where(eq(intradayRuns.id, id)).get();
+        if (!row || (row.status !== "COMPLETED" && row.status !== "FAILED")) return;
+        const request = safeObject(row.requestJson);
+        const metrics = safeObject(JSON.stringify(safeObject(row.resultJson).metrics ?? null));
+        this.options.onTerminal({ kind, id, ownerId: row.ownerId,
+          symbol: typeof request.symbol === "string" ? request.symbol : "알 수 없는 종목",
+          strategyId: typeof request.strategyId === "string" ? request.strategyId : "알 수 없는 전략",
+          period: safePeriod(request.period), status: row.status, error: row.error,
+          returnPct: typeof metrics.returnPct === "number" && Number.isFinite(metrics.returnPct) ? metrics.returnPct : null });
+      }
+    } catch { /* 알림 실패가 종료 상태를 바꾸지 않는다. */ }
+  }
   /** 서버 부팅에서만 호출한다. 생성자를 공유하는 CLI가 작업을 실행하지 않게 한다. */
   recover(): void {
     if (this.recovered || this.closing) return;
@@ -151,7 +195,8 @@ export class IntradayService {
         this.options.db.update(intradayCollections).set({ status: "FAILED", updatedAtMs: this.now(),
           error: error instanceof Error ? error.message : "저장된 수집 요청을 복구할 수 없습니다." })
           .where(eq(intradayCollections.id, row.id)).run();
-        this.options.onRecoveryFailure?.();
+        this.notifyTerminal("collection", row.id);
+        this.options.onRecoveryFailure?.(row.parentRunId === null || parents.get(row.parentRunId) === row.ownerId);
       }
     }
     for (const row of runs) {
@@ -169,7 +214,8 @@ export class IntradayService {
         this.options.db.update(intradayRuns).set({ status: "FAILED", updatedAtMs: this.now(),
           error: error instanceof Error ? error.message : "저장된 백테스트 요청을 복구할 수 없습니다." })
           .where(eq(intradayRuns.id, row.id)).run();
-        this.options.onRecoveryFailure?.();
+        this.notifyTerminal("run", row.id);
+        this.options.onRecoveryFailure?.(true);
       }
     }
   }
@@ -305,7 +351,7 @@ export class IntradayService {
   async chart(
     symbol: string,
     period: IntradayPeriod,
-    timeframe: IntradayTimeframe,
+    timeframe: IntradayChartTimeframe,
   ): Promise<IntradayChart> {
     const { fromMs, toMs } = this.bounds(period);
     const data = await this.options.store.read(
@@ -313,7 +359,7 @@ export class IntradayService {
       fromMs,
       Math.min(toMs, this.now() - 60_000),
     );
-    const bars = aggregateIntradayBars(data.bars, timeframe);
+    const bars = aggregateChartBars(data.bars, timeframe);
     // 당일은 아직 도착할 수 없는 미래 봉을 누락으로 세지 않는다.
     const gaps = intradayGaps(data.bars, this.tradingDates(period))
       .filter((g) => g.fromMs < this.now() - 120_000)
@@ -331,9 +377,9 @@ export class IntradayService {
     return {
       symbol,
       timeframe,
-      bars: bars.slice(-2000),
+      bars,
       totalBars: bars.length,
-      truncated: bars.length > 2000,
+      truncated: false,
       revision: data.revision,
       gaps: gaps.slice(0, 500),
     };
@@ -485,6 +531,7 @@ export class IntradayService {
       }
       signal.throwIfAborted();
       update({ status: "COMPLETED", fetchedBars, pages, oldestEndMs });
+      this.notifyTerminal("collection", id);
     } catch (error) {
       const suspended = signal.aborted && this.closing && !this.cancelled.has(id);
       update({
@@ -495,7 +542,8 @@ export class IntradayService {
             ? error.message
             : "분봉 수집에 실패했습니다.",
       });
-      if (!signal.aborted && this.recovering.has(id)) this.options.onRecoveryFailure?.();
+      if (!signal.aborted) this.notifyTerminal("collection", id);
+      if (!signal.aborted && this.recovering.has(id)) this.options.onRecoveryFailure?.(true);
       throw error;
     }
   }
@@ -708,6 +756,7 @@ export class IntradayService {
         resultJson: JSON.stringify(result),
         error: null,
       });
+      this.notifyTerminal("run", id);
     } catch (error) {
       const suspended = signal.aborted && this.closing && !this.cancelled.has(id);
       const recoveredChild = this.recoveredCollections.get(id);
@@ -720,7 +769,8 @@ export class IntradayService {
             ? error.message
             : "분봉 백테스트에 실패했습니다.",
       });
-      if (!signal.aborted && this.recovering.has(id)) this.options.onRecoveryFailure?.();
+      if (!signal.aborted) this.notifyTerminal("run", id);
+      if (!signal.aborted && this.recovering.has(id)) this.options.onRecoveryFailure?.(true);
     }
   }
   async close(): Promise<void> {

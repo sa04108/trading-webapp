@@ -78,6 +78,9 @@ const completed = {
 test("수집과 준비 실패를 각 화면에서 확인한다", async ({ page }) => {
   await login(page);
   let collected = false;
+  let favorite = false;
+  let viewed = false;
+  const stock = { symbol: "005930", name: "삼성전자", market: "KOSPI" };
   const collection = {
     id: "collect-1",
     symbol: "005930",
@@ -102,8 +105,16 @@ test("수집과 준비 실패를 각 화면에서 확인한다", async ({ page }
     }),
   );
   await page.route("**/api/v1/intraday/symbols?**", (route) =>
-    route.fulfill({ json: { symbols: [] } }),
+    route.fulfill({ json: { symbols: [stock] } }),
   );
+  await page.route("**/api/v1/symbols/library**", (route) => {
+    if (route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON();
+      if (body.favorite !== undefined) favorite = body.favorite;
+      if (body.viewed) viewed = true;
+    }
+    return route.fulfill({ json: { favorites: favorite ? [stock] : [], recent: viewed ? [stock] : [] } });
+  });
   await page.route("**/api/v1/intraday/chart?**", (route) =>
     route.fulfill({
       json: {
@@ -123,10 +134,22 @@ test("수집과 준비 실패를 각 화면에서 확인한다", async ({ page }
   });
   await page.goto("/datasets/intraday");
   await page.getByLabel("종목 검색 (이름 또는 6자리 코드)").fill("005930");
+  await page.getByRole("button", { name: /삼성전자 005930/ }).click();
+  await expect(page.getByRole("tab", { name: "관심 종목" })).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: "관심 종목 추가", exact: true }).click();
+  await expect(page.getByRole("button", { name: "삼성전자 관심 종목 해제" })).toBeVisible();
+  await page.getByRole("tab", { name: "최근 조회 종목" }).click();
+  await expect(page.getByRole("tab", { name: "최근 조회 종목" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("button", { name: /삼성전자 005930/ })).toBeVisible();
+  await page.getByRole("button", { name: "1주", exact: true }).click();
+  const startDate = await page.getByLabel("시작일").inputValue();
+  const endDate = await page.getByLabel("종료일").inputValue();
+  expect(Date.parse(endDate) - Date.parse(startDate)).toBe(6 * 86400000);
   await page.getByRole("button", { name: "데이터 수집" }).click();
-  await expect(
-    page.getByRole("alert").filter({ hasText: "수집 연결 실패" }),
-  ).toBeVisible();
+  await page.getByRole("dialog").getByRole("button", { name: "수집 시작" }).click();
+  await expect(page.getByText("분봉 데이터 수집을 시작했습니다.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "작업 보기" })).toBeVisible();
+  await expect(page.getByText("수집 연결 실패")).toHaveCount(0);
   await expect(page).toHaveURL(/\/datasets\/intraday/);
   await expect(page.getByRole("button", { name: "수집 취소" })).toHaveCount(0);
 
@@ -224,17 +247,17 @@ test("일봉과 분봉 경로를 오가며 결과와 체결 시각을 확인한�
   await page.locator('a[href="/backtests/intraday/done"]').click();
   await expect(page.getByText("12,000원")).toBeVisible();
   await expect(page.getByRole("img", { name: "자산 추이 차트" })).toBeVisible();
-  const fillMarker = page.locator('circle[aria-label^="체결 BUY"]');
-  await expect(fillMarker).toBeVisible();
-  expect(Number(await fillMarker.getAttribute("cx"))).toBeGreaterThan(400);
-  await expect(page.locator('path[aria-label^="신호 BUY"]')).toBeVisible();
+  const markers = page.getByRole("list", { name: "차트 신호 및 체결", includeHidden: true });
+  await expect(markers).toContainText("신호 BUY");
+  await expect(markers).toContainText("체결 BUY");
+  await expect(page.getByRole("img", { name: /가격 캔들 및 거래량 차트/ })).toBeVisible();
   revision = "updated";
   await page.getByRole("combobox", { name: "봉 주기" }).click();
   await page.getByRole("option", { name: "1분", exact: true }).click();
   await expect(
     page.getByText("수집 데이터가 갱신되어 실행 당시 차트와 다를 수 있습니다."),
   ).toBeVisible();
-  await expect(page.locator('circle[aria-label^="체결 BUY"]')).toHaveCount(0);
+  await expect(page.getByRole("list", { name: "차트 신호 및 체결", includeHidden: true })).toHaveCount(0);
   await page.getByRole("button", { name: "체결 및 주문" }).click();
   await expect(
     page.getByRole("columnheader", { name: "신호 시각" }),
