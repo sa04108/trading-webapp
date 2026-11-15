@@ -35,6 +35,7 @@ import { NotificationService } from "../modules/notification/application/notific
 import type { NotificationInput } from "../modules/notification/application/notification-service.js";
 import {
   createBacktestNotificationListener,
+  createIntradayNotificationListener,
   createSeedCloneBatchNotificationListener,
 } from "./notification-wiring.js";
 import { createPreparationNotificationListener } from "./preparation-notification-wiring.js";
@@ -54,6 +55,7 @@ import {
   createSqliteUserRepository,
 } from "../modules/auth/infrastructure/sqlite-repositories.js";
 import { SymbolInfoService } from "../modules/market-data/application/symbol-info-service.js";
+import { SymbolLibraryService } from "../modules/market-data/application/symbol-library-service.js";
 import type { SymbolService } from "../../runtime/modules/market-data/application/symbol-service.js";
 import { CandleCoverageService } from "../../runtime/modules/market-data/application/candle-coverage-service.js";
 import type { CandleRepository } from "../../runtime/modules/market-data/application/ports.js";
@@ -138,6 +140,7 @@ export interface Container {
   readonly candleCoverageService: CandleCoverageService;
   readonly symbolService: SymbolService;
   readonly symbolInfoService: SymbolInfoService;
+  readonly symbolLibraryService: SymbolLibraryService;
   readonly strategyRegistry: StrategyRegistry;
   readonly tradingService: TradingService;
   readonly intradayService: IntradayService;
@@ -358,15 +361,24 @@ export function createContainer(
   });
   // 로컬 폴백(symbolService)을 함께 넘긴다 — 증권사가 모르거나 조회에 실패한 코드도
   // 종목 마스터가 채워 둔 이름이 있으면 그걸로 보여준다 (자격 증명 미설정 환경도 포함).
+  const symbolLibraryService = new SymbolLibraryService(database.sqlite, () => clock.now());
   const symbolInfoService = new SymbolInfoService(
     stockInfoSource,
     clock,
     logger,
-    symbolService,
+    {
+      getLocalNames: (codes) => new Map([...symbolService.getLocalNames(codes), ...symbolLibraryService.getLocalNames(codes)]),
+      rememberNames: (stocks) => symbolLibraryService.rememberNames(stocks),
+    },
   );
   const intradayService = createIntradayService({ database, dataRoot: config.dataRoot, client: tossClient, symbolInfo: symbolInfoService,
-    onRecoveryFailure: () => safeNotify({ type: "data-sync", severity: "error", title: "분봉 작업을 자동으로 재개하지 못했습니다",
-      body: "작업 센터에서 본인 작업의 실패 사유를 확인하고 설정이나 연결 문제를 해결한 뒤 다시 실행해주세요.", link: "/jobs" }),
+    search: (query) => symbolLibraryService.search(query, (codes) => symbolInfoService.lookup(codes)),
+    onTerminal: createIntradayNotificationListener({ notify: safeNotify, logger }),
+    onRecoveryFailure: (terminalNotificationExpected) => {
+      // 부모가 없는 내부 수집은 일반 종료 알림 대상이 아니므로 복구 불가를 따로 알린다.
+      if (!terminalNotificationExpected) safeNotify({ type: "data-sync", severity: "error", title: "분봉 작업을 자동으로 재개하지 못했습니다",
+        body: "연결된 백테스트가 종료되었거나 없어 내부 수집을 재개할 수 없습니다. 필요한 기간을 다시 수집해주세요.", link: "/jobs" });
+    },
   });
 
   const fredSource = createFredBenchmarkSource(
@@ -708,6 +720,7 @@ export function createContainer(
     candleCoverageService,
     symbolService,
     symbolInfoService,
+    symbolLibraryService,
     strategyRegistry,
     tradingService,
     intradayService,

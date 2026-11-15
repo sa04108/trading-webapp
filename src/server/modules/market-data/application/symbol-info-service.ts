@@ -20,6 +20,7 @@ interface CacheEntry {
  * 에 심어 뒀는데 조회 경로가 그걸 안 보면, 멀쩡히 상장된 종목도 이름을 잃는다.
  */
 export interface LocalSymbolNameSource {
+  rememberNames?(stocks: readonly StockInfo[]): void;
   getLocalNames(
     codes: readonly string[],
   ): ReadonlyMap<string, { name: string; market: string }>;
@@ -62,6 +63,10 @@ export class SymbolInfoService {
       try {
         const { stocks, failedSymbols } =
           await this.source.getStockInfo(misses);
+        try { this.localNames.rememberNames?.(stocks); }
+        catch (error) {
+          this.logger.warn({ module: "market-data", event: "symbol-info.remember.failed", err: error }, "종목명 사전 저장 실패");
+        }
         const bySymbol = new Map(stocks.map((info) => [info.symbol, info]));
         const failed = new Set(failedSymbols);
         for (const symbol of misses) {

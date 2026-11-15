@@ -11,3 +11,4 @@ export * from "./agent-schema.js";
 export * from "./trading-schema.js";
 export * from "./intraday-schema.js";
 export * from "./job-center-schema.js";
+export * from "./symbol-library-schema.js";

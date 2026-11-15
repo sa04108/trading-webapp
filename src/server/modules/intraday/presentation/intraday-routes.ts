@@ -4,7 +4,7 @@ import { historyQuerySchema } from "../../../../shared/schemas/backtest-history.
 import {
   intradayPeriodSchema,
   intradaySymbolSchema,
-  intradayTimeframeSchema,
+  intradayChartTimeframeSchema,
 } from "../../../../shared/schemas/intraday.js";
 import {
   IntradayError,
@@ -22,7 +22,7 @@ const chartSchema = z
     symbol: intradaySymbolSchema,
     from: z.string(),
     to: z.string(),
-    timeframe: intradayTimeframeSchema,
+    timeframe: intradayChartTimeframeSchema,
   })
   .strict();
 type PreHandler = (

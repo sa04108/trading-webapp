@@ -16,6 +16,8 @@ import type {
   SeedCloneBatchEvent,
 } from "../modules/backtest/application/seed-clone-batch-service.js";
 import type { NotificationInput } from "../modules/notification/application/notification-service.js";
+import type { IntradayTerminalEvent } from "../modules/intraday/application/intraday-service.js";
+import { INTRADAY_STRATEGIES } from "../../shared/schemas/intraday-strategies.js";
 import type { Logger } from "../shared/logger.js";
 
 // status 컬럼은 리터럴 유니온이 아니라 text() 라 string 이다 — Record 키를
@@ -35,6 +37,41 @@ const TERMINAL_NOTIFICATIONS: Partial<
  */
 function signedPct(value: number): string {
   return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+/** 분봉 작업의 종료 전이를 사용자에게 알린다. */
+export function createIntradayNotificationListener(deps: {
+  notify: (input: NotificationInput) => void;
+  logger: Logger;
+}): (event: IntradayTerminalEvent) => void {
+  return (event) => {
+    try {
+      const completed = event.status === "COMPLETED";
+      const period = `${event.period.from} ~ ${event.period.to}`;
+      const label = event.kind === "collection"
+        ? event.symbol
+        : `${INTRADAY_STRATEGIES.find((strategy) => strategy.id === event.strategyId)?.name ?? event.strategyId} · ${event.symbol}`;
+      const summary = event.kind === "run" && completed && event.returnPct !== null
+        ? `${label} · 수익률 ${signedPct(event.returnPct)}`
+        : label;
+      deps.notify({
+        type: event.kind === "collection" ? "data-sync" : "backtest",
+        severity: completed ? "info" : "error",
+        title: event.kind === "collection"
+          ? `분봉 수집이 ${completed ? "완료되었습니다" : "실패했습니다"}`
+          : `분봉 백테스트가 ${completed ? "완료되었습니다" : "실패했습니다"}`,
+        body: [summary, period, ...(!completed && event.error ? [event.error] : [])].join("\n"),
+        link: event.kind === "collection"
+          ? `/jobs/${encodeURIComponent(`intraday-collection:${event.id}`)}`
+          : `/backtests/intraday/${encodeURIComponent(event.id)}`,
+      });
+    } catch (error) {
+      deps.logger.warn(
+        { module: "notification", event: "notify.intraday.failed", jobId: event.id, err: error },
+        "intraday notification failed",
+      );
+    }
+  };
 }
 
 /** 저장된 경고 원문. 깨진 JSON 은 빈 배열로 — 설명 조립 실패가 알림을 없애면 안 된다 */
