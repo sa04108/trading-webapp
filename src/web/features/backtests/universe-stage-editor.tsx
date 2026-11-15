@@ -2,6 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
   type UniverseCriterion,
@@ -249,61 +256,71 @@ export function UniverseStageEditor({
 
             <div className="space-y-1">
               <Label htmlFor={`stage-criterion-${index}`}>기준</Label>
-              {/* shadcn Select 는 popup 을 portal 로 그려 SSR·정적 markup 검사와 맞지
-                  않는다 — 여기서는 네이티브 select 로 옵션 disable 을 직접 검증한다. */}
-              <select
-                id={`stage-criterion-${index}`}
+              <Select
                 name="criterion"
-                className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm"
                 value={stage.criterion}
-                onChange={(event) =>
+                onValueChange={(value) =>
                   applyUpdate(
                     changeStageCriterion(
                       stages,
                       index,
-                      event.target.value as UniverseCriterion,
+                      value as UniverseCriterion,
                     ),
                   )
                 }
               >
-                {ALL_CRITERIA.map((criterion) => (
-                  <option
-                    key={criterion}
-                    value={criterion}
-                    disabled={
-                      criterion !== stage.criterion &&
-                      usedCriteria.has(criterion)
-                    }
-                  >
-                    {CRITERION_LABEL[criterion]}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger
+                  id={`stage-criterion-${index}`}
+                  className="h-8 w-auto rounded-lg px-2 text-sm"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ALL_CRITERIA.map((criterion) => (
+                    <SelectItem
+                      key={criterion}
+                      value={criterion}
+                      disabled={
+                        criterion !== stage.criterion &&
+                        usedCriteria.has(criterion)
+                      }
+                    >
+                      {CRITERION_LABEL[criterion]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="space-y-1">
               <Label htmlFor={`stage-direction-${index}`}>방향</Label>
-              <select
-                id={`stage-direction-${index}`}
+              <Select
                 name="direction"
-                className="h-8 rounded-lg border border-input bg-transparent px-2 text-sm"
                 value={stage.direction}
-                onChange={(event) =>
+                onValueChange={(value) =>
                   applyUpdate(
                     changeStageDirection(
                       stages,
                       index,
-                      event.target.value as UniverseDirection,
+                      value as UniverseDirection,
                     ),
                   )
                 }
               >
-                {DIRECTION_OPTIONS[stage.criterion].map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger
+                  id={`stage-direction-${index}`}
+                  className="h-8 w-auto rounded-lg px-2 text-sm"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {DIRECTION_OPTIONS[stage.criterion].map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="space-y-1">

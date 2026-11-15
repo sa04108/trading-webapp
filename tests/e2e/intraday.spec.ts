@@ -229,7 +229,8 @@ test("일봉과 분봉 경로를 오가며 결과와 체결 시각을 확인한�
   expect(Number(await fillMarker.getAttribute("cx"))).toBeGreaterThan(400);
   await expect(page.locator('path[aria-label^="신호 BUY"]')).toBeVisible();
   revision = "updated";
-  await page.getByLabel("봉 주기").selectOption("1m");
+  await page.getByRole("combobox", { name: "봉 주기" }).click();
+  await page.getByRole("option", { name: "1분", exact: true }).click();
   await expect(
     page.getByText("수집 데이터가 갱신되어 실행 당시 차트와 다를 수 있습니다."),
   ).toBeVisible();
