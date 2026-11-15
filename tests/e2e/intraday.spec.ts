@@ -75,6 +75,80 @@ const completed = {
   result,
 };
 
+// 빈 차트만 검사하면 수집 폴링이 확대·이동한 차트를 다시 만드는 회귀를 잡지 못한다.
+test("수집 폴링은 차트와 스크롤을 유지하고 사용자 조회는 최신 데이터를 가져온다", async ({ page }) => {
+  await login(page);
+  const stock = { symbol: "005930", name: "삼성전자", market: "KOSPI" };
+  let polls = 0;
+  let releasePoll: (() => void) | undefined;
+  const requests: string[] = [];
+  await page.route("**/api/v1/symbols/library**", (route) => route.fulfill({ json: { favorites: [stock], recent: [] } }));
+  await page.route("**/api/v1/intraday/data", async (route) => {
+    const poll = polls++;
+    if (poll > 0) await new Promise<void>((resolve) => { releasePoll = resolve; });
+    const status = poll === 0 ? "QUEUED" : poll < 3 ? "RUNNING" : "COMPLETED";
+    await route.fulfill({ json: {
+      configured: true, retentionDays: 365, quoteScope: "TOSS_UNSPECIFIED",
+      symbols: [{ symbol: stock.symbol, bars: 150 + poll, firstEndMs: at, lastEndMs: at + 149 * 300000, revision: `revision-${poll}`, updatedAtMs: at }],
+      collections: [{ id: "collect-1", symbol: stock.symbol, period: request.period, status, fetchedBars: 150, pages: 1, oldestEndMs: at, error: null, createdAtMs: at, updatedAtMs: at }],
+    } });
+  });
+  await page.route("**/api/v1/intraday/chart?**", (route) => {
+    const timeframe = new URL(route.request().url()).searchParams.get("timeframe")!;
+    requests.push(timeframe);
+    const price = 70000 + requests.length * 1000;
+    const bars = Array.from({ length: 150 }, (_, i) => ({ endMs: at + i * 300000, open: price + i, high: price + i + 20, low: price + i - 20, close: price + i + 10, volume: 1000 + i }));
+    return route.fulfill({ json: { symbol: stock.symbol, timeframe, bars, revision: `chart-${requests.length}`, gaps: [], totalBars: bars.length, truncated: false } });
+  });
+  await page.goto("/datasets/intraday?symbol=005930");
+  const status = page.getByRole("status", { name: "분봉 수집 상태" });
+  await expect(status).toHaveText(/수집 대기/);
+  await expect(page.getByText("71,159원", { exact: true })).toBeVisible();
+  const chart = page.getByRole("img", { name: /가격 캔들 및 거래량 차트/ });
+  await chart.scrollIntoViewIfNeeded();
+  const canvas = chart.locator("canvas").first();
+  const bitmap = () => canvas.evaluate((element: HTMLCanvasElement) => element.toDataURL());
+  const before = await bitmap();
+  const box = (await chart.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 100);
+  await page.mouse.wheel(0, -300);
+  await page.mouse.move(0, 0);
+  await expect.poll(bitmap).not.toBe(before);
+  const zoomed = await bitmap();
+  await page.mouse.move(box.x + box.width / 2, box.y + 100);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 60, box.y + 100, { steps: 5 });
+  await page.mouse.up();
+  await page.mouse.move(0, 0);
+  await expect.poll(bitmap).not.toBe(zoomed);
+  const moved = await bitmap();
+  const scroll = await page.evaluate(() => window.scrollY);
+  expect(scroll).toBeGreaterThan(0);
+  const node = await canvas.elementHandle();
+  for (let poll = 1; poll <= 3; poll++) {
+    await expect.poll(() => polls).toBeGreaterThan(poll);
+    const release = releasePoll!;
+    releasePoll = undefined;
+    release();
+    if (poll < 3) await expect(status).toHaveText(/수집 중/);
+    else await expect(status).toBeEmpty();
+    await expect(page.getByText(new RegExp(`보관 범위:.*${150 + poll}개`))).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(scroll);
+    expect(await bitmap()).toBe(moved);
+    expect(await canvas.evaluate((element, original) => element === original, node)).toBe(true);
+    expect(requests).toEqual(["5m"]);
+    await expect(page.getByText("71,159원", { exact: true })).toBeVisible();
+  }
+  await page.getByRole("button", { name: "1분", exact: true }).click();
+  await expect(page.getByText("72,159원", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "5분", exact: true }).click();
+  await expect(page.getByText("73,159원", { exact: true })).toBeVisible();
+  expect(requests).toEqual(["5m", "1m", "5m"]);
+  await page.getByRole("button", { name: "1주", exact: true }).click();
+  await expect(page.getByText("74,159원", { exact: true })).toBeVisible();
+  expect(requests).toEqual(["5m", "1m", "5m", "5m"]);
+});
+
 test("수집과 준비 실패를 각 화면에서 확인한다", async ({ page }) => {
   await login(page);
   let collected = false;

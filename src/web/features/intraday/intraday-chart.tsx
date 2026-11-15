@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import {
   CandlestickSeries,
   ColorType,
@@ -30,7 +30,6 @@ interface IntradayChartViewProps {
   timeframe: IntradayChartTimeframe;
   showSummary?: boolean;
   expectedRevision?: string;
-  refreshRevision?: string;
   signals?: IntradaySignal[];
   fills?: IntradayFill[];
 }
@@ -112,7 +111,6 @@ export function IntradayChartView({
   timeframe,
   showSummary = false,
   expectedRevision,
-  refreshRevision,
   signals,
   fills,
 }: IntradayChartViewProps) {
@@ -121,17 +119,24 @@ export function IntradayChartView({
   const [hovered, setHovered] = useState<{ bar: IntradayBar; x: number; y: number } | null>(null);
   const valid = /^\d{6}$/.test(symbol) && !!from && !!to && from <= to;
   const query = useQuery({
-    queryKey: ["intraday-chart", symbol, from, to, timeframe, refreshRevision],
+    queryKey: ["intraday-chart", symbol, from, to, timeframe],
     queryFn: () => api<IntradayChart>(`/intraday/chart?${new URLSearchParams({ symbol, from, to, timeframe })}`),
     enabled: valid,
+    // 수집 현황과 독립된 화면 스냅샷을 유지하고 조회 조건을 바꿀 때 최신 데이터를 받는다.
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchInterval: false,
+    placeholderData: keepPreviousData,
   });
   const bars = query.data?.bars;
+  const chartTimeframe = query.data?.timeframe ?? timeframe;
   const barByTime = useMemo(() => new Map((bars ?? []).map((bar) => [bar.endMs / 1000, bar])), [bars]);
   const showMarkers = !!expectedRevision && query.data?.revision === expectedRevision;
   const dark = resolvedTheme === "dark";
   const markers = useMemo(
-    () => showMarkers && bars ? markersForBars(bars, timeframe, signals ?? [], fills ?? []) : [],
-    [showMarkers, bars, timeframe, signals, fills],
+    () => showMarkers && bars ? markersForBars(bars, chartTimeframe, signals ?? [], fills ?? []) : [],
+    [showMarkers, bars, chartTimeframe, signals, fills],
   );
 
   useEffect(() => {
@@ -149,8 +154,8 @@ export function IntradayChartView({
       timeScale: { borderColor: grid, timeVisible: true, secondsVisible: false, tickMarkFormatter: (t: Time, type: TickMarkType) => {
         const ms = seconds(t) * 1000;
         if (type === TickMarkType.Year) return kstYear.format(ms);
-        if (type === TickMarkType.Month || timeframe === "1mo") return kstMonth.format(ms);
-        if (type === TickMarkType.DayOfMonth || timeframe === "1d" || timeframe === "1w") return kstDay.format(ms);
+        if (type === TickMarkType.Month || chartTimeframe === "1mo") return kstMonth.format(ms);
+        if (type === TickMarkType.DayOfMonth || chartTimeframe === "1d" || chartTimeframe === "1w") return kstDay.format(ms);
         return kstTick.format(ms);
       } },
       localization: { timeFormatter: (t: Time) => formatTime(seconds(t) * 1000), locale: "ko-KR" },
@@ -186,7 +191,7 @@ export function IntradayChartView({
       markerSeries.detach();
       chart.remove();
     };
-  }, [dark, bars, barByTime, markers]);
+  }, [dark, bars, barByTime, markers, chartTimeframe]);
 
   const displayed = hovered?.bar ?? bars?.[bars.length - 1];
   return (
@@ -199,7 +204,7 @@ export function IntradayChartView({
         return <div className="flex flex-wrap items-baseline gap-x-3"><strong className="text-2xl">{number.format(last.close)}원</strong><span className={change > 0 ? "text-sm text-red-500" : change < 0 ? "text-sm text-blue-500" : "text-sm text-muted-foreground"}>{change > 0 ? "+" : ""}{number.format(change)}원 ({change > 0 ? "+" : ""}{percentage.toFixed(2)}%)</span><span className="text-xs text-muted-foreground">조회 기간 첫 봉 시가 대비 · 마지막 봉 종가</span></div>;
       })()}
       {query.error && <Alert variant="destructive"><AlertDescription>{query.error instanceof Error ? query.error.message : "차트를 불러오지 못했습니다."}</AlertDescription></Alert>}
-      {query.isFetching && <p className="text-sm text-muted-foreground">차트 불러오는 중…</p>}
+      <p role="status" aria-label="차트 조회 상태" className="h-5 text-sm text-muted-foreground">{query.isFetching ? "차트 불러오는 중…" : ""}</p>
       {expectedRevision && query.data && !showMarkers && <Alert><AlertDescription>수집 데이터가 갱신되어 실행 당시 차트와 다를 수 있습니다.</AlertDescription></Alert>}
       {query.data?.truncated && <Alert><AlertDescription>표시 가능한 봉 수를 초과했습니다. 날짜 범위를 좁혀 주세요.</AlertDescription></Alert>}
       {query.data && <div className="text-sm text-muted-foreground">
