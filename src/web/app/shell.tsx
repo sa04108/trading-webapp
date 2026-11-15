@@ -5,6 +5,7 @@ import {
   Database,
   FlaskConical,
   LayoutDashboard,
+  ListTodo,
   LogOut,
   Moon,
   Settings,
@@ -157,10 +158,13 @@ export function AppShell() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-10 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur">
-          <span className="text-sm font-semibold md:hidden">
+          <span className="min-w-0 truncate text-sm font-semibold md:hidden">
             Quant Platform
           </span>
-          <div className="ml-auto flex items-center">
+          <div className="ml-auto flex shrink-0 items-center">
+            <Button variant="ghost" size="icon" className="size-11" aria-label="작업" asChild>
+              <NavLink to="/jobs"><ListTodo className="size-5" /></NavLink>
+            </Button>
             <NotificationBell />
             <ThemeToggle />
             <LogoutButton />

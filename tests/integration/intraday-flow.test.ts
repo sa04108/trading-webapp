@@ -12,7 +12,7 @@ import {
 import { executeIntraday } from "../../src/server/modules/intraday/application/forked-intraday-engine.js";
 import { ParquetIntradayStore } from "../../src/server/modules/intraday/infrastructure/parquet-intraday-store.js";
 import { registerIntradayRoutes } from "../../src/server/modules/intraday/presentation/intraday-routes.js";
-import { intradayRuns } from "../../src/server/shared/db/intraday-schema.js";
+import { intradayCollections, intradayRuns } from "../../src/server/shared/db/intraday-schema.js";
 import type {
   IntradayBar,
   IntradayRequest,
@@ -250,7 +250,7 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
           release = resolve;
         }),
     );
-    const { service, app } = await fixture(source);
+    const { service, app, database } = await fixture(source);
     expect(() =>
       service.submit("owner", {
         ...request,
@@ -265,12 +265,17 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
     ).toThrow("하루 전체");
     const run = service.submit("owner", request);
     await vi.waitFor(() => expect(source).toHaveBeenCalledOnce());
+    const child = database.db.select().from(intradayCollections).all()[0]!;
+    expect(child.parentRunId).toBe(run.id);
     const cancel = await app.inject({ method: "DELETE", url: `/intraday/runs/${run.id}`, headers });
     expect(cancel.statusCode).toBe(200);
     expect(cancel.json().status).toBe("CANCELLED");
+    expect(service.getCollection("owner", child.id).status).toBe("CANCELLED");
+    expect(service.pendingCancellationIds()).toEqual(expect.arrayContaining([run.id, child.id]));
     expect((await app.inject({ method: "DELETE", url: `/intraday/history/${run.id}`, headers })).statusCode).toBe(409);
     release(bars);
     await service.close();
+    expect(service.pendingCancellationIds()).toEqual([]);
     expect(service.getRun("owner", run.id)).toMatchObject({
       status: "CANCELLED",
     });

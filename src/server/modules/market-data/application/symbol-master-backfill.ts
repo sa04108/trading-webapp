@@ -1,3 +1,6 @@
+import { EventEmitter } from "node:events";
+import { newId } from "../../../../runtime/shared/ids.js";
+import type { JobItem, JobStatus } from "../../../../shared/schemas/jobs.js";
 import type { Clock } from "../../../../runtime/shared/clock.js";
 import type { Logger } from "../../../shared/logger.js";
 import {
@@ -57,6 +60,30 @@ export class SymbolMasterBackfill {
   private targetEndDate: string | null = null;
   private error: string | null = null;
   private stopRequested = false;
+  readonly jobEvents = new EventEmitter();
+  private job: JobItem | null = null;
+
+  currentJob(): JobItem | null { return this.job; }
+
+  private updateJob(status: JobStatus, current: number, total: number, label: string | null, error: string | null = null): void {
+    if (!this.job) return;
+    const now = this.deps.clock.now();
+    const finished = ["COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"].includes(status);
+    this.job = { ...this.job, status, phase: label, error, updatedAtMs: now,
+      finishedAtMs: finished ? now : null, cancellable: status === "RUNNING",
+      progress: { current, total, percent: total ? Math.min(100, current / total * 100) : null, label } };
+    for (const listener of this.jobEvents.rawListeners("job")) {
+      try { listener.call(this.jobEvents, this.job); } catch { /* 관찰자 오류가 수집을 중단하지 않는다. */ }
+    }
+  }
+
+  cancelJob(id: string): boolean {
+    if (!this.job || this.job.id !== id || this.job.status !== "RUNNING") return false;
+    this.stopRequested = true;
+    const p = this.job.progress!;
+    this.updateJob("CANCELLING", p.current!, p.total!, p.label);
+    return true;
+  }
 
   constructor(deps: SymbolMasterBackfillDeps) {
     this.deps = deps;
@@ -92,12 +119,17 @@ export class SymbolMasterBackfill {
     this.cursorDate = fromDate;
     this.error = null;
 
-    void this.runLoop(fromDate, toDate);
+    const end = toDate ?? kstDateOf(this.deps.clock.now());
+    const total = Math.max(0, Math.round((Date.parse(end) - Date.parse(fromDate)) / 86400000) + 1);
+    const now = this.deps.clock.now();
+    this.job = { id: `symbol-master:${newId("sync")}`, kind: "symbol-master", title: "종목 마스터 수집", status: "RUNNING", phase: fromDate, description: `${fromDate} ~ ${end}`, progress: null, error: null, createdAtMs: now, updatedAtMs: now, finishedAtMs: null, cancellable: true, link: "/datasets/master" };
+    this.updateJob("RUNNING", 0, total, fromDate);
+    void this.runLoop(fromDate, end);
   }
 
   /** 진행 중 루프를 다음 날짜 경계에서 멈춘다 — 그 자리(cursorDate)에서 재개할 수 있다 */
   stop(): void {
-    this.stopRequested = true;
+    if (this.job) this.cancelJob(this.job.id);
   }
 
   /**
@@ -112,11 +144,15 @@ export class SymbolMasterBackfill {
       // 다음날 스케줄러가 같은 fromDate 로 다시 불러 이어간다.
       const upperBound = toDate ?? kstDateOf(this.deps.clock.now());
       let cursor = fromDate;
+      let completed = 0;
+      const total = Math.max(0, Math.round((Date.parse(upperBound) - Date.parse(fromDate)) / 86400000) + 1);
 
       while (cursor <= upperBound) {
         if (this.stopRequested) {
           this.cursorDate = cursor;
           this.state = "IDLE";
+          this.error = "사용자가 수집을 취소했습니다.";
+          this.updateJob("CANCELLED", completed, total, cursor, this.error);
           return;
         }
 
@@ -129,24 +165,38 @@ export class SymbolMasterBackfill {
         ) {
           this.cursorDate = cursor;
           this.state = "BUDGET_EXHAUSTED";
+          this.updateJob("INTERRUPTED", completed, total, cursor, "일일 호출 예산을 소진했습니다.");
           return;
         }
 
         this.cursorDate = cursor;
         await this.deps.service.ingestDate(cursor);
+        completed++;
+        this.updateJob(this.stopRequested ? "CANCELLING" : "RUNNING", completed, total, cursor);
         cursor = addCalendarDays(cursor, 1);
       }
 
       this.cursorDate = null;
       this.state = "IDLE";
+      this.error = this.stopRequested ? "사용자가 수집을 취소했습니다." : null;
+      this.updateJob(this.stopRequested ? "CANCELLED" : "COMPLETED", completed, total, null, this.error);
     } catch (error) {
+      const p = this.job!.progress!;
+      if (this.stopRequested) {
+        this.state = "IDLE";
+        this.error = "사용자가 수집을 취소했습니다.";
+        this.updateJob("CANCELLED", p.current!, p.total!, this.cursorDate, this.error);
+        return;
+      }
       if (error instanceof KrxQuotaError) {
         // cursorDate 는 실패한 바로 그 날짜에 남겨 둔다 — 재개 지점 표시용이다.
         this.state = "BUDGET_EXHAUSTED";
+        this.updateJob("INTERRUPTED", p.current!, p.total!, this.cursorDate, "일일 호출 예산을 소진했습니다.");
         return;
       }
       this.error = error instanceof Error ? error.message : String(error);
       this.state = "FAILED";
+      this.updateJob("FAILED", p.current!, p.total!, this.cursorDate, this.error);
       this.deps.logger.error(
         {
           module: "market-data",

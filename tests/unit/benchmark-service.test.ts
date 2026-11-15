@@ -20,6 +20,30 @@ const logger = {
 } as unknown as Logger;
 
 describe('벤치마크 저장과 결과 비교', () => {
+  it('취소는 마지막 요청이 끝날 때까지 대기하고 이전 ID는 새 작업을 취소하지 않는다', async () => {
+    const database = openDatabase(':memory:');
+    try {
+      let release!: (value: number | null) => void;
+      const fetchBenchmarkClose = vi.fn(() => new Promise<number | null>((resolve) => { release = resolve; }));
+      const service = new BenchmarkService({ db: database.db,
+        krxSource: { fetchBenchmarkClose } as unknown as KrxHistoricalUniverseSource,
+        fredSource: { fetchBenchmarkRange: async () => [] }, clock: { now: () => 123 }, logger });
+      service.startBackfill('KOSPI', '2026-01-02', '2026-01-02');
+      const id = service.currentJob()!.id;
+      expect(service.cancelJob(id)).toBe(true);
+      expect(service.currentJob()?.status).toBe('CANCELLING');
+      service.startBackfill('KOSPI', '2026-01-05', '2026-01-05');
+      expect(service.currentJob()?.id).toBe(id);
+      release(100);
+      await vi.waitFor(() => expect(service.currentJob()?.status).toBe('CANCELLED'));
+      service.startBackfill('KOSPI', '2026-01-05', '2026-01-05');
+      expect(service.cancelJob(id)).toBe(false);
+      expect(service.currentJob()?.status).toBe('RUNNING');
+      release(101);
+      await vi.waitFor(() => expect(service.currentJob()?.status).toBe('COMPLETED'));
+    } finally { database.close(); }
+  });
+
   it('거래일 커버를 pin하고 전략 대비 단순 초과수익률을 계산한다', async () => {
     const database = openDatabase(':memory:');
     try {

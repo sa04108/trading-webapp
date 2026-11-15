@@ -300,8 +300,8 @@ export class IntradayService {
       gaps: gaps.slice(0, 500),
     };
   }
-  collect(ownerId: string, raw: unknown, internal = false): IntradayCollection {
-    this.checkCapacity(internal);
+  collect(ownerId: string, raw: unknown, parentRunId?: string): IntradayCollection {
+    this.checkCapacity(parentRunId !== undefined);
     if (!this.options.source)
       throw new IntradayError("서버의 토스증권 API 연결 설정을 확인하세요.");
     const request = intradayCollectSchema.parse(raw);
@@ -314,6 +314,7 @@ export class IntradayService {
       .values({
         id,
         ownerId,
+        parentRunId: parentRunId ?? null,
         symbol: request.symbol,
         periodJson: JSON.stringify(request.period),
         status: "QUEUED",
@@ -488,6 +489,10 @@ export class IntradayService {
     if (!row) throw new IntradayError("분봉 백테스트를 찾을 수 없습니다.", 404);
     return this.run(row);
   }
+  /** 취소 표시 이후에도 I/O가 끝나지 않은 작업은 관찰 화면에서 진행 중으로 취급한다. */
+  pendingCancellationIds(): string[] {
+    return [...this.controllers].filter(([, controller]) => controller.signal.aborted).map(([id]) => id);
+  }
   deleteRunHistory(ownerId: string, id: string): void {
     const row = this.options.db
       .select({ id: intradayRuns.id, status: intradayRuns.status })
@@ -580,7 +585,7 @@ export class IntradayService {
         const collection = this.collect(
           ownerId,
           { symbol: request.symbol, period: request.period },
-          true,
+          id,
         );
         const cancel = () => this.cancelCollection(ownerId, collection.id);
         signal.addEventListener("abort", cancel, { once: true });

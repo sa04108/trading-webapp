@@ -33,7 +33,7 @@ const envSchema = z.object({
     .min(0)
     .max(3650)
     .default(90),
-  /** 알림 보존 일수 (설계 2026-08-03-notification-center). 0 = 삭제하지 않음 */
+  /** 알림·종료 작업 이력 보존 일수. 0 = 자동 정리하지 않음 */
   NOTIFICATION_RETENTION_DAYS: z.coerce
     .number()
     .int()

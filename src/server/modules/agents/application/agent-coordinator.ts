@@ -510,7 +510,7 @@ export class AgentCoordinator {
   }
 
   /** 배정 전 관측값도 GET과 SSE에서 같은 내용과 단위를 사용한다. */
-  backtestProgress(job: BacktestJobRow): ExecutionProgress | null {
+  backtestProgress(job: Pick<BacktestJobRow, "id" | "status" | "createdAtMs" | "estimatedBars" | "attempt" | "leaseFailures">): ExecutionProgress | null {
     return job.status === "QUEUED"
       ? { ...this.queuedProgress(job.id, job.createdAtMs, job.estimatedBars),
           attempt: job.attempt || null, retryCount: job.leaseFailures }

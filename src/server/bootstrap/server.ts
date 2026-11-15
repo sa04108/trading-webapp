@@ -26,6 +26,7 @@ import { registerBacktestRoutes } from "../modules/backtest/presentation/backtes
 import { registerBacktestWizardDraftRoutes } from "../modules/backtest/presentation/backtest-wizard-draft-routes.js";
 import { registerBacktestPreparationRoutes } from "../modules/backtest/presentation/backtest-preparation-routes.js";
 import { registerNotificationRoutes } from "../modules/notification/presentation/notification-routes.js";
+import { registerJobCenterRoutes } from "../modules/jobs/presentation/job-center-routes.js";
 import { registerSymbolMasterRoutes } from "../modules/market-data/presentation/symbol-master-routes.js";
 import fastifyWebsocket from "@fastify/websocket";
 import {
@@ -126,7 +127,7 @@ export async function buildServer(
         container.backtestWizardDraftService,
         requireAuth,
       );
-      registerBacktestRoutes(
+      const validations = registerBacktestRoutes(
         api,
         {
           submissionValidator: container.submissionValidator,
@@ -197,6 +198,7 @@ export async function buildServer(
         container.notificationService,
         requireAuth,
       );
+      registerJobCenterRoutes(api, container, validations, requireAuth);
       registerSymbolMasterRoutes(
         api,
         {

@@ -16,6 +16,8 @@ import {
   DataPage,
   DatasetsIndexRedirect,
 } from "../features/datasets/data-page";
+import { JobsPage } from "../features/jobs/jobs-page";
+import { JobDetailPage } from "../features/jobs/job-detail-page";
 import { NotificationsPage } from "../features/notifications/notifications-page";
 import { SettingsPage } from "../features/settings/settings-page";
 import { SymbolMasterPanel } from "../features/symbol-master/symbol-master-panel";
@@ -57,6 +59,8 @@ export const router = createBrowserRouter([
               { path: "*", element: <DatasetsIndexRedirect /> },
             ],
           },
+          { path: "jobs", element: <JobsPage /> },
+          { path: "jobs/:id", element: <JobDetailPage /> },
           { path: "notifications", element: <NotificationsPage /> },
           { path: "settings", element: <SettingsPage /> },
         ],
