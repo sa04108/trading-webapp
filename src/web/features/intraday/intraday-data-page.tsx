@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { PanelLeftClose, PanelLeftOpen, Star } from "lucide-react";
+import { LoaderCircle, PanelLeftClose, PanelLeftOpen, Star } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
@@ -69,6 +69,8 @@ export function IntradayDataPage() {
   const rows = searching ? (searchPending ? [] : searchResults.data?.symbols ?? []) : library.data?.[tab] ?? [];
   const selected = [...favorites, ...(library.data?.recent ?? []), ...(searchResults.data?.symbols ?? [])].find((entry) => entry.symbol === symbol);
   const stored = overview.data?.symbols.find((entry) => entry.symbol === symbol);
+  const activeCollections = overview.data?.collections.filter((entry) => entry.status === "QUEUED" || entry.status === "RUNNING") ?? [];
+  const collecting = activeCollections.some((entry) => entry.status === "RUNNING");
   const selectedFavorite = favorites.some((entry) => entry.symbol === symbol);
   const choose = (entry: SymbolDirectoryEntry) => {
     const next = new URLSearchParams(params);
@@ -92,9 +94,14 @@ export function IntradayDataPage() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><h3 className="text-xl font-semibold">분봉 시세</h3><p className="text-sm text-muted-foreground">관심 종목의 움직임을 원하는 주기로 살펴보세요.</p></div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" asChild><Link to={`/backtests/intraday/new?${new URLSearchParams({ symbol, from: from < intradayFirstBacktestDate() ? intradayFirstBacktestDate() : from, to: to > yesterday ? yesterday : to })}`}>이 조건으로 백테스트</Link></Button>
-          <Button disabled={!/^\d{6}$/.test(symbol)} onClick={() => { setCollectFrom(from); setCollectTo(to); collect.reset(); setDialogOpen(true); }}>데이터 수집</Button>
+        <div className="ml-auto flex flex-col items-end gap-2">
+          <div role="status" aria-label="분봉 수집 상태" className="flex h-5 items-center gap-1.5 text-sm text-muted-foreground">
+            {activeCollections.length > 0 && <><LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /><span>{collecting ? "수집 중" : "수집 대기"} · {activeCollections.length}건</span></>}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" asChild><Link to={`/backtests/intraday/new?${new URLSearchParams({ symbol, from: from < intradayFirstBacktestDate() ? intradayFirstBacktestDate() : from, to: to > yesterday ? yesterday : to })}`}>이 조건으로 백테스트</Link></Button>
+            <Button disabled={!/^\d{6}$/.test(symbol)} onClick={() => { setCollectFrom(from); setCollectTo(to); collect.reset(); setDialogOpen(true); }}>데이터 수집</Button>
+          </div>
         </div>
       </div>
       {overview.error && <Alert variant="destructive"><AlertDescription>{errorText(overview.error)}</AlertDescription></Alert>}
@@ -135,7 +142,7 @@ export function IntradayDataPage() {
             <label className="grid gap-1 text-xs text-muted-foreground">종료일<Input type="date" min={intradayRetentionDate()} max={intradayDate(Date.now())} value={to} onChange={(e) => setTo(e.target.value)} /></label>
             <div className="flex flex-wrap gap-1" aria-label="조회 기간">{[[1, "1일"], [7, "1주"], [30, "1개월"], [365, "1년"]].map(([days, label]) => <Button key={days} variant="outline" size="sm" onClick={() => quickRange(Number(days))}>{label}</Button>)}</div>
           </div>
-          <IntradayChartView symbol={symbol} from={from} to={to} timeframe={timeframe} refreshRevision={stored?.revision} showSummary />
+          <IntradayChartView symbol={symbol} from={from} to={to} timeframe={timeframe} showSummary />
           <p className="text-xs text-muted-foreground">보관 범위: {stored ? `${time(stored.firstEndMs)} ~ ${time(stored.lastEndMs)} · ${stored.bars.toLocaleString("ko-KR")}개` : "없음"} · 보관된 1분봉 기준 · 09:00–15:20 KST · 수정주가 미적용</p>
         </section>
       </div>
