@@ -123,7 +123,7 @@ export function ValidationResult({
 }: {
   experiment: PeriodValidationDto;
   specs: NumberParamSpec[];
-  refresh: () => Promise<void>;
+  refresh: (deleted?: boolean) => Promise<void>;
   onDeleted?: () => void;
 }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -137,7 +137,7 @@ export function ValidationResult({
       ),
     onSuccess: async (_data, action) => {
       setDeleteOpen(false);
-      await refresh();
+      await refresh(action === "delete");
       if (action === "delete") onDeleted?.();
     },
   });

@@ -44,9 +44,9 @@ function PeriodValidationDetail({ experiment, validationId }: { experiment: Peri
   });
   const specs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
   if (source.isLoading || (Boolean(strategyId) && schema.isLoading)) return <Skeleton className="h-64 w-full" />;
-  const refresh = async () => {
+  const refresh = async (deleted = false) => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["period-validation", validationId] }),
+      queryClient.invalidateQueries({ queryKey: ["period-validation", validationId], refetchType: deleted ? "none" : "active" }),
       queryClient.invalidateQueries({ queryKey: ["period-validations", experiment.sourceJobId] }),
       queryClient.invalidateQueries({ queryKey: ["backtests"] }),
       queryClient.invalidateQueries({ queryKey: ["backtest-experiments"] }),

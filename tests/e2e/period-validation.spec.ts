@@ -23,7 +23,7 @@ async function setup(page: Page) {
   await page.route(`**/api/v1/backtests/${id}/series`, (route) => route.fulfill({ json: { equity: [], benchmark: [], drawdown: [], monthly: [], symbols: [], totalEquityPoints: 0 } }));
   await page.route(`**/api/v1/backtests/${id}/trades?**`, (route) => route.fulfill({ json: { trades: [], total: 0 } }));
   await page.route('**/api/v1/strategies/range-breakout/schema', (route) => route.fulfill({ json: { schema: { type: 'object', properties: { lookbackDays: { type: 'integer', title: '관찰 기간', minimum: 1, maximum: 200, default: 20 } }, required: ['lookbackDays'] } } }));
-  const state: { experiments: PeriodValidationDto[]; submitted: PeriodValidationConfig | null } = { experiments: [], submitted: null };
+  const state: { experiments: PeriodValidationDto[]; submitted: PeriodValidationConfig | null; deletedDetailReads: number } = { experiments: [], submitted: null, deletedDetailReads: 0 };
   await page.route(`**/api/v1/backtests/${id}/validations`, async (route) => {
     if (route.request().method() === 'POST') {
       const config = route.request().postDataJSON() as PeriodValidationConfig;
@@ -45,7 +45,13 @@ async function setup(page: Page) {
     } else await route.fulfill({ json: { experiments: state.experiments } });
   });
   await page.route('**/api/v1/backtest-validations/val_test', async (route) => {
-    await route.fulfill({ json: { experiment: state.experiments[0] } });
+    if (route.request().method() === 'DELETE') {
+      state.experiments = [];
+      await route.fulfill({ status: 204 });
+    } else if (!state.experiments[0]) {
+      state.deletedDetailReads++;
+      await route.fulfill({ status: 404, json: { error: 'NOT_FOUND' } });
+    } else await route.fulfill({ json: { experiment: state.experiments[0] } });
   });
   await page.route('**/api/v1/backtest-validations/val_test/cancel', async (route) => {
     state.experiments[0]!.status = 'CANCELLED';
@@ -74,6 +80,12 @@ test('홀드아웃의 독립 실행 의미와 두 구간을 확인하고 실행�
   await expect(page).toHaveURL('/backtests/validations/val_test');
   await page.getByRole('button', { name: '실험 취소' }).click();
   await expect(page.getByText('홀드아웃 · 취소', { exact: true })).toBeVisible();
+  // 전용 상세에서 삭제한 실험을 다시 조회하면 정상 삭제 직후 404 화면이 나타난다.
+  await page.getByRole('button', { name: '실험 삭제', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: '삭제', exact: true }).click();
+  await expect(page).toHaveURL(`/backtests/${id}/validations`);
+  await expect(page.getByText('아직 검증 실험이 없습니다.')).toBeVisible();
+  expect(state.deletedDetailReads).toBe(0);
 });
 
 test('워크포워드의 후보·고정 전략 실행량과 제외 구간을 표시한다', async ({ page }) => {
