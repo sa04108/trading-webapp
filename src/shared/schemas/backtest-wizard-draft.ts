@@ -110,6 +110,7 @@ export const backtestWizardUniverseDraftSchema = z.object({
 export const backtestWizardCapitalDraftSchema = z.object({
   initialCash: formTextSchema,
   maxPositions: formTextSchema,
+  maxPositionWeightPercent: formTextSchema.default(""),
   commissionProfileId: formTextSchema,
   slippageProfileId: formTextSchema,
   randomSeed: formTextSchema,

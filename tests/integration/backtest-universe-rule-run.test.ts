@@ -168,13 +168,14 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     },
   });
 
-  it('커버리지가 보고한 일봉으로 백테스트가 완주한다', { timeout: 90_000 }, async ({ scenario }) => {
+  it('커버리지가 보고한 일봉으로 완주하고 요청의 비중 상한을 워커에 전달한다', { timeout: 90_000 }, async ({ scenario }) => {
     const { ctx, cookie, dailyCandles } = scenario;
     // 사용자가 보는 화면: 커버리지는 봉이 있다고 말한다
     const coverage = ctx.container.candleCoverageService.getCoverage(['005930']);
     expect(coverage[0]!.barCount).toBe(dailyCandles.length);
 
     const request = buildRequest();
+    request.risk.maxPositionWeightPercent = 1;
     await scenario.prepare(request);
     const created = await ctx.app.inject({
       method: 'POST',
@@ -212,6 +213,8 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     // 요청 시작일은 일요일이라 첫 실제 봉보다 하루 이르다. Worker가 첫 봉부터만
     // CAGR을 재면 기간이 짧아지므로 요청 날짜 anchor와 같은 분모인지 함께 검증한다.
     const full = ctx.container.resultsService.getFullExport(jobId);
+    expect(full.trades[0]?.quantity).toBe(1);
+    expect(JSON.parse(full.run!.warningsJson!).some((warning: string) => warning.includes('종목별 투자 비중 상한(1%)'))).toBe(true);
     const requestedFromTsMs = Date.parse('2025-07-27T00:00:00Z');
     const requestedToTsMs = Date.parse('2026-07-24T00:00:00Z');
     expect(full.equityPoints[0]?.tsMs).toBe(requestedFromTsMs);

@@ -140,7 +140,7 @@ export class TradingService {
     const request=backtestRequestSchema.parse(JSON.parse(job.requestJson));
     const artifact=this.artifacts().find(a=>a.strategyId===run.strategyId&&a.version===run.strategyVersion&&a.executionVersion===job.runnerVersion);
     if(!artifact)return {setup:null,strategyName:run.strategyId,strategyVersion:run.strategyVersion,error:"이 백테스트를 실행한 버전의 실행 파일이 보관되어 있지 않습니다. 최신 버전으로 임의 대체하지 않습니다. 사용 가능한 버전으로 백테스트한 뒤 가져오세요."};
-    return {strategyName:artifact.name,strategyVersion:artifact.version,error:null,setup:tradingSetupSchema.parse({strategyId:run.strategyId,artifactHash:artifact.artifactHash,parameters:JSON.parse(run.parameterJson),universeRule:request.universeRule,timeframe:"1d",budgetKrw:request.capital.initialCash,maxPositions:request.risk.maxPositions,maxPositionPercent:100,dailyLossLimitPercent:3,maxOrderKrw:Math.min(request.capital.initialCash,99_000_000),maxSlippageBps:50,randomSeed:request.randomSeed,sourceJobId:jobId})};
+    return {strategyName:artifact.name,strategyVersion:artifact.version,error:null,setup:tradingSetupSchema.parse({strategyId:run.strategyId,artifactHash:artifact.artifactHash,parameters:JSON.parse(run.parameterJson),universeRule:request.universeRule,timeframe:"1d",budgetKrw:request.capital.initialCash,maxPositions:request.risk.maxPositions,maxPositionPercent:request.risk.maxPositionWeightPercent??100,dailyLossLimitPercent:3,maxOrderKrw:Math.min(request.capital.initialCash,99_000_000),maxSlippageBps:50,randomSeed:request.randomSeed,sourceJobId:jobId})};
   }
   private async validate(input:TradingSetup) {
     const setup=tradingSetupSchema.parse(input);

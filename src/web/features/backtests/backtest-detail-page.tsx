@@ -679,6 +679,10 @@ function RunMetadataCard({
             <span className="text-muted-foreground">초기 자본</span>
             <span>{formatKrw(job.request.capital.initialCash)}</span>
           </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">종목별 최대 비중</span>
+            <span>{job.request.risk?.maxPositionWeightPercent == null ? "제한 없음" : `${job.request.risk.maxPositionWeightPercent}%`}</span>
+          </div>
         </CardContent>
       </Card>
       <Card>

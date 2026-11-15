@@ -43,7 +43,16 @@ describe('requestToFormState', () => {
     expect(state.to).toBe('2026-07-24');
     expect(state.initialCash).toBe('10000000');
     expect(state.maxPositions).toBe('5');
+    expect(state.maxPositionWeightPercent).toBe('');
     expect(state.randomSeed).toBe('42');
+  });
+
+  it('복제 요청에 지정된 종목별 최대 비중을 복원한다', () => {
+    const { state } = requestToFormState({
+      ...request,
+      risk: { ...request.risk, maxPositionWeightPercent: 12.5 },
+    }, catalog);
+    expect(state.maxPositionWeightPercent).toBe('12.5');
   });
 
   it('timeframe 을 왕복시킨다 — 미지정은 빈 문자열(유니버스 기본)', () => {

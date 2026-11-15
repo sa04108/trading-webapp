@@ -83,6 +83,101 @@ function buyAtBarStrategy(buyIndex: number, quantity = 1): TradingStrategy<unkno
   };
 }
 
+describe('공통 종목별 비중 상한', () => {
+  const input = {
+    initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 42,
+    maxPositions: 5, maxPositionWeightPercent: 50,
+  };
+  function scheduled(orders: OrderIntent[][]): TradingStrategy<unknown, { seen: number }> {
+    return {
+      ...buyAtBarStrategy(0),
+      onBars(_context, state) { return { orders: orders[state.seen++] ?? [] }; },
+    };
+  }
+
+  it.each([undefined, 2.5, 100])('고가주 1주는 상한 %s에서 가능한 경우에만 매수한다', (cap) => {
+    const result = runBacktest(buyAtBarStrategy(0) as never, {
+      ...input, initialCash: 10_000_000,
+      maxPositionWeightPercent: cap,
+      candles: [bar(0, 1_000_000), bar(1, 1_000_000)],
+    });
+    expect(result.fills.map(fill => fill.quantity)).toEqual(cap === 2.5 ? [] : [1]);
+    expect(result.warnings.some(warning => warning.includes('종목별 투자 비중 상한'))).toBe(cap === 2.5);
+  });
+
+  it('갭 상승과 기존 보유분을 반영하며 초과 보유분을 강제 매도하지 않고 전략 매도는 허용한다', () => {
+    const result = runBacktest(scheduled([
+      [{ symbol: 'A', side: 'BUY', quantity: 20 }],
+      [{ symbol: 'A', side: 'BUY', quantity: 100 }],
+      [{ symbol: 'A', side: 'BUY', quantity: 100 }],
+      [{ symbol: 'A', side: 'SELL', quantity: 100 }],
+    ]) as never, { ...input, candles: [100, 100, 200, 400, 400].map((price, i) => bar(i, price)) });
+    expect(result.fills.map(fill => [fill.side, fill.quantity, fill.tsMs])).toEqual([
+      ['BUY', 20, START + HOUR], ['BUY', 10, START + 2 * HOUR], ['SELL', 30, START + 4 * HOUR],
+    ]);
+    expect(result.warnings).toContain(
+      '종목별 투자 비중 상한(50%)으로 매수 주문 1건의 수량이 축소되고 1건이 거부되었습니다. 한도 내에서 최소 주문 수량을 살 수 없으면 매수하지 않습니다.',
+    );
+  });
+
+  it('부동소수점 반올림 때문에 정확히 상한인 고가주 1주를 거부하지 않는다', () => {
+    const result = runBacktest(buyAtBarStrategy(0) as never, {
+      ...input, initialCash: 10_000_000, maxPositionWeightPercent: 57,
+      candles: [bar(0, 5_700_000), bar(1, 5_700_000)],
+    });
+    expect(result.fills.map(fill => fill.quantity)).toEqual([1]);
+  });
+
+  it('수수료·슬리피지·호가 비용 차감 후 비중을 제한하고 체결일 종가를 미리 사용하지 않는다', () => {
+    const result = runBacktest(buyAtBarStrategy(0, 100) as never, {
+      ...input, candles: [bar(0, 100), bar(1, 100, { high: 10_000, close: 10_000 })],
+      execution: {
+        cost: { ...ZERO_COST.cost, buyCommissionRate: 0.1 },
+        slippage: { ...ZERO_COST.slippage, fixed: 1 },
+        rules: { tickSize: 10, minOrderQty: 1 },
+      },
+    });
+    expect(result.fills).toHaveLength(1);
+    expect(result.fills[0]).toMatchObject({ quantity: 45, price: 110, commission: 495 });
+    // 시가 평가액 4,500원 / 비용 차감 후 자산 9,055원. 46주는 50%를 넘는다.
+    expect(4_500 / 9_055).toBeLessThan(0.5);
+    expect(4_600 / 9_034).toBeGreaterThan(0.5);
+  });
+
+  it.each([100_000, 100_001])('기존 보유분 차감 후 정확한 1주 경계는 허용하고 시가 %i의 초과는 거부한다', (price) => {
+    const result = runBacktest(scheduled([
+      [{ symbol: 'A', side: 'BUY', quantity: 56 }],
+      [{ symbol: 'A', side: 'BUY', quantity: 1 }],
+    ]) as never, {
+      ...input, initialCash: 10_000_000, maxPositionWeightPercent: 57,
+      candles: [bar(0, 100_000), bar(1, 100_000), bar(2, price)],
+    });
+    expect(result.fills.map(fill => fill.quantity)).toEqual(price === 100_000 ? [56, 1] : [56]);
+  });
+
+  it('같은 봉에 같은 종목을 반복 주문해도 이미 체결한 보유분을 포함한다', () => {
+    const result = runBacktest(scheduled([[
+      { symbol: 'A', side: 'BUY', quantity: 100 },
+      { symbol: 'A', side: 'BUY', quantity: 100 },
+    ]]) as never, { ...input, maxPositionWeightPercent: 25, candles: [bar(0, 100), bar(1, 100)] });
+    expect(result.fills.map(fill => fill.quantity)).toEqual([25]);
+  });
+
+  it('다른 보유 종목의 체결일 시가 하락도 전체 평가자산에 반영한다', () => {
+    const result = runBacktest(scheduled([
+      [{ symbol: 'B', side: 'BUY', quantity: 40 }],
+      [{ symbol: 'A', side: 'BUY', quantity: 100 }],
+    ]) as never, {
+      ...input,
+      candles: [0, 1, 2].flatMap(i => [
+        bar(i, 100),
+        bar(i, i === 2 ? 50 : 100, { symbol: 'B', ...(i === 2 ? { high: 10_000, close: 10_000 } : {}) }),
+      ]),
+    });
+    expect(result.fills.map(fill => [fill.symbol, fill.quantity])).toEqual([['B', 40], ['A', 40]]);
+  });
+});
+
 describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
   it('fills at the NEXT bar open, never the signal bar close', () => {
     const candles = [bar(0, 100), bar(1, 110), bar(2, 120)];

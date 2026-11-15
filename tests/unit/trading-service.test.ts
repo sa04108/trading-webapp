@@ -5,6 +5,8 @@ import type { AnyTradingStrategy } from "../../src/runtime/modules/strategy/doma
 import type { TradingArtifact, TradingSetup } from "../../src/shared/schemas/trading.js";
 import { BrokerRequestError, type BrokerHolding, type BrokerOrder, type TradingBroker } from "../../src/server/modules/trading/application/broker-port.js";
 import { TradingService, type StrategyArtifactStore, type TradingDecisionEngine } from "../../src/server/modules/trading/application/trading-service.js";
+import { backtestJobs } from "../../src/runtime/shared/db/operations-schema.js";
+import { backtestRuns } from "../../src/server/shared/db/backtest-result-schema.js";
 
 const oldHash = "a".repeat(64), newHash = "b".repeat(64);
 const setup: TradingSetup = { strategyId: "alpha", artifactHash: oldHash, parameters: {}, universeRule: { markets: ["KOSPI"], stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 100 }], rebalanceInterval: { unit: "MONTH", value: 1 } }, timeframe: "1d", budgetKrw: 1_000_000, maxPositions: 10, maxPositionPercent: 100, dailyLossLimitPercent: 5, maxOrderKrw: 100_000, maxSlippageBps: 0, randomSeed: 42, sourceJobId: null };
@@ -49,6 +51,29 @@ async function active(f: ReturnType<typeof fixture>, config: TradingSetup = setu
 const holding = (quantity: number): BrokerHolding => ({ symbol: "005930", name: "삼성전자", quantity, availableQuantity: quantity, averagePrice: 1000, price: 1000, marketValue: quantity * 1000, unrealizedPnl: 0 });
 
 describe("실매매 전략 생명주기", () => {
+  it.each([undefined, 12.5])("백테스트 비중 %s를 실매매 설정으로 가져오고 미설정은 100%%로 유지한다", async (cap) => {
+    const f = fixture();
+    const request = {
+      strategyId: "alpha", parameters: {}, universeRule: setup.universeRule,
+      period: { from: "2026-01-01", to: "2026-12-31" },
+      capital: { initialCash: setup.budgetKrw, currency: "KRW" },
+      execution: { fillTiming: "NEXT_BAR_OPEN", commissionProfileId: "kr-equity-default", slippageProfileId: "fixed-5bps" },
+      risk: { maxPositions: 10, maxPositionWeightPercent: cap }, randomSeed: 42,
+    };
+    f.database.db.insert(backtestJobs).values({
+      id: "source", status: "COMPLETED", requestJson: JSON.stringify(request), strategyId: "alpha",
+      universeRuleJson: JSON.stringify(setup.universeRule), universeScheduleJson: "[]",
+      runnerVersion: "1", createdAtMs: 1,
+    }).run();
+    f.database.db.insert(backtestRuns).values({
+      id: "run", jobId: "source", strategyId: "alpha", strategyVersion: "1", strategySourceHash: "test",
+      parameterJson: "{}", universeRuleJson: JSON.stringify(setup.universeRule), scheduleHash: "test",
+      universeHash: "test", universeJson: "[]", engineVersion: "1", executionVersion: "1",
+      feeModelVersion: "1", slippageModelVersion: "1", randomSeed: 42, gitCommitSha: "test", startedAtMs: 1,
+    }).run();
+    expect((await f.service.source("source")).setup?.maxPositionPercent).toBe(cap ?? 100);
+  });
+
   it("동시 등록은 단일 슬롯과 리비전을 지키고 고정 버전은 최신 변경 후에도 유지된다", async () => {
     const f = fixture();
     const results = await Promise.allSettled([f.service.register(setup, 0, "a"), f.service.register(setup, 0, "b")]);

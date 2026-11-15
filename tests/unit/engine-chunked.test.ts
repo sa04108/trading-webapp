@@ -64,10 +64,11 @@ function batches(daysPerBatch: number): () => Iterable<readonly Candle[]> {
 
 describe('날짜 묶음 백테스트', () => {
   it.each([1, 2, 4, 9])('%i일 묶음은 전체 입력과 같은 결과를 낸다', (daysPerBatch) => {
-    const expected = runBacktest(strategy(), { ...baseInput, candles });
+    const cappedInput = { ...baseInput, maxPositionWeightPercent: 1.5 };
+    const expected = runBacktest(strategy(), { ...cappedInput, candles });
     const historyLengths: number[] = [];
     const actual = runBacktest(strategy(historyLengths), {
-      ...baseInput, candleBatches: batches(daysPerBatch),
+      ...cappedInput, candleBatches: batches(daysPerBatch),
     });
     expect(actual).toEqual(expected);
     expect(Math.max(...historyLengths)).toBe(3);

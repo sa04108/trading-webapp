@@ -909,6 +909,9 @@ async function main(input: { lease: AgentLease }): Promise<void> {
         parameters,
         randomSeed: request.randomSeed,
         maxPositions: request.risk.maxPositions,
+        ...(request.risk.maxPositionWeightPercent === undefined ? {} : {
+          maxPositionWeightPercent: request.risk.maxPositionWeightPercent,
+        }),
         facts,
         ...(financialView ? { fundamentals: (symbol: string, tsMs: number) => financialView.fundamentals(symbol, tsMs) } : {}),
         tradeFromTsMs,

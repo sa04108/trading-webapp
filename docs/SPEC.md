@@ -101,6 +101,8 @@ Git SHA는 출처를 기록한다. `agentVersion`·`collectionVersion`·`preview
 
 일봉 전략의 손절은 종가 신호와 다음 봉 체결 모델을 따른다. 장중 스톱 주문의 체결을 재현하지 않는다.
 
+일봉 백테스트의 자본·비용 설정에서 종목별 투자 비중 상한(`risk.maxPositionWeightPercent`)을 선택할 수 있다. 생략하면 무제한이며 설정값은 0 초과 100% 이하다. 모든 전략의 매수 체결에 공통 적용하고 전략이 요청한 수량을 늘리지 않는다. 기존 보유 수량을 포함해 매수 후 종목 평가액이 총 평가자산(현금 + 보유 평가액)의 상한 이내가 되도록 정수 수량을 줄인다. 체결일 시가(봉이 없는 보유분은 마지막 종가)로 평가하고 슬리피지·호가 반올림·수수료에 따른 자산 감소도 반영한다. 한도로 1주도 살 수 없으면 매수를 건너뛰며, 가격 상승으로 이미 초과한 보유분을 강제로 매도하지 않는다. 축소·거부 건수는 실행 경고에 남긴다. 복제·난수 실험·기간 검증은 상한을 유지한다. 실매매 가져오기는 기존 종목별 비중 설정으로 값을 옮기며, 실매매의 분모는 기존 계약대로 운용 예산이다.
+
 기간 검증은 홀드아웃·최적화 홀드아웃·워크포워드를 지원한다. 최적화 후보는 학습 구간 성과로만 선택하며 평가 구간 성과를 선택 함수에 전달하지 않는다. 여러 실험 중 좋은 결과를 고르는 선택 편향의 통계적 보정과 성과 신뢰구간은 제공하지 않는다. 계약과 구간·후보 제한은 [period-validation.ts](../src/shared/schemas/period-validation.ts)를 따른다.
 
 구현: [container.ts](../src/server/bootstrap/container.ts), [agent-coordinator.ts](../src/server/modules/agents/application/agent-coordinator.ts), [database.ts](../src/runtime/shared/db/database.ts).

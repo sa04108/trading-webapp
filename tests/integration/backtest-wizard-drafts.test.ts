@@ -50,6 +50,7 @@ describe('backtest wizard draft routes', () => {
       capital: {
         initialCash: '12345678',
         maxPositions: '7',
+        maxPositionWeightPercent: '12.5',
         commissionProfileId: 'kr-equity-default',
         slippageProfileId: 'fixed-5bps',
         randomSeed: '99',
@@ -75,6 +76,13 @@ describe('backtest wizard draft routes', () => {
       expect(loaded.json().draft).toMatchObject({ step, payload });
       expect(loaded.json().draft.updatedAtMs).toEqual(expect.any(Number));
     }
+    const { maxPositionWeightPercent: _cap, ...legacyCapital } = payloads.capital;
+    const legacy = await ctx.app.inject({
+      method: 'PUT', url: '/api/v1/backtests/wizard-draft/capital',
+      cookies: { session: cookie }, payload: legacyCapital,
+    });
+    expect(legacy.statusCode).toBe(200);
+    expect(legacy.json().draft.payload.maxPositionWeightPercent).toBe('');
   });
 
   it('separates new and clone contexts and clears only the requested context', async ({ ctx, cookie }) => {
