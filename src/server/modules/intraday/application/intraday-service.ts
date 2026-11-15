@@ -488,6 +488,27 @@ export class IntradayService {
     if (!row) throw new IntradayError("분봉 백테스트를 찾을 수 없습니다.", 404);
     return this.run(row);
   }
+  deleteRunHistory(ownerId: string, id: string): void {
+    const row = this.options.db
+      .select({ id: intradayRuns.id, status: intradayRuns.status })
+      .from(intradayRuns)
+      .where(and(eq(intradayRuns.id, id), eq(intradayRuns.ownerId, ownerId)))
+      .get();
+    if (!row) throw new IntradayError("분봉 백테스트를 찾을 수 없습니다.", 404);
+    if (this.controllers.has(id) || !["COMPLETED", "FAILED", "CANCELLED"].includes(row.status)) {
+      throw new IntradayError("실행이 완전히 종료된 백테스트만 삭제할 수 있습니다.", 409);
+    }
+    const deleted = this.options.db
+      .delete(intradayRuns)
+      .where(and(
+        eq(intradayRuns.id, id),
+        eq(intradayRuns.ownerId, ownerId),
+        inArray(intradayRuns.status, ["COMPLETED", "FAILED", "CANCELLED"]),
+      ))
+      .returning({ id: intradayRuns.id })
+      .get();
+    if (!deleted) throw new IntradayError("백테스트 상태가 변경되어 삭제할 수 없습니다.", 409);
+  }
   submit(ownerId: string, raw: unknown): IntradayRun {
     this.checkCapacity();
     const request = intradayRequestSchema.parse(raw);

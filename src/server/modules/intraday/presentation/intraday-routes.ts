@@ -109,6 +109,12 @@ export function registerIntradayRoutes(
       service.getRun(request.authUser!.id, idSchema.parse(request.params).id),
     ),
   );
+  app.delete("/intraday/history/:id", auth, async (request, reply) =>
+    respond(reply, () => {
+      service.deleteRunHistory(request.authUser!.id, idSchema.parse(request.params).id);
+      return reply.code(204).send();
+    }),
+  );
   app.delete("/intraday/runs/:id", auth, async (request, reply) =>
     respond(reply, () =>
       service.cancelRun(

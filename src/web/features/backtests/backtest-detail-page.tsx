@@ -31,7 +31,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Progress } from "@/components/ui/progress";
+import { BacktestProgressCard } from "./backtest-progress-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -968,20 +968,9 @@ export function BacktestDetailPage() {
       </p>
 
       {running ? (
-        <Card>
-          <CardContent className="space-y-2 py-4">
-            <div className="flex items-center justify-between text-sm">
-              <span>진행률</span>
-              <span className="tabular-nums" aria-live="polite">
-                {displayedProgress !== null ? `${displayedProgress}%` : "진행 중"}
-              </span>
-            </div>
-            {displayedProgress !== null ? (
-              <Progress value={displayedProgress} aria-label="백테스트 현재 단계 진행률" />
-            ) : null}
-            {activity ? <ExecutionProgressSummary progress={activity} /> : null}
-          </CardContent>
-        </Card>
+        <BacktestProgressCard percent={displayedProgress}>
+          {activity ? <ExecutionProgressSummary progress={activity} /> : null}
+        </BacktestProgressCard>
       ) : null}
 
       {job.error ? (

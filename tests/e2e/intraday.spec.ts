@@ -130,22 +130,31 @@ test("수집과 준비 실패를 각 화면에서 확인한다", async ({ page }
   await expect(page).toHaveURL(/\/datasets\/intraday/);
   await expect(page.getByRole("button", { name: "수집 취소" })).toHaveCount(0);
 
-  await page.route("**/api/v1/intraday/runs/failed", (route) =>
-    route.fulfill({
-      json: {
-        id: "failed",
-        request,
-        status: "FAILED",
-        error: "데이터 준비 실패",
-        createdAtMs: at,
-        updatedAtMs: at,
-      },
-    }),
-  );
+  // 기존 실패 화면 검사만으로는 응답 대기·준비·계산 중 피드백의 누락을 잡을 수 없다.
+  let phase = "QUEUED";
+  let release!: () => void;
+  const responseReady = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/v1/intraday/runs/failed", async (route) => {
+    await responseReady;
+    return route.fulfill({ json: {
+      id: "failed", request, status: phase,
+      error: phase === "FAILED" ? "데이터 준비 실패" : null,
+      createdAtMs: at, updatedAtMs: at,
+    } });
+  });
   await page.goto("/backtests/intraday/failed");
-  await expect(
-    page.getByRole("alert").filter({ hasText: "데이터 준비 실패" }),
-  ).toBeVisible();
+  await expect(page.getByRole("status", { name: "백테스트 불러오는 중" })).toBeVisible();
+  release();
+  const progress = page.getByRole("status", { name: "백테스트 실행 상태" });
+  await expect(progress).toContainText("실행 순서를 기다리고 있습니다.");
+  phase = "PREPARING";
+  await expect(progress).toContainText("필요한 데이터를 수집하고 있습니다.");
+  phase = "RUNNING";
+  await expect(progress).toContainText("분봉으로 전략을 계산하고 있습니다.");
+  await expect(progress.getByRole("progressbar")).toHaveCount(0);
+  phase = "FAILED";
+  await expect(page.getByRole("alert").filter({ hasText: "데이터 준비 실패" })).toBeVisible();
+  await expect(progress).toHaveCount(0);
   await expect(page.getByRole("button", { name: "실행 취소" })).toHaveCount(0);
 });
 
@@ -291,4 +300,56 @@ test("새 분봉 전략의 설정을 실행하고 복제한다", async ({ page }
     await expect(page.getByRole("combobox", { name: "분봉 전략" })).toContainText(strategy.name);
     await expect(page.getByLabel(strategy.field, { exact: true })).toHaveValue(strategy.value);
   }
+});
+
+
+// 분봉 기록 삭제는 취소 API와 구분해야 하며, 접힌 전략·다른 페이지·실행 중 기록을 건드리면 안 된다.
+test("분봉 편집은 현재 페이지의 종료된 이력만 삭제한다", async ({ page }) => {
+  await login(page);
+  const runs = Array.from({ length: 13 }, (_, i) => ({
+    ...completed, result: undefined, id: `history-${i}`,
+    request: { ...request, strategyId: i === 12 ? "intraday-orb" : "intraday-ema" },
+    status: i === 0 ? "RUNNING" : "COMPLETED", createdAtMs: at + i * 60000,
+    metrics: i === 0 ? null : result.metrics,
+  }));
+  const deleted: string[] = [];
+  await page.route("**/api/v1/intraday/runs/groups", (route) => route.fulfill({ json: {
+    groups: ["intraday-ema", "intraday-orb"].map((strategyId) => ({
+      strategyId, total: runs.filter((r) => r.request.strategyId === strategyId && !deleted.includes(r.id)).length,
+    })),
+  } }));
+  await page.route("**/api/v1/intraday/runs?**", (route) => {
+    const q = new URL(route.request().url()).searchParams;
+    const rows = runs.filter((r) => r.request.strategyId === q.get("strategyId") && !deleted.includes(r.id));
+    const offset = Number(q.get("offset")), limit = Number(q.get("limit"));
+    return route.fulfill({ json: { runs: rows.slice(offset, offset + limit), total: rows.length } });
+  });
+  await page.route("**/api/v1/intraday/history/*", (route) => {
+    expect(route.request().method()).toBe("DELETE");
+    deleted.push(new URL(route.request().url()).pathname.split("/").at(-1)!);
+    return route.fulfill({ status: 204 });
+  });
+  await page.goto("/backtests/intraday?view=table&page.intraday-ema=2&collapsed=intraday-orb");
+  const group = page.locator("section").filter({ has: page.getByRole("heading", { name: "EMA 교차", exact: true }) });
+  await expect(group.locator("tbody > tr")).toHaveCount(2);
+  const edit = page.getByRole("button", { name: "편집", exact: true });
+  const view = page.getByRole("switch", { name: "카드 보기" });
+  const editBox = await edit.boundingBox(), viewBox = await view.boundingBox();
+  if (!editBox || !viewBox) throw new Error("이력 도구를 찾을 수 없습니다");
+  expect(editBox.x + editBox.width).toBeLessThan(viewBox.x);
+  await edit.click();
+  await expect(edit).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("button", { name: "현재 페이지 전체 삭제", exact: true }).click();
+  await expect.poll(() => [...deleted].sort()).toEqual(["history-10", "history-11"]);
+  await expect(group.locator("tbody > tr")).toHaveCount(10);
+  await expect(edit).toHaveAttribute("aria-pressed", "false");
+  await edit.click();
+  await expect(group.getByRole("row").filter({ hasText: "진행 중" }).getByRole("checkbox")).toBeDisabled();
+  await page.getByRole("checkbox", { name: "현재 페이지 선택", exact: true }).check();
+  await expect(page.getByRole("button", { name: "현재 페이지 선택 삭제 (9)", exact: true })).toBeEnabled();
+  await view.click();
+  await expect(view).toBeChecked();
+  await expect(page.getByRole("button", { name: "현재 페이지 선택 삭제 (0)", exact: true })).toBeDisabled();
+  await expect(group.getByRole("checkbox")).toHaveCount(6);
+  await expect(group.getByRole("checkbox").first()).toBeDisabled();
 });

@@ -132,13 +132,18 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
     .locator("section")
     .filter({ has: page.getByRole("button", { name: /전략 B/ }) });
   await expect(group).toContainText("12건");
-  const viewToggle = page.getByRole("button", { name: /^(표|카드) 보기로 전환$/ });
+  const viewToggle = page.getByRole("switch", { name: "카드 보기" });
   await expect(viewToggle).toHaveCount(1);
-  await expect(viewToggle).toHaveAccessibleName(
-    testInfo.project.name === "mobile" ? "카드 보기로 전환" : "표 보기로 전환",
-  );
+  await expect(viewToggle).toBeChecked({ checked: testInfo.project.name === "desktop" });
   await expect(viewToggle).toHaveText("");
   if (testInfo.project.name === "desktop") await viewToggle.click();
+  await expect(viewToggle).not.toBeChecked();
+  const edit = page.getByRole("button", { name: "편집", exact: true });
+  const editBox = await edit.boundingBox();
+  const viewBox = await viewToggle.boundingBox();
+  if (!editBox || !viewBox) throw new Error("이력 도구를 찾을 수 없습니다");
+  expect(editBox.x + editBox.width).toBeLessThan(viewBox.x);
+  expect(Math.abs(editBox.y + editBox.height / 2 - viewBox.y - viewBox.height / 2)).toBeLessThanOrEqual(1);
   await expect(group.locator("tbody > tr")).toHaveCount(10);
   await expect(other.locator("tbody > tr")).toHaveCount(1);
   await group.getByRole("button", { name: "다음", exact: true }).click();
@@ -162,7 +167,8 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
         q.get("strategyId") === "strategy-a",
     ),
   ).toBe(true);
-  await page.getByRole("button", { name: "카드 보기로 전환", exact: true }).click();
+  await viewToggle.click();
+  await expect(viewToggle).toBeChecked();
   await expect(group.locator('a[href^="/backtests/history-"]')).toHaveCount(6);
   const boxes = await group
     .locator('a[href^="/backtests/history-"]')
@@ -175,10 +181,10 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
   expect(boxes.every((b) => b.width <= 361)).toBe(true);
   if (testInfo.project.name === "desktop")
     expect(boxes[0]!.y).toBe(boxes[1]!.y);
-  await expect(viewToggle).toHaveAccessibleName("표 보기로 전환");
+  await expect(viewToggle).toBeChecked();
   await viewToggle.focus();
-  await page.keyboard.press("Enter");
-  await expect(viewToggle).toHaveAccessibleName("카드 보기로 전환");
+  await page.keyboard.press("Space");
+  await expect(viewToggle).not.toBeChecked();
   if (testInfo.project.name === "mobile")
     await page.setViewportSize({ width: 320, height: 844 });
   await expect

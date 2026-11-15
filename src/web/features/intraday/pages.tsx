@@ -5,9 +5,13 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { LoaderCircle } from "lucide-react";
+import { toast } from "sonner";
 import { BacktestHeader, NewBacktestButton } from "../backtests/backtest-header";
+import { BacktestProgressCard } from "../backtests/backtest-progress-card";
 import {
   HistoryPager,
+  HistorySelectionActions,
   HistoryStrategyGroup,
   HistoryToolbar,
   historyPeriod,
@@ -32,6 +36,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api, postJson } from "@/lib/api-client";
 import {
   intradayDate,
@@ -517,6 +523,16 @@ export function IntradayDataPage() {
 }
 export function IntradayListPage() {
   const controls = useHistoryControls(true);
+  const client = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const clear = () => setSelected(new Set());
+  const toggleOne = (id: string) => setSelected((previous) => {
+    const next = new Set(previous);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
   const groups = useQuery({
     queryKey: ["intraday-runs", "groups"],
     queryFn: () => api<{ groups: HistoryGroup[] }>("/intraday/runs/groups"),
@@ -543,6 +559,28 @@ export function IntradayListPage() {
       };
     }),
   });
+  const visibleRuns = pages.flatMap((query, index) =>
+    controls.collapsed(groups.data?.groups[index]?.strategyId ?? "")
+      ? [] : (query.data?.runs ?? []),
+  );
+  const deletableIds = visibleRuns.filter((run) => !active(run.status)).map((run) => run.id);
+  const selectedIds = deletableIds.filter((id) => selected.has(id));
+  const remove = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const results = await Promise.allSettled(ids.map(async (id) => {
+        await api(`/intraday/history/${encodeURIComponent(id)}`, { method: "DELETE" });
+        client.removeQueries({ queryKey: ["intraday-run", id], exact: true });
+      }));
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
+    },
+    onSuccess: (_result, ids) => {
+      toast.success(`백테스트 ${ids.length}개를 삭제했습니다`);
+      clear();
+      setEditing(false);
+    },
+    onSettled: () => client.invalidateQueries({ queryKey: ["intraday-runs"] }),
+  });
   const corrections = (groups.data?.groups ?? []).flatMap((group, index) => {
     const query = pages[index];
     if (
@@ -565,6 +603,7 @@ export function IntradayListPage() {
     }>;
     if (!pending.length) return;
     correctPages(pending);
+    setSelected((previous) => previous.size ? new Set() : previous);
   }, [correctionKey, correctPages]);
   return (
     <div className="space-y-4">
@@ -572,8 +611,28 @@ export function IntradayListPage() {
         mode="intraday"
         actions={<NewBacktestButton mode="intraday" />}
       />
-      <HistoryToolbar controls={controls} intraday />
+      <HistoryToolbar
+        controls={controls}
+        intraday
+        onChange={clear}
+        editing={editing}
+        onEditingChange={visibleRuns.length > 0 || editing ? (value) => {
+          setEditing(value);
+          clear();
+        } : undefined}
+      />
+      {editing ? (
+        <HistorySelectionActions
+          total={deletableIds.length}
+          selected={selectedIds.length}
+          pending={remove.isPending}
+          onToggleAll={() => setSelected(selectedIds.length === deletableIds.length ? new Set() : new Set(deletableIds))}
+          onRemoveSelected={() => remove.mutate(selectedIds)}
+          onRemoveAll={() => remove.mutate(deletableIds)}
+        />
+      ) : null}
       <ErrorAlert error={groups.error} />
+      <ErrorAlert error={remove.error} />
       {groups.isLoading ? (
         <p className="text-sm text-muted-foreground">
           이력을 불러오는 중입니다.
@@ -593,21 +652,20 @@ export function IntradayListPage() {
             description={strategy?.description}
             total={group.total}
             collapsed={controls.collapsed(group.strategyId)}
-            onToggle={() => controls.toggle(group.strategyId)}
+            onToggle={() => {
+              controls.toggle(group.strategyId);
+              clear();
+            }}
           >
             <ErrorAlert error={query?.error} />
             {controls.view === "cards" ? (
               <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
-                {query?.data?.runs.map((run) => (
-                  <Link
-                    key={run.id}
-                    className="max-w-[360px]"
-                    to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
-                  >
+                {query?.data?.runs.map((run) => {
+                  const card = (
                     <Card>
                       <CardContent className="space-y-2 py-4">
                         <div className="flex justify-between gap-2 text-xs text-muted-foreground">
-                          <span>{statusLabel[run.status]}</span>
+                          <span className="flex items-center gap-1">{active(run.status) ? <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" aria-hidden /> : null}{statusLabel[run.status]}</span>
                           <span>{time(run.createdAtMs)}</span>
                         </div>
                         <p className="whitespace-nowrap text-sm font-medium">
@@ -648,8 +706,27 @@ export function IntradayListPage() {
                         ) : null}
                       </CardContent>
                     </Card>
-                  </Link>
-                ))}
+                  );
+                  return (
+                    <div key={run.id} className="min-w-0 max-w-[360px]">
+                      {editing ? (
+                        <div className="flex items-start gap-3">
+                          <Checkbox
+                            id={`intraday-${run.id}`}
+                            className="mt-5"
+                            checked={selected.has(run.id)}
+                            disabled={active(run.status) || remove.isPending}
+                            onCheckedChange={() => toggleOne(run.id)}
+                            aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
+                          />
+                          <label htmlFor={`intraday-${run.id}`} className="min-w-0 flex-1 cursor-pointer">{card}</label>
+                        </div>
+                      ) : (
+                        <Link className="block" to={`/backtests/intraday/${encodeURIComponent(run.id)}`}>{card}</Link>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             ) : (
               <table className="w-full table-fixed text-xs">
@@ -666,15 +743,27 @@ export function IntradayListPage() {
                   {query?.data?.runs.map((run) => (
                     <tr key={run.id} className="border-t">
                       <td className="py-3">
-                        <Link
-                          className="whitespace-nowrap text-[11px] underline sm:text-xs"
-                          to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
-                        >
-                          {historyPeriod(
-                            run.request.period.from,
-                            run.request.period.to,
-                          )}
-                        </Link>
+                        {editing ? (
+                          <>
+                            <Checkbox
+                              className="mr-1"
+                              checked={selected.has(run.id)}
+                              disabled={active(run.status) || remove.isPending}
+                              onCheckedChange={() => toggleOne(run.id)}
+                              aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
+                            />
+                            <span className="whitespace-nowrap text-[11px] sm:text-xs">
+                              {historyPeriod(run.request.period.from, run.request.period.to)}
+                            </span>
+                          </>
+                        ) : (
+                          <Link
+                            className="whitespace-nowrap text-[11px] underline sm:text-xs"
+                            to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
+                          >
+                            {historyPeriod(run.request.period.from, run.request.period.to)}
+                          </Link>
+                        )}
                         <div className="text-muted-foreground">
                           {statusLabel[run.status]} · {run.request.symbol}{" "}
                           <span className="sm:hidden">
@@ -710,7 +799,10 @@ export function IntradayListPage() {
                 page={controls.page(group.strategyId)}
                 total={query.data.total}
                 limit={limit}
-                onPage={(page) => controls.setPage(group.strategyId, page)}
+                onPage={(page) => {
+                  controls.setPage(group.strategyId, page);
+                  clear();
+                }}
               />
             ) : null}
           </HistoryStrategyGroup>
@@ -765,6 +857,7 @@ export function IntradayListPage() {
 export function IntradayNewPage() {
   const [search] = useSearchParams();
   const navigate = useNavigate();
+  const client = useQueryClient();
   const [request, setRequest] = useState<IntradayRequest>(() => {
     const selected = INTRADAY_STRATEGIES.find(
       (s) => s.id === search.get("strategy"),
@@ -797,8 +890,11 @@ export function IntradayNewPage() {
   const submit = useMutation({
     mutationFn: (body: IntradayRequest) =>
       postJson<IntradayRun>("/intraday/runs", body),
-    onSuccess: (run) =>
-      void navigate(`/backtests/intraday/${encodeURIComponent(run.id)}`),
+    onSuccess: (run) => {
+      client.setQueryData(["intraday-run", run.id], run);
+      void client.invalidateQueries({ queryKey: ["intraday-runs"] });
+      void navigate(`/backtests/intraday/${encodeURIComponent(run.id)}`);
+    },
   });
   const numberField = (
     label: string,
@@ -1025,7 +1121,8 @@ export function IntradayNewPage() {
           submit.mutate(parsed.data);
         }}
       >
-        백테스트 실행
+        {submit.isPending ? <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : null}
+        {submit.isPending ? "실행 요청 중…" : "백테스트 실행"}
       </Button>
     </div>
   );
@@ -1082,8 +1179,10 @@ export function IntradayDetailPage() {
       api<IntradayRun>(`/intraday/runs/${encodeURIComponent(id)}`, {
         method: "DELETE",
       }),
-    onSuccess: () =>
-      void client.invalidateQueries({ queryKey: ["intraday-run", id] }),
+    onSuccess: (run) => {
+      client.setQueryData(["intraday-run", id], run);
+      void client.invalidateQueries({ queryKey: ["intraday-runs"] });
+    },
   });
   const r = run.data;
   const result = r?.result;
@@ -1098,6 +1197,12 @@ export function IntradayDetailPage() {
   return (
     <div className="space-y-4">
       <BacktestHeader mode="intraday" title="백테스트 결과" />
+      {run.isLoading ? (
+        <div role="status" aria-label="백테스트 불러오는 중" className="space-y-3">
+          <Skeleton className="h-10 w-1/2" />
+          <Skeleton className="h-40 w-full" />
+        </div>
+      ) : null}
       <ErrorAlert
         error={
           run.error || cancel.error || (r?.error ? new Error(r.error) : null)
@@ -1110,22 +1215,35 @@ export function IntradayDetailPage() {
             {statusLabel[r.status]} · {r.request.symbol} ·{" "}
             {r.request.period.from} ~ {r.request.period.to}
           </p>
-          {active(r.status) && (
-            <Button
-              variant="outline"
-              disabled={cancel.isPending}
-              onClick={() => cancel.mutate()}
-            >
-              실행 취소
+          {active(r.status) && !run.isError ? (
+            <BacktestProgressCard label={cancel.isPending ? "취소 요청 중" : statusLabel[r.status]}>
+              <p className="text-xs text-muted-foreground">
+                {r.status === "QUEUED"
+                  ? "실행 순서를 기다리고 있습니다."
+                  : r.status === "PREPARING"
+                    ? "저장된 분봉을 확인하고 필요한 데이터를 수집하고 있습니다."
+                    : "분봉으로 전략을 계산하고 있습니다."}
+              </p>
+            </BacktestProgressCard>
+          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            {active(r.status) && (
+              <Button
+                variant="outline"
+                disabled={cancel.isPending}
+                onClick={() => cancel.mutate()}
+              >
+                실행 취소
+              </Button>
+            )}
+            <Button asChild variant="outline">
+              <Link
+                to={`/backtests/intraday/new?clone=${encodeURIComponent(id)}`}
+              >
+                이 설정으로 다시 실행
+              </Link>
             </Button>
-          )}
-          <Button asChild variant="outline">
-            <Link
-              to={`/backtests/intraday/new?clone=${encodeURIComponent(id)}`}
-            >
-              이 설정으로 다시 실행
-            </Link>
-          </Button>
+          </div>
         </>
       )}
       {result && m && (
