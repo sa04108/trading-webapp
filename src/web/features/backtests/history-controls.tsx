@@ -306,6 +306,15 @@ export function HistoryToolbar({
           <TooltipTrigger asChild>
             <Switch
               className="h-11 w-20 aria-checked:bg-muted aria-[checked=false]:bg-muted sm:h-8 sm:w-14 [&_[data-slot=switch-thumb]]:size-9 sm:[&_[data-slot=switch-thumb]]:size-6"
+              trackContent={
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 grid grid-cols-2 items-center justify-items-center text-muted-foreground"
+                >
+                  <Table2 className="size-4" />
+                  <LayoutGrid className="size-4" />
+                </span>
+              }
               aria-label="카드 보기"
               checked={controls.view === "cards"}
               onCheckedChange={(checked) => {
