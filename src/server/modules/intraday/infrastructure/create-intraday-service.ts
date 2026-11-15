@@ -26,6 +26,7 @@ export function createIntradayService(options: {
   dataRoot: string;
   client?: TossClient;
   symbolInfo: SymbolInfoService;
+  onRecoveryFailure?: () => void;
 }): IntradayService {
   const instrumentCache = new Map<
     string,
@@ -37,6 +38,7 @@ export function createIntradayService(options: {
     source: options.client ? new TossIntradaySource(options.client) : null,
     calendar: createOfficialKrxTradingCalendar(),
     execute: executeIntraday,
+    onRecoveryFailure: options.onRecoveryFailure,
     validateSymbol: async (symbol) => {
       const cached = instrumentCache.get(symbol);
       if (cached && cached.expires > Date.now()) return cached.value;

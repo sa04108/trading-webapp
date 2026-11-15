@@ -149,10 +149,13 @@ describe("작업 관찰·취소·이력 경계", () => {
   it("재시작 시 고아 수집을 중단 이력으로 복구하고 정상 종료는 사용자 취소와 구분한다", async ({ ctx }) => {
     const now = Date.now();
     const abandoned: JobItem = { id: "benchmark:abandoned", kind: "benchmark", title: "수집", status: "RUNNING", phase: null, description: null,
-      progress: null, error: null, createdAtMs: now - 10 * day, updatedAtMs: now - day, finishedAtMs: null, cancellable: true, link: null };
+      progress: null, error: null, createdAtMs: now - 10 * day, updatedAtMs: now - day, finishedAtMs: null, cancellable: true, link: "/datasets/benchmarks" };
     ctx.container.database.db.insert(backgroundJobHistory).values({ id: abandoned.id, status: abandoned.status, createdAtMs: abandoned.createdAtMs, updatedAtMs: abandoned.updatedAtMs, snapshotJson: JSON.stringify(abandoned) }).run();
+    const cancelled: JobItem = { ...abandoned, id: "symbol-master:cancelled", kind: "symbol-master", status: "CANCELLING" };
+    ctx.container.database.db.insert(backgroundJobHistory).values({ id: cancelled.id, status: cancelled.status, createdAtMs: cancelled.createdAtMs, updatedAtMs: cancelled.updatedAtMs, snapshotJson: JSON.stringify(cancelled) }).run();
     let live: JobItem = { ...abandoned, id: "benchmark:live", createdAtMs: now, updatedAtMs: now };
     const events = new EventEmitter();
+    const notify = vi.fn();
     const history = new BackgroundJobHistory(ctx.container.database, ctx.container.clock, ctx.container.logger, [{
       jobEvents: events, currentJob: () => live, cancelJob: (id) => {
         if (id !== live.id) return false;
@@ -160,13 +163,20 @@ describe("작업 관찰·취소·이력 경계", () => {
         events.emit("job", live);
         return true;
       },
-    }]);
+    }], notify);
     const saved = (id: string) => JSON.parse(ctx.container.database.db.select().from(backgroundJobHistory).where(eq(backgroundJobHistory.id, id)).get()!.snapshotJson) as JobItem;
     expect(saved(abandoned.id)).toMatchObject({ status: "INTERRUPTED", cancellable: false });
     expect(saved(abandoned.id).finishedAtMs).toBeGreaterThanOrEqual(now);
+    expect(saved(cancelled.id)).toMatchObject({ status: "CANCELLED", cancellable: false });
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ id: abandoned.id, status: "INTERRUPTED", link: "/datasets/benchmarks" }));
     expect(saved(live.id).status).toBe("RUNNING");
     await history.close();
     expect(saved(live.id)).toMatchObject({ status: "INTERRUPTED", phase: "서버 종료로 중단됨", cancellable: false });
+    expect(notify).toHaveBeenCalledTimes(2);
+    const reopened = new BackgroundJobHistory(ctx.container.database, ctx.container.clock, ctx.container.logger, [], notify);
+    await reopened.close();
+    expect(notify).toHaveBeenCalledTimes(2);
     expect(events.listenerCount("job")).toBe(0);
   });
 });

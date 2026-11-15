@@ -1,3 +1,4 @@
+import { registerBacktestExperimentRoutes } from "./backtest-experiment-routes.js";
 import { historyQuerySchema } from "../../../../shared/schemas/backtest-history.js";
 import { datasetIdentity } from "../../../../runtime/shared/db/database-layout.js";
 import { withDiagnostics, measureAsync } from "../../../../runtime/shared/diagnostics.js";
@@ -388,6 +389,7 @@ export function registerBacktestRoutes(
   deps: BacktestRouteDeps,
   requireAuth: PreHandler,
 ): PeriodValidationService {
+  registerBacktestExperimentRoutes(app, deps.database, requireAuth);
   const {
     queue,
     orchestrator,

@@ -19,7 +19,17 @@ export function registerJobCenterRoutes(
   requireAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<void>,
 ): void {
   const history = new BackgroundJobHistory(container.database, container.clock, container.logger,
-    [container.symbolMasterBackfill, container.benchmarkService]);
+    [container.symbolMasterBackfill, container.benchmarkService], (job) => {
+      try {
+        container.notificationService.create({
+          type: "data-sync", severity: "error", title: `${job.title} 작업이 중단되었습니다`,
+          body: `${job.error ?? "서버 종료로 수집이 중단되었습니다."} 원본 화면에서 다시 시작하세요.`,
+          link: job.link ?? "/jobs",
+        });
+      } catch (error) {
+        container.logger.warn({ err: error, jobId: job.id }, "수집 작업 중단 알림 생성 실패");
+      }
+    });
   app.addHook("onClose", async () => { await history.close(); });
   const service = new JobCenterService(container, validations);
   const handle = (request: FastifyRequest, reply: FastifyReply, action: () => unknown): unknown => {

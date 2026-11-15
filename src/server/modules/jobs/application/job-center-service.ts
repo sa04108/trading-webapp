@@ -172,9 +172,9 @@ export class JobCenterService {
         break;
       }
       case "intraday-backtest": {
-        const data = db.prepare(`SELECT json_extract(request_json,'$.strategyId') AS strategyId, json_extract(request_json,'$.symbol') AS symbol,
-          json_extract(request_json,'$.period.from') AS dateFrom, json_extract(request_json,'$.period.to') AS dateTo, status, error FROM intraday_runs WHERE id=? AND owner_id=?`).get(row.sourceId, owner) as { strategyId: string; symbol: string; dateFrom: string; dateTo: string; status: string; error: string | null };
-        job = { ...job, title: `${strategyName(data.strategyId)} · 분봉 백테스트`, description: `${data.symbol} · ${period(data.dateFrom, data.dateTo)}`, phase: jobPhase(data.status), error: data.error, link: `/backtests/intraday/${encodeURIComponent(row.sourceId)}` };
+        const data = db.prepare(`SELECT json_extract(CASE WHEN json_valid(request_json) THEN request_json ELSE '{}' END,'$.strategyId') AS strategyId, json_extract(CASE WHEN json_valid(request_json) THEN request_json ELSE '{}' END,'$.symbol') AS symbol,
+          json_extract(CASE WHEN json_valid(request_json) THEN request_json ELSE '{}' END,'$.period.from') AS dateFrom, json_extract(CASE WHEN json_valid(request_json) THEN request_json ELSE '{}' END,'$.period.to') AS dateTo, status, error FROM intraday_runs WHERE id=? AND owner_id=?`).get(row.sourceId, owner) as { strategyId: string; symbol: string; dateFrom: string; dateTo: string; status: string; error: string | null };
+        job = { ...job, title: `${strategyName(data.strategyId ?? "알 수 없는 전략")} · 분봉 백테스트`, description: `${data.symbol ?? "알 수 없는 종목"} · ${period(data.dateFrom, data.dateTo)}`, phase: jobPhase(data.status), error: data.error, link: `/backtests/intraday/${encodeURIComponent(row.sourceId)}` };
         if (data.status === "PREPARING") {
           const collection = db.prepare("SELECT fetched_bars AS bars, pages FROM intraday_collections WHERE parent_run_id=? AND owner_id=? ORDER BY created_at_ms DESC LIMIT 1").get(row.sourceId, owner) as { bars: number; pages: number } | undefined;
           if (collection) job = { ...job, progress: jobProgress(collection.bars, null, `${collection.pages}페이지 · ${collection.bars.toLocaleString("ko-KR")}봉 수집`) };
@@ -182,9 +182,9 @@ export class JobCenterService {
         break;
       }
       case "intraday-collection": {
-        const data = db.prepare(`SELECT symbol, json_extract(period_json,'$.from') AS dateFrom, json_extract(period_json,'$.to') AS dateTo,
+        const data = db.prepare(`SELECT symbol, json_extract(CASE WHEN json_valid(period_json) THEN period_json ELSE '{}' END,'$.from') AS dateFrom, json_extract(CASE WHEN json_valid(period_json) THEN period_json ELSE '{}' END,'$.to') AS dateTo,
           fetched_bars AS bars, pages, error FROM intraday_collections WHERE id=? AND owner_id=?`).get(row.sourceId, owner) as { symbol: string; dateFrom: string; dateTo: string; bars: number; pages: number; error: string | null };
-        job = { ...job, title: `${data.symbol} · 분봉 수집`, description: period(data.dateFrom, data.dateTo), progress: jobProgress(data.bars, null, `${data.pages}페이지 · ${data.bars.toLocaleString("ko-KR")}봉 수집`), error: data.error, link: "/datasets/intraday" };
+        job = { ...job, title: `${data.symbol ?? "알 수 없는 종목"} · 분봉 수집`, description: period(data.dateFrom, data.dateTo), progress: jobProgress(data.bars, null, `${data.pages}페이지 · ${data.bars.toLocaleString("ko-KR")}봉 수집`), error: data.error, link: "/datasets/intraday" };
         break;
       }
     }

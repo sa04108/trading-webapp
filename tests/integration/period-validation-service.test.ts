@@ -253,11 +253,15 @@ describe('독립 구간 검증 실행', () => {
     { executionVersion: null }, { executionVersion: 'old-execution' },
     { validationVersion: null }, { validationVersion: 'old-validation' },
   ])('과거·불일치 버전 실험은 진행하지 않는다: %j', async (versions) => {
+    deps.onFinished = vi.fn();
     const experiment = service.create(sourceId, optimized);
     database.db.update(backtestValidations).set(versions).where(eq(backtestValidations.id, experiment.id)).run();
     await service.pump();
     expect(service.get(experiment.id)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('버전') });
     expect(service.get(experiment.id)!.trials.every((trial) => trial.jobId === null)).toBe(true);
+    await service.pump();
+    expect(deps.onFinished).toHaveBeenCalledTimes(1);
+    expect(deps.onFinished).toHaveBeenCalledWith(expect.objectContaining({ status: 'FAILED', error: expect.stringContaining('버전') }));
   });
 
   it.each([null, 'old-execution'])('하위 결과 실행 버전 %s는 같은 실험에 합치지 않는다', async (executionVersion) => {

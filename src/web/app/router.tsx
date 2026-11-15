@@ -1,3 +1,5 @@
+import { SeedExperimentsPage } from "../features/backtests/seed-experiments-page";
+import { PeriodValidationPage, PeriodValidationDetailPage } from "../features/backtests/period-validation-pages";
 import { createBrowserRouter } from "react-router";
 import {
   IntradayDataPage,
@@ -44,6 +46,9 @@ export const router = createBrowserRouter([
           { path: "backtests/new", element: <NewBacktestEntry /> },
           { path: "backtests/new/:step", element: <NewBacktestWizard /> },
           { path: "backtests/batches/:id", element: <SeedCloneBatchPage /> },
+          { path: "backtests/:id/seeds", element: <SeedExperimentsPage /> },
+          { path: "backtests/:id/validations", element: <PeriodValidationPage /> },
+          { path: "backtests/validations/:validationId", element: <PeriodValidationDetailPage /> },
           { path: "backtests/:id", element: <BacktestDetailPage /> },
           {
             path: "datasets",

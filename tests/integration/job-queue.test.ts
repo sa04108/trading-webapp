@@ -802,17 +802,23 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     })).toBe(false);
   });
 
-  it('recovers orphaned active jobs as INTERRUPTED on restart (스펙 §10)', ({ scenario }) => {
-    const { ctx } = scenario;
-    const queue = ctx.container.jobQueue;
-    const job = queue.enqueue(buildRequest());
-    queue.setStatus(job.id, 'RUNNING', { pid: 999_999_999 });
+  for (const status of ['STARTING', 'RUNNING', 'CANCELLING'] as const) {
+    it(`서버 재시작은 임대 없는 ${status} 작업의 계산을 재개하거나 사용자 취소를 유지한다`, ({ scenario }) => {
+      const { ctx } = scenario;
+      const queue = ctx.container.jobQueue;
+      const job = queue.enqueue(buildRequest());
+      queue.setStatus(job.id, status, { pid: 999_999_999, progressBars: 100, resultTransferBytes: 512 });
 
-    const recovered = queue.recoverUnleasedJobs();
-    expect(recovered).toContain(job.id);
-    expect(queue.getJob(job.id)!.status).toBe('INTERRUPTED');
-    expect(queue.getJob(job.id)!.error).toContain('복제');
-  });
+      const recovered = queue.recoverUnleasedJobs();
+      expect(recovered).toContain(job.id);
+      expect(queue.getJob(job.id)).toMatchObject({
+        status: status === 'CANCELLING' ? 'CANCELLED' : 'QUEUED', error: null,
+        pid: null, progressBars: null, resultTransferBytes: null,
+        requestJson: job.requestJson, attempt: job.attempt, leaseFailures: job.leaseFailures,
+      });
+      expect(queue.recoverUnleasedJobs()).toEqual([]);
+    });
+  }
 
   it('서버 재시작은 유효한 에이전트 리스를 보존한다', ({ scenario }) => {
     const { ctx } = scenario;

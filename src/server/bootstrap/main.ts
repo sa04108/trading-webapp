@@ -40,7 +40,8 @@ async function main(): Promise<void> {
   container.jobOrchestrator.start();
   container.agentCoordinator.start();
   container.seedCloneBatchService.recover();
-  container.backtestPreparationOrchestrator.recoverOrphaned();
+  container.backtestPreparationOrchestrator.recoverOrphaned(container.refreshProviderFilings);
+  container.intradayService.recover();
 
   await app.listen({ host: config.bindAddress, port: config.port });
   const withoutTotp = container.userRepository.listUsernamesWithoutTotp();

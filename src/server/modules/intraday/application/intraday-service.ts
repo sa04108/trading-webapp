@@ -12,6 +12,7 @@ import {
 } from "../../../shared/db/intraday-schema.js";
 import {
   INTRADAY_RETENTION_DAYS,
+  MINUTE_MS,
   intradayCollectSchema,
   intradayDate,
   intradayFirstBacktestDate,
@@ -87,6 +88,7 @@ interface Options {
     symbol: string,
   ) => Promise<{ listDate: string; isinCode: string }>;
   search: (query: string) => Promise<{ symbol: string; name: string }[]>;
+  onRecoveryFailure?: () => void;
 }
 type CollectionRow = typeof intradayCollections.$inferSelect;
 type RunRow = Omit<typeof intradayRuns.$inferSelect, "resultJson"> & {
@@ -106,6 +108,10 @@ const runColumns = {
 export class IntradayService {
   private readonly now: () => number;
   private readonly controllers = new Map<string, AbortController>();
+  private readonly cancelled = new Set<string>();
+  private readonly recovering = new Set<string>();
+  private readonly recoveredCollections = new Map<string, string>();
+  private recovered = false;
   private readonly tasks = new Set<Promise<void>>();
   private collectionQueue: Promise<void> = Promise.resolve();
   private runQueue: Promise<void> = Promise.resolve();
@@ -115,30 +121,57 @@ export class IntradayService {
   private readonly timer: NodeJS.Timeout;
   constructor(private readonly options: Options) {
     this.now = options.now ?? Date.now;
-    // 재시작 뒤 실행 중처럼 보이는 행을 남기지 않는다. 명시적인 재시도로 다시 준비한다.
-    options.db
-      .update(intradayRuns)
-      .set({
-        status: "FAILED",
-        error:
-          "서버가 재시작되어 실행이 중단됐습니다. 설정을 복제해 다시 실행하세요.",
-        updatedAtMs: this.now(),
-      })
-      .where(inArray(intradayRuns.status, ACTIVE))
-      .run();
-    options.db
-      .update(intradayCollections)
-      .set({
-        status: "FAILED",
-        error: "서버가 재시작되어 수집이 중단됐습니다. 다시 수집하세요.",
-        updatedAtMs: this.now(),
-      })
-      .where(inArray(intradayCollections.status, ACTIVE))
-      .run();
     this.timer = setInterval(() => {
       void this.prune().catch(() => {});
     }, 3_600_000);
     this.timer.unref();
+  }
+  /** 서버 부팅에서만 호출한다. 생성자를 공유하는 CLI가 작업을 실행하지 않게 한다. */
+  recover(): void {
+    if (this.recovered || this.closing) return;
+    this.recovered = true;
+    const runs = this.options.db.select(runColumns).from(intradayRuns)
+      .where(inArray(intradayRuns.status, ACTIVE)).orderBy(asc(intradayRuns.createdAtMs)).all();
+    const parents = new Map(runs.map((run) => [run.id, run.ownerId]));
+    const collections = this.options.db.select().from(intradayCollections)
+      .where(inArray(intradayCollections.status, ACTIVE)).orderBy(asc(intradayCollections.createdAtMs)).all();
+    for (const row of collections) {
+      try {
+        const request = intradayCollectSchema.parse({ symbol: row.symbol, period: JSON.parse(row.periodJson) });
+        this.bounds(request.period);
+        if (row.parentRunId !== null && parents.get(row.parentRunId) !== row.ownerId)
+          throw new IntradayError("연결된 백테스트가 종료되었거나 없어 수집을 재개할 수 없습니다.");
+        this.options.db.update(intradayCollections).set({ status: "QUEUED", error: null,
+          pages: 0, fetchedBars: 0, oldestEndMs: null, updatedAtMs: this.now() })
+          .where(eq(intradayCollections.id, row.id)).run();
+        this.recovering.add(row.id);
+        if (row.parentRunId !== null) this.recoveredCollections.set(row.parentRunId, row.id);
+        this.enqueueCollection(row.id, request.symbol, request.period);
+      } catch (error) {
+        this.options.db.update(intradayCollections).set({ status: "FAILED", updatedAtMs: this.now(),
+          error: error instanceof Error ? error.message : "저장된 수집 요청을 복구할 수 없습니다." })
+          .where(eq(intradayCollections.id, row.id)).run();
+        this.options.onRecoveryFailure?.();
+      }
+    }
+    for (const row of runs) {
+      try {
+        const request = intradayRequestSchema.parse(JSON.parse(row.requestJson));
+        this.bounds(request.period, true);
+        this.options.db.update(intradayRuns).set({ status: "QUEUED", error: null, updatedAtMs: this.now() })
+          .where(eq(intradayRuns.id, row.id)).run();
+        this.recovering.add(row.id);
+        this.enqueueRun(row.ownerId, row.id, request);
+      } catch (error) {
+        const childId = this.recoveredCollections.get(row.id);
+        if (childId) this.cancelCollection(row.ownerId, childId);
+        this.recoveredCollections.delete(row.id);
+        this.options.db.update(intradayRuns).set({ status: "FAILED", updatedAtMs: this.now(),
+          error: error instanceof Error ? error.message : "저장된 백테스트 요청을 복구할 수 없습니다." })
+          .where(eq(intradayRuns.id, row.id)).run();
+        this.options.onRecoveryFailure?.();
+      }
+    }
   }
   private async prune(): Promise<void> {
     if (this.closing) return;
@@ -202,10 +235,15 @@ export class IntradayService {
     return dates;
   }
   private collection(row: CollectionRow): IntradayCollection {
+    let period: IntradayPeriod = { from: "", to: "" };
+    try {
+      const saved = intradayCollectSchema.safeParse({ symbol: row.symbol, period: JSON.parse(row.periodJson) });
+      if (saved.success) period = saved.data.period;
+    } catch { /* 손상된 요청도 실패 상태와 복구 사유는 조회할 수 있어야 한다. */ }
     return {
       id: row.id,
       symbol: row.symbol,
-      period: JSON.parse(row.periodJson) as IntradayPeriod,
+      period,
       status: row.status as IntradayCollection["status"],
       fetchedBars: row.fetchedBars,
       pages: row.pages,
@@ -307,8 +345,7 @@ export class IntradayService {
     const request = intradayCollectSchema.parse(raw);
     this.bounds(request.period);
     const id = randomUUID(),
-      now = this.now(),
-      controller = new AbortController();
+      now = this.now();
     this.options.db
       .insert(intradayCollections)
       .values({
@@ -322,20 +359,28 @@ export class IntradayService {
         updatedAtMs: now,
       })
       .run();
+    this.enqueueCollection(id, request.symbol, request.period);
+    return this.getCollection(ownerId, id);
+  }
+  private enqueueCollection(id: string, symbol: string, period: IntradayPeriod): void {
+    const controller = new AbortController();
     this.controllers.set(id, controller);
     const task = this.collectionQueue
       .then(() =>
         this.performCollection(
           id,
-          request.symbol,
-          request.period,
+          symbol,
+          period,
           controller.signal,
         ),
       )
-      .finally(() => this.controllers.delete(id));
+      .finally(() => {
+        this.controllers.delete(id);
+        this.cancelled.delete(id);
+        this.recovering.delete(id);
+      });
     this.collectionQueue = task.catch(() => {});
     this.track(this.collectionQueue);
-    return this.getCollection(ownerId, id);
   }
   getCollection(ownerId: string, id: string): IntradayCollection {
     const row = this.options.db
@@ -354,6 +399,7 @@ export class IntradayService {
   cancelCollection(ownerId: string, id: string): IntradayCollection {
     const row = this.getCollection(ownerId, id);
     if (ACTIVE.includes(row.status)) {
+      this.cancelled.add(id);
       this.controllers.get(id)?.abort();
       this.options.db
         .update(intradayCollections)
@@ -382,6 +428,8 @@ export class IntradayService {
     try {
       signal.throwIfAborted();
       this.bounds(period);
+      if (!this.options.source)
+        throw new IntradayError("서버의 토스증권 API 연결 설정을 확인하세요.");
       update({ status: "RUNNING" });
       const stored = await this.options.store.list();
       if (stored.length >= 100 && !stored.some((s) => s.symbol === symbol))
@@ -395,29 +443,59 @@ export class IntradayService {
         );
       if (range.fromMs > range.toMs)
         throw new IntradayError("선택한 기간은 현재 종목의 상장일 이전입니다.");
-      const bars = await this.options.source!.fetch(
-        symbol,
-        range.fromMs,
-        range.toMs,
-        { signal, onProgress: (p) => update(p) },
-      );
-      signal.throwIfAborted();
-      if (!bars.length)
-        throw new IntradayError(
-          "요청 구간에서 토스가 반환한 분봉이 없습니다. 조회 가능 기간·상장일·휴장 여부를 확인하세요.",
+      const data = await this.options.store.read(symbol, range.fromMs, range.toMs);
+      const availableToMs = Math.min(range.toMs, this.now() - MINUTE_MS);
+      // 누락 판정은 백테스트와 같게 유지하고, 재조회 범위는 누락이 있는 서울 날짜로 묶는다.
+      const missingDates = new Set(intradayGaps(data.bars, this.tradingDates({
+        from: intradayDate(range.fromMs),
+        to: intradayDate(range.toMs),
+      })).filter((gap) => {
+        const firstMissingEndMs = Math.ceil(Math.max(gap.fromMs + MINUTE_MS, range.fromMs) / MINUTE_MS) * MINUTE_MS;
+        return firstMissingEndMs <= Math.min(gap.toMs, availableToMs);
+      }).map((gap) => intradayDate(gap.toMs)));
+      let fetchedBars = 0;
+      let pages = 0;
+      let oldestEndMs: number | null = null;
+      for (const date of missingDates) {
+        signal.throwIfAborted();
+        const day = intradayPeriodMs({ from: date, to: date });
+        let dayPages = 0;
+        const bars = await this.options.source.fetch(
+          symbol,
+          Math.max(range.fromMs, day.fromMs),
+          Math.min(range.toMs, day.toMs),
+          { signal, onProgress: (progress) => {
+            dayPages = progress.pages;
+            if (progress.oldestEndMs !== null)
+              oldestEndMs = Math.min(oldestEndMs ?? Infinity, progress.oldestEndMs);
+            update({ pages: pages + dayPages, fetchedBars: fetchedBars + progress.fetchedBars, oldestEndMs });
+          } },
         );
-      await this.options.store.merge(symbol, bars, this.now());
+        signal.throwIfAborted();
+        if (!bars.length)
+          throw new IntradayError(
+            `${date}에 토스가 반환한 분봉이 없습니다. 조회 가능 기간·상장일·휴장 여부를 확인하세요.`,
+          );
+        // 다음 날짜의 실패나 서버 재시작에도 이미 채운 날짜는 다시 받지 않는다.
+        await this.options.store.merge(symbol, bars, this.now());
+        pages += dayPages;
+        fetchedBars += bars.length;
+        oldestEndMs = Math.min(oldestEndMs ?? Infinity, ...bars.map((bar) => bar.endMs));
+        update({ pages, fetchedBars, oldestEndMs });
+      }
       signal.throwIfAborted();
-      update({ status: "COMPLETED", fetchedBars: bars.length });
+      update({ status: "COMPLETED", fetchedBars, pages, oldestEndMs });
     } catch (error) {
+      const suspended = signal.aborted && this.closing && !this.cancelled.has(id);
       update({
-        status: signal.aborted ? "CANCELLED" : "FAILED",
-        error: signal.aborted
+        status: suspended ? "QUEUED" : signal.aborted ? "CANCELLED" : "FAILED",
+        error: suspended ? null : signal.aborted
           ? "수집이 취소되었습니다."
           : error instanceof Error
             ? error.message
             : "분봉 수집에 실패했습니다.",
       });
+      if (!signal.aborted && this.recovering.has(id)) this.options.onRecoveryFailure?.();
       throw error;
     }
   }
@@ -519,7 +597,6 @@ export class IntradayService {
     const request = intradayRequestSchema.parse(raw);
     this.bounds(request.period, true);
     const id = randomUUID(),
-      controller = new AbortController(),
       now = this.now();
     this.options.db
       .insert(intradayRuns)
@@ -532,18 +609,30 @@ export class IntradayService {
         updatedAtMs: now,
       })
       .run();
+    this.enqueueRun(ownerId, id, request);
+    return this.getRun(ownerId, id);
+  }
+  private enqueueRun(ownerId: string, id: string, request: IntradayRequest): void {
+    const controller = new AbortController();
     this.controllers.set(id, controller);
     const task = this.runQueue
       .then(() => this.performRun(ownerId, id, request, controller.signal))
-      .finally(() => this.controllers.delete(id));
+      .finally(() => {
+        this.controllers.delete(id);
+        this.cancelled.delete(id);
+        this.recovering.delete(id);
+        this.recoveredCollections.delete(id);
+      });
     this.runQueue = task.catch(() => {});
     this.track(this.runQueue);
-    return this.getRun(ownerId, id);
   }
   cancelRun(ownerId: string, id: string): IntradayRun {
     const row = this.getRun(ownerId, id);
     if (ACTIVE.includes(row.status)) {
+      this.cancelled.add(id);
       this.controllers.get(id)?.abort();
+      const recoveredChild = this.recoveredCollections.get(id);
+      if (recoveredChild) this.cancelCollection(ownerId, recoveredChild);
       this.options.db
         .update(intradayRuns)
         .set({
@@ -581,13 +670,17 @@ export class IntradayService {
           `현재 종목의 상장일(${instrument.listDate}) 이후 기간을 선택하세요.`,
         );
       let data = await this.options.store.read(request.symbol, fromMs, toMs);
-      if (intradayGaps(data.bars, tradingDates).length > 0) {
-        const collection = this.collect(
+      const recoveredCollection = this.recoveredCollections.get(id);
+      if (recoveredCollection || intradayGaps(data.bars, tradingDates).length > 0) {
+        const collection = recoveredCollection ? this.getCollection(ownerId, recoveredCollection) : this.collect(
           ownerId,
           { symbol: request.symbol, period: request.period },
           id,
         );
-        const cancel = () => this.cancelCollection(ownerId, collection.id);
+        const cancel = () => {
+          if (this.closing && !this.cancelled.has(id)) this.controllers.get(collection.id)?.abort();
+          else this.cancelCollection(ownerId, collection.id);
+        };
         signal.addEventListener("abort", cancel, { once: true });
         if (signal.aborted) cancel();
         try {
@@ -616,14 +709,18 @@ export class IntradayService {
         error: null,
       });
     } catch (error) {
+      const suspended = signal.aborted && this.closing && !this.cancelled.has(id);
+      const recoveredChild = this.recoveredCollections.get(id);
+      if (!suspended && recoveredChild) this.cancelCollection(ownerId, recoveredChild);
       update({
-        status: signal.aborted ? "CANCELLED" : "FAILED",
-        error: signal.aborted
+        status: suspended ? "QUEUED" : signal.aborted ? "CANCELLED" : "FAILED",
+        error: suspended ? null : signal.aborted
           ? "실행이 취소되었습니다."
           : error instanceof Error
             ? error.message
             : "분봉 백테스트에 실패했습니다.",
       });
+      if (!signal.aborted && this.recovering.has(id)) this.options.onRecoveryFailure?.();
     }
   }
   async close(): Promise<void> {

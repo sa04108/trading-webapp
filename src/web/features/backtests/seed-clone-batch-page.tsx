@@ -1,3 +1,5 @@
+import { BacktestBreadcrumbs } from "./backtest-breadcrumbs";
+import { StrategySeedExplanation } from "./experiment-help";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
@@ -64,6 +66,7 @@ export function SeedCloneBatchPage() {
       api(`/backtest-clone-batches/${id}/cancel`, { method: "POST" }),
     onSuccess: () => {
       toast.info("남은 난수 시드 실행을 취소했습니다");
+      void queryClient.invalidateQueries({ queryKey: ["backtest-experiments"] });
       void queryClient.invalidateQueries({
         queryKey: ["backtest-clone-batches"],
       });
@@ -76,11 +79,12 @@ export function SeedCloneBatchPage() {
     onSuccess: () => {
       setDeleteOpen(false);
       toast.success("난수 시드 실험을 삭제했습니다");
+      void queryClient.invalidateQueries({ queryKey: ["backtest-experiments"] });
       void queryClient.invalidateQueries({ queryKey: ["backtests"] });
       void queryClient.invalidateQueries({
         queryKey: ["backtest-clone-batches"],
       });
-      void navigate("/backtests");
+      void navigate(query.data ? `/backtests/${query.data.batch.sourceJobId}/seeds` : "/backtests");
     },
     onError: (error) => toast.error(error.message),
   });
@@ -110,6 +114,10 @@ export function SeedCloneBatchPage() {
 
   return (
     <div className="space-y-4">
+      <BacktestBreadcrumbs jobId={batch.sourceJobId} trail={[
+        { label: "난수 시드 실험", href: `/backtests/${batch.sourceJobId}/seeds` },
+        { label: `실험 ${batch.id.slice(-6)}` },
+      ]} />
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-lg font-semibold">난수 시드 실험</h2>
         <Badge
@@ -159,6 +167,7 @@ export function SeedCloneBatchPage() {
         </div>
       </div>
 
+      <StrategySeedExplanation strategyId={batch.strategyId} />
       <Card>
         <CardContent className="space-y-3 py-4">
           <div className="flex flex-wrap justify-between gap-2 text-sm">
