@@ -79,7 +79,7 @@ stop_server() {
   fi
 }
 update() {
-  local requested="${1:-${SETTINGS[SERVER_IMAGE]}}" candidate pending previous=''
+  local requested="${1:-${SETTINGS[SERVER_IMAGE]}}" candidate pending
   [[ "$requested" =~ ^[a-z0-9][a-zA-Z0-9./:@_-]+$ ]] || { echo '이미지 주소가 올바르지 않습니다.' >&2; return 1; }
   # 로컬 이미지 ID로 고정하여 별칭 변경과 레지스트리 다운로드를 차단한다.
   candidate="$(docker image inspect --format '{{.Id}}' "$requested")" || { echo '로컬 이미지를 찾을 수 없습니다.' >&2; return 1; }
@@ -94,7 +94,6 @@ update() {
     fi
   fi
   validate_app "$candidate"
-  if [[ -s .server-image ]]; then previous="$(cat .server-image)"; fi
   stop_server
   # DB 변경 전 기록한다. 실패·전원 차단 뒤 이전 이미지를 자동 기동하지 못하게 한다.
   printf '%s\n' "$candidate" > .server-update-pending.tmp
@@ -108,7 +107,6 @@ update() {
     echo '새 서버를 확인하지 못해 중지했습니다. 로그와 DB 호환성을 확인한 뒤 다시 업데이트하세요.' >&2
     return 1
   fi
-  if [[ -n "$previous" && "$previous" != "$candidate" ]]; then printf '%s\n' "$previous" > .server-image.previous; fi
   printf '%s\n' "$candidate" > .server-image.tmp
   mv .server-image.tmp .server-image
   rm .server-update-pending

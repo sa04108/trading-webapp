@@ -92,7 +92,7 @@ describe('Docker 서버 설정과 업데이트', () => {
     const untagged = `sha256:${'3'.repeat(64)}`;
     const secondCandidate = `sha256:${'4'.repeat(64)}`;
     fs.writeFileSync(h.file('.server-image'), `${candidate}\n`);
-    fs.writeFileSync(h.file('.server-image.previous'), `${previous}\n`);
+    fs.writeFileSync(h.file('.server-image.previous'), 'invalid-legacy-pin\n');
     fs.writeFileSync(h.file('.server-update-pending'), `${pending}\n`);
     fs.mkdirSync(h.file('.server-build-candidates'));
     fs.writeFileSync(h.file('.server-build-candidates/first'), `${buildCandidate}\n`);
@@ -100,6 +100,7 @@ describe('Docker 서버 설정과 업데이트', () => {
     const env = {
       IMAGE_IDS: JSON.stringify({ [candidate]: candidate, [previous]: previous, [pending]: pending, [buildCandidate]: buildCandidate, [secondCandidate]: secondCandidate }),
       CONTAINERS: 'stopped-container', CONTAINER_IMAGES: container,
+      BAD_PIN: 'invalid-legacy-pin',
       TAGGED_IMAGES: [
         `${candidate} quant-platform:current`, `${previous} quant-platform:previous`,
         `${pending} quant-platform:pending`, `${container} quant-platform:in-use`,
@@ -110,7 +111,9 @@ describe('Docker 서버 설정과 업데이트', () => {
       DANGLING_IMAGES: dangling,
     };
     expect(h.run(['cleanup'], env).status).toBe(0);
+    expect(fs.existsSync(h.file('.server-image.previous'))).toBe(false);
     expect(h.calls().filter(call => call.args[0] === 'image' && call.args[1] === 'rm').map(call => call.args)).toEqual([
+      ['image', 'rm', '--no-prune', 'quant-platform:previous'],
       ['image', 'rm', '--no-prune', untagged],
       ['image', 'rm', '--no-prune', 'quant-platform:stale'],
       ['image', 'rm', '--no-prune', 'ghcr.io/sa04108/quant-platform:stale'],
@@ -121,13 +124,13 @@ describe('Docker 서버 설정과 업데이트', () => {
     expect(danglingQuery.args.join(' ')).toContain('label=org.opencontainers.image.title=Quant Platform');
   });
 
-  it('현재 핀이 없거나 이전 핀이 끊어진 링크면 이미지 삭제를 건너뛴다', () => {
+  it('현재 핀이 없거나 진행 중인 핀이 끊어진 링크면 이미지 삭제를 건너뛴다', () => {
     const h = harness();
     const env = { TAGGED_IMAGES: `${candidate} quant-platform:stale` };
     expect(h.run(['cleanup'], env).status).toBe(0);
     expect(h.calls().some(call => call.args[0] === 'image' && call.args[1] === 'rm')).toBe(false);
     fs.writeFileSync(h.file('.server-image'), `${candidate}\n`);
-    fs.symlinkSync('missing-image-pin', h.file('.server-image.previous'));
+    fs.symlinkSync('missing-image-pin', h.file('.server-update-pending'));
     h.clear();
     expect(h.run(['cleanup'], env).status).toBe(0);
     expect(h.calls().some(call => call.args[0] === 'image' && call.args[1] === 'rm')).toBe(false);
@@ -161,6 +164,7 @@ describe('Docker 서버 설정과 업데이트', () => {
     const h = harness();
     expect(h.run(['init']).status).toBe(0);
     fs.writeFileSync(h.file('.server-image'), `${oldImage}\n`);
+    fs.writeFileSync(h.file('.server-image.previous'), 'invalid-legacy-pin\n');
     h.clear();
     const env = {
       REGISTERED_BUILDER: 'quant-server-build', EXISTING_VOLUME: 'buildx_buildkit_quant-server-manual0_state',
@@ -170,7 +174,7 @@ describe('Docker 서버 설정과 업데이트', () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain('정리 실패');
     expect(fs.readFileSync(h.file('.server-image'), 'utf8').trim()).toBe(candidate);
-    expect(fs.readFileSync(h.file('.server-image.previous'), 'utf8').trim()).toBe(oldImage);
+    expect(fs.existsSync(h.file('.server-image.previous'))).toBe(false);
     expect(fs.existsSync(h.file('.server-update-pending'))).toBe(false);
     expect(h.run(['cleanup'], env).status).toBe(0);
     expect(h.calls().some(call => call.args[0] === 'buildx' && call.args[1] === 'prune')).toBe(false);
@@ -215,7 +219,7 @@ describe('Docker 서버 설정과 업데이트', () => {
     expect(fs.readFileSync(h.file('config.env'), 'utf8')).toBe(original);
     expect(fs.existsSync(h.file('.server-update-pending'))).toBe(false);
     expect(fs.readFileSync(h.file('.server-image'), 'utf8').trim()).toBe(candidate);
-    expect(fs.readFileSync(h.file('.server-image.previous'), 'utf8').trim()).toBe(oldImage);
+    expect(fs.existsSync(h.file('.server-image.previous'))).toBe(false);
   });
 
   it('없는 로컬 이미지는 서버를 유지하고 태그는 이미지 ID로 고정하며 내려받지 않는다', () => {
@@ -229,7 +233,7 @@ describe('Docker 서버 설정과 업데이트', () => {
     h.clear();
     expect(h.run(['update', 'quant-platform:release']).status).toBe(0);
     expect(fs.readFileSync(h.file('.server-image'), 'utf8').trim()).toBe(candidate);
-    expect(fs.readFileSync(h.file('.server-image.previous'), 'utf8').trim()).toBe(oldImage);
+    expect(fs.existsSync(h.file('.server-image.previous'))).toBe(false);
     expect(h.calls().some(call => call.args[0] === 'pull')).toBe(false);
     const runs = h.calls().filter(call => call.args[0] === 'compose' && (call.args.includes('run') || call.args.includes('up')));
     expect(runs.length).toBeGreaterThan(0);
