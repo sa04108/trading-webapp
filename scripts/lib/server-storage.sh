@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# 복구용 핀을 모두 확인한 뒤 이 프로젝트의 로컬 서버 이미지만 정리한다.
+# 현재 실행·배포 후보 핀을 확인한 뒤 이 프로젝트의 로컬 서버 이미지만 정리한다.
 prune_server_images() {
   local pin ref id listing containers tagged dangling
   local -A protected=()
@@ -8,7 +8,7 @@ prune_server_images() {
     echo '현재 운영 이미지 핀이 없어 이미지 정리를 건너뜁니다.' >&2
     return 1
   }
-  local -a pins=(.server-image .server-image.previous .server-update-pending)
+  local -a pins=(.server-image .server-update-pending)
   # 동시 자동·수동 빌드는 각자 후보 핀을 보유해 서로 덮어쓰지 않는다.
   for pin in .server-build-candidates/*; do
     [[ -e "$pin" || -L "$pin" ]] && pins+=("$pin")
@@ -24,6 +24,8 @@ prune_server_images() {
       protected["$id"]=1
     fi
   done
+  # 직전 이미지를 별도 보관하던 과거 정책의 기록은 더 이상 사용하지 않는다.
+  rm -f -- .server-image.previous || return 1
   # 정지한 컨테이너도 이미지를 참조한다. Docker의 강제 없는 삭제로 경합도 막는다.
   containers="$(docker ps --all --quiet)" || return 1
   if [[ -n "$containers" ]]; then
