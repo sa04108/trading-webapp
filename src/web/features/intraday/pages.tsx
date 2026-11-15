@@ -1,5 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { Plus } from "lucide-react";
+import { BacktestHeader } from "../backtests/backtest-header";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  INTRADAY_STRATEGIES,
+  getIntradayStrategy,
+  type IntradayStrategyId,
+} from "../../../shared/schemas/intraday-strategies";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -40,30 +54,27 @@ const money = (n: number) =>
 const message = (error: unknown) =>
   error instanceof Error ? error.message : "요청에 실패했습니다.";
 const yesterday = () => intradayDate(Date.now() - 86_400_000);
-const defaults = (): IntradayRequest => ({
-  mode: "intraday",
-  strategyId: "intraday-ema",
-  symbol: "",
-  period: { from: intradayFirstBacktestDate(), to: yesterday() },
-  timeframe: "5m",
-  initialCash: 10_000_000,
-  parameters: {
-    fast: 12,
-    slow: 26,
-    allocationPct: 95,
-    stopLossPct: 3,
-    takeProfitPct: 6,
-  },
-  execution: {
-    holdingPolicy: "DAY_ONLY",
-    commissionBps: 1.5,
-    taxBps: 20,
-    slippageBps: 5,
-    latencyMs: 1000,
-    orderExpiryMinutes: 3,
-    maxParticipationPct: 1,
-  },
-});
+const defaults = (
+  strategyId: IntradayStrategyId = "intraday-orb",
+): IntradayRequest =>
+  ({
+    mode: "intraday",
+    strategyId,
+    symbol: "",
+    period: { from: intradayFirstBacktestDate(), to: yesterday() },
+    timeframe: "5m",
+    initialCash: 10_000_000,
+    parameters: { ...getIntradayStrategy(strategyId).defaults },
+    execution: {
+      holdingPolicy: "DAY_ONLY",
+      commissionBps: 1.5,
+      taxBps: 20,
+      slippageBps: 5,
+      latencyMs: 1000,
+      orderExpiryMinutes: 3,
+      maxParticipationPct: 1,
+    },
+  }) as IntradayRequest;
 function ErrorAlert({ error }: { error: unknown }) {
   return error ? (
     <Alert variant="destructive" role="alert">
@@ -490,18 +501,6 @@ export function IntradayDataPage() {
     </div>
   );
 }
-export function IntradayNav() {
-  return (
-    <nav aria-label="백테스트 종류" className="flex gap-2">
-      <Button asChild variant="outline" size="sm">
-        <Link to="/backtests">일봉</Link>
-      </Button>
-      <Button asChild variant="outline" size="sm">
-        <Link to="/backtests/intraday">분봉</Link>
-      </Button>
-    </nav>
-  );
-}
 export function IntradayListPage() {
   const runs = useQuery({
     queryKey: ["intraday-runs"],
@@ -511,11 +510,51 @@ export function IntradayListPage() {
   });
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-semibold">분봉 백테스트</h2>
-      <IntradayNav />
-      <Button asChild>
-        <Link to="/backtests/intraday/new">새 분봉 백테스트</Link>
-      </Button>
+      <BacktestHeader
+        mode="intraday"
+        actions={
+          <Button asChild className="h-11 w-11 px-0 sm:w-auto sm:px-4">
+            <Link to="/backtests/intraday/new" aria-label="새 백테스트">
+              <Plus data-icon="inline-start" />
+              <span className="hidden sm:inline">새 백테스트</span>
+            </Link>
+          </Button>
+        }
+      />
+      <section aria-label="분봉 전략" className="space-y-3">
+        <div>
+          <h3 className="font-semibold">분봉 전략</h3>
+          <p className="text-sm text-muted-foreground">
+            서로 다른 장세를 검증할 수 있는 기본 전략입니다. 현재 분봉
+            백테스트에서 사용할 수 있습니다.
+          </p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          {INTRADAY_STRATEGIES.map((strategy) => (
+            <Card key={strategy.id}>
+              <CardContent className="flex h-full flex-col items-start gap-2 py-4">
+                <p className="text-xs text-muted-foreground">
+                  {strategy.regime}
+                </p>
+                <h4 className="font-semibold">{strategy.name}</h4>
+                <p className="text-sm">{strategy.description}</p>
+                <p className="text-sm text-muted-foreground">
+                  {strategy.caution}
+                </p>
+                <Button asChild size="sm" variant="outline" className="mt-auto">
+                  <Link
+                    to={`/backtests/intraday/new?strategy=${strategy.id}`}
+                    aria-label={`${strategy.name} 백테스트`}
+                  >
+                    이 전략으로 설정
+                  </Link>
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </section>
+      <h3 className="font-semibold">실행 내역</h3>
       <ErrorAlert error={runs.error} />
       {runs.data?.runs.length === 0 && <p>백테스트가 없습니다.</p>}
       {runs.data?.runs.map((run) => (
@@ -527,6 +566,7 @@ export function IntradayListPage() {
           <Card>
             <CardContent className="space-y-1 py-4">
               <p>
+                {getIntradayStrategy(run.request.strategyId).name} ·{" "}
                 {statusLabel[run.status]} · {run.request.symbol} ·{" "}
                 {run.request.timeframe}
               </p>
@@ -546,7 +586,10 @@ export function IntradayNewPage() {
   const [search] = useSearchParams();
   const navigate = useNavigate();
   const [request, setRequest] = useState<IntradayRequest>(() => {
-    const d = defaults();
+    const selected = INTRADAY_STRATEGIES.find(
+      (s) => s.id === search.get("strategy"),
+    );
+    const d = defaults(selected?.id);
     return {
       ...d,
       symbol: search.get("symbol") ?? d.symbol,
@@ -569,6 +612,7 @@ export function IntradayNewPage() {
     setRequest(clone.data.request);
     setLoadedClone(true);
   }
+  const strategy = getIntradayStrategy(request.strategyId);
   const [validation, setValidation] = useState("");
   const submit = useMutation({
     mutationFn: (body: IntradayRequest) =>
@@ -581,26 +625,34 @@ export function IntradayNewPage() {
     value: number,
     update: (n: number) => void,
     step = "1",
+    bounds?: { min: number; max: number },
   ) => (
     <Field label={label}>
       <Input
         type="number"
         step={step}
+        min={bounds?.min}
+        max={bounds?.max}
         value={value}
         onChange={(e) => update(Number(e.target.value))}
       />
     </Field>
   );
-  const params = (key: keyof IntradayRequest["parameters"], n: number) =>
-    setRequest((r) => ({ ...r, parameters: { ...r.parameters, [key]: n } }));
+  const params = (key: string, n: number) =>
+    setRequest(
+      (r) =>
+        ({
+          ...r,
+          parameters: { ...r.parameters, [key]: n },
+        }) as IntradayRequest,
+    );
   const execution = (
     key: Exclude<keyof IntradayRequest["execution"], "holdingPolicy">,
     n: number,
   ) => setRequest((r) => ({ ...r, execution: { ...r.execution, [key]: n } }));
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-semibold">새 분봉 백테스트</h2>
-      <IntradayNav />
+      <BacktestHeader mode="intraday" title="새 백테스트" />
       <p className="text-sm text-muted-foreground">
         토스 제공 시세 (거래소 구성 미확인), 수정주가 미적용. 필요한 데이터는
         실행 시 자동으로 준비합니다.
@@ -629,36 +681,82 @@ export function IntradayNewPage() {
           setRequest((r) => ({ ...r, period: { ...r.period, to } }))
         }
         setTimeframe={(timeframe) =>
-          setRequest((r) => ({
-            ...r,
-            timeframe,
-            parameters:
-              timeframe === "15m" && r.parameters.slow > 24
-                ? {
-                    ...r.parameters,
-                    slow: 12,
-                    fast: Math.min(r.parameters.fast, 11),
-                  }
-                : r.parameters,
-          }))
+          setRequest(
+            (r) =>
+              ({
+                ...r,
+                timeframe,
+                parameters:
+                  timeframe === "15m" &&
+                  r.strategyId === "intraday-ema" &&
+                  r.parameters.slow > 24
+                    ? {
+                        ...r.parameters,
+                        slow: 12,
+                        fast: Math.min(r.parameters.fast, 11),
+                      }
+                    : r.parameters,
+              }) as IntradayRequest,
+          )
         }
         max={yesterday()}
       />
       <Card>
         <CardContent className="space-y-3 py-4">
-          <h3 className="font-semibold">EMA 교차 전략</h3>
+          <Field label="분봉 전략">
+            <Select
+              value={request.strategyId}
+              onValueChange={(value) => {
+                const next = INTRADAY_STRATEGIES.find((s) => s.id === value);
+                if (!next) return;
+                setRequest(
+                  (r) =>
+                    ({
+                      ...r,
+                      strategyId: next.id,
+                      parameters: { ...next.defaults },
+                    }) as IntradayRequest,
+                );
+                setValidation("");
+              }}
+            >
+              <SelectTrigger className="w-full" aria-label="분봉 전략">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {INTRADAY_STRATEGIES.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <p className="text-sm">
+            {strategy.entry} {strategy.exit}
+          </p>
+          <p className="text-sm text-muted-foreground">{strategy.caution}</p>
+          <p className="text-xs text-muted-foreground">
+            전략 변경 시 지표·손절·익절 파라미터에 해당 전략의 기본값을
+            적용합니다.
+          </p>
           <p className="text-sm text-muted-foreground">
-            매일 EMA를 초기화하고 장기 EMA 기간만큼 준비합니다. 09:00~15:20,
-            진입 마감 15:10, 청산 신호 15:15. 청산 미체결 시 보유 상태로 해당
-            일에 시뮬레이션을 중단합니다.
+            지표는 매일 초기화합니다. 09:00~15:20, 진입 마감 15:10, 청산 신호
+            15:15. 청산 미체결 시 보유 상태로 해당 일에 시뮬레이션을 중단합니다.
           </p>
           <div className="grid gap-3 sm:grid-cols-3">
-            {numberField("단기 EMA", request.parameters.fast, (n) =>
-              params("fast", n),
-            )}
-            {numberField("장기 EMA", request.parameters.slow, (n) =>
-              params("slow", n),
-            )}
+            {strategy.fields.map((field) => (
+              <div key={field.key}>
+                {numberField(
+                  field.label,
+                  (request.parameters as Record<string, number>)[field.key] ??
+                    0,
+                  (n) => params(field.key, n),
+                  String(field.step ?? 1),
+                  field,
+                )}
+              </div>
+            ))}
             {numberField(
               "투자 비율 (%)",
               request.parameters.allocationPct,
@@ -819,8 +917,7 @@ export function IntradayDetailPage() {
   );
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-semibold">분봉 백테스트 결과</h2>
-      <IntradayNav />
+      <BacktestHeader mode="intraday" title="백테스트 결과" />
       <ErrorAlert
         error={
           run.error || cancel.error || (r?.error ? new Error(r.error) : null)
@@ -829,6 +926,7 @@ export function IntradayDetailPage() {
       {r && (
         <>
           <p>
+            {getIntradayStrategy(r.request.strategyId).name} ·{" "}
             {statusLabel[r.status]} · {r.request.symbol} ·{" "}
             {r.request.period.from} ~ {r.request.period.to}
           </p>
@@ -852,7 +950,11 @@ export function IntradayDetailPage() {
       )}
       {result && m && (
         <>
-          <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
+          <p className="text-xs text-muted-foreground">
+            전략 버전 {result.strategyVersion} · {result.request.timeframe} ·{" "}
+            {money(result.processedBars)}개 분봉 처리
+          </p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
             {[
               ["손익", `${money(m.pnl)}원`],
               ["수익률", `${money(m.returnPct)}%`],

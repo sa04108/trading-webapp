@@ -1,4 +1,3 @@
-import { IntradayNav } from "../intraday/pages";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Dices, Plus } from "lucide-react";
 import { useState } from "react";
@@ -12,6 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api-client";
 import { useBacktests, useSeedCloneBatches, useStrategies } from "./api";
+import { BacktestHeader } from "./backtest-header";
 import {
   formatDateTime,
   formatSignedPct,
@@ -317,59 +317,61 @@ export function BacktestsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-lg font-semibold">백테스트</h2>
-        <IntradayNav />
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          {editing ? (
-            <>
-              <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Checkbox
-                  checked={allSelected}
-                  onCheckedChange={() =>
-                    setSelected(toggleAllBacktests(selected, deletableIds))
-                  }
-                  aria-label="전체 선택"
-                />
-                전체 선택
-              </label>
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={selectedIds.length === 0 || remove.isPending}
-                onClick={() => remove.mutate(selectedIds)}
-              >
-                선택 삭제 ({selectedIds.length})
-              </Button>
+      <BacktestHeader
+        mode="daily"
+        actions={
+          <>
+            {jobs.length > 0 ? (
               <Button
                 variant="outline"
                 size="sm"
-                disabled={deletableIds.length === 0 || remove.isPending}
-                onClick={() => remove.mutate(deletableIds)}
+                onClick={() => {
+                  setEditing((previous) => !previous);
+                  setSelected(new Set());
+                }}
               >
-                전체 삭제
+                {editing ? "완료" : "편집"}
               </Button>
-            </>
-          ) : null}
-          {jobs.length > 0 ? (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setEditing((previous) => !previous);
-                setSelected(new Set());
-              }}
-            >
-              {editing ? "완료" : "편집"}
+            ) : null}
+            <Button asChild className="h-11 w-11 px-0 sm:w-auto sm:px-4">
+              <Link to="/backtests/new" aria-label="새 백테스트">
+                <Plus data-icon="inline-start" />
+                <span className="hidden sm:inline">새 백테스트</span>
+              </Link>
             </Button>
-          ) : null}
-          <Button asChild className="h-11">
-            <Link to="/backtests/new">
-              <Plus data-icon="inline-start" />새 백테스트
-            </Link>
+          </>
+        }
+      />
+      {editing ? (
+        <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1">
+          <label className="flex shrink-0 items-center gap-2 text-sm text-muted-foreground">
+            <Checkbox
+              checked={allSelected}
+              onCheckedChange={() =>
+                setSelected(toggleAllBacktests(selected, deletableIds))
+              }
+              aria-label="전체 선택"
+            />
+            전체 선택
+          </label>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={selectedIds.length === 0 || remove.isPending}
+            onClick={() => remove.mutate(selectedIds)}
+          >
+            선택 삭제 ({selectedIds.length})
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={deletableIds.length === 0 || remove.isPending}
+            onClick={() => remove.mutate(deletableIds)}
+          >
+            전체 삭제
           </Button>
         </div>
-      </div>
+      ) : null}
 
       {isLoading || batchesQuery.isLoading ? (
         <div className="space-y-3">
