@@ -1,6 +1,6 @@
+import { useHistoryQueries } from "./use-history-queries";
 import {
   useMutation,
-  useQueries,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -98,18 +98,24 @@ export function BacktestJobCard({
       <CardContent className="space-y-2 py-4">
         <div className="flex items-start justify-between gap-2">
           <StatusBadge status={job.status} />
-          <div className="text-right">
-            {!editing ? <ExperimentLinks jobId={job.id} /> : null}
-            <p className="mt-1 text-xs text-muted-foreground">{formatDateTime(job.completedAtMs ?? job.createdAtMs)}</p>
-          </div>
+          {!editing ? <ExperimentLinks jobId={job.id} /> : null}
         </div>
-        {editing ? (
-          <p className="whitespace-nowrap text-sm font-medium">{historyPeriod(job.request.period.from, job.request.period.to)}</p>
-        ) : (
-          <Link className="block whitespace-nowrap text-sm font-medium underline after:absolute after:inset-0" to={`/backtests/${job.id}`}>
-            {historyPeriod(job.request.period.from, job.request.period.to)}
-          </Link>
-        )}
+        <div className="flex items-baseline justify-between gap-2 whitespace-nowrap">
+          {editing ? (
+            <p className="text-xs font-medium">{historyPeriod(job.request.period.from, job.request.period.to)}</p>
+          ) : (
+            <Link className="text-xs font-medium underline after:absolute after:inset-0" to={`/backtests/${job.id}`}>
+              {historyPeriod(job.request.period.from, job.request.period.to)}
+            </Link>
+          )}
+          <time
+            className="shrink-0 text-[11px] text-muted-foreground tabular-nums"
+            dateTime={new Date(job.completedAtMs ?? job.createdAtMs).toISOString()}
+            title={formatDateTime(job.completedAtMs ?? job.createdAtMs)}
+          >
+            {formatDateTime(job.completedAtMs ?? job.createdAtMs).replace(/^\d{2}/, "")}
+          </time>
+        </div>
         <p className="text-xs text-muted-foreground">
           {formatUniverseRuleSummary(job.request.universeRule)}
           {timeframe ? ` · ${timeframeLabel(timeframe)}` : ""}
@@ -203,7 +209,7 @@ export function BacktestsPage() {
     refetchInterval: 5_000,
   });
   const limit = controls.view === "cards" ? 6 : 10;
-  const pages = useQueries({
+  const pages = useHistoryQueries({
     queries: (groups.data?.groups ?? []).map((group) => {
       const params = new URLSearchParams({
         strategyId: group.strategyId,
@@ -212,7 +218,11 @@ export function BacktestsPage() {
         limit: String(limit),
         offset: String((controls.page(group.strategyId) - 1) * limit),
       });
+      const scope = new URLSearchParams(params);
+      scope.delete("offset");
       return {
+        placeholderKey: group.strategyId,
+        placeholderScope: scope.toString(),
         queryKey: ["backtests", "history", params.toString()],
         queryFn: () =>
           api<{ jobs: JobSummary[]; total: number }>(`/backtests?${params}`),
@@ -222,7 +232,7 @@ export function BacktestsPage() {
     }),
   });
   const visibleJobs = pages.flatMap((query, index) =>
-    controls.collapsed(groups.data?.groups[index]?.strategyId ?? "")
+    controls.collapsed(groups.data?.groups[index]?.strategyId ?? "") || query.isPlaceholderData
       ? []
       : (query.data?.jobs ?? []),
   );
@@ -241,7 +251,7 @@ export function BacktestsPage() {
   const corrections = (groups.data?.groups ?? []).flatMap((group, index) => {
     const query = pages[index];
     if (
-      !query?.data ||
+      !query?.data || query.isPlaceholderData ||
       query.isFetching ||
       controls.collapsed(group.strategyId)
     )
@@ -353,7 +363,7 @@ export function BacktestsPage() {
             ) : null}
             {query?.isLoading ? <Skeleton className="h-24 w-full" /> : null}
             {controls.view === "cards" ? (
-              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
+              <div data-pagination-content aria-busy={query?.isPlaceholderData} className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
                 {query?.data?.jobs.map((job) => (
                   <div key={job.id} className="min-w-0 max-w-[360px] space-y-2">
                     <BacktestJobCard
@@ -368,21 +378,21 @@ export function BacktestsPage() {
                 ))}
               </div>
             ) : (
-              <table className="w-full table-fixed text-xs">
+              <table data-pagination-content aria-busy={query?.isPlaceholderData} className="w-full table-fixed text-xs">
                 <thead>
                   <tr className="text-muted-foreground">
                     <th className="w-[48%] py-2 text-left sm:w-[32%] lg:w-[25%]">기간</th>
                     <th className="text-right">수익률</th>
                     <th className="text-right">CAGR</th>
                     <th className="hidden text-right sm:table-cell">MDD</th>
+                    <th className="hidden text-right lg:table-cell">초과수익률</th>
+                    <th className="hidden text-right lg:table-cell">Sharpe</th>
                     <th className="hidden text-right md:table-cell">
                       난수 <InfoHint label="난수 시드 통계 설명">건수는 난수 시드 실험 수이며 괄호는 완료된 실행 중 유효한 수익률의 표본 표준편차입니다.</InfoHint>
                     </th>
                     <th className="hidden text-right md:table-cell">
                       검증 <InfoHint label="기간 검증 통계 설명">건수는 기간 검증 실험 수이며 괄호는 완료된 실험별 OOS 평균 수익률 분포의 표본 표준편차입니다.</InfoHint>
                     </th>
-                    <th className="hidden text-right lg:table-cell">초과수익률</th>
-                    <th className="hidden text-right lg:table-cell">Sharpe</th>
                     <th className="hidden text-right sm:table-cell">실행일</th>
                   </tr>
                 </thead>
@@ -458,13 +468,17 @@ export function BacktestsPage() {
                         >
                           {formatSignedPct(job.metrics?.cagrPct ?? null)}
                         </td>
-                        <td className="hidden text-right sm:table-cell">
+                        <td className={`hidden text-right sm:table-cell ${pnlClass(job.metrics?.maxDrawdownPct)}`}>
                           {formatSignedPct(job.metrics?.maxDrawdownPct ?? null)}
+                        </td>
+                        <td className={`hidden text-right lg:table-cell ${pnlClass(extrasBySource.get(job.id)?.benchmarkExcessReturnPct)}`}>
+                          {formatSignedPct(extrasBySource.get(job.id)?.benchmarkExcessReturnPct ?? null)}
+                        </td>
+                        <td className={`hidden text-right lg:table-cell ${job.metrics?.sharpe == null ? "text-muted-foreground" : job.metrics.sharpe < 0 ? "text-loss" : job.metrics.sharpe >= 1 ? "text-gain" : "text-foreground"}`}>
+                          {job.metrics?.sharpe == null ? "—" : job.metrics.sharpe.toFixed(2)}
                         </td>
                         <td className="hidden text-right md:table-cell">{distribution(extrasBySource.get(job.id)?.seed.batchCount, extrasBySource.get(job.id)?.seed.returns.sampleStdDev)}</td>
                         <td className="hidden text-right md:table-cell">{distribution(extrasBySource.get(job.id)?.validation.experimentCount, extrasBySource.get(job.id)?.validation.returns.sampleStdDev)}</td>
-                        <td className="hidden text-right lg:table-cell">{formatSignedPct(extrasBySource.get(job.id)?.benchmarkExcessReturnPct ?? null)}</td>
-                        <td className="hidden text-right lg:table-cell">{job.metrics?.sharpe == null ? "—" : job.metrics.sharpe.toFixed(2)}</td>
                         <td className="hidden pl-2 text-right sm:table-cell">
                           {formatDateTime(job.createdAtMs)}
                         </td>
@@ -479,6 +493,7 @@ export function BacktestsPage() {
                 page={controls.page(group.strategyId)}
                 total={query.data.total}
                 limit={limit}
+                pending={query.isPlaceholderData}
                 onPage={(page) => {
                   controls.setPage(group.strategyId, page);
                   clear();

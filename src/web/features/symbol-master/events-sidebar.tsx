@@ -162,7 +162,7 @@ export function EventsSidebar({
           </p>
         ) : (
           <>
-            <ul className="divide-y">
+            <ul data-pagination-content className="divide-y">
               {visible.map((event) => (
                 <EventRow
                   key={event.id}

@@ -13,7 +13,7 @@ const request: BacktestRequest = {
   execution: { fillTiming: "NEXT_BAR_OPEN", commissionProfileId: "kr-equity-default", slippageProfileId: "fixed-5bps" }, risk: { maxPositions: 5 }, randomSeed: 42,
 };
 const metrics = { initialCash: 10000000, finalEquity: 11000000, totalReturnPct: 10, cagrPct: 3, maxDrawdownPct: -5, sharpe: 1, tradeCount: 12, winRate: 50, totalCommission: 100, totalTax: 100, totalSlippage: 100 };
-const rootItems = [{ label: "백테스트", href: "/backtests" }, { label: "직접 실행 source", href: `/backtests/${sourceId}` }];
+const rootItems = [{ label: "백테스트", href: "/backtests" }, { label: "결과 source", href: `/backtests/${sourceId}` }];
 const seedItems = [...rootItems, { label: "난수 시드 실험", href: `/backtests/${sourceId}/seeds` }, { label: "실험 batch", href: "/backtests/batches/navigation-batch" }, { label: "시드 77", href: `/backtests/${seedId}` }];
 const oosItems = [...rootItems, { label: "기간검증", href: `/backtests/${sourceId}/validations` }, { label: "홀드아웃 validation", href: "/backtests/validations/navigation-validation" }, { label: "1회차 · OOS 검증", href: `/backtests/${oosId}` }];
 
@@ -48,7 +48,7 @@ async function setup(page: Page) {
 test("원본 요약에서 난수·기간검증으로 이동하고 직접 열린 자식의 경로를 보존한다", async ({ page }, testInfo) => {
   const state = await setup(page);
   await page.goto(`/backtests/${sourceId}`);
-  await expect(page.getByRole("navigation", { name: "백테스트 경로" })).toContainText("직접 실행 source");
+  await expect(page.getByRole("navigation", { name: "백테스트 경로" })).toContainText("결과 source");
   await expect(page.getByRole("region", { name: "기간 검증" })).toHaveCount(0);
   const summaries = page.getByRole("region", { name: "백테스트 실험" });
   await expect(summaries).toContainText("기록 1개");

@@ -1,9 +1,9 @@
 import { IntradayChartView } from "./intraday-chart";
 export { IntradayDataPage } from "./intraday-data-page";
+import { useHistoryQueries } from "../backtests/use-history-queries";
 import { ResultBreadcrumbs } from "../backtests/backtest-breadcrumbs";
 import {
   useMutation,
-  useQueries,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -246,7 +246,7 @@ export function IntradayListPage() {
     refetchInterval: 5_000,
   });
   const limit = controls.view === "cards" ? 6 : 10;
-  const pages = useQueries({
+  const pages = useHistoryQueries({
     queries: (groups.data?.groups ?? []).map((group) => {
       const params = new URLSearchParams({
         strategyId: group.strategyId,
@@ -255,7 +255,11 @@ export function IntradayListPage() {
         limit: String(limit),
         offset: String((controls.page(group.strategyId) - 1) * limit),
       });
+      const scope = new URLSearchParams(params);
+      scope.delete("offset");
       return {
+        placeholderKey: group.strategyId,
+        placeholderScope: scope.toString(),
         queryKey: ["intraday-runs", "history", params.toString()],
         queryFn: () =>
           api<{ runs: IntradayRunSummary[]; total: number }>(
@@ -267,7 +271,7 @@ export function IntradayListPage() {
     }),
   });
   const visibleRuns = pages.flatMap((query, index) =>
-    controls.collapsed(groups.data?.groups[index]?.strategyId ?? "")
+    controls.collapsed(groups.data?.groups[index]?.strategyId ?? "") || query.isPlaceholderData
       ? [] : (query.data?.runs ?? []),
   );
   const deletableIds = visibleRuns.filter((run) => !active(run.status)).map((run) => run.id);
@@ -291,7 +295,7 @@ export function IntradayListPage() {
   const corrections = (groups.data?.groups ?? []).flatMap((group, index) => {
     const query = pages[index];
     if (
-      !query?.data ||
+      !query?.data || query.isPlaceholderData ||
       query.isFetching ||
       controls.collapsed(group.strategyId)
     )
@@ -366,21 +370,29 @@ export function IntradayListPage() {
           >
             <ErrorAlert error={query?.error} />
             {controls.view === "cards" ? (
-              <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
+              <div data-pagination-content aria-busy={query?.isPlaceholderData} className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
                 {query?.data?.runs.map((run) => {
                   const card = (
                     <Card>
                       <CardContent className="space-y-2 py-4">
                         <div className="flex justify-between gap-2 text-xs text-muted-foreground">
                           <span className="flex items-center gap-1">{active(run.status) ? <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" aria-hidden /> : null}{statusLabel[run.status]}</span>
-                          <span>{time(run.createdAtMs)}</span>
                         </div>
-                        <p className="whitespace-nowrap text-sm font-medium">
-                          {historyPeriod(
-                            run.request.period.from,
-                            run.request.period.to,
-                          )}
-                        </p>
+                        <div className="flex items-baseline justify-between gap-2 whitespace-nowrap">
+                          <p className="text-xs font-medium">
+                            {historyPeriod(run.request.period.from, run.request.period.to)}
+                          </p>
+                          <time
+                            className="shrink-0 text-[11px] text-muted-foreground tabular-nums"
+                            dateTime={new Date(run.createdAtMs).toISOString()}
+                            title={time(run.createdAtMs)}
+                          >
+                            {new Date(run.createdAtMs).toLocaleString("sv-SE", {
+                              timeZone: "Asia/Seoul", year: "2-digit", month: "2-digit", day: "2-digit",
+                              hour: "2-digit", minute: "2-digit",
+                            }).replaceAll("-", ".")}
+                          </time>
+                        </div>
                         <p className="text-xs text-muted-foreground">
                           {run.request.symbol} · {run.request.timeframe}
                         </p>
@@ -422,7 +434,7 @@ export function IntradayListPage() {
                             id={`intraday-${run.id}`}
                             className="mt-5"
                             checked={selected.has(run.id)}
-                            disabled={active(run.status) || remove.isPending}
+                            disabled={active(run.status) || remove.isPending || query?.isPlaceholderData}
                             onCheckedChange={() => toggleOne(run.id)}
                             aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
                           />
@@ -436,7 +448,7 @@ export function IntradayListPage() {
                 })}
               </div>
             ) : (
-              <table className="w-full table-fixed text-xs">
+              <table data-pagination-content aria-busy={query?.isPlaceholderData} className="w-full table-fixed text-xs">
                 <thead>
                   <tr className="text-muted-foreground">
                     <th className="w-[52%] py-2 text-left sm:w-[38%]">기간</th>
@@ -455,7 +467,7 @@ export function IntradayListPage() {
                             <Checkbox
                               className="mr-1"
                               checked={selected.has(run.id)}
-                              disabled={active(run.status) || remove.isPending}
+                              disabled={active(run.status) || remove.isPending || query?.isPlaceholderData}
                               onCheckedChange={() => toggleOne(run.id)}
                               aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
                             />
@@ -489,7 +501,7 @@ export function IntradayListPage() {
                         {formatSignedPct(run.metrics?.returnPct ?? null)}
                       </td>
                       <td className="text-right">—</td>
-                      <td className="hidden text-right sm:table-cell">
+                      <td className={`hidden text-right sm:table-cell ${pnlClass(run.metrics?.maxDrawdownPct)}`}>
                         {formatSignedPct(run.metrics?.maxDrawdownPct ?? null)}
                       </td>
                       <td className="hidden pl-2 text-right sm:table-cell">
@@ -506,6 +518,7 @@ export function IntradayListPage() {
                 page={controls.page(group.strategyId)}
                 total={query.data.total}
                 limit={limit}
+                pending={query.isPlaceholderData}
                 onPage={(page) => {
                   controls.setPage(group.strategyId, page);
                   clear();
@@ -903,7 +916,7 @@ export function IntradayDetailPage() {
   );
   return (
     <div className="space-y-4">
-      <ResultBreadcrumbs items={[{ label: "백테스트", href: "/backtests" }, { label: "분봉", href: "/backtests/intraday" }, { label: `직접 실행 ${id.slice(-6)}` }]} />
+      <ResultBreadcrumbs items={[{ label: "백테스트", href: "/backtests" }, { label: "분봉", href: "/backtests/intraday" }, { label: `결과 ${id.slice(-6)}` }]} />
       <BacktestHeader mode="intraday" title="백테스트 결과" />
       {run.isLoading ? (
         <div role="status" aria-label="백테스트 불러오는 중" className="space-y-3">

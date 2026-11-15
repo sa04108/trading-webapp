@@ -179,6 +179,11 @@ export function BenchmarkComparisonChart({
               <Tooltip
                 {...chartTooltipProps}
                 labelFormatter={(ts) => formatDate(Number(ts))}
+                itemSorter={(item) =>
+                  typeof item.value === "number" && Number.isFinite(item.value)
+                    ? -item.value
+                    : Infinity
+                }
                 formatter={(value, name) => [
                   Number(value).toFixed(2),
                   String(name),

@@ -211,5 +211,13 @@ export function useBacktestTrades(
       ),
     enabled,
     staleTime: Infinity,
+    placeholderData: (previous, previousQuery) => {
+      const key = previousQuery?.queryKey;
+      const prior = key?.[3];
+      return key?.[1] === jobId && prior && typeof prior === "object" &&
+        prior.limit === options.limit && prior.symbol === options.symbol &&
+        prior.sort === options.sort && prior.dir === options.dir
+        ? previous : undefined;
+    },
   });
 }

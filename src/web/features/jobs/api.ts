@@ -6,8 +6,9 @@ const cannotRefresh = (error: Error | null) => error instanceof ApiError && [401
 const retry = (count: number, error: Error) => count < 1 && !cannotRefresh(error);
 
 export function useJobs(status: JobFilter, offset: number) {
-  return useQuery({
+  return useQuery<JobsResponse>({
     queryKey: ["jobs", "list", status, offset],
+    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[2] === status ? previous : undefined,
     queryFn: ({ signal }) => api<JobsResponse>(`/jobs?status=${status}&limit=50&offset=${offset}`, { signal }),
     refetchInterval: (query) => cannotRefresh(query.state.error) ? false : query.state.error ? 30_000 : query.state.data?.activeCount ? 5_000 : 30_000,
     refetchIntervalInBackground: false,

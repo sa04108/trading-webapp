@@ -45,7 +45,7 @@ export function UniverseRebalancingSection({
         />
       </CardHeader>
       <CardContent>
-        <div className="overflow-x-auto">
+        <div data-pagination-content className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>

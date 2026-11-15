@@ -1,6 +1,5 @@
 import { ExperimentSummary } from "./experiment-summary";
 import { BacktestBreadcrumbs } from "./backtest-breadcrumbs";
-import { useBacktestLineage } from "./experiment-api";
 import {
   ExecutionProgressSummary,
   executionProgressPercent,
@@ -284,7 +283,7 @@ function TradesSection({
   const [pageSizeText, setPageSizeText] = useState(String(RESULT_PAGE_SIZE));
   const [sort, setSort] = useState<TradeSort>(DEFAULT_TRADE_SORT);
   const pageSize = parsePageSize(pageSizeText, RESULT_PAGE_SIZE);
-  const { data, isLoading } = useBacktestTrades(
+  const { data, isLoading, isPlaceholderData } = useBacktestTrades(
     jobId,
     {
       limit: pageSize,
@@ -351,6 +350,7 @@ function TradesSection({
             }}
           />
         </div>
+        <div data-pagination-content>
         {isLoading ? (
           <Skeleton className="h-32 w-full" />
         ) : trades.length === 0 && openRows.length === 0 ? (
@@ -547,10 +547,12 @@ function TradesSection({
             factor·매도 체결 수에는 포함되지 않습니다.
           </p>
         ) : null}
+        </div>
         <Pagination
           className="mt-3"
           ariaLabel="거래 내역 페이지 이동"
           currentPage={page}
+          pending={isPlaceholderData}
           pageCount={pageCount}
           onPageChange={setPage}
         />
@@ -718,7 +720,6 @@ function RunMetadataCard({
 export function BacktestDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
-  const lineage = useBacktestLineage(id);
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [seedCloneOpen, setSeedCloneOpen] = useState(false);
@@ -887,7 +888,6 @@ export function BacktestDetailPage() {
           {strategyName ?? job.strategyId}
         </h2>
         <StatusBadge status={job.status} />
-        {lineage.data ? <Badge variant="outline">{lineage.data.roleLabel}</Badge> : null}
         {completed ? <Button variant="outline" onClick={() => void navigate(`/trading?sourceJobId=${encodeURIComponent(id)}`)}>이 설정으로 매매 준비</Button> : null}
         <div
           className={cn(
