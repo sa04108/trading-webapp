@@ -325,9 +325,10 @@ export function BacktestsPage() {
   const batchesBySource = groupSeedBatchesBySource(
     batchQuery.data?.batches ?? [],
   );
+  // 재조회 중에는 직전 성공 결과를 유지해 편집 체크박스와 선택 상태가 흔들리지 않게 한다.
   const batchReady =
     sourceIds.length === 0 ||
-    (batchQuery.isSuccess && !batchQuery.isFetching && !batchQuery.isError);
+    (batchQuery.isSuccess && !batchQuery.isError);
   const deletableIds = batchReady
     ? deletableBacktestIds(visibleJobs).filter(
         (id) => !hasActiveSeedBatch(batchesBySource.get(id) ?? []),
