@@ -212,7 +212,7 @@ export function UniverseTable({
         </Alert>
       ) : (
         <div className="space-y-2">
-          <div className="rounded-md border">
+          <div data-pagination-content className="rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>

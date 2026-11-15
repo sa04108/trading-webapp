@@ -126,7 +126,7 @@ export function backtestLineage(database: DatabaseHandle, id: string): BacktestL
       if (jobId === id) { kind = "clone"; roleLabel = "복제 실행"; }
       return [...walk(job.source), { ...own, label: `복제 ${jobId.slice(-6)}` }];
     }
-    return [{ ...own, label: `직접 실행 ${jobId.slice(-6)}` }];
+    return [own];
   };
   const items = [{ label: "백테스트", href: "/backtests" }, ...walk(id)];
   if (!complete && kind === "original") { kind = "unknown"; roleLabel = "경로 확인 필요"; }
