@@ -33,8 +33,8 @@ export interface BacktestBreadcrumbEntry {
 
 export interface BacktestLineage {
   items: BacktestBreadcrumbEntry[];
-  kind: "original" | "clone" | "seed" | "validation" | "unknown";
+  kind: "original" | "seed" | "validation" | "unknown";
   roleLabel: string;
-  /** 상위 기록이 없거나 연결이 손상되면 직접 실행으로 단정하지 않는다. */
+  /** 실험의 상위 기록이 없거나 연결이 손상되면 독립 결과로 단정하지 않는다. */
   complete: boolean;
 }

@@ -115,6 +115,8 @@ Git SHA는 출처를 기록한다. `agentVersion`·`collectionVersion`·`preview
 
 기간 검증은 홀드아웃·최적화 홀드아웃·워크포워드를 지원한다. 최적화 후보는 학습 구간 성과로만 선택하며 평가 구간 성과를 선택 함수에 전달하지 않는다. 여러 실험 중 좋은 결과를 고르는 선택 편향의 통계적 보정과 성과 신뢰구간은 제공하지 않는다. 계약과 구간·후보 제한은 [period-validation.ts](../src/shared/schemas/period-validation.ts)를 따른다.
 
+결과의 상하 관계는 난수 시드 실험과 기간 검증에 참여한 실행에만 적용한다. 그대로 복제·재설정 및 복제는 복제 원본의 종류와 관계없이 독립된 루트 결과이며 브레드크럼은 `백테스트 > 결과 xxxxxx`로 시작한다. 일반 복제의 원본 ID는 입력 재사용을 위한 출처로 보존하지만 경로를 따라가지 않는다. 이 규칙은 기존 기록에도 적용하며 일반 복제 원본의 삭제는 루트 경로의 완전성에 영향을 주지 않는다.
+
 구현: [container.ts](../src/server/bootstrap/container.ts), [agent-coordinator.ts](../src/server/modules/agents/application/agent-coordinator.ts), [database.ts](../src/runtime/shared/db/database.ts).
 
 ## 5. 저장소 구조와 의존 방향
