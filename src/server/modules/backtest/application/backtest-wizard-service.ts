@@ -10,7 +10,8 @@ import { BacktestWizardError, requireEditableWizard, requireWizard } from "./bac
 
 const terminal = ["COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"];
 type Row = typeof backtestWizardJobs.$inferSelect;
-type Child = { id: string; status: string; updatedAtMs: number; error: string | null; requestJson: string; cancelRequested?: number };
+type Child = { id: string; status: string; updatedAtMs: number; error: string | null; cancelRequested?: number };
+type PreparationChild = Child & { requestJson: string };
 
 /** 별도 실행 큐 없이 기존 준비·계산 작업을 묶는다. 읽을 때도 상태를 맞춰 서버 재시작을 견딘다. */
 export class BacktestWizardService {
@@ -37,10 +38,10 @@ export class BacktestWizardService {
     const preparation = this.database.sqlite.prepare(`SELECT p.id, p.status, p.updated_at_ms AS updatedAtMs,
       p.error, p.request_json AS requestJson, p.cancel_requested AS cancelRequested
       FROM preparation_wizard_references r JOIN backtest_preparation_jobs p ON p.id=r.preparation_job_id
-      WHERE r.user_id=? AND r.context=?`).get(row.ownerId, row.id) as Child | undefined;
+      WHERE r.user_id=? AND r.context=?`).get(row.ownerId, row.id) as PreparationChild | undefined;
     const backtest = row.backtestJobId ? this.database.sqlite.prepare(`SELECT id, status,
       coalesce(completed_at_ms,last_received_at_ms,last_progress_at_ms,started_at_ms,created_at_ms) AS updatedAtMs,
-      error, request_json AS requestJson FROM backtest_jobs WHERE id=?`).get(row.backtestJobId) as Child | undefined : undefined;
+      error FROM backtest_jobs WHERE id=?`).get(row.backtestJobId) as Child | undefined : undefined;
     return { preparation, backtest };
   }
 
@@ -49,28 +50,30 @@ export class BacktestWizardService {
       .where(and(ownerId ? eq(backtestWizardJobs.ownerId, ownerId) : undefined,
         notInArray(backtestWizardJobs.status, ["COMPLETED", "CANCELLED"]))).all();
     for (const row of rows) {
-      if (row.status === "COMPLETED" || row.status === "CANCELLED") continue;
       const { preparation, backtest } = this.children(row);
-      const child = backtest ?? preparation;
-      const status = backtest?.status === "COMPLETED" ? "COMPLETED"
-        : !child || terminal.includes(child.status) ? "WAITING"
-        : child.cancelRequested || child.status === "CANCELLING" ? "CANCELLING"
-        : child.status === "QUEUED" ? "QUEUED"
-        : child.status.startsWith("WAITING") ? "WAITING" : "RUNNING";
-      const updatedAtMs = Math.max(row.updatedAtMs, child?.updatedAtMs ?? row.updatedAtMs);
-      if (status !== row.status || updatedAtMs !== row.updatedAtMs) {
-        this.database.db.update(backtestWizardJobs).set({ status, updatedAtMs,
-          finishedAtMs: status === "COMPLETED" ? backtest!.updatedAtMs : null,
-        }).where(eq(backtestWizardJobs.id, row.id)).run();
-      }
+      this.syncRow(row, preparation, backtest);
     }
   }
 
+  private syncRow(row: Row, preparation: Child | undefined, backtest: Child | undefined): Row {
+    if (row.status === "COMPLETED" || row.status === "CANCELLED") return row;
+    const child = backtest ?? preparation;
+    const status = backtest?.status === "COMPLETED" ? "COMPLETED"
+      : !child || terminal.includes(child.status) ? "WAITING"
+      : child.cancelRequested || child.status === "CANCELLING" ? "CANCELLING"
+      : child.status === "QUEUED" ? "QUEUED"
+      : child.status.startsWith("WAITING") ? "WAITING" : "RUNNING";
+    const updatedAtMs = Math.max(row.updatedAtMs, child?.updatedAtMs ?? row.updatedAtMs);
+    if (status === row.status && updatedAtMs === row.updatedAtMs) return row;
+    const updated = { status, updatedAtMs, finishedAtMs: status === "COMPLETED" ? backtest!.updatedAtMs : null };
+    this.database.db.update(backtestWizardJobs).set(updated).where(eq(backtestWizardJobs.id, row.id)).run();
+    return { ...row, ...updated };
+  }
+
   get(ownerId: string, id: string): BacktestWizardJob {
-    requireWizard(this.database, ownerId, id);
-    this.sync(ownerId);
-    const row = requireWizard(this.database, ownerId, id);
-    const { preparation, backtest } = this.children(row);
+    const stored = requireWizard(this.database, ownerId, id);
+    const { preparation, backtest } = this.children(stored);
+    const row = this.syncRow(stored, preparation, backtest);
     const child = backtest ?? preparation;
     let phase = "설정 입력 대기";
     if (row.status === "CANCELLED") phase = "사용자가 작업을 취소했습니다";

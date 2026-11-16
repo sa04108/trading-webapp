@@ -243,7 +243,6 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
 
   const sourceJobId = wizard.sourceJobId;
 
-  const wizardDraftContextKey = wizardId;
   const wizardDraft = useQuery({
     queryKey: ["backtests", "wizard-draft", wizardId],
     queryFn: () => loadBacktestWizardDraft(wizardId),
@@ -361,7 +360,7 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
   // 서버 초안 복원은 전략 스키마 기본값 시딩과 복제 프리필보다 먼저 한 번만 적용한다.
   useEffect(() => {
     if (!wizardDraft.isSuccess) return;
-    if (restoredWizardDraftContext === wizardDraftContextKey) return;
+    if (restoredWizardDraftContext === wizardId) return;
     const saved = wizardDraft.data;
     const savedStrategyId = saved.strategy?.strategyId ?? null;
     if (savedStrategyId !== null && !strategies.data && !strategies.isError)
@@ -404,12 +403,12 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
       setReviewPassed(restoredStep === RUN_STEP);
       if (sourceJobId !== null) prefilledFrom.current = sourceJobId;
     }
-    setRestoredWizardDraftContext(wizardDraftContextKey);
+    setRestoredWizardDraftContext(wizardId);
   }, [
     wizardDraft.isSuccess,
     wizardDraft.data,
     restoredWizardDraftContext,
-    wizardDraftContextKey,
+    wizardId,
     hasStoredWizardDraft,
     strategies.data,
     strategies.isError,
@@ -725,10 +724,10 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
   const draftRestorePending =
     wizardDraft.isPending ||
     (wizardDraft.isSuccess &&
-      restoredWizardDraftContext !== wizardDraftContextKey);
+      restoredWizardDraftContext !== wizardId);
   const storedDraftSchemaPending =
     hasStoredWizardDraft &&
-    restoredWizardDraftContext === wizardDraftContextKey &&
+    restoredWizardDraftContext === wizardId &&
     strategyId !== null &&
     schema.data === undefined &&
     !schema.isError;
@@ -740,7 +739,7 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
       !prefillError);
   const canAutosave =
     wizardDraft.isSuccess &&
-    restoredWizardDraftContext === wizardDraftContextKey &&
+    restoredWizardDraftContext === wizardId &&
     !prefilling &&
     !submitMutation.isPending &&
     !submitMutation.isSuccess &&
@@ -749,7 +748,6 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
       prefilledFrom.current === sourceJobId);
   const currentDraftSnapshot = {
     canAutosave,
-    sourceJobId,
     currentStep: stepSlug(step),
     strategyId,
     parameters,

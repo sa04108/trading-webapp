@@ -20,10 +20,7 @@ export interface BacktestWizardDraft<
   readonly updatedAtMs: number;
 }
 
-const contextOf = (sourceJobId: string | undefined): string =>
-  sourceJobId ?? "";
-
-/** 인증 사용자별 입력을 보존하고 현재 미리보기는 서버의 단일 참조에서 복원한다. */
+/** 인증 사용자별 입력을 보존하고 현재 미리보기는 해당 위저드의 참조에서 복원한다. */
 export class BacktestWizardDraftService {
   private readonly references: PreparationReferenceService;
 
@@ -36,10 +33,10 @@ export class BacktestWizardDraftService {
 
   get<S extends BacktestWizardDraftStep>(
     userId: string,
-    sourceJobId: string | undefined,
+    contextId: string | undefined,
     step: S,
   ): BacktestWizardDraft<S> | null {
-    const context = contextOf(sourceJobId);
+    const context = contextId ?? "";
     const row = this.database.db
       .select()
       .from(backtestWizardDrafts)
@@ -81,13 +78,13 @@ export class BacktestWizardDraftService {
 
   save<S extends BacktestWizardDraftStep>(
     userId: string,
-    sourceJobId: string | undefined,
+    contextId: string | undefined,
     step: S,
     payload: BacktestWizardDraftWritePayloadMap[S],
   ): BacktestWizardDraft<S> {
     return this.database.sqlite
       .transaction(() => {
-        const context = contextOf(sourceJobId);
+        const context = contextId ?? "";
         const wizard = this.database.db.select().from(backtestWizardJobs).where(eq(backtestWizardJobs.id, context)).get();
         if (wizard) requireEditableWizard(this.database, userId, context);
         const updatedAtMs = this.clock.now();
@@ -99,7 +96,7 @@ export class BacktestWizardDraftService {
           const owner = this.references.getWizard(userId, context);
           // 신규 미리보기는 POST에서 이미 연결한다. 늦은 자동 저장이 새 참조를 되돌리지 않는다.
           // 복제 위저드는 원본 백테스트가 실제 소유한 ID만 최초 연결할 수 있다.
-          const cloneSourceId = wizard?.sourceJobId ?? sourceJobId;
+          const cloneSourceId = wizard ? wizard.sourceJobId : contextId;
           if (requestedId && !owner && cloneSourceId) {
             const source = this.database.db
               .select({ preparationJobId: backtestJobs.preparationJobId })
@@ -137,17 +134,17 @@ export class BacktestWizardDraftService {
             ...(strategy?.currentStep ? { currentStep: strategy.currentStep } : {}),
           }).where(eq(backtestWizardJobs.id, context)).run();
         }
-        return this.get(userId, sourceJobId, step)!;
+        return this.get(userId, contextId, step)!;
       })
       .immediate();
   }
 
-  remove(userId: string, sourceJobId: string | undefined): void {
-    if (sourceJobId && this.database.db.select().from(backtestWizardJobs).where(eq(backtestWizardJobs.id, sourceJobId)).get())
+  remove(userId: string, contextId: string | undefined): void {
+    if (contextId && this.database.db.select().from(backtestWizardJobs).where(eq(backtestWizardJobs.id, contextId)).get())
       throw new BacktestWizardError("위저드 작업은 작업 취소 API로 종료하세요.", 409);
     this.database.sqlite
       .transaction(() => {
-        const context = contextOf(sourceJobId);
+        const context = contextId ?? "";
         this.database.db
           .delete(backtestWizardDrafts)
           .where(

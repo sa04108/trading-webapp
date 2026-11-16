@@ -16,10 +16,12 @@ function trackDraftSave<T>(wizardId: string, request: Promise<T>): Promise<T> {
   const pending = pendingDraftSaves.get(wizardId) ?? new Set();
   pendingDraftSaves.set(wizardId, pending);
   pending.add(request);
-  void request.then(
-    () => pending.delete(request),
-    () => pending.delete(request),
-  );
+  const cleanup = (): void => {
+    pending.delete(request);
+    if (pending.size === 0 && pendingDraftSaves.get(wizardId) === pending)
+      pendingDraftSaves.delete(wizardId);
+  };
+  void request.then(cleanup, cleanup);
   return request;
 }
 
@@ -33,24 +35,21 @@ function enqueueDraftSave<T>(wizardId: string, key: string, write: () => Promise
     .catch(() => undefined)
     .then(write);
   lastDraftSaveByKey.set(key, request);
-  void request.then(
-    () => {
-      if (lastDraftSaveByKey.get(key) === request)
-        lastDraftSaveByKey.delete(key);
-    },
-    () => {
-      if (lastDraftSaveByKey.get(key) === request)
-        lastDraftSaveByKey.delete(key);
-    },
-  );
+  const cleanup = (): void => {
+    if (lastDraftSaveByKey.get(key) === request)
+      lastDraftSaveByKey.delete(key);
+  };
+  void request.then(cleanup, cleanup);
   return trackDraftSave(wizardId, request);
 }
 
 /** 같은 문서에서 막 시작한 unload/unmount 저장보다 진입 판정이 앞서는 경합을 막는다. */
 export async function waitForPendingDraftSaves(wizardId: string): Promise<void> {
-  const pending = pendingDraftSaves.get(wizardId);
-  while (pending && pending.size > 0) await Promise.allSettled([...pending]);
-  pendingDraftSaves.delete(wizardId);
+  while (true) {
+    const pending = pendingDraftSaves.get(wizardId);
+    if (!pending || pending.size === 0) return;
+    await Promise.allSettled([...pending]);
+  }
 }
 
 function contextQuery(wizardId: string): string {

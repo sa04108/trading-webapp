@@ -207,8 +207,8 @@ export class JobCenterService {
         break;
       }
       case "validation": {
-        const data = db.prepare(`SELECT source_job_id AS sourceJobId, phase, error,
-          json_extract(request_json,'$.strategyId') AS strategyId, json_extract(plan_json,'$.totalRuns') AS total FROM backtest_validations WHERE id=?`).get(row.sourceId) as { sourceJobId: string; phase: string; strategyId: string; total: number; error: string | null };
+        const data = db.prepare(`SELECT phase, error,
+          json_extract(request_json,'$.strategyId') AS strategyId, json_extract(plan_json,'$.totalRuns') AS total FROM backtest_validations WHERE id=?`).get(row.sourceId) as { phase: string; strategyId: string; total: number; error: string | null };
         const counts = db.prepare(`SELECT count(*) AS done,
           coalesce(sum(CASE WHEN t.skip_reason IS NOT NULL THEN 1 ELSE 0 END), 0) AS notEvaluated
           FROM backtest_validation_trials t LEFT JOIN backtest_jobs j ON j.id=t.job_id
