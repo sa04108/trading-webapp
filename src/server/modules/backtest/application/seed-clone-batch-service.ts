@@ -385,10 +385,11 @@ export class SeedCloneBatchService {
         .prepare(
           `
       SELECT 1 FROM backtest_validations WHERE source_job_id = ?
-      UNION ALL SELECT 1 FROM backtest_validation_trials WHERE job_id = ? LIMIT 1
+      UNION ALL SELECT 1 FROM backtest_validation_trials WHERE job_id = ?
+      UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE source_job_id = ? AND status IN ('QUEUED','PREPARING','SUBMITTING') LIMIT 1
     `,
         )
-        .get(jobId, jobId) !== undefined
+        .get(jobId, jobId, jobId) !== undefined
     );
   }
 

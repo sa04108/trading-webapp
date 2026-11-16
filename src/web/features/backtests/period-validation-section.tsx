@@ -1,3 +1,4 @@
+import { isRefreshRequired, useBacktestRefresh } from "./backtest-refresh-dialog";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router";
@@ -392,6 +393,7 @@ export function PeriodValidationSection({
   request: BacktestRequestBody;
 }) {
   const queryClient = useQueryClient();
+  const refreshFlow = useBacktestRefresh(jobId);
   const queryKey = ["period-validations", jobId];
   const experiments = useQuery({
     queryKey,
@@ -497,6 +499,9 @@ export function PeriodValidationSection({
         body: JSON.stringify(config),
       }),
     onSuccess: refresh,
+    onError: (error, config) => {
+      if (isRefreshRequired(error)) refreshFlow.offer({ kind: "PERIOD_VALIDATION", config }, error);
+    },
   });
   return (
     <section
@@ -504,6 +509,7 @@ export function PeriodValidationSection({
       className="space-y-4 min-w-0"
       aria-label="기간 검증"
     >
+      {refreshFlow.modal}
       <Card>
         <CardHeader>
           <CardTitle>새 기간검증</CardTitle>
@@ -741,10 +747,10 @@ export function PeriodValidationSection({
           ) : (
             <p className="text-sm text-muted-foreground">{preview.error}</p>
           )}
-          {create.error || experiments.error || schema.error ? (
+          {(create.error && !isRefreshRequired(create.error)) || experiments.error || schema.error ? (
             <Alert variant="destructive">
               <AlertDescription>
-                {create.error?.message ??
+                {(!isRefreshRequired(create.error) ? create.error?.message : undefined) ??
                   experiments.error?.message ??
                   schema.error?.message}
               </AlertDescription>

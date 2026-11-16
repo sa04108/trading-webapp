@@ -1,3 +1,4 @@
+import { isRefreshRequired, useBacktestRefresh } from "./backtest-refresh-dialog";
 import { ResultBenchmarkComparison } from "./result-benchmark-comparison";
 import { ExperimentSummary } from "./experiment-summary";
 import { BacktestBreadcrumbs } from "./backtest-breadcrumbs";
@@ -18,7 +19,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -697,6 +698,8 @@ function RunMetadataCard({
 export function BacktestDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const refresh = useBacktestRefresh(id, searchParams.get("refreshJob"));
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [seedCloneOpen, setSeedCloneOpen] = useState(false);
@@ -744,14 +747,8 @@ export function BacktestDetailPage() {
       void navigate(`/backtests/${data.job.id}`);
     },
     onError: (error: unknown) => {
-      if (
-        error instanceof ApiError &&
-        (error.message === "PREPARATION_REQUIRED" ||
-          error.message === "PREVIEW_REQUIRED")
-      ) {
-        toast.error(
-          "현재 데이터를 다시 준비해야 합니다. 재설정 및 복제에서 미리보기를 완료하세요.",
-        );
+      if (isRefreshRequired(error)) {
+        refresh.offer({ kind: "CLONE" }, error);
         return;
       }
       toast.error(
@@ -775,15 +772,10 @@ export function BacktestDetailPage() {
       });
       void navigate(`/backtests/batches/${data.batch.id}`);
     },
-    onError: (error: unknown) => {
-      if (
-        error instanceof ApiError &&
-        (error.message === "PREPARATION_REQUIRED" ||
-          error.message === "PREVIEW_REQUIRED")
-      ) {
-        toast.error(
-          "현재 데이터를 다시 준비해야 합니다. 재설정 및 복제에서 미리보기를 완료하세요.",
-        );
+    onError: (error: unknown, count) => {
+      if (isRefreshRequired(error)) {
+        setSeedCloneOpen(false);
+        refresh.offer({ kind: "RANDOM_SEEDS", count }, error);
         return;
       }
       toast.error(
@@ -1042,6 +1034,7 @@ export function BacktestDetailPage() {
         </Button>
       </div>
 
+      {refresh.modal}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>
           <DialogHeader>

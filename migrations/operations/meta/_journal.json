@@ -127,6 +127,13 @@
       "when": 1794796081407,
       "tag": "0017_remove_benchmark_pins",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1794805737491,
+      "tag": "0018_backtest_refresh_jobs",
+      "breakpoints": true
     }
   ]
 }

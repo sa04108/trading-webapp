@@ -33,6 +33,7 @@ import type {
   BacktestUniversePreview,
 } from "../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js";
 import type { ResultsService } from "./results-service.js";
+import { BacktestRefreshRequiredError } from "./backtest-refresh-error.js";
 import { PreparationPreviewCache } from "../../../../runtime/modules/backtest/application/preparation-preview-cache.js";
 
 type Experiment = typeof backtestValidations.$inferSelect;
@@ -76,22 +77,20 @@ export class PeriodValidationService {
     const strategy = this.deps.strategies.get(source.strategyId);
     if (!strategy) throw new Error("전략을 찾을 수 없습니다.");
     const run = this.deps.results.getRun(sourceJobId);
+    if (!run) throw new Error("원본 백테스트 결과를 찾을 수 없습니다.");
+    let refreshReason: string | null = null;
     if (
-      !run ||
       run.strategyVersion !== strategy.version ||
       run.strategySourceHash !== strategySourceHash(strategy)
     ) {
-      throw new Error(
-        "원본과 현재 전략 버전이 다릅니다. 현재 전략으로 백테스트를 다시 실행하세요.",
-      );
-    }
-    if (
+      refreshReason = "원본과 현재 전략 버전이 다릅니다. 최신 기준으로 다시 준비해야 합니다.";
+    } else if (
       run.executionVersion !== readRuntimeVersions().executionVersion ||
       run.engineVersion !== ENGINE_VERSION
     ) {
-      throw new Error(
-        "원본과 현재 실행 버전이 다릅니다. 현재 실행 버전으로 백테스트를 다시 실행하세요.",
-      );
+      refreshReason = "원본과 현재 실행 버전이 다릅니다. 최신 기준으로 다시 준비해야 합니다.";
+    } else if (!sourceJob.preparationJobId || !this.cache.isFresh(sourceJob.preparationJobId)) {
+      refreshReason = "원본 데이터 준비 결과가 없거나 오래됐습니다. 최신 기준으로 다시 준비해야 합니다.";
     }
     if (config.mode !== "HOLDOUT") {
       const schema = this.deps.strategies.getParameterJsonSchema(
@@ -125,14 +124,16 @@ export class PeriodValidationService {
         }
       }
     }
-    return { source, config, plan, strategy };
+    return { source, config, plan, strategy, requiresRefresh: refreshReason !== null, refreshReason };
   }
 
-  create(sourceJobId: string, rawConfig: unknown): PeriodValidationDto {
-    const { source, config, plan, strategy } = this.plan(
+  create(sourceJobId: string, rawConfig: unknown, options?: { refreshData?: boolean }): PeriodValidationDto {
+    const { source, config, plan, strategy, requiresRefresh, refreshReason } = this.plan(
       sourceJobId,
       rawConfig,
     );
+    if (requiresRefresh && !options?.refreshData)
+      throw new BacktestRefreshRequiredError(refreshReason!);
     const { executionVersion, validationVersion } = readRuntimeVersions();
     const id = newId("val");
     this.deps.database.sqlite
@@ -307,10 +308,11 @@ export class PeriodValidationService {
               .prepare(
                 `
           SELECT 1 FROM backtest_validations WHERE source_job_id = ?
-          UNION ALL SELECT 1 FROM backtest_clone_batches WHERE source_job_id = ? LIMIT 1
+          UNION ALL SELECT 1 FROM backtest_clone_batches WHERE source_job_id = ?
+          UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE source_job_id = ? AND status IN ('QUEUED','PREPARING','SUBMITTING') LIMIT 1
         `,
               )
-              .get(trial.jobId, trial.jobId)
+              .get(trial.jobId, trial.jobId, trial.jobId)
           )
             throw new Error("하위 백테스트에서 만든 실험을 먼저 삭제하세요.");
         }
@@ -496,10 +498,11 @@ export class PeriodValidationService {
         SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id = ? AND validation_id <> ?
         UNION ALL SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id = ?
         UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id = ?
-        UNION ALL SELECT 1 FROM backtest_clone_batches WHERE preparation_job_id = ? LIMIT 1
+        UNION ALL SELECT 1 FROM backtest_clone_batches WHERE preparation_job_id = ?
+        UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id = ? LIMIT 1
       `,
         )
-        .get(prep.id, experiment.id, prep.id, prep.id, prep.id);
+        .get(prep.id, experiment.id, prep.id, prep.id, prep.id, prep.id);
       if (!shared) {
         this.deps.preparation.cancel(prep.id);
         pending = true;

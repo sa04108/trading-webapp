@@ -1,4 +1,10 @@
 import { registerBacktestExperimentRoutes } from "./backtest-experiment-routes.js";
+import { registerBacktestRefreshRoutes } from "./backtest-refresh-routes.js";
+import { BacktestRefreshError, BacktestRefreshService } from "../application/backtest-refresh-service.js";
+import { PreparationReferenceError } from "../application/preparation-reference-service.js";
+import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
+import { strategySourceHash } from "../../../../runtime/modules/strategy/application/strategy-source-hash.js";
+import type { BacktestRefreshAction, BacktestRefreshJob } from "../../../../shared/schemas/backtest-refresh.js";
 import { registerBenchmarkComparisonRoutes } from "./benchmark-comparison-routes.js";
 import { BenchmarkComparisonService } from "../application/benchmark-comparison-service.js";
 import { historyQuerySchema } from "../../../../shared/schemas/backtest-history.js";
@@ -103,6 +109,8 @@ export interface BacktestRouteDeps {
   readonly database: DatabaseHandle;
   readonly submissionValidator?: SubmissionValidator;
   readonly onValidationFinished?: (experiment: PeriodValidationDto) => void;
+  readonly onRefreshFinished?: (job: BacktestRefreshJob) => void;
+  readonly refreshProviderFilings?: () => Promise<void>;
   readonly queue: JobQueue;
   readonly orchestrator: JobOrchestrator;
   /** 로컬·원격 에이전트의 임대 관리가 발행하는 작업 상태·진행 이벤트. */
@@ -389,7 +397,7 @@ export function registerBacktestRoutes(
   app: FastifyInstance,
   deps: BacktestRouteDeps,
   requireAuth: PreHandler,
-): PeriodValidationService {
+): { validations: PeriodValidationService; refreshJobs: BacktestRefreshService } {
   registerBacktestExperimentRoutes(app, deps.database, requireAuth);
   const {
     queue,
@@ -740,6 +748,72 @@ export function registerBacktestRoutes(
     },
     requireAuth,
   );
+
+  const refreshJobs = new BacktestRefreshService({
+    database: deps.database, clock, preparation, refreshProviderFilings: deps.refreshProviderFilings,
+    snapshot: (sourceJobId, action) => {
+      const source = queue.getJob(sourceJobId);
+      if (!source) throw new BacktestRefreshError("원본 백테스트를 찾을 수 없습니다.", 404);
+      const rebased = rebaseStoredRequest(source.requestJson, strategies.get(source.strategyId)?.version ?? null);
+      if (!rebased.ok) throw new BacktestRefreshError(rebased.error, 400);
+      const errors = validateStaticSubmission(rebased.request);
+      const capacity = checkPositionCapacity(rebased.request);
+      if (errors.length || capacity) throw new BacktestRefreshError(errors[0] ?? capacity!, 400);
+      if (action.kind === "RANDOM_SEEDS") {
+        if (source.cloneBatchId !== null) throw new BacktestRefreshError("난수 실험은 원본 백테스트에서 시작하세요.", 409);
+        if (strategies.describe(source.strategyId)?.supportsRandomSeed === false)
+          throw new BacktestRefreshError("이 전략은 난수 시드의 영향을 받지 않습니다.", 400);
+      }
+      if (action.kind === "PERIOD_VALIDATION") {
+        try { validations.plan(sourceJobId, action.config); }
+        catch (error) { throw new BacktestRefreshError(error instanceof Error ? error.message : "검증 설정이 올바르지 않습니다.", 400); }
+      }
+      return { request: rebased.request, warnings: rebased.warnings };
+    },
+    runtimeIdentity: (body) => {
+      const strategy = strategies.get(body.strategyId);
+      return JSON.stringify({ execution: readRuntimeVersions().executionVersion,
+        preview: readRuntimeVersions().previewVersion, validation: readRuntimeVersions().validationVersion,
+        strategy: strategy ? strategySourceHash(strategy) : null });
+    },
+    buildSubmission: async (row, preview) => {
+      const action = JSON.parse(row.actionJson) as BacktestRefreshAction;
+      if (action.kind === "PERIOD_VALIDATION") return () => {
+        const experiment = validations.create(row.sourceJobId, action.config, { refreshData: true });
+        return `/backtests/validations/${encodeURIComponent(experiment.id)}`;
+      };
+      if (!preview) throw new PreparationReferenceError();
+      const body = JSON.parse(row.requestJson) as BacktestRequest;
+      if (action.kind === "CLONE" && queueDepthError()) return null;
+      const resourceError = await checkResources(deps.dataRoot);
+      if (resourceError) throw new Error(resourceError);
+      const validated = await validateSubmission(body, preview);
+      if (!validated.ok) {
+        throw new Error(validated.errors[0] ?? "제출을 검증하지 못했습니다.");
+      }
+      if (validated.fundamentalsIssue) throw new PreparationReferenceError();
+      const warnings = [...JSON.parse(row.warningsJson) as string[], ...validated.warnings];
+      return () => {
+        if (action.kind === "CLONE") {
+          if (queueDepthError()) return null;
+          const job = queue.enqueue({ ...body, timeframe: validated.timeframe }, validated.resolved.schedule,
+            validated.universe, validated.provenancePin, warnings, {
+              estimatedBars: validated.estimatedBars, submissionSnapshot: validated.snapshot,
+              cloneSourceJobId: row.sourceJobId, preparationJobId: preview.preparationJobId,
+            });
+          return `/backtests/${encodeURIComponent(job.id)}`;
+        }
+        const batch = seedCloneBatches.create(row.sourceJobId, action.count, {
+          request: { ...body, timeframe: validated.timeframe }, schedule: validated.resolved.schedule,
+          universe: validated.universe, provenancePin: validated.provenancePin, warnings,
+          submissionSnapshot: validated.snapshot, preparationJobId: preview.preparationJobId,
+        });
+        return `/backtests/batches/${encodeURIComponent(batch.batch.id)}`;
+      };
+    },
+    onFinished: (job) => deps.onRefreshFinished?.(job),
+  });
+  registerBacktestRefreshRoutes(app, refreshJobs, requireAuth);
 
   app.get("/backtests/profiles", { preHandler: requireAuth }, async () => ({
     commissionProfiles: listCostProfiles(),
@@ -1585,5 +1659,5 @@ export function registerBacktestRoutes(
       });
     },
   );
-  return validations;
+  return { validations, refreshJobs };
 }

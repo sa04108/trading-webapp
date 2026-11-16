@@ -77,7 +77,8 @@ describe('독립 구간 검증 실행', () => {
       cancelJob: (id) => { queue.setStatus(id, 'CANCELLED'); },
     };
     service = new PeriodValidationService(deps);
-    sourceId = queue.enqueue(source).id;
+    const sourcePreparation = preparation.start(source);
+    sourceId = queue.enqueue(source, [], undefined, null, [], { preparationJobId: sourcePreparation.id }).id;
     complete(sourceId);
   });
 
@@ -176,7 +177,7 @@ describe('독립 구간 검증 실행', () => {
     const other = new PeriodValidationService(deps);
     try {
       await Promise.all([service.pump(), other.pump()]);
-      expect(preparationSequence).toBe(1);
+      expect(preparationSequence).toBe(2);
     } finally { await other.stop(); }
   });
 
@@ -242,11 +243,24 @@ describe('독립 구간 검증 실행', () => {
     expect(service.get(experiment.id)!.status).toBe('COMPLETED');
   });
 
-  it.each([null, 'old-execution'])('원본 실행 버전 %s는 조회를 유지하고 새 검증 실험에서 거절한다', (executionVersion) => {
+  it('오래된 데이터 준비 결과는 확인을 요구하고 원본 결과를 보존한다', () => {
+    const original = results.getRun(sourceId);
+    database.sqlite.exec('UPDATE dataset_state SET revision = revision + 1');
+    expect(service.plan(sourceId, optimized)).toMatchObject({ requiresRefresh: true, refreshReason: expect.any(String) });
+    expect(() => service.create(sourceId, optimized)).toThrow('준비 결과');
+    const experiment = service.create(sourceId, optimized, { refreshData: true });
+    expect(experiment.config).toEqual(optimized);
+    expect(results.getRun(sourceId)).toEqual(original);
+  });
+
+  it.each([null, 'old-execution'])('원본 실행 버전 %s는 확인 후 현재 버전으로 검증한다', (executionVersion) => {
     database.db.update(backtestRuns).set({ executionVersion }).where(eq(backtestRuns.jobId, sourceId)).run();
     expect(results.getRun(sourceId)?.executionVersion).toBe(executionVersion);
-    expect(() => service.plan(sourceId, optimized)).toThrow('원본과 현재 실행 버전');
+    expect(service.plan(sourceId, optimized)).toMatchObject({ requiresRefresh: true, refreshReason: expect.stringContaining('실행 버전') });
     expect(() => service.create(sourceId, optimized)).toThrow('원본과 현재 실행 버전');
+    const experiment = service.create(sourceId, optimized, { refreshData: true });
+    expect(database.db.select().from(backtestValidations).where(eq(backtestValidations.id, experiment.id)).get()).toMatchObject({ executionVersion: readRuntimeVersions().executionVersion, strategyVersion: strategy.version });
+    expect(results.getRun(sourceId)?.executionVersion).toBe(executionVersion);
   });
 
   it.each([
@@ -302,7 +316,14 @@ describe('독립 구간 검증 실행', () => {
       const headers = { authorization: 'test-session' };
       const preview = await app.inject({ method: 'POST', url: `${url}/preview`, headers, payload: optimized });
       expect(preview.statusCode).toBe(200);
-      expect(preview.json().plan.totalRuns).toBe(4);
+      expect(preview.json()).toMatchObject({ plan: { totalRuns: 4 }, requiresRefresh: false, refreshReason: null });
+      database.db.update(backtestRuns).set({ executionVersion: 'old' }).where(eq(backtestRuns.jobId, sourceId)).run();
+      const stalePreview = await app.inject({ method: 'POST', url: `${url}/preview`, headers, payload: optimized });
+      expect(stalePreview.json()).toMatchObject({ requiresRefresh: true, refreshReason: expect.any(String) });
+      const staleCreate = await app.inject({ method: 'POST', url, headers, payload: { ...optimized, refreshData: true } });
+      expect(staleCreate.statusCode).toBe(409);
+      expect(staleCreate.json()).toMatchObject({ error: 'PREPARATION_REQUIRED', message: expect.any(String) });
+      database.db.update(backtestRuns).set({ executionVersion: readRuntimeVersions().executionVersion }).where(eq(backtestRuns.jobId, sourceId)).run();
       const invalid = await app.inject({ method: 'POST', url, headers, payload: { ...optimized, optimization: { ...optimization, axes: [{ key: 'unknown', values: [1, 2] }] } } });
       expect(invalid.statusCode).toBe(400);
       const created = await app.inject({ method: 'POST', url, headers, payload: optimized });
