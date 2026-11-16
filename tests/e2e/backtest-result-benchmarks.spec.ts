@@ -53,6 +53,7 @@ test("완료 결과에서 여러 지수 선택을 저장하고 비교 실패를 
   });
   await page.goto(`/backtests/${id}`);
   await expect(page.getByText("누적 수익률", { exact: true })).toBeVisible();
+  await expect(page.getByText("Sharpe", { exact: true }).locator("..").locator("p").nth(1)).toHaveClass(/text-gain/);
   await expect(page.getByText("비교 조회 실패")).toBeVisible();
   await expect(page.getByText("과거 벤치마크")).toHaveCount(0);
   failLoad = false;

@@ -21,7 +21,7 @@ import {
   useHistoryControls,
 } from "../backtests/history-controls";
 import type { HistoryGroup } from "../../../shared/schemas/backtest-history";
-import { formatSignedPct, pnlClass } from "@/lib/format";
+import { formatSignedPct, pnlClass, sharpeClass } from "@/lib/format";
 import {
   Select,
   SelectContent,
@@ -980,7 +980,7 @@ export function IntradayDetailPage() {
               <Card key={label}>
                 <CardContent className="py-3">
                   <p className="text-sm text-muted-foreground">{label}</p>
-                  <p>{value}</p>
+                  <p className={label === "샤프" ? sharpeClass(m.sharpe) : undefined}>{value}</p>
                 </CardContent>
               </Card>
             ))}

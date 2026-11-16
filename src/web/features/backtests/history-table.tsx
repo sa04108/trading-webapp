@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { InfoHint } from "@/components/info-hint";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { formatDateTime, formatSignedPct, pnlClass } from "@/lib/format";
+import { formatDateTime, formatSignedPct, pnlClass, sharpeClass } from "@/lib/format";
 import type { HistoryView } from "./history-controls";
 import { HISTORY_TABLE_COLUMNS, type HistoryColumnId } from "./history-table-preferences";
 import "./history-table.css";
@@ -70,7 +70,7 @@ export function HistoryMetricCells({ columns, values }: {
     }
     if (id === "sharpe") {
       const value = values.sharpe;
-      return <TableCell key={id} className={`text-right tabular-nums ${value == null ? "text-muted-foreground" : value < 0 ? "text-loss" : value >= 1 ? "text-gain" : "text-foreground"}`}>{value == null ? "—" : value.toFixed(2)}</TableCell>;
+      return <TableCell key={id} className={`text-right tabular-nums ${value == null ? "text-muted-foreground" : sharpeClass(value) || "text-foreground"}`}>{value == null ? "—" : value.toFixed(2)}</TableCell>;
     }
     return <TableCell key={id} className={`text-right tabular-nums ${pnlClass(values[id])}`}>{formatSignedPct(values[id] ?? null)}</TableCell>;
   });

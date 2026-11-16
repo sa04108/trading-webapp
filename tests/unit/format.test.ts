@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   formatCompactNumber,
   formatRelativeTime,
+  sharpeClass,
   timeframeLabel,
 } from '../../src/web/lib/format.js';
 
@@ -74,5 +75,17 @@ describe('formatCompactNumber', () => {
     expect(formatCompactNumber(undefined)).toBe('-');
     expect(formatCompactNumber(Number.NaN)).toBe('-');
     expect(formatCompactNumber(Infinity)).toBe('-');
+  });
+});
+
+describe('sharpeClass', () => {
+  it('0과 1을 기준으로 점수의 색상을 구분한다', () => {
+    expect(sharpeClass(-0.01)).toBe('text-loss');
+    expect(sharpeClass(0)).toBe('');
+    expect(sharpeClass(0.99)).toBe('');
+    expect(sharpeClass(1)).toBe('text-gain');
+    expect(sharpeClass(null)).toBe('');
+    expect(sharpeClass(undefined)).toBe('');
+    expect(sharpeClass(Number.NaN)).toBe('');
   });
 });

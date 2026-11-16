@@ -258,7 +258,9 @@ export interface IntradayResult {
     pnl: number;
     returnPct: number;
     totalCosts: number;
+    /** 고점 대비 최대 낙폭을 0 이하의 백분율로 기록한다. */
     maxDrawdownPct: number;
+    /** 거래일말 자산을 기준으로 계산한 최대 낙폭이며 0 이하의 백분율이다. */
     dailyMaxDrawdownPct: number;
     sharpe: number | null;
     completedTrades: number;
