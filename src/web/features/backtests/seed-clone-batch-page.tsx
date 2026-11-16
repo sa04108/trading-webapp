@@ -31,6 +31,7 @@ import {
   formatNumber,
   formatSignedPct,
   pnlClass,
+  sharpeClass,
 } from "@/lib/format";
 import { api } from "@/lib/api-client";
 import { useSeedCloneBatch, useStrategies } from "./api";
@@ -222,7 +223,7 @@ export function SeedCloneBatchPage() {
                 <CardTitle className="text-sm">평균 Sharpe</CardTitle>
               </CardHeader>
               <CardContent>
-                <p>{formatNumber(metrics.sharpe?.mean ?? null)}</p>
+                <p className={sharpeClass(metrics.sharpe?.mean)}>{formatNumber(metrics.sharpe?.mean ?? null)}</p>
                 <p className="text-xs text-muted-foreground">
                   유효 지표 {metrics.sharpe?.count ?? 0}개
                 </p>
@@ -341,7 +342,7 @@ export function SeedCloneBatchPage() {
                         ? formatSignedPct(item.metrics.totalReturnPct)
                         : "—"}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className={`text-right ${sharpeClass(item.metrics?.sharpe)}`}>
                       {item.metrics ? formatNumber(item.metrics.sharpe) : "—"}
                     </TableCell>
                     <TableCell

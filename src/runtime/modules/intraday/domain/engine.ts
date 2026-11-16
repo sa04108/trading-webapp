@@ -395,9 +395,9 @@ export function runIntradayBacktest(
     }
     const equity = cash + quantity * bar.close;
     peak = Math.max(peak, equity);
-    result.metrics.maxDrawdownPct = Math.max(
+    result.metrics.maxDrawdownPct = Math.min(
       result.metrics.maxDrawdownPct,
-      (1 - equity / peak) * 100,
+      (equity / peak - 1) * 100,
     );
     result.equity.push({ endMs: bar.endMs, equity, cash, quantity });
     dailyEquities.set(day, equity);
@@ -416,9 +416,9 @@ export function runIntradayBacktest(
     returns.push(equity / prior - 1);
     prior = equity;
     dailyPeak = Math.max(dailyPeak, equity);
-    result.metrics.dailyMaxDrawdownPct = Math.max(
+    result.metrics.dailyMaxDrawdownPct = Math.min(
       result.metrics.dailyMaxDrawdownPct,
-      (1 - equity / dailyPeak) * 100,
+      (equity / dailyPeak - 1) * 100,
     );
   }
   if (returns.length > 1) {

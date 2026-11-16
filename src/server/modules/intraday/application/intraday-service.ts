@@ -107,6 +107,12 @@ type RunRow = Omit<typeof intradayRuns.$inferSelect, "resultJson"> & {
   resultJson?: string | null;
 };
 const ACTIVE = ["QUEUED", "PREPARING", "RUNNING"];
+
+/** 양의 크기로 저장된 과거 낙폭도 현재의 음수 표기로 조회한다. */
+function normalizeDrawdown(value: number): number {
+  return value > 0 ? -value : value;
+}
+
 const runColumns = {
   id: intradayRuns.id,
   ownerId: intradayRuns.ownerId,
@@ -300,6 +306,13 @@ export class IntradayService {
     };
   }
   private run(row: RunRow): IntradayRun {
+    const result = row.resultJson
+      ? JSON.parse(row.resultJson) as IntradayResult
+      : undefined;
+    if (result) {
+      result.metrics.maxDrawdownPct = normalizeDrawdown(result.metrics.maxDrawdownPct);
+      result.metrics.dailyMaxDrawdownPct = normalizeDrawdown(result.metrics.dailyMaxDrawdownPct);
+    }
     return {
       id: row.id,
       request: JSON.parse(row.requestJson) as IntradayRequest,
@@ -307,9 +320,7 @@ export class IntradayService {
       error: row.error,
       createdAtMs: row.createdAtMs,
       updatedAtMs: row.updatedAtMs,
-      ...(row.resultJson
-        ? { result: JSON.parse(row.resultJson) as IntradayResult }
-        : {}),
+      ...(result ? { result } : {}),
     };
   }
   private track(task: Promise<void>): void {
@@ -602,7 +613,7 @@ export class IntradayService {
         ...this.run(row),
         metrics: row.returnPct === null || row.maxDrawdownPct === null
           ? null
-          : { returnPct: row.returnPct, maxDrawdownPct: row.maxDrawdownPct, sharpe: row.sharpe },
+          : { returnPct: row.returnPct, maxDrawdownPct: normalizeDrawdown(row.maxDrawdownPct), sharpe: row.sharpe },
       }));
   }
   getRun(ownerId: string, id: string): IntradayRun {

@@ -75,6 +75,8 @@ describe("분봉 정보 시각과 주문 생명주기", () => {
     });
     expect(result.position.quantity).toBe(0);
     expect(result.metrics.pnl).toBe(0);
+    expect(result.metrics.maxDrawdownPct).toBe(0);
+    expect(result.metrics.dailyMaxDrawdownPct).toBe(0);
     expect(result.metrics.completedTrades).toBe(1);
     expect(result.equity.every((e) => e.cash >= 0)).toBe(true);
     expect(
@@ -82,6 +84,18 @@ describe("분봉 정보 시각과 주문 생명주기", () => {
         (f) => f.atMs >= f.eligibleAtMs && f.atMs > f.signalAtMs,
       ),
     ).toBe(true);
+  });
+  // 기존 체결 검사는 장중·거래일말 최대 낙폭의 부호와 크기를 확인하지 않는다.
+  it("고점 대비 손실을 장중과 거래일말 모두 음의 최대 낙폭으로 기록한다", () => {
+    const data = bars();
+    for (const bar of data.slice(10)) {
+      Object.assign(bar, { open: 900, high: 900, low: 900, close: 900 });
+    }
+    const result = run(data);
+
+    expect(result.metrics.pnl).toBe(-10_340);
+    expect(result.metrics.maxDrawdownPct).toBeCloseTo(-10.34);
+    expect(result.metrics.dailyMaxDrawdownPct).toBeCloseTo(-10.34);
   });
   it("미래 거래량으로 주문 수량을 늘리지 않고 부분체결 잔량을 만료시킨다", () => {
     const data = bars();

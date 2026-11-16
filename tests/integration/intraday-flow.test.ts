@@ -109,6 +109,49 @@ async function fixture(
 }
 const headers = { authorization: "owner" };
 describe("분봉 준비부터 격리 계산과 저장까지", () => {
+  // 기존 이력 검사는 양수로 저장된 과거 낙폭의 목록·상세 조회 호환성을 다루지 않는다.
+  it("과거 양수와 현재 음수·0의 낙폭을 같은 음수 기준으로 조회한다", async () => {
+    const { app, database } = await fixture();
+    const cases = [
+      { maxDrawdownPct: 5, dailyMaxDrawdownPct: 2, expectedMax: -5, expectedDaily: -2 },
+      { maxDrawdownPct: -5, dailyMaxDrawdownPct: -2, expectedMax: -5, expectedDaily: -2 },
+      { maxDrawdownPct: 0, dailyMaxDrawdownPct: 0, expectedMax: 0, expectedDaily: 0 },
+    ];
+    const records = cases.map((values) => {
+      const id = randomUUID();
+      const resultJson = JSON.stringify({
+        executionVersion: "saved-version",
+        metrics: {
+          returnPct: 3,
+          maxDrawdownPct: values.maxDrawdownPct,
+          dailyMaxDrawdownPct: values.dailyMaxDrawdownPct,
+          sharpe: 1.25,
+        },
+        equity: [{ endMs: now, equity: 103_000 }],
+      });
+      database.db.insert(intradayRuns).values({
+        id, ownerId: "owner", status: "COMPLETED", requestJson: JSON.stringify(request),
+        resultJson, createdAtMs: now, updatedAtMs: now,
+      }).run();
+      return { ...values, id, resultJson };
+    });
+
+    const history = (await app.inject({ method: "GET", url: "/intraday/runs", headers })).json<{ runs: IntradayRun[] }>();
+    for (const record of records) {
+      expect(history.runs.find((run) => run.id === record.id)).toMatchObject({
+        metrics: { maxDrawdownPct: record.expectedMax, returnPct: 3, sharpe: 1.25 },
+      });
+      const detail = await app.inject({ method: "GET", url: `/intraday/runs/${record.id}`, headers });
+      expect(detail.statusCode).toBe(200);
+      expect(detail.json().result).toMatchObject({
+        executionVersion: "saved-version",
+        metrics: { maxDrawdownPct: record.expectedMax, dailyMaxDrawdownPct: record.expectedDaily },
+      });
+      const stored = database.db.select().from(intradayRuns).all().find((run) => run.id === record.id);
+      expect(stored?.resultJson).toBe(record.resultJson);
+    }
+  });
+
   // 과거 2,000봉 제한으로 1년 보관 자료를 앞부분부터 탐색할 수 없던 회귀를 보호한다.
   it("시세 API는 저장된 전체 기간과 확장 주기를 반환하며 실행 주기 제한은 유지한다", async () => {
     const { app, store } = await fixture();

@@ -119,3 +119,9 @@ export function pnlClass(value: number | null | undefined): string {
     return "text-muted-foreground";
   return value > 0 ? "text-gain" : "text-loss";
 }
+
+export function sharpeClass(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) return "";
+  if (value < 0) return "text-loss";
+  return value >= 1 ? "text-gain" : "";
+}

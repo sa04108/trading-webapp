@@ -78,6 +78,7 @@ import {
   formatSignedKrw,
   formatSignedPct,
   pnlClass,
+  sharpeClass,
   timeframeLabel,
 } from "@/lib/format";
 import {
@@ -146,7 +147,7 @@ function MetricCards({
       value: formatSignedPct(metrics.maxDrawdownPct),
       className: pnlClass(metrics.maxDrawdownPct),
     },
-    { label: "Sharpe", value: formatNumber(metrics.sharpe), className: "" },
+    { label: "Sharpe", value: formatNumber(metrics.sharpe), className: sharpeClass(metrics.sharpe) },
     {
       label: "승률 (매도 체결 기준)",
       value: metrics.winRate === null ? "-" : `${metrics.winRate.toFixed(1)}%`,

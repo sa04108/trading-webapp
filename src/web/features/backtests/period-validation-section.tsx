@@ -11,6 +11,7 @@ import {
   formatKrw,
   formatNumber,
   formatSignedPct,
+  sharpeClass,
 } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -313,7 +314,7 @@ export function ValidationResult({
                   <TableCell>
                     {formatSignedPct(testMetrics?.maxDrawdownPct ?? null)}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className={sharpeClass(testMetrics?.sharpe)}>
                     {formatNumber(testMetrics?.sharpe ?? null)}
                   </TableCell>
                   <TableCell>{testMetrics?.tradeCount ?? "-"}</TableCell>
@@ -388,7 +389,7 @@ export function ValidationResult({
                   <TableCell>
                     {formatSignedPct((trial.status === "NOT_EVALUATED" ? null : trial.metrics?.maxDrawdownPct) ?? null)}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className={sharpeClass(trial.status === "NOT_EVALUATED" ? null : trial.metrics?.sharpe)}>
                     {formatNumber((trial.status === "NOT_EVALUATED" ? null : trial.metrics?.sharpe) ?? null)}
                   </TableCell>
                   <TableCell>{trial.status === "NOT_EVALUATED" ? "—" : trial.metrics?.tradeCount ?? "—"}</TableCell>
