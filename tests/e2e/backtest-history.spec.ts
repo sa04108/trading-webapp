@@ -96,7 +96,7 @@ async function historyFixture(page: Page) {
     });
   });
   await page.route(/\/api\/v1\/backtests\/history-extras(?:\?|$)/, (route) =>
-    route.fulfill({ json: { summaries: new URL(route.request().url()).searchParams.get("jobIds")?.split(",").map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null } }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) ?? [] } }),
+    route.fulfill({ json: { summaries: new URL(route.request().url()).searchParams.get("jobIds")?.split(",").map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, seed: { batchCount: ["history-0", "history-1"].includes(jobId) ? 1 : 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null } }, validation: { experimentCount: ["history-0", "history-2"].includes(jobId) ? 1 : 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) ?? [] } }),
   );
   await page.route(/\/api\/v1\/backtests\/history-\d+$/, (route) => {
     const id = new URL(route.request().url()).pathname.split("/").at(-1)!;
@@ -148,6 +148,10 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
   const firstRow = group.locator("tbody > tr").first();
   await expect(firstRow.getByRole("link", { name: "난수", exact: true })).toHaveAttribute("href", "/backtests/history-0/seeds");
   await expect(firstRow.getByRole("link", { name: "검증", exact: true })).toHaveAttribute("href", "/backtests/history-0/validations");
+  // 건수가 0인데도 양쪽 버튼을 항상 표시하던 회귀를 표·카드에서 함께 확인한다.
+  const experimentLinks = group.locator('a[href$="/seeds"], a[href$="/validations"]');
+  const expectedExperimentLinks = ["/backtests/history-0/seeds", "/backtests/history-0/validations", "/backtests/history-1/seeds", "/backtests/history-2/validations"];
+  await expect.poll(() => experimentLinks.evaluateAll((links) => links.map((link) => link.getAttribute("href")).sort())).toEqual(expectedExperimentLinks);
   await expect(group.getByRole("columnheader")).toHaveText(["기간", "수익률", "CAGR", "MDD", "실행일"]);
 
   await expect(other.locator("tbody > tr")).toHaveCount(1);
@@ -175,6 +179,7 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
   await viewToggle.click();
   await expect(viewToggle).toBeChecked();
   await expect(group.locator('a[href^="/backtests/history-"]:not([href$="/seeds"]):not([href$="/validations"])')).toHaveCount(6);
+  await expect.poll(() => experimentLinks.evaluateAll((links) => links.map((link) => link.getAttribute("href")).sort())).toEqual(expectedExperimentLinks);
   const boxes = await group
     .locator('a[href^="/backtests/history-"]:not([href$="/seeds"]):not([href$="/validations"])')
     .evaluateAll((nodes) =>
