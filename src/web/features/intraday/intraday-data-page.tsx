@@ -146,7 +146,7 @@ export function IntradayDataPage() {
             <div className="flex flex-wrap gap-1" aria-label="조회 기간">{[[1, "1일"], [7, "1주"], [30, "1개월"], [365, "1년"]].map(([days, label]) => <Button key={days} variant="outline" size="sm" onClick={() => quickRange(Number(days))}>{label}</Button>)}</div>
           </div>
           <IntradayChartView symbol={symbol} from={from} to={to} timeframe={timeframe} showSummary />
-          <p className="text-xs text-muted-foreground">보관 범위: {stored ? `${time(stored.firstEndMs)} ~ ${time(stored.lastEndMs)} · ${stored.bars.toLocaleString("ko-KR")}개` : "없음"} · 보관된 1분봉 기준 · 09:00–15:20 KST · 수정주가 미적용</p>
+          <p className="text-xs text-muted-foreground">보관 범위: {stored ? `${time(stored.firstEndMs)} ~ ${time(stored.lastEndMs)} · ${stored.bars.toLocaleString("ko-KR")}개` : "없음"} · 보관된 1분봉 기준 · 정규장 개장–15:20 KST · 수정주가 미적용</p>
         </section>
       </div>
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}><DialogContent>

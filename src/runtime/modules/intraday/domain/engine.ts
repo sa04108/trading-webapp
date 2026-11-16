@@ -1,4 +1,5 @@
 import { getIntradayStrategy } from "../../../../shared/schemas/intraday-strategies.js";
+import { INTRADAY_CLOSE_MINUTE, intradaySession } from "../../../../shared/intraday-session.js";
 import { createIntradaySignalModel } from "./signal-model.js";
 import {
   MINUTE_MS,
@@ -18,9 +19,7 @@ import {
 } from "../../backtest/domain/cost-profiles.js";
 import { roundToTick } from "../../backtest/domain/execution.js";
 
-export const SESSION_MINUTES = 380;
-const OPEN = 9 * 60;
-const CLOSE = 15 * 60 + 20;
+const CLOSE = INTRADAY_CLOSE_MINUTE;
 const ENTRY_CUTOFF = 15 * 60 + 10;
 const EXIT = 15 * 60 + 15;
 function minuteOfDay(ms: number): number {
@@ -28,7 +27,7 @@ function minuteOfDay(ms: number): number {
 }
 export function isIntradaySessionBar(bar: IntradayBar): boolean {
   const minute = minuteOfDay(bar.endMs);
-  return minute > OPEN && minute <= CLOSE;
+  return minute > intradaySession(intradayDate(bar.endMs)).openMinute && minute <= CLOSE;
 }
 
 /** 봉 종료 시각을 유지한다. 누락된 1분봉이 있는 구간은 집계 봉을 만들지 않는다. */
@@ -43,7 +42,7 @@ export function aggregateIntradayBars(
   if (minutes === 1) return bars;
   const groups = new Map<number, IntradayBar[]>();
   for (const bar of bars) {
-    const elapsed = minuteOfDay(bar.endMs) - OPEN;
+    const elapsed = minuteOfDay(bar.endMs) - intradaySession(intradayDate(bar.endMs)).openMinute;
     const end =
       bar.endMs +
       (Math.ceil(elapsed / minutes) * minutes - elapsed) * MINUTE_MS;
@@ -80,9 +79,10 @@ export function intradayGaps(
   const times = new Set(input.map((b) => b.endMs));
   const gaps: IntradayGap[] = [];
   for (const date of dates) {
-    const start = Date.parse(`${date}T09:00:00+09:00`);
+    const session = intradaySession(date);
+    const start = Date.parse(`${date}T${session.openTime}:00+09:00`);
     let gap: IntradayGap | null = null;
-    for (let i = 1; i <= SESSION_MINUTES; i++) {
+    for (let i = 1; i <= CLOSE - session.openMinute; i++) {
       const end = start + i * MINUTE_MS;
       if (!times.has(end)) {
         if (!gap) {
@@ -136,7 +136,7 @@ export function runIntradayBacktest(
     dataRevision: input.dataRevision,
     quoteScope: "TOSS_UNSPECIFIED",
     adjusted: false,
-    session: "09:00–15:20 Asia/Seoul",
+    session: "거래일별 개장–15:20 Asia/Seoul",
     fills: [],
     signals: [],
     orderEvents: [],
@@ -145,6 +145,10 @@ export function runIntradayBacktest(
       "토스 제공 시세의 거래소 구성은 확인되지 않았습니다. 지정 시간 구간을 사용하는 모의 체결입니다.",
       "지표와 시초 범위는 매일 초기화합니다. 손절·익절은 확정된 신호 봉 종가로 판단하며 체결 지연·비용은 입력한 가정입니다.",
       "미체결 매도 주문이 있으면 청산을 계속 시도하며 후속 신호로 주문 지연·만료 시간을 연장하지 않습니다.",
+      ...[...expected].flatMap((date) => {
+        const session = intradaySession(date);
+        return session.reason ? [`${date}: ${session.reason}으로 ${session.openTime} 개장. 개장 전 구간은 결측 검사와 전략 입력에서 제외했습니다.`] : [];
+      }),
     ],
     processedBars: 0,
     position: { quantity: 0, averagePrice: 0, lastPrice: 0 },

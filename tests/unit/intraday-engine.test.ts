@@ -131,6 +131,29 @@ describe("분봉 정보 시각과 주문 생명주기", () => {
     expect(() => run(incomplete)).toThrow("분봉 1개가 없습니다");
     expect(() => run([...data, data[0]!])).toThrow("중복");
   });
+  // 일반 결측 검사는 지연 개장을 허용했을 때 시초 범위까지 실제 개장에 맞추는지 확인하지 못한다.
+  it("확인된 지연 개장 전 구간만 제외하고 실제 첫 분과 장중 누락은 계속 거부한다", () => {
+    const day = "2026-01-02";
+    const data = bars(day).slice(0, 320).map((bar) => ({ ...bar, endMs: bar.endMs + 60 * 60_000 }));
+    const req: IntradayRequest = {
+      ...request(),
+      period: { from: day, to: day },
+      strategyId: "intraday-orb",
+      parameters: { openingMinutes: 5, entryWindowMinutes: 15, breakoutBps: 0, volumeMultiplier: 1, allocationPct: 95, stopLossPct: 50, takeProfitPct: 100 },
+    };
+    const result = run([...bars(day).slice(0, 60), ...data], req, [day]);
+    expect(result.processedBars).toBe(320);
+    expect(result.equity[0]!.endMs).toBe(at("10:01", day));
+    expect(result.signals[0]).toMatchObject({ atMs: at("10:06", day), side: "BUY", reason: "ORB" });
+    expect(result.fills.at(-1)).toMatchObject({ atMs: at("15:16", day), side: "SELL" });
+    expect(result.warnings.join(" ")).toContain("2026-01-02: 연초 개장식으로 10:00 개장");
+    for (const missingIndex of [0, 75]) {
+      expect(() => run(data.filter((_, i) => i !== missingIndex), req, [day])).toThrow("분봉 1개가 없습니다");
+    }
+    expect(aggregateIntradayBars(data, "5m")[0]!.endMs).toBe(at("10:05", day));
+    const normalDay = "2026-01-05";
+    expect(() => run(bars(normalDay).slice(60), { ...request(), period: { from: normalDay, to: normalDay } }, [normalDay])).toThrow("분봉 60개가 없습니다");
+  });
   it("다음 날 가격 단절을 EMA 교차로 해석하지 않고 지원 모드를 검증한다", () => {
     const flat = (day: string, price: number) =>
       bars(day).map((b) => ({
