@@ -8,6 +8,13 @@
       "when": 1789466591675,
       "tag": "0000_baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1794796083789,
+      "tag": "0001_remove_benchmark_pins",
+      "breakpoints": true
     }
   ]
 }

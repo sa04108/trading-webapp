@@ -1974,10 +1974,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       expect(response.statusCode).toBe(201);
       const cloned = ctx.container.jobQueue.getJob(response.json().job.id)!;
       expect(coverage).not.toHaveBeenCalled();
-      expect(source.benchmarkJson).toBeNull();
-      expect(source.benchmarkHash).toBeNull();
-      expect(cloned.benchmarkJson).toBeNull();
-      expect(cloned.benchmarkHash).toBeNull();
       expect(JSON.parse(cloned.requestJson)).toEqual(JSON.parse(source.requestJson));
       expect(cloned.universeScheduleJson).toBe(source.universeScheduleJson);
       expect(cloned.universeJson).toBe(source.universeJson);

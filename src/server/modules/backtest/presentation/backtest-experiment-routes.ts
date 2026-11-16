@@ -74,7 +74,7 @@ export function backtestLineage(database: DatabaseHandle, id: string): BacktestL
   const visited = new Set<string>();
   let complete = true;
   let kind: BacktestLineage["kind"] = "original";
-  let roleLabel = "직접 실행";
+  let roleLabel = "결과";
   const walk = (jobId: string): BacktestBreadcrumbEntry[] => {
     if (visited.has(jobId) || visited.size >= 32) {
       complete = false;
@@ -110,10 +110,7 @@ export function backtestLineage(database: DatabaseHandle, id: string): BacktestL
         { label: `실험 ${job.batch.slice(-6)}`, ...(batch ? { href: `/backtests/batches/${encodeURIComponent(job.batch)}` } : {}) },
         { ...own, label: item ? `시드 ${item.seed}` : own.label }];
     }
-    if (job.source) {
-      if (jobId === id) { kind = "clone"; roleLabel = "복제 실행"; }
-      return [...walk(job.source), { ...own, label: `복제 ${jobId.slice(-6)}` }];
-    }
+    // 일반 복제의 원본 ID는 입력 재사용을 위한 출처이며 결과의 상하 관계가 아니다.
     return [own];
   };
   const items = [{ label: "백테스트", href: "/backtests" }, ...walk(id)];

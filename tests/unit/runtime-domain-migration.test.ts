@@ -69,3 +69,60 @@ it('수집 coverage 컬럼 이행은 기존 시장 데이터를 보존하고 버
     }
   } finally { sqlite.close(); }
 });
+
+// 빈 DB 생성 테스트는 컬럼 삭제 중 기존 결과·대기 작업·새 비교 선택의 손실을 잡지 못한다.
+it.each(['operations', 'agent'] as const)('%s DB의 옛 벤치마크 pin을 제거해도 작업과 관련 데이터를 보존한다', (role) => {
+  const sqlite = new Database(':memory:');
+  try {
+    sqlite.pragma('foreign_keys = ON');
+    sqlite.exec('CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL, created_at NUMERIC NOT NULL)');
+    // 서버는 비교 선택 테이블 도입 직후, 에이전트는 최초 스키마에서 업그레이드한다.
+    const previousCount = role === 'operations' ? 17 : 1;
+    for (const migration of readMigrationFiles({ migrationsFolder: `migrations/${role}` }).slice(0, previousCount)) {
+      for (const statement of migration.sql) sqlite.exec(statement);
+      sqlite.prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)').run(migration.hash, migration.folderMillis);
+    }
+    sqlite.exec(`
+      INSERT INTO backtest_jobs (id, status, request_json, strategy_id, universe_rule_json,
+        universe_schedule_json, universe_json, universe_hash, provenance_pin_json, benchmark_json, benchmark_hash, created_at_ms)
+      VALUES ('source', 'COMPLETED', '{"randomSeed":42}', 'strategy', '{}', '[]', '[]', 'universe-hash', '{}', '{old-pin', 'old-hash', 1),
+             ('queued', 'QUEUED', '{"randomSeed":43}', 'strategy', '{}', '[]', '[]', 'universe-hash', '{}', '{old-pin', 'old-hash', 2);
+    `);
+    const tables = ['backtest_jobs'];
+    if (role === 'operations') {
+      sqlite.exec(`
+        INSERT INTO users (id, username, password_hash, created_at_ms, updated_at_ms)
+        VALUES ('user', 'user', 'unused-test-hash', 1, 1);
+        INSERT INTO backtest_metrics (job_id, total_return_pct, max_drawdown_pct, trade_count, metrics_json)
+        VALUES ('source', 10, -5, 1, '{"totalReturnPct":10}');
+        INSERT INTO backtest_equity_points (job_id, ts_ms, equity) VALUES ('source', 1, 110);
+        INSERT INTO backtest_clone_batches (id, source_job_id, strategy_id, status, total_count,
+          request_json, universe_schedule_json, universe_json, universe_hash, provenance_pin_json,
+          benchmark_json, benchmark_hash, created_at_ms)
+        VALUES ('batch', 'source', 'strategy', 'ACTIVE', 2, '{}', '[]', '[]', 'universe-hash', '{}', '{old-pin', 'old-hash', 1);
+        INSERT INTO backtest_clone_batch_items (id, batch_id, ordinal, random_seed, state, job_id)
+        VALUES ('dispatched', 'batch', 0, 43, 'DISPATCHED', 'queued'), ('pending', 'batch', 1, 44, 'PENDING', NULL);
+        INSERT INTO backtest_benchmark_selections (user_id, job_id, benchmark_ids_json)
+        VALUES ('user', 'source', '["KOSPI","SP500"]');
+      `);
+      tables.push('backtest_clone_batches', 'backtest_clone_batch_items', 'backtest_metrics', 'backtest_equity_points', 'backtest_benchmark_selections');
+    }
+    const discarded = ['benchmark_json', 'benchmark_hash'];
+    const snapshots = tables.map((table) => {
+      const columns = (sqlite.pragma(`table_info(${table})`) as Array<{ name: string }>)
+        .map(({ name }) => name).filter((name) => !discarded.includes(name));
+      const query = `SELECT ${columns.map((name) => `"${name}"`).join(', ')} FROM ${table} ORDER BY rowid`;
+      return { query, rows: sqlite.prepare(query).all() };
+    });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      migrateDatabaseRole(sqlite, role, 'main');
+      for (const table of role === 'operations' ? ['backtest_jobs', 'backtest_clone_batches'] : ['backtest_jobs']) {
+        const columns = (sqlite.pragma(`table_info(${table})`) as Array<{ name: string }>).map(({ name }) => name);
+        for (const column of discarded) expect(columns).not.toContain(column);
+      }
+      for (const { query, rows } of snapshots) expect(sqlite.prepare(query).all()).toEqual(rows);
+      expect(sqlite.pragma('foreign_key_check')).toEqual([]);
+      expect(sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
+    }
+  } finally { sqlite.close(); }
+});

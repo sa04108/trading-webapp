@@ -31,7 +31,7 @@ describe("백테스트 실험 요약과 결과 경로", () => {
   it("완료된 실험의 독립 OOS 평균을 집계하고 표본 수와 기록 수를 구분한다", async ({ ctx, cookie }) => {
     const database = ctx.container.database;
     const f = fixtures(database);
-    f.job("source", 25, { benchmarkJson: JSON.stringify({ benchmarkId: "KOSPI", name: "코스피", source: "KRX_OPEN_API", sourceVersion: "v1", period: { from: "2020-01-01", to: "2021-01-01" }, covered: true, points: [{ date: "2020-01-01", close: 100 }, { date: "2021-01-01", close: 110 }] }) });
+    f.job("source", 25);
     f.job("other");
     f.batch("batch", "source");
     f.seed("batch", "source", "seed-1", 10, 0);
@@ -73,12 +73,39 @@ describe("백테스트 실험 요약과 결과 경로", () => {
     const lineage = response.json();
     expect(lineage).toMatchObject({ kind: "validation", complete: true, roleLabel: "2회차 · IS 학습 · 후보 3" });
     expect(lineage.items.map((i: { href: string }) => i.href)).toEqual(["/backtests", "/backtests/original", "/backtests/original/seeds", "/backtests/batches/batch", "/backtests/seed", "/backtests/seed/validations", "/backtests/validations/validation", "/backtests/candidate"]);
-    expect(backtestLineage(database, "original")).toMatchObject({ kind: "original", roleLabel: "직접 실행", complete: true });
-    f.job("orphan", null, { cloneSourceJobId: "deleted" });
-    expect(backtestLineage(database, "orphan")).toMatchObject({ kind: "clone", complete: false });
-    f.job("cycle-a", null, { cloneSourceJobId: "cycle-b" }); f.job("cycle-b", null, { cloneSourceJobId: "cycle-a" });
-    expect(backtestLineage(database, "cycle-a")).toMatchObject({ complete: false });
+    expect(backtestLineage(database, "original")).toMatchObject({ kind: "original", roleLabel: "결과", complete: true });
+    f.job("orphan", null, { cloneSourceJobId: "deleted", cloneBatchId: "deleted-batch" });
+    expect(backtestLineage(database, "orphan")).toMatchObject({ kind: "seed", complete: false });
+    f.batch("cycle-batch-a", "cycle-b"); f.batch("cycle-batch-b", "cycle-a");
+    f.seed("cycle-batch-a", "cycle-b", "cycle-a", 1, 0); f.seed("cycle-batch-b", "cycle-a", "cycle-b", 1, 0);
+    expect(backtestLineage(database, "cycle-a")).toMatchObject({ kind: "seed", complete: false });
     expect(backtestLineage(database, "missing")).toBeNull();
+  });
+
+  // 기존 검사는 일반 복제의 출처까지 상위 결과로 해석했다. 기존 기록과 복제 이후 새 실험의 루트 경계를 검증한다.
+  it("일반 복제는 원본의 종류나 삭제 여부와 관계없이 독립 결과이며 새 실험의 루트가 된다", async ({ ctx, cookie }) => {
+    const database = ctx.container.database;
+    const f = fixtures(database);
+    f.job("source"); f.batch("source-seeds", "source"); f.seed("source-seeds", "source", "seed-child", 1, 0);
+    f.validation("source-validation", "source"); f.trial("source-validation", "oos-child", 1);
+    for (const [id, source] of [["same-clone", "source"], ["configured-clone", "source"], ["copy-of-seed", "seed-child"],
+      ["copy-of-oos", "oos-child"], ["orphan-clone", "deleted"], ["clone-cycle-a", "clone-cycle-b"], ["clone-cycle-b", "clone-cycle-a"]] as const) {
+      f.job(id, null, { cloneSourceJobId: source });
+      const response = await ctx.app.inject({ method: "GET", url: `/api/v1/backtests/${id}/lineage`, cookies: { session: cookie } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ kind: "original", roleLabel: "결과", complete: true, items: [
+        { label: "백테스트", href: "/backtests" },
+        { label: `결과 ${id.slice(-6)}`, href: `/backtests/${id}`, description: id },
+      ] });
+    }
+    f.batch("copy-seeds", "copy-of-seed"); f.seed("copy-seeds", "copy-of-seed", "new-seed", 1, 0);
+    expect(backtestLineage(database, "new-seed")?.items.map((item) => item.href)).toEqual([
+      "/backtests", "/backtests/copy-of-seed", "/backtests/copy-of-seed/seeds", "/backtests/batches/copy-seeds", "/backtests/new-seed",
+    ]);
+    f.validation("copy-validation", "copy-of-oos"); f.trial("copy-validation", "new-oos", 1);
+    expect(backtestLineage(database, "new-oos")?.items.map((item) => item.href)).toEqual([
+      "/backtests", "/backtests/copy-of-oos", "/backtests/copy-of-oos/validations", "/backtests/validations/copy-validation", "/backtests/new-oos",
+    ]);
   });
 
   it("새 읽기 API의 인증과 조회 범위를 제한한다", async ({ ctx, cookie }) => {
