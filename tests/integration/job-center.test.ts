@@ -5,6 +5,7 @@ import { authenticatedTest as it } from "../helpers/test-fixtures.js";
 import { createTestAdmin } from "../helpers/test-app.js";
 import type { Container } from "../../src/server/bootstrap/container.js";
 import { backtestJobs, backtestPreparationJobs } from "../../src/runtime/shared/db/operations-schema.js";
+import { intradayValidations, intradayValidationTrials } from "../../src/server/shared/db/intraday-validation-schema.js";
 import { intradayCollections, intradayRuns } from "../../src/server/shared/db/intraday-schema.js";
 import { backtestMetrics } from "../../src/server/shared/db/backtest-result-schema.js";
 import { backtestValidations, backtestValidationTrials } from "../../src/server/shared/db/backtest-validation-schema.js";
@@ -24,6 +25,24 @@ function preparation(container: Container, id: string, status: string, updatedAt
 }
 
 describe("작업 관찰·취소·이력 경계", () => {
+  it("분봉 검증의 완료와 미평가 수를 작업 센터에 표시한다", async ({ ctx, cookie, admin }) => {
+    const now = Date.now(), ownerId = ctx.container.userRepository.findByUsername(admin.username)!.id;
+    const db = ctx.container.database.db;
+    db.insert(intradayRuns).values([
+      { id: "intraday-validation-source", ownerId, status: "COMPLETED", requestJson: JSON.stringify(request), createdAtMs: now, updatedAtMs: now },
+      { id: "intraday-validation-child", ownerId, status: "COMPLETED", requestJson: JSON.stringify(request), resultJson: "large result must not be read", createdAtMs: now, updatedAtMs: now },
+    ]).run();
+    db.insert(intradayValidations).values({ id: "intraday-validation-progress", ownerId, sourceJobId: "intraday-validation-source", requestJson: JSON.stringify(request), configJson: "{}", planJson: JSON.stringify({ totalRuns: 3 }), executionVersion: "1", validationVersion: "1", strategyVersion: "1", dataRevision: "1", status: "COMPLETED", createdAtMs: now, completedAtMs: now }).run();
+    db.insert(intradayValidationTrials).values([
+      { id: "intraday-progress-train", validationId: "intraday-validation-progress", fold: 0, role: "TRAIN", runId: "intraday-validation-child" },
+      { id: "intraday-progress-skip", validationId: "intraday-validation-progress", fold: 0, role: "OOS", skipReason: "NO_ELIGIBLE_CANDIDATE" },
+      { id: "intraday-progress-pending", validationId: "intraday-validation-progress", fold: 0, role: "BASELINE" },
+    ]).run();
+    const response = await ctx.app.inject({ method: "GET", url: "/api/v1/jobs/intraday-validation:intraday-validation-progress", cookies: { session: cookie } });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json<JobResponse>().job).toMatchObject({ description: "005930 · 2026-01-05 ~ 2026-02-05", progress: { current: 2, total: 3 } });
+  });
+
   // 서비스의 미평가 DTO 검사만으로는 작업 센터의 JOIN이 이 행을 누락하는 문제를 찾지 못한다.
   it("선택 OOS가 미평가여도 종료된 기간검증의 진행률과 사유를 표시한다", async ({ ctx, cookie }) => {
     const now = Date.now();

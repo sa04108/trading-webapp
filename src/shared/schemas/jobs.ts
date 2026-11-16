@@ -1,7 +1,7 @@
 export const jobKinds = [
   "backtest-wizard",
   "backtest", "preparation", "clone-batch", "validation", "backtest-refresh",
-  "intraday-backtest", "intraday-collection", "symbol-master", "benchmark",
+  "intraday-backtest", "intraday-validation", "intraday-collection", "symbol-master", "benchmark",
 ] as const;
 
 export type JobKind = (typeof jobKinds)[number];

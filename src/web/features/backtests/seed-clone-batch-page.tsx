@@ -121,13 +121,11 @@ export function SeedCloneBatchPage() {
       ]} />
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-lg font-semibold">난수 시드 실험</h2>
-        <Badge
+        {batch.status !== "COMPLETED" ? <Badge
           variant={
             batch.status === "FAILED"
               ? "destructive"
-              : batch.status === "COMPLETED"
-                ? "default"
-                : batch.status === "CANCELLED"
+              : batch.status === "CANCELLED"
                   ? "outline"
                   : "secondary"
           }
@@ -136,12 +134,10 @@ export function SeedCloneBatchPage() {
             ? "진행 중"
             : batch.status === "CANCELLING"
               ? "취소 중"
-              : batch.status === "COMPLETED"
-                ? "완료"
-                : batch.status === "CANCELLED"
+              : batch.status === "CANCELLED"
                   ? "취소됨"
                   : "실패"}
-        </Badge>
+        </Badge> : null}
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-muted-foreground">
             {formatDateTime(batch.createdAtMs)}
@@ -310,7 +306,7 @@ export function SeedCloneBatchPage() {
                 <TableRow>
                   <TableHead>#</TableHead>
                   <TableHead>난수 시드</TableHead>
-                  <TableHead>상태</TableHead>
+                  <TableHead>상태 / 결과</TableHead>
                   <TableHead className="text-right">수익률</TableHead>
                   <TableHead className="text-right">Sharpe</TableHead>
                   <TableHead className="text-right">MDD</TableHead>
@@ -329,10 +325,10 @@ export function SeedCloneBatchPage() {
                           className="hover:underline"
                           to={`/backtests/${item.jobId}`}
                         >
-                          {ITEM_STATUS_LABELS[item.status]}
+                          {item.status === "COMPLETED" ? "결과 보기" : ITEM_STATUS_LABELS[item.status]}
                         </Link>
                       ) : (
-                        ITEM_STATUS_LABELS[item.status]
+                        item.status === "COMPLETED" ? "—" : ITEM_STATUS_LABELS[item.status]
                       )}
                     </TableCell>
                     <TableCell

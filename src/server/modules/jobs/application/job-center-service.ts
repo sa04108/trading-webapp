@@ -1,3 +1,4 @@
+import type { IntradayValidationService } from "../../intraday/application/intraday-validation-service.js";
 import type { Container } from "../../../bootstrap/container.js";
 import type { PeriodValidationService } from "../../backtest/application/period-validation-service.js";
 import type { JobFilter, JobItem, JobKind, JobsResponse, JobStatus } from "../../../../shared/schemas/jobs.js";
@@ -33,7 +34,8 @@ const sources: Source[] = [
   { kind: "preparation", table: "backtest_preparation_jobs", status: preparationStatus, updated: "updated_at_ms", finished: "coalesce(completed_at_ms, updated_at_ms)", where: "(NOT EXISTS (SELECT 1 FROM backtest_wizard_children w JOIN backtest_wizard_jobs parent ON parent.id=w.wizard_id WHERE parent.owner_id=@owner AND w.kind='preparation' AND w.job_id=backtest_preparation_jobs.id) OR EXISTS (SELECT 1 FROM preparation_wizard_references r WHERE r.preparation_job_id=backtest_preparation_jobs.id AND r.user_id=@owner AND r.context NOT IN (SELECT id FROM backtest_wizard_jobs)))" },
   { kind: "clone-batch", table: "backtest_clone_batches", updated: "coalesce(completed_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)" },
   { kind: "validation", table: "backtest_validations", updated: "coalesce(completed_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)" },
-  { kind: "intraday-backtest", table: "intraday_runs", status: intradayStatus, updated: "updated_at_ms", finished: "updated_at_ms", where: "owner_id=@owner" },
+  { kind: "intraday-validation", table: "intraday_validations", updated: "coalesce(completed_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)", where: "owner_id=@owner" },
+  { kind: "intraday-backtest", table: "intraday_runs", status: intradayStatus, updated: "updated_at_ms", finished: "updated_at_ms", where: "owner_id=@owner AND NOT EXISTS (SELECT 1 FROM intraday_validation_trials t WHERE t.run_id=intraday_runs.id)" },
   { kind: "intraday-collection", table: "intraday_collections", status: intradayStatus, updated: "updated_at_ms", finished: "updated_at_ms", where: "owner_id=@owner AND parent_run_id IS NULL" },
 ];
 
@@ -67,7 +69,7 @@ export class JobCenterError extends Error {
 }
 
 export class JobCenterService {
-  constructor(private readonly container: Container, private readonly validations: PeriodValidationService, private readonly refreshJobs: BacktestRefreshService) {}
+  constructor(private readonly container: Container, private readonly validations: PeriodValidationService, private readonly refreshJobs: BacktestRefreshService, private readonly intradayValidations?: IntradayValidationService) {}
 
   private bindings(owner: string) {
     const days = this.container.config.notificationRetentionDays;
@@ -218,6 +220,18 @@ export class JobCenterService {
           progress: jobProgress(counts.done, data.total, "실행 처리 (미평가 포함)"), link: `/backtests/validations/${encodeURIComponent(row.sourceId)}` };
         break;
       }
+      case "intraday-validation": {
+        const data = db.prepare(`SELECT error, status, json_extract(request_json, '$.strategyId') AS strategyId,
+          json_extract(request_json, '$.symbol') AS symbol, json_extract(request_json, '$.period.from') AS dateFrom,
+          json_extract(request_json, '$.period.to') AS dateTo, json_extract(plan_json, '$.totalRuns') AS total
+          FROM intraday_validations WHERE id=? AND owner_id=?`).get(row.sourceId, owner) as { error: string | null; status: string; strategyId: string; symbol: string; dateFrom: string; dateTo: string; total: number };
+        const counts = db.prepare(`SELECT count(*) AS done FROM intraday_validation_trials t
+          LEFT JOIN intraday_runs r ON r.id=t.run_id WHERE t.validation_id=? AND (t.skip_reason IS NOT NULL OR r.status='COMPLETED')`).get(row.sourceId) as { done: number };
+        job = { ...job, title: `${strategyName(data.strategyId)} · 분봉 기간 검증`, phase: data.status === "ACTIVE" ? "검증 실행 중" : jobPhase(data.status),
+          description: [data.symbol, period(data.dateFrom, data.dateTo)].filter(Boolean).join(" · "), error: data.error,
+          progress: jobProgress(counts.done, data.total, "실행 처리 (미평가 포함)"), link: `/backtests/intraday/validations/${encodeURIComponent(row.sourceId)}` };
+        break;
+      }
       case "intraday-backtest": {
         const data = db.prepare(`SELECT json_extract(CASE WHEN json_valid(request_json) THEN request_json ELSE '{}' END,'$.strategyId') AS strategyId, json_extract(CASE WHEN json_valid(request_json) THEN request_json ELSE '{}' END,'$.symbol') AS symbol,
           json_extract(CASE WHEN json_valid(request_json) THEN request_json ELSE '{}' END,'$.period.from') AS dateFrom, json_extract(CASE WHEN json_valid(request_json) THEN request_json ELSE '{}' END,'$.period.to') AS dateTo, status, error FROM intraday_runs WHERE id=? AND owner_id=?`).get(row.sourceId, owner) as { strategyId: string; symbol: string; dateFrom: string; dateTo: string; status: string; error: string | null };
@@ -256,6 +270,10 @@ export class JobCenterService {
         break;
       }
       case "validation": this.validations.cancel(row.sourceId); break;
+      case "intraday-validation": {
+        if (!this.intradayValidations) throw new JobCenterError("분봉 검증 취소 서비스를 사용할 수 없습니다.", 503);
+        this.intradayValidations.cancel(owner, row.sourceId); break;
+      }
       case "intraday-backtest": this.container.intradayService.cancelRun(owner, row.sourceId); break;
       case "intraday-collection": this.container.intradayService.cancelCollection(owner, row.sourceId); break;
       case "benchmark": this.container.benchmarkService.cancelJob(row.id); break;

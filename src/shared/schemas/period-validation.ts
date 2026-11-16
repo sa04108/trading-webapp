@@ -5,6 +5,7 @@ import {
   type BacktestPeriod,
   type BacktestRequest,
 } from "./backtest-request.js";
+import { intradayRequestSchema, type IntradayRequest } from "./intraday.js";
 
 export const MAX_VALIDATION_RUNS = 300;
 export const MAX_VALIDATION_CANDIDATES = 50;
@@ -75,9 +76,18 @@ export function validationMonthOffset(date: string, months: number): string {
 
 /** 화면 미리보기와 서버 실행이 같은 비중복 기간·후보 조합을 사용한다. */
 export function buildPeriodValidationPlan(
-  source: BacktestRequest,
+  source: BacktestRequest | IntradayRequest,
   config: PeriodValidationConfig,
 ): PeriodValidationPlan {
+  const intraday = "mode" in source && source.mode === "intraday";
+  if (intraday && config.mode !== "HOLDOUT") {
+    if (config.optimization.objective !== "sharpe")
+      throw new Error("분봉 기간검증은 Sharpe를 기준으로 최적화합니다.");
+    for (const axis of config.optimization.axes) {
+      if (!Object.hasOwn(source.parameters, axis.key) || typeof source.parameters[axis.key as keyof typeof source.parameters] !== "number")
+        throw new Error(`숫자 전략 매개변수만 탐색할 수 있습니다: ${axis.key}`);
+    }
+  }
   const { from, to } = source.period;
   if (from >= to)
     throw new Error("검증 기간은 시작일보다 종료일이 뒤여야 합니다.");
@@ -152,7 +162,7 @@ export function buildPeriodValidationPlan(
       if (period.from >= period.to)
         throw new Error("각 IS/OOS 구간에는 최소 2일이 필요합니다.");
       for (const parameters of [...candidates, source.parameters]) {
-        const parsed = backtestRequestSchema.safeParse({
+        const parsed = (intraday ? intradayRequestSchema : backtestRequestSchema).safeParse({
           ...source,
           period,
           parameters,

@@ -127,6 +127,7 @@ export function generateRuntimeVersions(root = repository, overrides = {}) {
   const validationVersion = digest({
     ...inputs([
       "src/server/modules/backtest/application/period-validation-service.ts",
+      "src/server/modules/intraday/application/intraday-validation-service.ts",
     ]),
     previewVersion,
     executionVersion,

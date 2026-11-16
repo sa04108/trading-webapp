@@ -41,9 +41,13 @@ function compactKrw(value: number): string {
 export function EquityChart({
   points,
   summary,
+  formatTimestamp = formatDate,
+  formatTick = (ts: number) => formatDate(ts).slice(2),
 }: {
   points: SeriesPoint[];
   summary: string;
+  formatTimestamp?: (ts: number) => string;
+  formatTick?: (ts: number) => string;
 }) {
   return (
     <Card>
@@ -72,7 +76,7 @@ export function EquityChart({
                 type="number"
                 scale="time"
                 domain={["dataMin", "dataMax"]}
-                tickFormatter={(ts: number) => formatDate(ts).slice(2)}
+                tickFormatter={formatTick}
                 tick={AXIS_TICK}
                 tickLine={false}
                 axisLine={{ stroke: GRID }}
@@ -88,7 +92,7 @@ export function EquityChart({
               />
               <Tooltip
                 {...chartTooltipProps}
-                labelFormatter={(ts) => formatDate(Number(ts))}
+                labelFormatter={(ts) => formatTimestamp(Number(ts))}
                 formatter={(value) => [formatKrw(Number(value)), "평가금액"]}
               />
               <Line

@@ -8,21 +8,12 @@ import {
 } from "./execution-progress-display";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowDown,
-  ArrowUp,
-  ChevronsUpDown,
-  Copy,
-  Dices,
-  Download,
-  SlidersHorizontal,
-  Trash2,
   XCircle,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageSizeInput, Pagination } from "@/components/pagination";
@@ -45,14 +36,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { api, ApiError } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { SymbolLabel } from "@/components/symbol-label";
@@ -65,17 +48,16 @@ import {
 } from "./api";
 import { exitReasonLabel } from "./exit-reason";
 import { openPositionRows } from "./open-position-rows";
-import { periodEndTsMs, staleDays } from "./stale-days";
+import { periodEndTsMs } from "./stale-days";
+import { TradesTable } from "./trades-table";
 import { parsePageSize } from "@/lib/page-size";
 import { ParamHint } from "./param-hint";
 import { extractNumberParams, paramLabel } from "./param-specs";
 import {
-  formatDate,
   formatDateTime,
   formatDuration,
   formatKrw,
   formatNumber,
-  formatSignedKrw,
   formatSignedPct,
   pnlClass,
   sharpeClass,
@@ -88,13 +70,11 @@ import {
 } from "./result-charts";
 import { resolveJobTimeframe } from "./job-timeframe";
 import { StatusBadge } from "./status-badge";
+import { ResultActions } from "./result-actions";
 import {
-  ariaSortValue,
   DEFAULT_TRADE_SORT,
   nextTradeSort,
   sortOpenRows,
-  TRADE_SORT_LABELS,
-  tradeSortHint,
   tradeSortSummary,
   type TradeSort,
   type TradeSortKey,
@@ -195,55 +175,6 @@ function MetricCards({
   );
 }
 
-/**
- * 정렬 가능한 열 머리글.
- *
- * 이름은 버튼의 보이는 글자 그대로 두고(aria-label 로 덮지 않는다) 지금 순서는
- * `<th aria-sort>` 가 알린다 — 스크린리더가 열 이름과 정렬 상태를 따로 읽는다.
- * 누르면 어떻게 되는지는 `title` 에 적는다.
- */
-function SortableHead({
-  sortKey,
-  sort,
-  onSort,
-  align,
-}: {
-  sortKey: TradeSortKey;
-  sort: TradeSort;
-  onSort: (key: TradeSortKey) => void;
-  align?: "right";
-}) {
-  const active = sort.key === sortKey;
-  return (
-    <TableHead
-      aria-sort={ariaSortValue(sort, sortKey)}
-      className={align === "right" ? "text-right" : undefined}
-    >
-      <Button
-        variant="ghost"
-        size="xs"
-        // -mx-2 로 버튼 자기 여백을 상쇄해 글자가 아래 셀과 같은 줄에 선다
-        className="-mx-2 font-medium"
-        title={tradeSortHint(sort, sortKey)}
-        onClick={() => onSort(sortKey)}
-      >
-        {TRADE_SORT_LABELS[sortKey]}
-        {active ? (
-          sort.direction === "ASC" ? (
-            <ArrowUp />
-          ) : (
-            <ArrowDown />
-          )
-        ) : (
-          // 고르지 않은 축도 누를 수 있다는 것이 보여야 한다 — 아이콘 없이 두면
-          // 활성 열만 정렬되는 줄로 읽힌다
-          <ChevronsUpDown className="opacity-40" />
-        )}
-      </Button>
-    </TableHead>
-  );
-}
-
 function TradesSection({
   jobId,
   symbols,
@@ -296,7 +227,7 @@ function TradesSection({
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-2">
-        <CardTitle className="text-base">거래 내역</CardTitle>
+        <CardTitle className="shrink-0 whitespace-nowrap text-base">거래 내역</CardTitle>
         <Select
           value={symbol}
           onValueChange={(value) => {
@@ -304,7 +235,7 @@ function TradesSection({
             setPage(0);
           }}
         >
-          <SelectTrigger className="h-9 w-56" aria-label="종목 필터">
+          <SelectTrigger className="h-9 min-w-0 w-56" aria-label="종목 필터">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -337,172 +268,8 @@ function TradesSection({
             거래가 없습니다.
           </p>
         ) : (
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  {/* 종목·사유는 정렬 축이 아니다 — 종목은 위 필터가 맡고, 사유는
-                      코드 문자열 순서가 사람에게 뜻이 없다. 누를 수 있게 두면 골랐는데
-                      순서가 그대로인 상태가 된다 (D-027·D-038 과 같은 방향) */}
-                  <TableHead>종목</TableHead>
-                  <SortableHead
-                    sortKey="QUANTITY"
-                    sort={sort}
-                    onSort={changeSort}
-                    align="right"
-                  />
-                  <SortableHead
-                    sortKey="ENTRY_TS"
-                    sort={sort}
-                    onSort={changeSort}
-                  />
-                  <SortableHead
-                    sortKey="EXIT_TS"
-                    sort={sort}
-                    onSort={changeSort}
-                  />
-                  <SortableHead
-                    sortKey="NET_PNL"
-                    sort={sort}
-                    onSort={changeSort}
-                    align="right"
-                  />
-                  <SortableHead
-                    sortKey="RETURN_PCT"
-                    sort={sort}
-                    onSort={changeSort}
-                    align="right"
-                  />
-                  <SortableHead
-                    sortKey="HOLDING_TIME"
-                    sort={sort}
-                    onSort={changeSort}
-                  />
-                  {/* 미청산 행에만 값이 있다 — 매도 체결 행은 이미 매도일이 있어 별도로
-                      "확인일" 을 말할 필요가 없다. 정렬 축으로 두지 않는 이유는 사유와 같다 */}
-                  <TableHead>마지막 확인일</TableHead>
-                  <TableHead>사유</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {openRows.map((row) => {
-                  const stale = staleDays(
-                    row.lastPriceTsMs,
-                    periodEndMsForStale,
-                  );
-                  return (
-                    <TableRow
-                      key={`open-${row.symbol}`}
-                      className="bg-muted/40"
-                    >
-                      <TableCell className="font-medium">
-                        <SymbolLabel
-                          symbol={row.symbol}
-                          name={nameOf(row.symbol)}
-                        />
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {row.quantity}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-xs">
-                        {formatDateTime(row.entryTsMs)}
-                        <br />
-                        <span className="text-muted-foreground">
-                          {formatKrw(row.entryPrice)}
-                        </span>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-xs">
-                        <Badge variant="outline">미청산</Badge>
-                        <br />
-                        <span className="text-muted-foreground">
-                          {formatKrw(row.lastPrice)}
-                        </span>
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "text-right tabular-nums",
-                          pnlClass(row.unrealizedPnl),
-                        )}
-                      >
-                        {formatSignedKrw(row.unrealizedPnl)}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "text-right tabular-nums",
-                          pnlClass(row.returnPct),
-                        )}
-                      >
-                        {formatSignedPct(row.returnPct)}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                        {formatDuration(row.holdingTimeMs)}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                        {formatDate(row.lastPriceTsMs)}
-                        {stale > 0 ? ` (${stale}일 경과)` : ""}
-                      </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
-                        미청산
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-                {trades.map((trade) => (
-                  <TableRow key={trade.id}>
-                    <TableCell className="font-medium">
-                      <SymbolLabel
-                        symbol={trade.symbol}
-                        name={nameOf(trade.symbol)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {trade.quantity}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">
-                      {formatDateTime(trade.entryTsMs)}
-                      <br />
-                      <span className="text-muted-foreground">
-                        {formatKrw(trade.entryPrice)}
-                      </span>
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs">
-                      {formatDateTime(trade.exitTsMs)}
-                      <br />
-                      <span className="text-muted-foreground">
-                        {formatKrw(trade.exitPrice)}
-                      </span>
-                    </TableCell>
-                    <TableCell
-                      className={cn(
-                        "text-right tabular-nums",
-                        pnlClass(trade.netPnl),
-                      )}
-                    >
-                      {formatSignedKrw(trade.netPnl)}
-                    </TableCell>
-                    <TableCell
-                      className={cn(
-                        "text-right tabular-nums",
-                        pnlClass(trade.returnPct),
-                      )}
-                    >
-                      {formatSignedPct(trade.returnPct)}
-                    </TableCell>
-                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                      {formatDuration(trade.holdingTimeMs)}
-                    </TableCell>
-                    {/* 매도 체결 행에는 "마지막 확인일" 개념이 없다 — 매도일이 그 역할이다 */}
-                    <TableCell className="text-xs text-muted-foreground">
-                      -
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {exitReasonLabel(trade.exitReason)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <TradesTable trades={trades} openRows={openRows} sort={sort} onSort={changeSort}
+            nameOf={nameOf} reasonLabel={exitReasonLabel} periodEndMs={periodEndMsForStale} />
         )}
         {trades.length > 0 || openRows.length > 0 ? (
           <p className="mt-2 text-xs text-muted-foreground">
@@ -875,63 +642,15 @@ export function BacktestDetailPage() {
               취소
             </Button>
           ) : (
-            <>
-              <div
-                className="grid w-full grid-cols-2 overflow-hidden rounded-lg border border-input sm:w-auto sm:auto-cols-max sm:grid-flow-col sm:grid-cols-none"
-                role="group"
-                aria-label="백테스트 복제"
-              >
-                <Button
-                  className="h-11 min-w-0 rounded-none border-0 focus-visible:z-10 focus-visible:ring-inset"
-                  onClick={() => cloneMutation.mutate()}
-                  disabled={cloneMutation.isPending}
-                >
-                  <Copy data-icon="inline-start" />
-                  그대로 복제
-                </Button>
-                {job.cloneBatchId === null ? (
-                  <Button
-                    variant="outline"
-                    className="h-11 min-w-0 rounded-none border-0 border-l border-input focus-visible:z-10 focus-visible:ring-inset"
-                    disabled={!supportsRandomSeed || !strategy}
-                    onClick={() => setSeedCloneOpen(true)}
-                  >
-                    <Dices data-icon="inline-start" />새 난수로 복제
-                  </Button>
-                ) : null}
-                <Button
-                  variant="outline"
-                  className={cn(
-                    "h-11 min-w-0 rounded-none border-0 border-input focus-visible:z-10 focus-visible:ring-inset",
-                    job.cloneBatchId === null
-                      ? "col-span-2 border-t sm:col-span-1 sm:border-l sm:border-t-0"
-                      : "border-l",
-                  )}
-                  asChild
-                >
-                  <Link to={`/backtests/new?from=${id}`}>
-                    <SlidersHorizontal data-icon="inline-start" />
-                    재설정 및 복제
-                  </Link>
-                </Button>
-              </div>
-              {completed ? (
-                <Button variant="outline" className="h-11" asChild>
-                  <a href={`/api/v1/backtests/${id}/export`} download>
-                    <Download data-icon="inline-start" />
-                    Export
-                  </a>
-                </Button>
-              ) : null}
-              <Button
-                variant="ghost"
-                className="h-11"
-                onClick={() => setDeleteOpen(true)}
-              >
-                <Trash2 data-icon="inline-start" />
-                삭제
-              </Button>
-            </>
+            <ResultActions
+              onClone={() => cloneMutation.mutate()}
+              clonePending={cloneMutation.isPending}
+              showSeedClone={job.cloneBatchId === null}
+              onSeedClone={supportsRandomSeed && strategy ? () => setSeedCloneOpen(true) : undefined}
+              reconfigureHref={`/backtests/new?from=${id}`}
+              exportHref={completed ? `/api/v1/backtests/${id}/export` : undefined}
+              onDelete={() => setDeleteOpen(true)}
+            />
           )}
         </div>
       </div>

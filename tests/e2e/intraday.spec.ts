@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { login } from "./login";
+import { buildPeriodValidationPlan, type PeriodValidationConfig, type PeriodValidationDto } from "../../src/shared/schemas/period-validation";
+import { intradayRequestSchema } from "../../src/shared/schemas/intraday";
 
 const request = {
   mode: "intraday",
@@ -50,13 +52,16 @@ const result = {
       tax: 0,
       reason: "EMA",
     },
+    ...[2, 3].map((offset) => ({ orderId: "order-2", signalAtMs: at + 300000,
+      eligibleAtMs: at + 301000, atMs: at + offset * 300000, side: "SELL", qty: 1,
+      price: 71000, commission: 10.65, tax: 142, reason: "TAKE_PROFIT" })),
   ],
-  equity: [{ endMs: at, equity: 10000000, cash: 10000000, quantity: 0 }],
+  equity: [{ endMs: at, equity: 10000000, cash: 10000000, quantity: 0 }, { endMs: at + 900000, equity: 10001673.7, cash: 10001673.7, quantity: 0 }],
   position: { quantity: 0, averagePrice: 0, lastPrice: 70000 },
   metrics: {
-    pnl: 12000,
-    returnPct: 0.12,
-    totalCosts: 21,
+    pnl: 1673.7,
+    returnPct: 0.016737,
+    totalCosts: 326.3,
     maxDrawdownPct: -1,
     dailyMaxDrawdownPct: -1,
     sharpe: null,
@@ -74,6 +79,18 @@ const completed = {
   updatedAtMs: at,
   result,
 };
+
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/v1/intraday/experiments/summary?**", (route) => {
+    const ids = new URL(route.request().url()).searchParams.get("jobIds")!.split(",");
+    const returns = { count: 0, mean: null, sampleStdDev: null };
+    return route.fulfill({ json: { summaries: ids.map(jobId => ({ jobId, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns, modes: { HOLDOUT: 0, OPTIMIZED_HOLDOUT: 0, WALK_FORWARD: 0 } } })) } });
+  });
+  await page.route("**/api/v1/intraday/runs/*/lineage", (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").at(-2)!;
+    return route.fulfill({ json: { kind: "original", complete: true, roleLabel: "결과", items: [{ label: "백테스트", href: "/backtests" }, { label: "분봉", href: "/backtests/intraday" }, { label: `결과 ${id.slice(-6)}`, href: `/backtests/intraday/${id}` }] } });
+  });
+});
 
 // 빈 차트만 검사하면 수집 폴링이 확대·이동한 차트를 다시 만드는 회귀를 잡지 못한다.
 test("수집 폴링은 차트와 스크롤을 유지하고 사용자 조회는 최신 데이터를 가져온다", async ({ page }) => {
@@ -319,14 +336,31 @@ test("일봉과 분봉 경로를 오가며 결과와 체결 시각을 확인한�
   await expect(page).toHaveURL(/\/backtests\/intraday$/);
   await checkHeader();
   await page.locator('a[href="/backtests/intraday/done"]').click();
-  await expect(page.getByText("12,000원")).toBeVisible();
+  await expect(page.getByText("+1,674원", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "EMA 교차", exact: true })).toBeVisible();
+  await expect(page.getByText("완료", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "그대로 복제", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "새 난수로 복제", exact: true })).toBeDisabled();
+  await expect(page.getByRole("link", { name: "재설정 및 복제", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Export", exact: true })).toHaveAttribute("href", "/api/v1/intraday/runs/done/export");
+  // 기존 시각 확인만으로는 부분청산 집계·공통 표·비용 패널 배치의 회귀를 잡지 못한다.
+  await expect(page.getByText("매도 체결 수 (부분청산 포함)", { exact: true }).locator("..")).toContainText("2건");
+  await expect(page.getByText("승률 (매도 체결 기준)", { exact: true }).locator("..")).toContainText("100.0%");
+  const costPanel = page.getByLabel("비용 및 보유기간");
+  const columns = costPanel.locator(":scope > div");
+  const left = await columns.nth(0).boundingBox(), right = await columns.nth(1).boundingBox();
+  expect(left && right && Math.abs(left.width - right.width)).toBeLessThanOrEqual(1);
+  expect(left && right && Math.abs(left.y - right.y)).toBeLessThanOrEqual(1);
   // 공통 색상 함수 검사와 별도로 상세 화면에 적용한 값과 색상을 확인한다.
-  await expect(page.getByText("샤프", { exact: true }).locator("..").locator("p").last()).toHaveClass(/text-loss/);
-  await expect(page.getByText("최대 낙폭", { exact: true }).locator("..").locator("p").last()).toHaveText("-1%");
+  await expect(page.getByText("Sharpe", { exact: true }).locator("..").locator("p").last()).toHaveClass(/text-loss/);
+  await expect(page.getByText("MDD", { exact: true }).locator("..").locator("p").last()).toHaveText("-1.00%");
+  await expect(page.getByText("MDD", { exact: true }).locator("..").locator("p").last()).toHaveClass(/text-loss/);
   // 완료된 계산의 누락 경고가 결과와 차트에서 모두 보이는지 확인한다.
   await expect(page.getByRole("alert").filter({ hasText: "분봉 1개(1구간)가 누락" })).toBeVisible();
   await expect(page.getByRole("alert").filter({ hasText: "누락 구간에서는 매매를 시뮬레이션하지 않습니다" })).toBeVisible();
-  await expect(page.getByRole("img", { name: "자산 추이 차트" })).toBeVisible();
+  const equity = page.getByRole("img", { name: /자산 곡선 차트/ });
+  await equity.scrollIntoViewIfNeeded();
+  await expect(equity).toBeVisible();
   const markers = page.getByRole("list", { name: "차트 신호 및 체결", includeHidden: true });
   await expect(markers).toContainText("신호 BUY");
   await expect(markers).toContainText("체결 BUY");
@@ -338,17 +372,17 @@ test("일봉과 분봉 경로를 오가며 결과와 체결 시각을 확인한�
     page.getByText("수집 데이터가 갱신되어 실행 당시 차트와 다를 수 있습니다."),
   ).toBeVisible();
   await expect(page.getByRole("list", { name: "차트 신호 및 체결", includeHidden: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "체결 및 주문" }).click();
-  await expect(
-    page.getByRole("columnheader", { name: "신호 시각" }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("columnheader", { name: "체결 시각" }),
-  ).toBeVisible();
-  await expect(page.getByRole("cell", { name: /오전 9:05/ })).toBeVisible();
-  await expect(page.getByRole("cell", { name: /오전 9:10/ })).toBeVisible();
-  await page.getByRole("combobox", { name: "백테스트 주기" }).click();
-  await page.getByRole("option", { name: "일봉" }).click();
+  await expect(page.getByRole("button", { name: "체결 및 주문" })).toHaveCount(0);
+  await page.getByText("거래 내역", { exact: true }).scrollIntoViewIfNeeded();
+  await expect(page.getByRole("columnheader", { name: /진입가 \(원\)/ })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: /매도가 \(원\)/ })).toBeAttached();
+  await expect(page.getByRole("columnheader", { name: "비용 (원)", exact: true })).toBeAttached();
+  await expect(page.getByRole("cell", { name: /2026.01.02 09:10/ })).toHaveCount(2);
+  await expect(page.getByRole("cell", { name: /2026.01.02 09:15/ })).toHaveCount(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const notes = page.getByLabel("시세 및 체결 참고");
+  await expect(notes).toContainText("슬리피지를 다시 차감하지 않습니다");
+  await page.getByRole("navigation", { name: "백테스트 경로" }).getByRole("link", { name: "백테스트", exact: true }).click();
   await expect(page).toHaveURL(/\/backtests$/);
 });
 
@@ -400,7 +434,7 @@ test("새 분봉 전략의 설정을 실행하고 복제한다", async ({ page }
     await expect(page).toHaveURL(/\/backtests\/intraday\/created$/);
     expect(submitted?.strategyId).toBe(strategy.id);
     expect(submitted?.parameters).toEqual(strategy.parameters);
-    await page.getByRole("link", { name: "이 설정으로 다시 실행" }).click();
+    await page.getByRole("link", { name: "재설정 및 복제" }).click();
     await expect(page.getByRole("combobox", { name: "분봉 전략" })).toContainText(strategy.name);
     await expect(page.getByLabel(strategy.field, { exact: true })).toHaveValue(strategy.value);
   }
@@ -456,4 +490,73 @@ test("분봉 편집은 현재 페이지의 종료된 이력만 삭제한다", as
   await expect(page.getByRole("button", { name: "현재 페이지 선택 삭제 (0)", exact: true })).toBeDisabled();
   await expect(group.getByRole("checkbox")).toHaveCount(6);
   await expect(group.getByRole("checkbox").first()).toBeDisabled();
+});
+
+// 일봉 전용 API로 잘못 연결되는 회귀는 공통 검증 폼 테스트만으로 발견할 수 없다.
+test("분봉 실험 페이지를 재사용하고 검증 하위 결과와 일반 복제를 구분한다", async ({ page }) => {
+  await login(page);
+  const sourceRequest = intradayRequestSchema.parse({ ...request, period: { from: "2026-01-05", to: "2026-10-30" } });
+  const childRequest = { ...sourceRequest, period: { from: "2026-07-01", to: "2026-10-30" } };
+  const source = { ...completed, request: sourceRequest, result: { ...result, request: sourceRequest } };
+  let experiment: PeriodValidationDto | null = null;
+  let cloneCount = 0;
+  const wrongApi: string[] = [];
+  page.on("request", (r) => { if (r.url().includes("/api/v1/backtests/done")) wrongApi.push(r.url()); });
+  await page.route("**/api/v1/intraday/runs/done", (route) => route.fulfill({ json: source }));
+  await page.route("**/api/v1/intraday/runs/oos", (route) => route.fulfill({ json: { ...source, id: "oos", request: childRequest, result: { ...result, request: childRequest } } }));
+  await page.route("**/api/v1/intraday/runs/copied", (route) => route.fulfill({ json: { ...source, id: "copied" } }));
+  await page.route("**/api/v1/intraday/runs/oos/clone", (route) => {
+    expect(route.request().method()).toBe("POST"); cloneCount++;
+    return route.fulfill({ status: 202, json: { ...source, id: "copied" } });
+  });
+  await page.route("**/api/v1/intraday/chart?**", (route) => route.fulfill({ json: { symbol: "005930", timeframe: "5m", bars: [], revision: "test", gaps: [], totalBars: 0, truncated: false } }));
+  await page.route("**/api/v1/intraday/runs/done/validations", (route) => {
+    if (route.request().method() === "POST") {
+      const config = route.request().postDataJSON() as PeriodValidationConfig;
+      expect(config).toEqual({ mode: "HOLDOUT", splitDate: "2026-07-01" });
+      const plan = buildPeriodValidationPlan(sourceRequest, config);
+      experiment = { id: "validation", sourceJobId: "done", status: "COMPLETED", config, plan, initialCash: 10000000, createdAtMs: at, error: null,
+        trials: ["TRAIN", "OOS"].map((role, i) => ({ id: role, role: role as "TRAIN" | "OOS", fold: 0, candidate: 0, parameters: sourceRequest.parameters,
+          period: i ? plan.folds[0]!.test : plan.folds[0]!.train, jobId: i ? "oos" : "train", status: "COMPLETED", progress: null, error: null,
+          metrics: { totalReturnPct: 1, cagrPct: null, maxDrawdownPct: -1, sharpe: 1.2, tradeCount: 2 }, skipReason: null, selection: null })) };
+      return route.fulfill({ status: 201, json: { experiment } });
+    }
+    return route.fulfill({ json: { experiments: experiment ? [experiment] : [] } });
+  });
+  await page.route("**/api/v1/intraday/validations/validation", (route) => route.fulfill({ json: { experiment } }));
+  await page.route("**/api/v1/intraday/runs/oos/lineage", (route) => route.fulfill({ json: { complete: true, kind: "validation", roleLabel: "OOS 검증", items: [
+    { label: "백테스트", href: "/backtests/intraday" }, { label: "결과 done", href: "/backtests/intraday/done" },
+    { label: "홀드아웃", href: "/backtests/intraday/validations/validation" }, { label: "1회차 · OOS 검증" },
+  ] } }));
+  await page.goto("/backtests/intraday/done");
+  await page.getByRole("link", { name: "난수 시드 실험 열기" }).click();
+  await expect(page).toHaveURL(/\/backtests\/intraday\/done\/seeds$/);
+  await expect(page.getByRole("button", { name: "난수 실험 시작" })).toBeDisabled();
+  await expect(page.getByText(/분봉 엔진은 주문 순서를 난수로 섞지 않습니다/)).toBeVisible();
+  await page.getByRole("link", { name: "원본 결과", exact: true }).click();
+  await page.getByRole("link", { name: "기간검증 열기" }).click();
+  await expect(page).toHaveURL(/\/backtests\/intraday\/done\/validations$/);
+  const form = page.getByRole("region", { name: "기간 검증" });
+  await form.getByLabel("검증 방식", { exact: true }).click();
+  await page.getByRole("option", { name: "워크포워드", exact: true }).click();
+  await expect(form.getByLabel("학습 기간 (개월)")).toHaveValue("3");
+  await expect(form.getByLabel("평가·이동 기간 (개월)")).toHaveValue("1");
+  await form.getByLabel("IS 선택 기준").click();
+  await expect(page.getByRole("option", { name: "CAGR 최대" })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await form.getByLabel("검증 방식", { exact: true }).click();
+  await page.getByRole("option", { name: "홀드아웃", exact: true }).click();
+  await form.getByLabel("OOS 시작일").fill("2026-07-01");
+  await form.getByRole("button", { name: "검증 실험 실행" }).click();
+  await form.getByRole("link", { name: "상세 보기" }).click();
+  await expect(page).toHaveURL(/\/backtests\/intraday\/validations\/validation$/);
+  await expect(page.getByText("완료", { exact: true })).toHaveCount(0);
+  await page.locator('a[href="/backtests/intraday/oos"]').first().click();
+  await expect(page.getByRole("navigation", { name: "백테스트 경로" })).toContainText("1회차 · OOS 검증");
+  await page.getByRole("button", { name: "그대로 복제", exact: true }).click();
+  await expect(page).toHaveURL(/\/backtests\/intraday\/copied$/);
+  expect(cloneCount).toBe(1);
+  await expect(page.getByRole("navigation", { name: "백테스트 경로" })).toContainText("결과 copied");
+  await expect(page.getByRole("navigation", { name: "백테스트 경로" })).not.toContainText("OOS 검증");
+  expect(wrongApi).toEqual([]);
 });
