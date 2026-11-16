@@ -1627,7 +1627,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const pinPatches: Array<Partial<typeof backtestJobs.$inferInsert>> = [
       { universeJson: null, universeHash: null },
       { provenancePinJson: '{손상된 JSON' },
-      { benchmarkJson: '{}', benchmarkHash: '손상된 해시' },
     ];
 
     for (const patch of pinPatches) {
@@ -1734,7 +1733,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const childRequest = JSON.parse(child!.requestJson) as BacktestRequest;
     const { randomSeed: _sourceSeed, ...sourceSettings } = request;
     const { randomSeed: _childSeed, ...childSettings } = childRequest;
-    expect(childSettings).toEqual({ ...sourceSettings, benchmarkId: 'KOSPI', timeframe: '1d' });
+    expect(childSettings).toEqual({ ...sourceSettings, timeframe: '1d' });
 
     for (let round = 0; round < 6; round += 1) {
       const current = ctx.container.seedCloneBatchService.get(batchId)!;
@@ -1954,31 +1953,35 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
-  it('재설정 복제는 검토에서 동기화한 벤치마크로 불완전한 원본 pin을 보완한다', async ({ scenario }) => {
+  it('벤치마크 조회가 실패해도 제출과 재설정 복제를 실행한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     const body = buildRequest();
-    await scenario.prepare(body);
-    const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: body,
-    });
-    expect(created.statusCode).toBe(201);
-    const sourceId = created.json().job.id as string;
-    const source = ctx.container.jobQueue.getJob(sourceId)!;
-    expect(JSON.parse(source.benchmarkJson!).covered).toBe(false);
-    const coverage = vi.spyOn(ctx.container.benchmarkService, 'status').mockReturnValue({
-      covered: true,
-      points: [{ date: body.period.from, close: 2500 }, { date: body.period.to, close: 2600 }],
+    const coverage = vi.spyOn(ctx.container.benchmarkService, 'status').mockImplementation(() => {
+      throw new Error('벤치마크 조회 불가');
     });
     try {
+      await scenario.prepare(body);
+      const created = await ctx.app.inject({
+        method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: body,
+      });
+      expect(created.statusCode).toBe(201);
+      const sourceId = created.json().job.id as string;
+      const source = ctx.container.jobQueue.getJob(sourceId)!;
       const response = await ctx.app.inject({
         method: 'POST', url: `/api/v1/backtests/${sourceId}/clone-configured`,
         cookies: { session: cookie }, payload: body,
       });
       expect(response.statusCode).toBe(201);
       const cloned = ctx.container.jobQueue.getJob(response.json().job.id)!;
-      expect(JSON.parse(cloned.benchmarkJson!)).toMatchObject({ covered: true });
-      expect(cloned.benchmarkHash).not.toBe(source.benchmarkHash);
-      expect(ctx.container.jobQueue.getJob(sourceId)!.benchmarkJson).toBe(source.benchmarkJson);
+      expect(coverage).not.toHaveBeenCalled();
+      expect(source.benchmarkJson).toBeNull();
+      expect(source.benchmarkHash).toBeNull();
+      expect(cloned.benchmarkJson).toBeNull();
+      expect(cloned.benchmarkHash).toBeNull();
+      expect(JSON.parse(cloned.requestJson)).toEqual(JSON.parse(source.requestJson));
+      expect(cloned.universeScheduleJson).toBe(source.universeScheduleJson);
+      expect(cloned.universeJson).toBe(source.universeJson);
+      expect(cloned.provenancePinJson).toBe(source.provenancePinJson);
     } finally {
       coverage.mockRestore();
     }

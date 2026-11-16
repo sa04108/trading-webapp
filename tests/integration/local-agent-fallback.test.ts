@@ -160,7 +160,7 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
     ctx.container.agentCoordinator.start();
     await ctx.container.agentCoordinator.snapshots.ensureLatest();
     const oversized = ctx.container.jobQueue.enqueue(
-      request, schedule, undefined, undefined, [], undefined,
+      request, schedule, undefined, undefined, [],
       { estimatedBars: 2_100_000 },
     );
     await new Promise((resolve) => setImmediate(resolve));
@@ -178,7 +178,7 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
     ctx.container.agentCoordinator.start();
     await ctx.container.agentCoordinator.snapshots.ensureLatest();
     const job = ctx.container.jobQueue.enqueue(
-      request, schedule, undefined, undefined, [], undefined,
+      request, schedule, undefined, undefined, [],
       { estimatedBars: 1_247_646 },
     );
     await vi.waitFor(() => expect(ctx.container.jobQueue.getJob(job.id)?.agentId).toBe(LOCAL_AGENT_ID), { timeout: 1500 });

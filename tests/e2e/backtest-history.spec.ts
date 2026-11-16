@@ -148,12 +148,7 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
   const firstRow = group.locator("tbody > tr").first();
   await expect(firstRow.getByRole("link", { name: "난수", exact: true })).toHaveAttribute("href", "/backtests/history-0/seeds");
   await expect(firstRow.getByRole("link", { name: "검증", exact: true })).toHaveAttribute("href", "/backtests/history-0/validations");
-  if (testInfo.project.name === "mobile") {
-    await expect(group.getByRole("columnheader", { name: /난수/ })).toBeHidden();
-  } else {
-    await expect(group.getByRole("columnheader", { name: /난수/ })).toBeVisible();
-    await expect(group.getByRole("columnheader", { name: /검증/ })).toBeVisible();
-  }
+  await expect(group.getByRole("columnheader")).toHaveText(["기간", "수익률", "CAGR", "MDD", "실행일"]);
 
   await expect(other.locator("tbody > tr")).toHaveCount(1);
   await group.getByRole("button", { name: "다음", exact: true }).click();
@@ -233,6 +228,84 @@ test("삭제는 펼친 전략의 현재 페이지에 한정하고 빈 마지막 
   await expect(
     group.getByRole("button", { name: "다음", exact: true }),
   ).toBeDisabled();
+});
+
+// 기존 목록 검사는 사용자 열 선택·드래그 저장과 일봉/분봉 전환 후 복원을 다루지 않는다.
+test("표시 항목과 순서를 저장하고 일봉·분봉에 같은 표 구성을 적용한다", async ({ page }, testInfo) => {
+  await login(page);
+  await historyFixture(page);
+  await page.route("**/api/v1/intraday/runs/groups", (route) => route.fulfill({ json: { groups: [{ strategyId: "intraday-ema", total: 1 }] } }));
+  await page.route("**/api/v1/intraday/runs?**", (route) => route.fulfill({ json: {
+    total: 1, runs: [{ id: "columns-intraday", status: "COMPLETED", error: null, createdAtMs: Date.UTC(2026, 10, 15),
+      request: { strategyId: "intraday-ema", symbol: "005930", timeframe: "5m", period: { from: "2026-01-01", to: "2026-02-01" } },
+      metrics: { returnPct: 5, maxDrawdownPct: -3, sharpe: 1.25 },
+    }],
+  } }));
+  const mobile = testInfo.project.name === "mobile";
+  if (mobile) await page.setViewportSize({ width: 320, height: 844 });
+  await page.goto("/backtests?view=table");
+  const table = page.getByRole("table").first();
+  await expect(table.getByRole("columnheader")).toHaveText(["기간", "수익률", "CAGR", "MDD", "실행일"]);
+  await page.getByRole("button", { name: "표시 항목", exact: true }).click();
+  const menu = page.getByRole("dialog", { name: "표시 항목", exact: true });
+  await expect(menu.getByRole("checkbox")).toHaveCount(7);
+  await expect(menu).not.toContainText("기본 항목");
+  await expect(menu).not.toContainText("추가 항목");
+  await menu.getByRole("checkbox", { name: "CAGR 표시", exact: true }).uncheck();
+  const source = menu.getByRole("button", { name: "실행일 순서 변경", exact: true });
+  const first = menu.getByRole("button", { name: "수익률 순서 변경", exact: true });
+  const start = await source.boundingBox(), end = await first.boundingBox();
+  if (!start || !end) throw new Error("열 순서 손잡이를 찾지 못했습니다");
+  const x = start.x + start.width / 2, y = start.y + start.height / 2, targetY = end.y + end.height / 2;
+  if (mobile) {
+    const session = await page.context().newCDPSession(page);
+    await session.send("Emulation.setTouchEmulationEnabled", { enabled: true });
+    await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y, id: 1 }] });
+    for (let step = 1; step <= 12; step++) await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x, y: y + (targetY - y) * step / 12, id: 1 }] });
+    await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    await session.detach();
+  } else {
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, targetY, { steps: 12 });
+    await page.mouse.up();
+  }
+  await expect(table.getByRole("columnheader")).toHaveText(["기간", "실행일", "수익률", "MDD"]);
+  await expect(menu.getByRole("checkbox", { name: "CAGR 표시", exact: true })).not.toBeChecked();
+  await menu.getByRole("checkbox", { name: "난수 표시", exact: true }).check();
+  await menu.getByRole("checkbox", { name: "검증 표시", exact: true }).check();
+  await menu.getByRole("checkbox", { name: "Sharpe 표시", exact: true }).check();
+  const sharpe = menu.getByRole("button", { name: "Sharpe 순서 변경", exact: true });
+  await sharpe.focus();
+  await page.keyboard.press("Space");
+  await expect(sharpe).toHaveAttribute("aria-pressed", "true");
+  const announcement = page.getByRole("status").filter({ hasText: "Sharpe" });
+  await expect(announcement).toHaveText("Sharpe, 5번째 위치입니다.");
+  await page.keyboard.press("ArrowUp");
+  await expect(announcement).toHaveText("Sharpe, 4번째 위치입니다.");
+  await page.keyboard.press("Space");
+  const headers = ["기간", "실행일", "수익률", "Sharpe", "MDD", /난수/, /검증/];
+  await expect(table.getByRole("columnheader")).toHaveText(headers);
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const menuBox = await menu.boundingBox();
+  const triggerBox = await page.getByRole("button", { name: "표시 항목", exact: true }).boundingBox();
+  expect(menuBox!.x).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  expect(menuBox!.y).toBeGreaterThanOrEqual(triggerBox!.y + triggerBox!.height);
+  await page.screenshot({ path: testInfo.outputPath("column-picker.png"), fullPage: true });
+  await page.keyboard.press("Escape");
+  await page.reload();
+  await expect(table.getByRole("columnheader")).toHaveText(headers);
+  await page.goto("/backtests/intraday?view=table");
+  await expect(table.getByRole("columnheader")).toHaveText(headers);
+  await expect(table.locator("tbody tr").first().getByRole("cell").nth(3)).toHaveText("1.25");
+  await expect(table.locator("tbody tr").first().getByRole("cell").nth(5)).toHaveText("—");
+  await page.getByRole("button", { name: "표시 항목", exact: true }).click();
+  await expect(menu.getByRole("checkbox", { name: "CAGR 표시", exact: true })).not.toBeChecked();
+  await menu.getByRole("checkbox", { name: "CAGR 표시", exact: true }).check();
+  await page.keyboard.press("Escape");
+  await page.goto("/backtests?view=table");
+  await expect(table.getByRole("columnheader")).toHaveText(["기간", "실행일", "수익률", "CAGR", "Sharpe", "MDD", /난수/, /검증/]);
 });
 
 // 기존 정적 렌더링·삭제 검사는 5초 재조회 중 체크박스가 사라지는 회귀를 잡지 못한다.

@@ -35,13 +35,10 @@ function baseRequest(): Record<string, unknown> {
   };
 }
 
-describe('benchmarkId', () => {
-  it('한국·미국 대표지수를 허용하고 옛 요청의 생략은 유지한다', () => {
-    for (const benchmarkId of ['KOSDAQ', 'SP500', 'NASDAQCOM', 'NASDAQ100', 'DJIA']) {
-      expect(backtestRequestSchema.safeParse({ ...baseRequest(), benchmarkId }).success).toBe(true);
-    }
-    expect(backtestRequestSchema.safeParse({ ...baseRequest(), benchmarkId: 'RUSSELL2000' }).success).toBe(false);
-    expect(backtestRequestSchema.safeParse(baseRequest()).success).toBe(true);
+describe('기존 요청의 벤치마크 필드', () => {
+  it('과거 벤치마크 ID를 실행 요청에서 제외한다', () => {
+    const parsed = backtestRequestSchema.parse({ ...baseRequest(), benchmarkId: 'KOSPI' });
+    expect(parsed).not.toHaveProperty('benchmarkId');
   });
 });
 

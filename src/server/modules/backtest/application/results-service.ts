@@ -7,13 +7,6 @@ import {
 } from "../../../../shared/schemas/trade-sort.js";
 import type { AppDatabase } from "../../../../runtime/shared/db/database.js";
 import {
-  BENCHMARK_NAMES,
-  benchmarkIdSchema,
-  benchmarkPinSchema,
-  type BenchmarkId,
-} from "../../../../shared/schemas/benchmark.js";
-import { backtestJobs } from "../../../../runtime/shared/db/operations-schema.js";
-import {
   backtestDrawdownPoints,
   backtestEquityPoints,
   backtestMetrics,
@@ -104,95 +97,6 @@ export class ResultsService {
     return row?.totalReturnPct ?? null;
   }
 
-  private benchmarkResult(jobId: string) {
-    const job = this.db
-      .select({
-        benchmarkJson: backtestJobs.benchmarkJson,
-        benchmarkHash: backtestJobs.benchmarkHash,
-        requestJson: backtestJobs.requestJson,
-      })
-      .from(backtestJobs)
-      .where(eq(backtestJobs.id, jobId))
-      .get();
-    if (!job) return null;
-
-    let requestedId: BenchmarkId = "KOSPI";
-    try {
-      const request = JSON.parse(job.requestJson) as { benchmarkId?: unknown };
-      const parsedId = benchmarkIdSchema.safeParse(request.benchmarkId);
-      if (parsedId.success) requestedId = parsedId.data;
-    } catch {
-      // 손상된 옛 요청은 기본 벤치마크명만 표시한다.
-    }
-
-    const unavailable = (reason: string) => ({
-      summary: {
-        benchmarkId: requestedId,
-        name: BENCHMARK_NAMES[requestedId],
-        available: false as const,
-        unavailableReason: reason,
-        totalReturnPct: null,
-        excessReturnPct: null,
-        dataHash: job.benchmarkHash,
-      },
-      points: [] as Array<{ tsMs: number; value: number }>,
-    });
-
-    if (!job.benchmarkJson)
-      return unavailable("이 작업에는 벤치마크 데이터가 고정되지 않았습니다.");
-    let parsed: ReturnType<typeof benchmarkPinSchema.safeParse>;
-    try {
-      parsed = benchmarkPinSchema.safeParse(JSON.parse(job.benchmarkJson));
-    } catch {
-      return unavailable("고정된 벤치마크 데이터를 읽을 수 없습니다.");
-    }
-    if (!parsed.success)
-      return unavailable("고정된 벤치마크 데이터 형식이 올바르지 않습니다.");
-    const pin = parsed.data;
-    if (pin.points.length < 2) {
-      return unavailable(
-        `${pin.name} 수익률 계산에 필요한 거래일 데이터가 2개 미만입니다.`,
-      );
-    }
-    if (!pin.covered) {
-      return unavailable(
-        `${pin.name} 데이터가 백테스트 기간을 완전히 커버하지 않습니다.`,
-      );
-    }
-    const metrics = this.getMetrics(jobId) as {
-      totalReturnPct?: unknown;
-    } | null;
-    const strategyReturn =
-      typeof metrics?.totalReturnPct === "number"
-        ? metrics.totalReturnPct
-        : null;
-    if (strategyReturn === null)
-      return unavailable("백테스트 수익률이 아직 계산되지 않았습니다.");
-
-    const first = pin.points[0]!.close;
-    const last = pin.points.at(-1)!.close;
-    const totalReturnPct = (last / first - 1) * 100;
-    return {
-      summary: {
-        benchmarkId: pin.benchmarkId,
-        name: pin.name,
-        available: true as const,
-        unavailableReason: null,
-        totalReturnPct,
-        excessReturnPct: strategyReturn - totalReturnPct,
-        dataHash: job.benchmarkHash,
-      },
-      points: pin.points.map((point) => ({
-        tsMs: Date.parse(`${point.date}T00:00:00Z`),
-        value: (point.close / first) * 100,
-      })),
-    };
-  }
-
-  getBenchmark(jobId: string) {
-    return this.benchmarkResult(jobId)?.summary ?? null;
-  }
-
   /** 차트용 시리즈 — 서버 측 LTTB 다운샘플 (표시 전용) */
   getChartSeries(jobId: string) {
     const equity = this.db
@@ -233,10 +137,6 @@ export class ResultsService {
 
     return {
       equity: downsampleLttb(equity, CHART_MAX_POINTS),
-      benchmark: downsampleLttb(
-        this.benchmarkResult(jobId)?.points ?? [],
-        CHART_MAX_POINTS,
-      ),
       drawdown: downsampleLttb(drawdown, CHART_MAX_POINTS),
       monthly,
       symbols,
@@ -311,7 +211,6 @@ export class ResultsService {
           asc(backtestMonthlyReturns.month),
         )
         .all(),
-      benchmark: this.getBenchmark(jobId),
     };
   }
 }

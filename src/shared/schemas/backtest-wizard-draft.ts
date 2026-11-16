@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { benchmarkIdSchema } from "./benchmark.js";
 import { universeRuleSchema } from "./universe-rule.js";
 
 /** 입력 단계뿐 아니라 검토·실행까지 포함한 위저드 페이지 slug. */
@@ -49,9 +48,6 @@ export const backtestWizardPeriodDraftSchema = z.object({
   // 작성 중에는 빈 문자열도 정상 상태다. 완성된 날짜 검증은 기존 단계 게이트가 맡는다.
   from: z.string().max(10),
   to: z.string().max(10),
-  benchmarkId: benchmarkIdSchema,
-  /** 이 입력 조합으로 벤치마크 coverage를 확인했다는 UI 게이트 원재료. */
-  benchmarkCoverageVerifiedFor: z.string().max(160).nullable(),
 });
 
 const previewParamsSchema = z.object({

@@ -5,9 +5,7 @@ import type {
   FredBenchmarkSource,
   KrxHistoricalUniverseSource,
 } from '../../src/runtime/modules/market-data/application/ports.js';
-import { ResultsService } from '../../src/server/modules/backtest/application/results-service.js';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
-import { backtestJobs, backtestMetrics } from '../../src/server/shared/db/operations-schema.js';
 import {
   symbolMasterCoverage,
   symbolMasterTradingDays,
@@ -44,7 +42,7 @@ describe('벤치마크 저장과 결과 비교', () => {
     } finally { database.close(); }
   });
 
-  it('거래일 커버를 pin하고 전략 대비 단순 초과수익률을 계산한다', async () => {
+  it('저장된 거래일 커버를 확인하고 이미 수집한 날짜는 다시 받지 않는다', async () => {
     const database = openDatabase(':memory:');
     try {
       const closes = new Map([
@@ -81,47 +79,9 @@ describe('벤치마크 저장과 결과 비교', () => {
       await service.syncDate('KOSPI', '2026-01-02');
       await service.syncDate('KOSPI', '2026-01-05');
 
-      const benchmark = service.pin('KOSPI', { from: '2026-01-02', to: '2026-01-05' });
-      expect(benchmark.pin).toMatchObject({ covered: true });
-      expect(benchmark.hash).toMatch(/^[a-f0-9]{64}$/);
-
-      database.db.insert(backtestJobs).values({
-        id: 'bt_benchmark',
-        status: 'COMPLETED',
-        requestJson: JSON.stringify({ benchmarkId: 'KOSPI' }),
-        strategyId: 'test',
-        universeRuleJson: '{}',
-        universeScheduleJson: '[]',
-        benchmarkJson: JSON.stringify(benchmark.pin),
-        benchmarkHash: benchmark.hash,
-        createdAtMs: 1,
-      }).run();
-      database.db.insert(backtestMetrics).values({
-        jobId: 'bt_benchmark',
-        totalReturnPct: 15,
-        cagrPct: null,
-        maxDrawdownPct: -2,
-        sharpe: null,
-        winRate: null,
-        tradeCount: 0,
-        metricsJson: JSON.stringify({ totalReturnPct: 15 }),
-      }).run();
-
-      const results = new ResultsService(database.db);
-      const summary = results.getBenchmark('bt_benchmark');
-      expect(summary).toMatchObject({
-        available: true,
-        dataHash: benchmark.hash,
+      expect(service.status('KOSPI', '2026-01-02', '2026-01-05')).toEqual({
+        covered: true, points: [{ date: '2026-01-02', close: 100 }, { date: '2026-01-05', close: 110 }],
       });
-      expect(summary?.totalReturnPct).toBeCloseTo(10);
-      expect(summary?.excessReturnPct).toBeCloseTo(5);
-      const chart = results.getChartSeries('bt_benchmark').benchmark;
-      expect(chart.map((point) => point.tsMs)).toEqual([
-        Date.parse('2026-01-02T00:00:00Z'),
-        Date.parse('2026-01-05T00:00:00Z'),
-      ]);
-      expect(chart[0]?.value).toBe(100);
-      expect(chart[1]?.value).toBeCloseTo(110);
 
       fetchBenchmarkClose.mockClear();
       service.startBackfill('KOSPI', '2026-01-02', '2026-01-06');
@@ -306,7 +266,7 @@ describe('벤치마크 저장과 결과 비교', () => {
     }
   });
 
-  it('FRED 기간을 한 번에 수집하고 미국 거래일로 pin한다', async () => {
+  it('FRED 기간을 한 번에 수집하고 미국 거래일 커버를 확인한다', async () => {
     const database = openDatabase(':memory:');
     try {
       const fetchBenchmarkRange = vi.fn<FredBenchmarkSource['fetchBenchmarkRange']>(
@@ -331,7 +291,7 @@ describe('벤치마크 저장과 결과 비교', () => {
 
       await service.syncDate('SP500', '2026-01-01');
       await service.syncDate('SP500', '2026-01-05');
-      expect(service.pin('SP500', { from: '2026-01-01', to: '2026-01-05' }).pin.covered).toBe(false);
+      expect(service.status('SP500', '2026-01-01', '2026-01-05').covered).toBe(false);
 
       service.startBackfill('SP500', '2026-01-01', '2026-01-05');
       expect(service.backfillStatus().benchmarkId).toBe('SP500');
@@ -339,9 +299,7 @@ describe('벤치마크 저장과 결과 비교', () => {
 
       expect(fetchBenchmarkRange).toHaveBeenCalledTimes(3);
       expect(fetchBenchmarkRange).toHaveBeenLastCalledWith('SP500', '2026-01-01', '2026-01-05');
-      expect(service.pin('SP500', { from: '2026-01-01', to: '2026-01-05' }).pin).toMatchObject({
-        name: 'S&P 500',
-        source: 'FRED_API',
+      expect(service.status('SP500', '2026-01-01', '2026-01-05')).toMatchObject({
         covered: true,
       });
     } finally {

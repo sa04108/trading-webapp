@@ -9,7 +9,6 @@ export interface ExperimentReturnDistribution {
 
 export interface BacktestHistoryExtras {
   jobId: string;
-  benchmarkExcessReturnPct: number | null;
   seed: {
     batchCount: number;
     activeCount: number;

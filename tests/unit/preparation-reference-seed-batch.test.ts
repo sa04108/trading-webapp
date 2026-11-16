@@ -4,7 +4,6 @@ import type { TestApp } from '../helpers/test-app.js';
 import { test as it } from '../helpers/test-fixtures.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import type { ProvenancePin } from '../../src/shared/schemas/provenance-pin.js';
-import type { BenchmarkPin } from '../../src/shared/schemas/benchmark.js';
 import { SeedCloneBatchService, type SeedCloneBatchSnapshot } from '../../src/server/modules/backtest/application/seed-clone-batch-service.js';
 import type { LegacyUniverseScheduleEntry } from '../../src/runtime/modules/backtest/application/universe-rule-resolver.js';
 
@@ -65,14 +64,10 @@ describe('seed clone preparation ownership', () => {
       sourceKind: 'SYMBOL_MASTER', filterPolicyVersion: null,
       selectionMethod: 'TEST', scheduleHash: 'seed-schedule',
     };
-    const benchmark: BenchmarkPin = {
-      benchmarkId: 'KOSPI', name: '코스피', source: 'KRX_OPEN_API', sourceVersion: 'v1',
-      period: { from: '2026-01-05', to: '2026-01-05' }, points: [], covered: false,
-    };
     return {
       preparationJobId, request, schedule,
       universe: { entries: [], hash: 'universe-hash' },
-      provenancePin, benchmark: { pin: benchmark, hash: 'benchmark-hash' }, warnings: [],
+      provenancePin, warnings: [],
     };
   }
 
@@ -81,7 +76,7 @@ describe('seed clone preparation ownership', () => {
       ctx.container.database, ctx.container.jobQueue, 20, ctx.container.clock, () => {},
     );
     seedPreparation(ctx, 'prep_seed_batch');
-    const source = ctx.container.jobQueue.enqueue(request, [], undefined, null, [], undefined, {
+    const source = ctx.container.jobQueue.enqueue(request, [], undefined, null, [], {
       preparationJobId: 'prep_seed_batch',
     });
     const batch = seedBatchService.create(source.id, 2, snapshot('prep_seed_batch'));

@@ -212,7 +212,7 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
 
   await page.getByLabel('시작일').fill(period.from);
   await page.getByLabel('종료일').fill(period.to);
-  await advanceFromPeriod(page); // 기간 → 벤치마크 동기화(필요 시) → 유니버스
+  await advanceFromPeriod(page); // 기간 → 유니버스
 
   // 1. 시가총액 단계 뒤 PER와 가격 변동을 추가한다.
   await page.locator('#stage-limit-0').fill('50');

@@ -10,7 +10,6 @@ import type { UniverseRebalancingEntryDto } from "../../../shared/schemas/univer
 import {
   isTerminal,
   type BacktestMetrics,
-  type BenchmarkResult,
   type JobSummary,
   type RunMetadata,
   type SeriesResponse,
@@ -85,7 +84,6 @@ export interface BacktestDetail {
   job: JobSummary;
   run: RunMetadata | null;
   metrics: BacktestMetrics | null;
-  benchmark: BenchmarkResult | null;
   /** 제출 시점부터 서버가 소유하는 유니버스 출처 pin (Task 12) — job 이 생성될 때부터 있다 */
   provenancePin: ProvenancePin | null;
   universeRebalancing: UniverseRebalancingEntryDto[];
@@ -169,7 +167,6 @@ export function useBacktestLive(jobId: string) {
     job,
     run: detail.data?.run ?? null,
     metrics: detail.data?.metrics ?? null,
-    benchmark: detail.data?.benchmark ?? null,
     provenancePin: detail.data?.provenancePin ?? null,
     universeRebalancing: detail.data?.universeRebalancing ?? [],
   };

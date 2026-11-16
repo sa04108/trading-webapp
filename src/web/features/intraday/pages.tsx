@@ -40,6 +40,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
+import { TableCell, TableRow } from "@/components/ui/table";
+import { HistoryMetricCells, HistoryTable } from "../backtests/history-table";
+import { useHistoryTablePreferences } from "../backtests/history-table-preferences";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, postJson } from "@/lib/api-client";
 import {
@@ -230,6 +233,8 @@ function RangeFields({
 }
 export function IntradayListPage() {
   const controls = useHistoryControls(true);
+  const tablePreferences = useHistoryTablePreferences();
+  const columns = tablePreferences.visibleColumns.map((column) => column.id);
   const client = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -448,20 +453,10 @@ export function IntradayListPage() {
                 })}
               </div>
             ) : (
-              <table data-pagination-content aria-busy={query?.isPlaceholderData} className="w-full table-fixed text-xs">
-                <thead>
-                  <tr className="text-muted-foreground">
-                    <th className="w-[52%] py-2 text-left sm:w-[38%]">기간</th>
-                    <th className="text-right">수익률</th>
-                    <th className="text-right">CAGR</th>
-                    <th className="hidden text-right sm:table-cell">MDD</th>
-                    <th className="hidden text-right sm:table-cell">실행일</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <HistoryTable columns={columns} busy={query?.isPlaceholderData}>
                   {query?.data?.runs.map((run) => (
-                    <tr key={run.id} className="border-t">
-                      <td className="py-3">
+                    <TableRow key={run.id}>
+                      <TableCell className="sticky left-0 z-10 w-44 min-w-44 bg-background py-3 align-top whitespace-normal">
                         {editing ? (
                           <>
                             <Checkbox
@@ -483,34 +478,24 @@ export function IntradayListPage() {
                             {historyPeriod(run.request.period.from, run.request.period.to)}
                           </Link>
                         )}
-                        <div className="text-muted-foreground">
-                          {statusLabel[run.status]} · {run.request.symbol}{" "}
-                          <span className="sm:hidden">
-                            · {time(run.createdAtMs)}
-                          </span>
+                        <div className="mt-1 text-muted-foreground">
+                          {statusLabel[run.status]} · {run.request.symbol}
                         </div>
                         {run.error ? (
                           <p className="break-words text-destructive">
                             {run.error}
                           </p>
                         ) : null}
-                      </td>
-                      <td
-                        className={`text-right ${pnlClass(run.metrics?.returnPct ?? null)}`}
-                      >
-                        {formatSignedPct(run.metrics?.returnPct ?? null)}
-                      </td>
-                      <td className="text-right">—</td>
-                      <td className={`hidden text-right sm:table-cell ${pnlClass(run.metrics?.maxDrawdownPct)}`}>
-                        {formatSignedPct(run.metrics?.maxDrawdownPct ?? null)}
-                      </td>
-                      <td className="hidden pl-2 text-right sm:table-cell">
-                        {time(run.createdAtMs)}
-                      </td>
-                    </tr>
+                      </TableCell>
+                      <HistoryMetricCells columns={columns} values={{
+                        return: run.metrics?.returnPct,
+                        mdd: run.metrics?.maxDrawdownPct,
+                        date: run.createdAtMs,
+                        sharpe: run.metrics?.sharpe,
+                      }} />
+                    </TableRow>
                   ))}
-                </tbody>
-              </table>
+              </HistoryTable>
             )}
             {query?.data ? (
               <HistoryPager

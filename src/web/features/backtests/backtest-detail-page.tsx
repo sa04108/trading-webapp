@@ -1,3 +1,4 @@
+import { ResultBenchmarkComparison } from "./result-benchmark-comparison";
 import { ExperimentSummary } from "./experiment-summary";
 import { BacktestBreadcrumbs } from "./backtest-breadcrumbs";
 import {
@@ -79,7 +80,6 @@ import {
   timeframeLabel,
 } from "@/lib/format";
 import {
-  BenchmarkComparisonChart,
   DrawdownChart,
   EquityChart,
   MonthlyReturnsChart,
@@ -101,7 +101,6 @@ import { formatUniverseRuleSummary } from "./universe-summary";
 import {
   isTerminal,
   type BacktestMetrics,
-  type BenchmarkResult,
   type JobSummary,
   type RunMetadata,
 } from "./types";
@@ -120,10 +119,8 @@ const RESULT_PAGE_SIZE = 10;
 
 function MetricCards({
   metrics,
-  benchmark,
 }: {
   metrics: BacktestMetrics;
-  benchmark: BenchmarkResult | null;
 }) {
   const cost = costSummary(metrics);
   const cards: Array<{
@@ -167,26 +164,6 @@ function MetricCards({
       cardClassName: "col-span-full",
     },
   ];
-  if (
-    benchmark?.available &&
-    benchmark.totalReturnPct !== null &&
-    benchmark.excessReturnPct !== null
-  ) {
-    cards.splice(
-      1,
-      0,
-      {
-        label: `${benchmark.name} 수익률`,
-        value: formatSignedPct(benchmark.totalReturnPct),
-        className: pnlClass(benchmark.totalReturnPct),
-      },
-      {
-        label: "초과 수익률",
-        value: formatSignedPct(benchmark.excessReturnPct),
-        className: pnlClass(benchmark.excessReturnPct),
-      },
-    );
-  }
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       {cards.map((card) => (
@@ -729,7 +706,6 @@ export function BacktestDetailPage() {
     job,
     run,
     metrics,
-    benchmark,
     provenancePin,
     universeRebalancing,
     isLoading,
@@ -988,15 +964,10 @@ export function BacktestDetailPage() {
 
       {completed && metrics ? (
         <>
-          <MetricCards metrics={metrics} benchmark={benchmark} />
+          <MetricCards metrics={metrics} />
           <ExperimentSummary jobId={id} />
 
-          {benchmark && !benchmark.available ? (
-            <Alert>
-              <AlertTitle>{benchmark.name} 비교 사용 불가</AlertTitle>
-              <AlertDescription>{benchmark.unavailableReason}</AlertDescription>
-            </Alert>
-          ) : null}
+          <ResultBenchmarkComparison key={id} jobId={id} period={job.request.period} strategy={series?.equity ?? []} initialCash={metrics.initialCash} />
 
           {series ? (
             <div className="space-y-4">
@@ -1010,17 +981,6 @@ export function BacktestDetailPage() {
                     : ""
                 }`}
               />
-              {benchmark?.available &&
-              benchmark.totalReturnPct !== null &&
-              benchmark.excessReturnPct !== null ? (
-                <BenchmarkComparisonChart
-                  strategy={series.equity}
-                  benchmark={series.benchmark}
-                  initialCash={metrics.initialCash}
-                  benchmarkName={benchmark.name}
-                  summary={`${benchmark.name} ${formatSignedPct(benchmark.totalReturnPct)} · 초과 수익률 ${formatSignedPct(benchmark.excessReturnPct)} · 시작값 100 기준`}
-                />
-              ) : null}
               <DrawdownChart
                 points={series.drawdown}
                 summary={`최대 낙폭 ${formatSignedPct(metrics.maxDrawdownPct)} · 낙폭 기간 ${formatDuration(

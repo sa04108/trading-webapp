@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
+import { HistoryColumnPicker } from "./history-column-picker";
 import {
   Tooltip,
   TooltipContent,
@@ -240,7 +241,7 @@ export function HistoryToolbar({
   };
   return (
     <div
-      className="flex items-center gap-1 sm:gap-2"
+      className="flex items-center gap-1 max-[360px]:gap-0.5 sm:gap-2"
       aria-label="이력 표시 설정"
     >
       <Select
@@ -252,7 +253,7 @@ export function HistoryToolbar({
       >
         <SelectTrigger
           aria-label="전략 내 기록 정렬"
-          className="min-h-11 min-w-0 text-xs sm:min-h-8 sm:text-sm"
+          className="min-h-11 min-w-0 text-xs max-[360px]:gap-1 max-[360px]:px-1 sm:min-h-8 sm:text-sm"
         >
           <SelectValue>
             <span className="sm:hidden">{compactSortLabels[controls.sort]}</span>
@@ -285,7 +286,7 @@ export function HistoryToolbar({
           <ArrowUp aria-hidden />
         )}
       </Button>
-      <div className="ml-auto flex shrink-0 items-center gap-2">
+      <HistoryColumnPicker enabled={controls.view === "table"}>
         {onEditingChange ? (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -328,7 +329,7 @@ export function HistoryToolbar({
           </TooltipTrigger>
           <TooltipContent>{viewLabel}</TooltipContent>
         </Tooltip>
-      </div>
+      </HistoryColumnPicker>
     </div>
   );
 }

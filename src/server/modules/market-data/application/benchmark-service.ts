@@ -1,14 +1,12 @@
 import { EventEmitter } from "node:events";
 import { newId } from "../../../../runtime/shared/ids.js";
 import type { JobItem, JobStatus } from "../../../../shared/schemas/jobs.js";
-import { createHash } from "node:crypto";
 import { and, asc, eq, gte, lte } from "drizzle-orm";
 import {
   BENCHMARK_NAMES,
   BENCHMARK_SOURCES,
   type BenchmarkPoint,
   type BenchmarkId,
-  type BenchmarkPin,
   type FredBenchmarkId,
 } from "../../../../shared/schemas/benchmark.js";
 import type { AppDatabase } from "../../../../runtime/shared/db/database.js";
@@ -419,28 +417,5 @@ export class BenchmarkService {
         "벤치마크 백필이 날짜 처리 중 실패했다",
       );
     }
-  }
-
-  pin(
-    benchmarkId: BenchmarkId,
-    period: { from: string; to: string },
-  ): {
-    pin: BenchmarkPin;
-    hash: string;
-  } {
-    const status = this.status(benchmarkId, period.from, period.to);
-    const pin: BenchmarkPin = {
-      benchmarkId,
-      name: BENCHMARK_NAMES[benchmarkId],
-      source: BENCHMARK_SOURCES[benchmarkId],
-      sourceVersion: "v1",
-      period,
-      points: status.points,
-      covered: status.covered,
-    };
-    return {
-      pin,
-      hash: createHash("sha256").update(JSON.stringify(pin)).digest("hex"),
-    };
   }
 }

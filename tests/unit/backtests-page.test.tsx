@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as tablePreferences from '../../src/web/features/backtests/history-table-preferences.js';
 import { TooltipProvider } from '../../src/web/components/ui/tooltip.js';
 import {
   BacktestsPage,
@@ -173,13 +174,24 @@ describe('백테스트 목록', () => {
     client.setQueryData(['backtest-experiments', 'summaries', ['source']], {
       summaries: [{ jobId: 'source', benchmarkExcessReturnPct: 3, seed: { batchCount: 2, activeCount: 0, completedCount: 1, returns: { count: 5, mean: 10, sampleStdDev: 1.25 } }, validation: { experimentCount: 1, activeCount: 0, completedCount: 1, returns: { count: 1, mean: 4, sampleStdDev: null }, modes: {} } }],
     });
-    const html = renderToStaticMarkup(
-      <QueryClientProvider client={client}><TooltipProvider><MemoryRouter initialEntries={['/backtests?view=table']}><BacktestsPage /></MemoryRouter></TooltipProvider></QueryClientProvider>,
-    );
-    expect(html).toContain('2 (1.25%p)');
-    expect(html).toContain('1 (—)');
-    expect(html).not.toContain('초과수익률');
-    expect(html).not.toContain('+3.00%');
+    const preference = vi.spyOn(tablePreferences, 'useHistoryTablePreferences').mockReturnValue({
+      order: [...tablePreferences.DEFAULT_HISTORY_TABLE_PREFERENCES.order],
+      visible: ['seed', 'validation'],
+      visibleColumns: tablePreferences.HISTORY_TABLE_COLUMNS.filter((column) => column.id === 'seed' || column.id === 'validation'),
+      setVisible: () => {},
+      setOrder: () => {},
+    });
+    try {
+      const html = renderToStaticMarkup(
+        <QueryClientProvider client={client}><TooltipProvider><MemoryRouter initialEntries={['/backtests?view=table']}><BacktestsPage /></MemoryRouter></TooltipProvider></QueryClientProvider>,
+      );
+      expect(html).toContain('2 (1.25%p)');
+      expect(html).toContain('1 (—)');
+      expect(html).not.toContain('초과수익률');
+      expect(html).not.toContain('+3.00%');
+    } finally {
+      preference.mockRestore();
+    }
   });
 
 });

@@ -23,6 +23,7 @@ import {
 import { formatDate, formatKrw, formatSignedPct } from "@/lib/format";
 import { chartTooltipProps } from "@/components/chart-tooltip";
 import type { SeriesPoint } from "./types";
+import { BENCHMARK_IDS, type BenchmarkComparison } from "../../../shared/schemas/benchmark.js";
 
 const GAIN = "var(--gain)";
 const LOSS = "var(--loss)";
@@ -108,113 +109,40 @@ export function EquityChart({
 
 export function BenchmarkComparisonChart({
   strategy,
-  benchmark,
+  comparisons,
   initialCash,
-  benchmarkName,
-  summary,
 }: {
   strategy: SeriesPoint[];
-  benchmark: SeriesPoint[];
+  comparisons: BenchmarkComparison[];
   initialCash: number;
-  benchmarkName: string;
-  summary: string;
 }) {
-  const merged = new Map<
-    number,
-    { tsMs: number; strategy?: number; benchmark?: number }
-  >();
+  const merged = new Map<number, { tsMs: number; [key: string]: number }>();
   for (const point of strategy) {
-    merged.set(point.tsMs, {
-      tsMs: point.tsMs,
-      strategy: (point.value / initialCash) * 100,
-    });
+    merged.set(point.tsMs, { tsMs: point.tsMs, strategy: (point.value / initialCash - 1) * 100 });
   }
-  for (const point of benchmark) {
-    const row = merged.get(point.tsMs) ?? { tsMs: point.tsMs };
-    row.benchmark = point.value;
-    merged.set(point.tsMs, row);
+  for (const comparison of comparisons) {
+    for (const point of comparison.points) {
+      const row = merged.get(point.tsMs) ?? { tsMs: point.tsMs };
+      row[comparison.benchmarkId] = point.value;
+      merged.set(point.tsMs, row);
+    }
   }
   const data = [...merged.values()].sort((a, b) => a.tsMs - b.tsMs);
-
+  const colors = ["#2563eb", "#d97706", "#7c3aed", "#0891b2", "#db2777", "#4d7c0f"];
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">벤치마크 비교</CardTitle>
-        <CardDescription>{summary}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div
-          className="h-60 w-full"
-          role="img"
-          aria-label={`벤치마크 비교 차트. ${summary}`}
-        >
-          <ResponsiveContainer>
-            <LineChart
-              data={data}
-              margin={{ top: 4, right: 8, bottom: 0, left: 4 }}
-            >
-              <CartesianGrid
-                stroke={GRID}
-                strokeDasharray="2 4"
-                vertical={false}
-              />
-              <XAxis
-                dataKey="tsMs"
-                type="number"
-                scale="time"
-                domain={["dataMin", "dataMax"]}
-                tickFormatter={(ts: number) => formatDate(ts).slice(2)}
-                tick={AXIS_TICK}
-                tickLine={false}
-                axisLine={{ stroke: GRID }}
-                minTickGap={48}
-              />
-              <YAxis
-                tick={AXIS_TICK}
-                tickLine={false}
-                axisLine={false}
-                width={44}
-                domain={["auto", "auto"]}
-              />
-              <Tooltip
-                {...chartTooltipProps}
-                labelFormatter={(ts) => formatDate(Number(ts))}
-                itemSorter={(item) =>
-                  typeof item.value === "number" && Number.isFinite(item.value)
-                    ? -item.value
-                    : Infinity
-                }
-                formatter={(value, name) => [
-                  Number(value).toFixed(2),
-                  String(name),
-                ]}
-              />
-              <Legend />
-              <Line
-                type="monotone"
-                dataKey="strategy"
-                name="전략"
-                stroke="var(--primary)"
-                strokeWidth={2}
-                dot={false}
-                connectNulls
-                isAnimationActive={false}
-              />
-              <Line
-                type="monotone"
-                dataKey="benchmark"
-                name={benchmarkName}
-                stroke={INK}
-                strokeWidth={2}
-                dot={false}
-                connectNulls
-                isAnimationActive={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </CardContent>
-    </Card>
+    <div className="h-60 w-full" role="img" aria-label="전략과 선택한 벤치마크 수익률 비교 차트">
+      <ResponsiveContainer>
+        <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: 4 }}>
+          <CartesianGrid stroke={GRID} strokeDasharray="2 4" vertical={false} />
+          <XAxis dataKey="tsMs" type="number" scale="time" domain={["dataMin", "dataMax"]} tickFormatter={(ts: number) => formatDate(ts).slice(2)} tick={AXIS_TICK} tickLine={false} axisLine={{ stroke: GRID }} minTickGap={48} />
+          <YAxis tickFormatter={(value: number) => `${value}%`} tick={AXIS_TICK} tickLine={false} axisLine={false} width={50} domain={["auto", "auto"]} />
+          <Tooltip {...chartTooltipProps} labelFormatter={(ts) => formatDate(Number(ts))} itemSorter={(item) => typeof item.value === "number" && Number.isFinite(item.value) ? -item.value : Infinity} formatter={(value, name) => [`${Number(value).toFixed(2)}%`, String(name)]} />
+          <Legend />
+          <Line type="monotone" dataKey="strategy" name="전략" stroke="var(--primary)" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+          {comparisons.map((comparison) => <Line key={comparison.benchmarkId} type="monotone" dataKey={comparison.benchmarkId} name={comparison.name} stroke={colors[BENCHMARK_IDS.indexOf(comparison.benchmarkId)]} strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />)}
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
   );
 }
 

@@ -135,7 +135,7 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
         status: i === 100 ? "FAILED" : "COMPLETED", error: null,
         requestJson: JSON.stringify({ ...request, strategyId: i === 101 ? "intraday-orb" : request.strategyId }),
         createdAtMs: now + i, updatedAtMs: now + i,
-        resultJson: JSON.stringify({ metrics: { returnPct: i === 0 ? 500 : i, maxDrawdownPct: -5 }, equity: [{ endMs: now, equity: 123 }] }),
+        resultJson: JSON.stringify({ metrics: { returnPct: i === 0 ? 500 : i, maxDrawdownPct: -5, ...(i === 0 ? { sharpe: 1.25 } : {}) }, equity: [{ endMs: now, equity: 123 }] }),
       }).run();
     }
     const get = (query: string) => app.inject({ method: "GET", url: `/intraday/runs${query}`, headers });
@@ -150,7 +150,8 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
     const first = (await get(query)).json();
     expect(first.total).toBe(101);
     expect(first.runs.map((r: { id: string }) => r.id)).toEqual(["history-000", "history-099"]);
-    expect(first.runs[0].metrics).toEqual({ returnPct: 500, maxDrawdownPct: -5 });
+    expect(first.runs[0].metrics).toEqual({ returnPct: 500, maxDrawdownPct: -5, sharpe: 1.25 });
+    expect(first.runs[1].metrics.sharpe).toBeNull();
     expect(first.runs[0]).not.toHaveProperty("result");
     for (const dir of ["asc", "desc"]) {
       const tail = (await get(`?strategyId=intraday-ema&sort=returnPct&dir=${dir}&limit=2&offset=100`)).json();

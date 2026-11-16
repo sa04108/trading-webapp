@@ -50,7 +50,7 @@ describe("백테스트 실험 요약과 결과 경로", () => {
     expect(response.statusCode).toBe(200);
     const summaries = response.json().summaries;
     const source = summaries.find((s: { jobId: string }) => s.jobId === "source");
-    expect(source.benchmarkExcessReturnPct).toBeCloseTo(15);
+    expect(source).not.toHaveProperty('benchmarkExcessReturnPct');
     expect(source.seed).toMatchObject({ batchCount: 1, activeCount: 0, completedCount: 2, returns: { count: 2, mean: 20 } });
     expect(source.seed.returns.sampleStdDev).toBeCloseTo(Math.sqrt(200));
     expect(source.validation).toMatchObject({ experimentCount: 4, completedCount: 3, returns: { count: 2, mean: 20 }, modes: { HOLDOUT: 3, OPTIMIZED_HOLDOUT: 0, WALK_FORWARD: 1 } });
