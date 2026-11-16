@@ -1,3 +1,4 @@
+import { BacktestRefreshRequiredError } from "../application/backtest-refresh-error.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import {
   PeriodValidationService,
@@ -34,8 +35,8 @@ export function registerPeriodValidationRoutes(
     (request, reply) => {
       try {
         const { id } = request.params as { id: string };
-        const { plan } = service.plan(id, request.body);
-        return { plan };
+        const { plan, requiresRefresh, refreshReason } = service.plan(id, request.body);
+        return { plan, requiresRefresh, refreshReason };
       } catch (error) {
         return reply
           .code(400)
@@ -58,6 +59,8 @@ export function registerPeriodValidationRoutes(
         pump();
         return reply.code(201).send({ experiment });
       } catch (error) {
+        if (error instanceof BacktestRefreshRequiredError)
+          return reply.code(409).send({ error: error.code, message: error.message });
         return reply
           .code(400)
           .send({

@@ -4,6 +4,8 @@ import type { JobFilter, JobItem, JobKind, JobsResponse, JobStatus } from "../..
 import { isFinishedJob } from "../../../../shared/schemas/jobs.js";
 import { INTRADAY_STRATEGIES } from "../../../../shared/schemas/intraday-strategies.js";
 import { executionJobProgress, jobPhase, jobProgress } from "./job-progress.js";
+import type { BacktestRefreshService } from "../../backtest/application/backtest-refresh-service.js";
+import { backtestRefreshActionLabel } from "../../../../shared/schemas/backtest-refresh.js";
 
 const active = "('QUEUED', 'RUNNING', 'WAITING', 'CANCELLING')";
 const terminal = "('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')";
@@ -25,6 +27,7 @@ interface Source {
 }
 
 const sources: Source[] = [
+  { kind: "backtest-refresh", table: "backtest_refresh_jobs", updated: "updated_at_ms", finished: "completed_at_ms", where: "owner_id=@owner" },
   { kind: "backtest", table: "backtest_jobs", updated: "coalesce(completed_at_ms, last_received_at_ms, last_progress_at_ms, started_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)", where: "clone_batch_id IS NULL AND NOT EXISTS (SELECT 1 FROM backtest_validation_trials t WHERE t.job_id=backtest_jobs.id)" },
   { kind: "preparation", table: "backtest_preparation_jobs", status: preparationStatus, updated: "updated_at_ms", finished: "coalesce(completed_at_ms, updated_at_ms)" },
   { kind: "clone-batch", table: "backtest_clone_batches", updated: "coalesce(completed_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)" },
@@ -63,7 +66,7 @@ export class JobCenterError extends Error {
 }
 
 export class JobCenterService {
-  constructor(private readonly container: Container, private readonly validations: PeriodValidationService) {}
+  constructor(private readonly container: Container, private readonly validations: PeriodValidationService, private readonly refreshJobs: BacktestRefreshService) {}
 
   private bindings(owner: string) {
     const days = this.container.config.notificationRetentionDays;
@@ -101,6 +104,7 @@ export class JobCenterService {
     return Boolean(this.container.database.sqlite.prepare(`SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id=@id AND user_id<>@owner
       UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id=@id AND status NOT IN ${terminal}
       UNION ALL SELECT 1 FROM backtest_clone_batches WHERE preparation_job_id=@id AND status IN ('ACTIVE','CANCELLING')
+      UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id=@id AND status IN ('QUEUED','PREPARING','SUBMITTING')
       UNION ALL SELECT 1 FROM backtest_validation_trials t JOIN backtest_validations v ON v.id=t.validation_id
         WHERE t.preparation_job_id=@id AND v.status IN ('ACTIVE','CANCELLING') LIMIT 1`).get({ id, owner }));
   }
@@ -112,6 +116,15 @@ export class JobCenterService {
     const strategyName = (id: string) => this.container.strategyRegistry.describe(id)?.name ?? INTRADAY_STRATEGIES.find((strategy) => strategy.id === id)?.name ?? id;
     const period = (from: string | null, to: string | null) => from && to ? `${from} ~ ${to}` : null;
     switch (row.kind) {
+      case "backtest-refresh": {
+        const refresh = this.refreshJobs.get(owner, row.sourceId);
+        const preparation = refresh.preparationJobId ? this.container.backtestPreparationOrchestrator.get(refresh.preparationJobId) : null;
+        job = { ...job, title: `${backtestRefreshActionLabel(refresh.action)} · 데이터 업데이트`, phase: refresh.message,
+          error: refresh.error, description: "최신 데이터로 준비한 뒤 요청한 작업을 자동으로 실행합니다.",
+          progress: preparation ? jobProgress(preparation.doneSymbols, preparation.totalSymbols, "종목") : null,
+          link: refresh.resultHref ?? `/backtests/${encodeURIComponent(refresh.sourceJobId)}?refreshJob=${encodeURIComponent(refresh.id)}` };
+        break;
+      }
       case "benchmark": case "symbol-master": {
         const saved = db.prepare("SELECT snapshot_json FROM background_job_history WHERE id=?").get(row.id) as { snapshot_json: string };
         return JSON.parse(saved.snapshot_json) as JobItem;
@@ -199,6 +212,7 @@ export class JobCenterService {
     if (job.status === "CANCELLING") return job;
     if (!job.cancellable) throw new JobCenterError("이미 종료되었거나 다른 작업에서 사용 중인 작업은 취소할 수 없습니다.", 409);
     switch (row.kind) {
+      case "backtest-refresh": this.refreshJobs.cancel(owner, row.sourceId); break;
       case "backtest": this.container.jobOrchestrator.cancel(row.sourceId); break;
       case "preparation": this.container.backtestPreparationOrchestrator.cancel(row.sourceId); break;
       case "clone-batch": {

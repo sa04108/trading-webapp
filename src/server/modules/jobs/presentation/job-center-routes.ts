@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Container } from "../../../bootstrap/container.js";
 import type { PeriodValidationService } from "../../backtest/application/period-validation-service.js";
+import type { BacktestRefreshService } from "../../backtest/application/backtest-refresh-service.js";
 import { JobCenterError, JobCenterService } from "../application/job-center-service.js";
 import { BackgroundJobHistory } from "../application/background-job-history.js";
 
@@ -17,6 +18,7 @@ export function registerJobCenterRoutes(
   container: Container,
   validations: PeriodValidationService,
   requireAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<void>,
+  refreshJobs: BacktestRefreshService,
 ): void {
   const history = new BackgroundJobHistory(container.database, container.clock, container.logger,
     [container.symbolMasterBackfill, container.benchmarkService], (job) => {
@@ -31,7 +33,7 @@ export function registerJobCenterRoutes(
       }
     });
   app.addHook("onClose", async () => { await history.close(); });
-  const service = new JobCenterService(container, validations);
+  const service = new JobCenterService(container, validations, refreshJobs);
   const handle = (request: FastifyRequest, reply: FastifyReply, action: () => unknown): unknown => {
     // 사용자별 이력과 작업 소유권이 섞인 응답은 공유 캐시에 저장하지 않는다.
     reply.header("cache-control", "no-store");

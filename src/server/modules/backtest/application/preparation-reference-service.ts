@@ -133,6 +133,8 @@ export class PreparationReferenceService {
           WHERE w.preparation_job_id = backtest_preparation_jobs.id)
         AND NOT EXISTS (SELECT 1 FROM backtest_validation_trials v
           WHERE v.preparation_job_id = backtest_preparation_jobs.id)
+        AND NOT EXISTS (SELECT 1 FROM backtest_refresh_jobs r
+          WHERE r.preparation_job_id = backtest_preparation_jobs.id)
     `,
       )
       .run().changes;

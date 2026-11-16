@@ -1,3 +1,4 @@
+import { isRefreshRequired, useBacktestRefresh } from "./backtest-refresh-dialog";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -22,6 +23,7 @@ export function SeedExperimentsPage() {
   const strategies = useStrategies();
   const client = useQueryClient();
   const navigate = useNavigate();
+  const refresh = useBacktestRefresh(id);
   const [count, setCount] = useState("10");
   const query = useQuery({
     queryKey: ["backtest-clone-batches", "source", id],
@@ -31,29 +33,33 @@ export function SeedExperimentsPage() {
     refetchIntervalInBackground: false,
   });
   const create = useMutation({
-    mutationFn: () => api<{ batch: { id: string } }>(`/backtests/${encodeURIComponent(id)}/clone-random-seeds`, { method: "POST", body: JSON.stringify({ count: Number(count) }) }),
+    mutationFn: (requestedCount: number) => api<{ batch: { id: string } }>(`/backtests/${encodeURIComponent(id)}/clone-random-seeds`, { method: "POST", body: JSON.stringify({ count: requestedCount }) }),
     onSuccess: (data) => {
       void client.invalidateQueries({ queryKey: ["backtest-clone-batches"] });
       void client.invalidateQueries({ queryKey: ["backtest-experiments"] });
       void navigate(`/backtests/batches/${data.batch.id}`);
     },
-    onError: (error) => toast.error(error.message),
+    onError: (error, requestedCount) => {
+      if (isRefreshRequired(error)) refresh.offer({ kind: "RANDOM_SEEDS", count: requestedCount }, error);
+      else toast.error(error.message);
+    },
   });
   const strategy = strategies.data?.strategies.find((s) => s.id === source.job?.strategyId);
   const canCreate = source.job && isTerminal(source.job.status) && !source.job.cloneBatchId && strategy && strategy.supportsRandomSeed !== false;
   const validCount = Number.isInteger(Number(count)) && Number(count) >= 1 && Number(count) <= 100;
   return <div className="space-y-4">
+    {refresh.modal}
     <BacktestBreadcrumbs jobId={id} trail={[{ label: "난수 시드 실험" }]} />
     <h2 className="text-lg font-semibold">난수 시드 실험</h2>
     {source.isError ? <Alert variant="destructive"><AlertTitle>원본 백테스트를 불러올 수 없습니다</AlertTitle><AlertDescription>{source.error?.message}</AlertDescription></Alert> : source.job ? <>
       <p className="text-sm text-muted-foreground">{strategy?.name ?? source.job.strategyId} · {source.job.request.period.from} ~ {source.job.request.period.to}</p>
       <StrategySeedExplanation strategyId={source.job.strategyId} strategyVersion={source.run?.strategyVersion} />
       <Card><CardHeader><CardTitle className="text-sm">새 난수 시드 실험</CardTitle></CardHeader><CardContent>
-        <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (canCreate && validCount && !create.isPending) create.mutate(); }}>
+        <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (canCreate && validCount && !create.isPending) create.mutate(Number(count)); }}>
           <div className="flex flex-wrap items-end gap-2"><div className="space-y-2"><Label htmlFor="seed-experiment-count">복제 개수 (1~100)</Label><Input id="seed-experiment-count" className="w-32" type="number" inputMode="numeric" min={1} max={100} step={1} value={count} onChange={(e) => setCount(e.target.value)} /></div>
             <Button type="submit" disabled={!canCreate || !validCount || create.isPending}>{create.isPending ? "생성 중…" : "난수 실험 시작"}</Button></div>
           {!canCreate ? <p className="text-sm text-muted-foreground">종료된 원본 백테스트와 난수 실험을 지원하는 전략이 필요합니다. 난수 실험의 개별 결과에서는 새 묶음을 만들 수 없습니다.</p> : null}
-          {create.isError ? <p role="alert" className="text-sm text-destructive">{create.error.message}</p> : null}
+          {create.isError && !isRefreshRequired(create.error) ? <p role="alert" className="text-sm text-destructive">{create.error.message}</p> : null}
         </form>
       </CardContent></Card>
     </> : <Skeleton className="h-40 w-full" />}

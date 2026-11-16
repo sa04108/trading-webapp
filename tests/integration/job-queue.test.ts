@@ -1,4 +1,5 @@
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
+import { randomUUID } from 'node:crypto';
 import { readBacktestJobs } from '../helpers/backtest-jobs.js';
 import { and, desc, eq, gte, lte } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
@@ -1666,6 +1667,59 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
     expect(ctx.container.seedCloneBatchService.list()).toEqual([]);
   });
+
+  // 서비스 대역 검사는 실제 준비 결과·제출 pin·작업 센터·알림의 연결을 보장하지 않는다.
+  for (const kind of ['CLONE', 'RANDOM_SEEDS'] as const) {
+    it(`${kind} 데이터 업데이트는 원본을 보존하고 새 준비 결과로 한 번만 실행한다`, async ({ scenario }) => {
+      const { ctx, cookie } = scenario;
+      const request = buildRequest();
+      await scenario.prepare(request);
+      const sourceResponse = await ctx.app.inject({ method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: request });
+      expect(sourceResponse.statusCode, sourceResponse.body).toBe(201);
+      const sourceId = sourceResponse.json().job.id as string;
+      const source = ctx.container.jobQueue.getJob(sourceId)!;
+      ctx.container.database.sqlite.prepare("UPDATE backtest_preparation_jobs SET request_hash='previous-preview-version' WHERE id=?").run(source.preparationJobId);
+      ctx.container.database.sqlite.prepare("UPDATE preparation_preview_cache SET validation_version='previous-preview-version' WHERE job_id=?").run(source.preparationJobId);
+      const rejected = await ctx.app.inject({
+        method: 'POST', url: `/api/v1/backtests/${sourceId}/${kind === 'CLONE' ? 'clone' : 'clone-random-seeds'}`,
+        cookies: { session: cookie }, ...(kind === 'RANDOM_SEEDS' ? { payload: { count: 3 } } : {}),
+      });
+      expect(rejected.statusCode, rejected.body).toBe(409);
+      const payload = { requestId: randomUUID(), action: kind === 'CLONE' ? { kind } : { kind, count: 3 } };
+      await withSparseQueuePreparation(ctx, request, async () => {
+        const submit = () => ctx.app.inject({ method: 'POST', url: `/api/v1/backtests/${sourceId}/refresh-and-run`, cookies: { session: cookie }, payload });
+        expect((await ctx.app.inject({ method: 'POST', url: `/api/v1/backtests/${sourceId}/refresh-and-run`, payload })).statusCode).toBe(401);
+        const accepted = await submit();
+        expect(accepted.statusCode, accepted.body).toBe(202);
+        const refreshId = accepted.json().job.id as string;
+        expect((await submit()).json().job.id).toBe(refreshId);
+        let href = '';
+        await vi.waitFor(async () => {
+          const response = await ctx.app.inject({ method: 'GET', url: `/api/v1/backtests/refresh-jobs/${refreshId}`, cookies: { session: cookie } });
+          expect(response.json().job, response.body).toMatchObject({ status: 'COMPLETED' });
+          href = response.json().job.resultHref as string;
+        }, { timeout: 15_000, interval: 100 });
+        expect((await submit()).json().job).toMatchObject({ id: refreshId, status: 'COMPLETED', resultHref: href });
+        const id = href.split('/').at(-1)!;
+        const children = kind === 'CLONE' ? [ctx.container.jobQueue.getJob(id)!]
+          : ctx.container.seedCloneBatchService.get(id)!.items.map(({ job }) => job!);
+        expect(children).toHaveLength(kind === 'CLONE' ? 1 : 3);
+        for (const child of children) {
+          expect(child.cloneSourceJobId).toBe(sourceId);
+          expect(child.preparationJobId).not.toBe(source.preparationJobId);
+          const childRequest = JSON.parse(child.requestJson) as BacktestRequest;
+          expect(childRequest).toEqual({ ...JSON.parse(source.requestJson), randomSeed: childRequest.randomSeed });
+          expect(ctx.container.backtestPreparationOrchestrator.getFreshPreviewDetails(childRequest, child.preparationJobId!)?.preview).toBeDefined();
+        }
+        expect(new Set(children.map(child => JSON.parse(child.requestJson).randomSeed)).size).toBe(children.length);
+        expect(ctx.container.jobQueue.getJob(sourceId)).toEqual(source);
+        expect(ctx.container.database.sqlite.prepare('SELECT COUNT(*) AS total FROM backtest_refresh_jobs').get()).toEqual({ total: 1 });
+        const jobCenter = await ctx.app.inject({ method: 'GET', url: `/api/v1/jobs/backtest-refresh:${refreshId}`, cookies: { session: cookie } });
+        expect(jobCenter.json().job).toMatchObject({ status: 'COMPLETED', link: href });
+        expect(ctx.container.notificationService.list().filter(item => item.link === href && item.title === '최신 데이터로 후속 작업을 시작했습니다')).toHaveLength(1);
+      });
+    });
+  }
 
   it('새 난수 100개는 중복 없이 저장하고 기존 QUEUED 상한만큼 순차 투입한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;

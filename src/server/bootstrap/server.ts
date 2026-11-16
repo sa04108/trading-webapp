@@ -129,7 +129,7 @@ export async function buildServer(
         container.backtestWizardDraftService,
         requireAuth,
       );
-      const validations = registerBacktestRoutes(
+      const { validations, refreshJobs } = registerBacktestRoutes(
         api,
         {
           submissionValidator: container.submissionValidator,
@@ -158,6 +158,16 @@ export async function buildServer(
           benchmarks: container.benchmarkService,
           seedCloneBatches: container.seedCloneBatchService,
           database: container.database,
+          refreshProviderFilings: container.config.dartApiKey === null ? undefined : () => container.refreshProviderFilings(),
+          onRefreshFinished: (job) => {
+            container.notificationService.create({
+              type: "backtest", severity: job.status === "FAILED" ? "error" : "info",
+              title: job.status === "COMPLETED" ? "최신 데이터로 후속 작업을 시작했습니다"
+                : job.status === "FAILED" ? "데이터 업데이트 후 실행에 실패했습니다" : "데이터 업데이트 작업을 취소했습니다",
+              body: job.error ?? job.message,
+              link: job.resultHref ?? `/backtests/${encodeURIComponent(job.sourceJobId)}?refreshJob=${encodeURIComponent(job.id)}`,
+            });
+          },
           onValidationFinished: (experiment) => {
             try {
               container.notificationService.create({
@@ -200,7 +210,7 @@ export async function buildServer(
         container.notificationService,
         requireAuth,
       );
-      registerJobCenterRoutes(api, container, validations, requireAuth);
+      registerJobCenterRoutes(api, container, validations, requireAuth, refreshJobs);
       registerSymbolMasterRoutes(
         api,
         {

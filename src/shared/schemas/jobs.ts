@@ -1,5 +1,5 @@
 export const jobKinds = [
-  "backtest", "preparation", "clone-batch", "validation",
+  "backtest", "preparation", "clone-batch", "validation", "backtest-refresh",
   "intraday-backtest", "intraday-collection", "symbol-master", "benchmark",
 ] as const;
 
