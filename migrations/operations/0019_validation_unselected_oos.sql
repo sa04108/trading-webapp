@@ -1,0 +1,1 @@
+ALTER TABLE `backtest_validation_trials` ADD `skip_reason` text;

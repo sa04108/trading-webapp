@@ -14,7 +14,7 @@ export function ExperimentSummary({ jobId }: { jobId: string }) {
       help: "같은 설정에서 난수 시드를 바꿔 결과의 민감도를 확인합니다. 모든 실험의 유효한 완료 실행 수익률로 표본 표준편차를 계산합니다. 표본이 두 개 미만이면 —로 표시합니다.", metric: "수익률 표준편차" },
     { title: "기간검증", path: "validations", count: summary?.validation.experimentCount, active: summary?.validation.activeCount,
       samples: summary?.validation.returns.count, deviation: summary?.validation.returns.sampleStdDev,
-      help: "홀드아웃·최적화 홀드아웃·워크포워드로 별도 기간의 성과를 확인합니다. 완료된 실험마다 OOS 구간 수익률의 평균을 구한 뒤 실험 간 표본 표준편차를 계산합니다. 독립 실행 구간을 연속 수익률로 합산하지 않습니다. 표본이 두 개 미만이면 —로 표시합니다.", metric: "OOS 수익률 표준편차" },
+      help: "홀드아웃·최적화 홀드아웃·워크포워드로 별도 기간의 성과를 확인합니다. 모든 OOS 회차가 평가된 완료 실험만 사용합니다. 각 실험의 OOS 평균 수익률을 구한 뒤 실험 간 표본 표준편차를 계산합니다. 독립 실행 구간을 연속 수익률로 합산하지 않습니다. 표본이 두 개 미만이면 —로 표시합니다.", metric: "OOS 수익률 표준편차" },
   ];
   return <section aria-label="백테스트 실험" className="grid gap-3 md:grid-cols-2">
     {entries.map((entry) => <Card key={entry.path}>

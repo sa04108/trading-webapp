@@ -78,6 +78,7 @@ import {
 import { JobQueue } from "../modules/backtest/application/job-queue.js";
 import { PreparationReferenceService } from "../modules/backtest/application/preparation-reference-service.js";
 import { BacktestWizardDraftService } from "../modules/backtest/application/backtest-wizard-draft-service.js";
+import { BacktestWizardService } from "../modules/backtest/application/backtest-wizard-service.js";
 import { ResultsService } from "../modules/backtest/application/results-service.js";
 import {
   createSeedCloneBatchJobListener,
@@ -145,6 +146,7 @@ export interface Container {
   readonly tradingService: TradingService;
   readonly intradayService: IntradayService;
   readonly backtestWizardDraftService: BacktestWizardDraftService;
+  readonly backtestWizardService: BacktestWizardService;
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
   readonly backtestLeaseService: BacktestLeaseService;
@@ -445,6 +447,10 @@ export function createContainer(
     database,
     clock,
   );
+  const backtestWizardService = new BacktestWizardService(database, clock, {
+    backtest: (id) => jobOrchestrator.cancel(id),
+    preparation: (id) => backtestPreparationOrchestrator.cancel(id),
+  });
 
   const jobQueue = new JobQueue(database, clock, () => collection.filingDiscovery.freshness());
   const backtestResultCompleter = new ForkedBacktestResultCompleter(
@@ -678,6 +684,11 @@ export function createContainer(
     }
   };
   for (const source of [jobOrchestrator.events, backtestLeaseService.events]) {
+    source.on("job", (event: JobEvent) => {
+      if (event.kind !== "status") return;
+      try { backtestWizardService.sync(); }
+      catch (error) { logger.warn({ err: error, jobId: event.jobId }, "위저드 작업 상태 동기화 실패"); }
+    });
     source.on("job", backtestNotificationListener);
     source.on("job", seedBatchJobListener);
   }
@@ -725,6 +736,7 @@ export function createContainer(
     tradingService,
     intradayService,
     backtestWizardDraftService,
+    backtestWizardService,
     jobQueue,
     jobOrchestrator,
     backtestLeaseService,

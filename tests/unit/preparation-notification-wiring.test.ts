@@ -76,7 +76,7 @@ describe('createPreparationNotificationListener', () => {
         '횡단면 모멘텀 · 2026-01-01 ~ 2026-06-30',
         ...(error === null ? [] : [error]),
       ].join('\n'),
-      link: '/backtests/new',
+      link: '/jobs',
     }]);
   });
 

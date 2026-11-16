@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { universeRuleSchema } from "./universe-rule.js";
+import type { PreparationInput } from "./backtest-preparation.js";
+import type { JobStatus } from "./jobs.js";
 
 /** 입력 단계뿐 아니라 검토·실행까지 포함한 위저드 페이지 slug. */
 export const BACKTEST_WIZARD_PAGE_STEPS = [
@@ -40,7 +42,7 @@ const parameterKeySchema = z.string().min(1).max(128);
 export const backtestWizardStrategyDraftSchema = z.object({
   strategyId: z.string().min(1).max(128).nullable(),
   parameters: z.record(parameterKeySchema, formTextSchema),
-  /** 다음 신규 진입에서 사용자가 복원을 수락했을 때 돌아갈 마지막 페이지. */
+  /** 작업 목록에서 명시적으로 재개할 페이지. */
   currentStep: backtestWizardPageStepSchema.optional(),
 });
 
@@ -144,6 +146,23 @@ export interface BacktestWizardDraftPayloadMap {
 }
 
 export const backtestWizardDraftContextSchema = z.object({
+  wizardId: z.string().min(1).max(128).optional(),
   /** 없으면 신규 작성, 있으면 해당 원본을 재설정 복제하는 작성 문맥이다. */
   sourceJobId: z.string().min(1).max(128).optional(),
 });
+
+export interface BacktestWizardJob {
+  readonly id: string;
+  readonly sourceJobId: string | null;
+  readonly currentStep: BacktestWizardPageStep;
+  readonly status: JobStatus;
+  readonly phase: string;
+  readonly error: string | null;
+  readonly preparationJobId: string | null;
+  readonly preparationInput: PreparationInput | null;
+  readonly backtestJobId: string | null;
+  readonly createdAtMs: number;
+  readonly updatedAtMs: number;
+  readonly finishedAtMs: number | null;
+  readonly link: string;
+}

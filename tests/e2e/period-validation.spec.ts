@@ -33,12 +33,12 @@ async function setup(page: Page) {
         ...plan.candidates.map((parameters, candidate): ValidationTrialDto => ({
           id: `train-${fold.ordinal}-${candidate}`, fold: fold.ordinal, role: 'TRAIN', candidate,
           parameters, period: fold.train, jobId: null, status: 'PENDING', progress: null,
-          error: null, metrics: null, benchmarkReturnPct: null,
+          error: null, metrics: null, skipReason: null, selection: null,
         })),
         { id: `oos-${fold.ordinal}`, fold: fold.ordinal, role: 'OOS', candidate: null, parameters: null,
-          period: fold.test, jobId: null, status: 'PENDING', progress: null, error: null, metrics: null, benchmarkReturnPct: null },
+          period: fold.test, jobId: null, status: 'PENDING', progress: null, error: null, metrics: null, skipReason: null, selection: null },
         ...(config.mode === 'HOLDOUT' ? [] : [{ id: `baseline-${fold.ordinal}`, fold: fold.ordinal, role: 'BASELINE' as const,
-          candidate: null, parameters: request.parameters, period: fold.test, jobId: null, status: 'PENDING', progress: null, error: null, metrics: null, benchmarkReturnPct: null }]),
+          candidate: null, parameters: request.parameters, period: fold.test, jobId: null, status: 'PENDING', progress: null, error: null, metrics: null, skipReason: null, selection: null }]),
       ]);
       state.experiments = [{ id: 'val_test', sourceJobId: id, status: 'ACTIVE', config, plan, initialCash: request.capital.initialCash, createdAtMs: 1, error: null, trials }];
       await route.fulfill({ status: 201, json: { experiment: state.experiments[0] } });

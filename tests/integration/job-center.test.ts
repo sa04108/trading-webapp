@@ -7,6 +7,7 @@ import type { Container } from "../../src/server/bootstrap/container.js";
 import { backtestJobs, backtestPreparationJobs } from "../../src/runtime/shared/db/operations-schema.js";
 import { intradayCollections, intradayRuns } from "../../src/server/shared/db/intraday-schema.js";
 import { backtestMetrics } from "../../src/server/shared/db/backtest-result-schema.js";
+import { backtestValidations, backtestValidationTrials } from "../../src/server/shared/db/backtest-validation-schema.js";
 import { backgroundJobHistory, jobDismissals } from "../../src/server/shared/db/job-center-schema.js";
 import { pruneExpiredRows } from "../../src/server/shared/db/maintenance.js";
 import type { JobItem, JobResponse, JobsResponse } from "../../src/shared/schemas/jobs.js";
@@ -23,6 +24,26 @@ function preparation(container: Container, id: string, status: string, updatedAt
 }
 
 describe("작업 관찰·취소·이력 경계", () => {
+  // 서비스의 미평가 DTO 검사만으로는 작업 센터의 JOIN이 이 행을 누락하는 문제를 찾지 못한다.
+  it("선택 OOS가 미평가여도 종료된 기간검증의 진행률과 사유를 표시한다", async ({ ctx, cookie }) => {
+    const now = Date.now();
+    for (const id of ["validation-source", "validation-train", "validation-baseline"])
+      backtest(ctx.container, id, "COMPLETED", now, { completedAtMs: now });
+    ctx.container.database.db.insert(backtestValidations).values({
+      id: "validation-no-candidate", sourceJobId: "validation-source", requestJson: JSON.stringify(request),
+      configJson: '{}', planJson: JSON.stringify({ totalRuns: 3 }), strategyVersion: '1', strategySourceHash: 'test',
+      engineVersion: '1', gitCommitSha: 'test', status: 'COMPLETED', phase: 'OOS', createdAtMs: now, completedAtMs: now,
+    }).run();
+    ctx.container.database.db.insert(backtestValidationTrials).values([
+      { id: "trial-is", validationId: "validation-no-candidate", fold: 0, role: "TRAIN", jobId: "validation-train" },
+      { id: "trial-oos", validationId: "validation-no-candidate", fold: 0, role: "OOS", skipReason: "NO_ELIGIBLE_CANDIDATE" },
+      { id: "trial-baseline", validationId: "validation-no-candidate", fold: 0, role: "BASELINE", jobId: "validation-baseline" },
+    ]).run();
+    const response = await ctx.app.inject({ method: "GET", url: "/api/v1/jobs/validation:validation-no-candidate", cookies: { session: cookie } });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json<JobResponse>().job).toMatchObject({ status: "COMPLETED", progress: { current: 3, total: 3, percent: 100 }, description: expect.stringContaining("OOS 1회 미평가") });
+  });
+
   // 기존 개별 작업 API 검사는 통합 목록의 소유권·종료 이력 삭제와 원본 보존을 검증하지 않는다.
   it("모든 작업 API는 인증과 제한된 조회·삭제 입력을 요구한다", async ({ ctx, cookie }) => {
     for (const [method, url] of [["GET", "/jobs"], ["GET", "/jobs/backtest:nope"], ["POST", "/jobs/backtest:nope/cancel"], ["DELETE", "/jobs"]] as const) {

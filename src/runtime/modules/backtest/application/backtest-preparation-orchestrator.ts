@@ -252,7 +252,7 @@ const UNKNOWN_CANDIDATE_PROBE = "__UNKNOWN_FUTURE_UNIVERSE_CANDIDATE__";
 /** 사용자 소유권과 서버 결과 수명은 계산 worker 밖에서 관리한다. */
 export interface PreparationReferences {
   bindWizard(userId: string, context: string, preparationJobId: string): void;
-  getWizard(userId: string): { preparationJobId: string } | null;
+  getWizard(userId: string, context?: string): { preparationJobId: string } | null;
   collect(): number;
 }
 
@@ -548,8 +548,9 @@ export class BacktestPreparationOrchestrator {
   getReadyPreviewForWizard(
     input: PreparationInput,
     userId: string,
+    context?: string,
   ): BacktestUniversePreview | null {
-    const owner = this.deps.references?.getWizard(userId);
+    const owner = this.deps.references?.getWizard(userId, context);
     if (!owner) return null;
     return (
       this.getFreshPreviewDetails(input, owner.preparationJobId)?.preview ??
@@ -557,8 +558,8 @@ export class BacktestPreparationOrchestrator {
     );
   }
 
-  getWizardPreviewUnavailabilityReason(input: PreparationInput, userId: string) {
-    const owner = this.deps.references?.getWizard(userId);
+  getWizardPreviewUnavailabilityReason(input: PreparationInput, userId: string, context?: string) {
+    const owner = this.deps.references?.getWizard(userId, context);
     if (!owner) return "WIZARD_REFERENCE_MISSING" as const;
     const strategy = this.requireStrategy(input);
     return this.previewCache.unavailabilityReason(

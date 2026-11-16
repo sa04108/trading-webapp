@@ -1,4 +1,5 @@
 import { assertSubmissionSnapshot, type SubmissionSnapshot } from "./submission-snapshot.js";
+import { preserveCompletedWizards } from "./backtest-wizard-state.js";
 import { EventEmitter } from "node:events";
 import {
   and, asc, count, desc, eq, getTableColumns, inArray, isNull, or, sql,
@@ -191,6 +192,7 @@ export class JobQueue {
               metadata.wizardOwner.userId,
               context,
               preparationJobId,
+              row.id,
             );
           }
         }
@@ -746,6 +748,7 @@ export class JobQueue {
           !TERMINAL_STATUSES.includes(job.status as BacktestJobStatus)
         )
           return false;
+        preserveCompletedWizards(this.handle, [jobId]);
         this.db.delete(backtestJobs).where(eq(backtestJobs.id, jobId)).run();
         new PreparationReferenceService(this.handle).collect();
         return true;

@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  clearAllBacktestWizardDrafts,
   saveBacktestWizardDraftStep,
   waitForPendingDraftSaves,
 } from '../../src/web/features/backtests/wizard-draft-api.js';
@@ -10,7 +9,7 @@ describe('backtest wizard draft API', () => {
     vi.unstubAllGlobals();
   });
 
-  it('같은 문맥·단계의 저장을 순서대로 보낸 뒤 삭제한다', async () => {
+  it('같은 위저드·단계의 저장을 순서대로 보낸 뒤 대기한다', async () => {
     let releaseFirst!: () => void;
     const firstFinished = new Promise<void>((resolve) => {
       releaseFirst = resolve;
@@ -32,19 +31,19 @@ describe('backtest wizard draft API', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const firstSave = saveBacktestWizardDraftStep(null, 'strategy', {
+    const firstSave = saveBacktestWizardDraftStep('wizard-1', 'strategy', {
       strategyId: 'range-breakout',
       parameters: { lookbackBars: '10' },
       currentStep: 'strategy',
     });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
-    const latestSave = saveBacktestWizardDraftStep(null, 'strategy', {
+    const latestSave = saveBacktestWizardDraftStep('wizard-1', 'strategy', {
       strategyId: 'range-breakout',
       parameters: { lookbackBars: '17' },
       currentStep: 'period',
     });
-    const clear = clearAllBacktestWizardDrafts();
+    const clear = waitForPendingDraftSaves('wizard-1');
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
@@ -54,7 +53,6 @@ describe('backtest wizard draft API', () => {
     expect(calls).toEqual([
       { method: 'PUT', value: '10' },
       { method: 'PUT', value: '17' },
-      { method: 'DELETE', value: null },
     ]);
   });
 
@@ -72,7 +70,7 @@ describe('backtest wizard draft API', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    const save = saveBacktestWizardDraftStep(null, 'strategy', {
+    const save = saveBacktestWizardDraftStep('wizard-1', 'strategy', {
       strategyId: 'range-breakout',
       parameters: { lookbackBars: '10' },
       currentStep: 'strategy',
@@ -80,7 +78,7 @@ describe('backtest wizard draft API', () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     let finished = false;
-    const waiting = waitForPendingDraftSaves().then(() => {
+    const waiting = waitForPendingDraftSaves('wizard-1').then(() => {
       finished = true;
     });
     await Promise.resolve();
@@ -89,6 +87,23 @@ describe('backtest wizard draft API', () => {
     release();
     await Promise.all([save, waiting]);
     expect(finished).toBe(true);
+  });
+
+  it('다른 위저드의 저장은 기다리지 않는다', async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const fetchMock = vi.fn(async () => {
+      await blocked;
+      return new Response(JSON.stringify({ draft: {} }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const save = saveBacktestWizardDraftStep('wizard-blocked', 'strategy', {
+      strategyId: null, parameters: {}, currentStep: 'strategy',
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitForPendingDraftSaves('wizard-other');
+    release();
+    await save;
   });
 
   it('유니버스 미리보기 저장은 준비 작업 ID만 전송한다', async () => {
@@ -100,7 +115,7 @@ describe('backtest wizard draft API', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    await saveBacktestWizardDraftStep(null, 'universe', {
+    await saveBacktestWizardDraftStep('wizard-1', 'universe', {
       universeRule: {
         markets: ['KOSPI'],
         stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 20 }],
@@ -146,7 +161,7 @@ describe('backtest wizard draft API', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    await saveBacktestWizardDraftStep(null, 'universe', {
+    await saveBacktestWizardDraftStep('wizard-1', 'universe', {
       universeRule: {
         markets: ['KOSPI'],
         stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 20 }],

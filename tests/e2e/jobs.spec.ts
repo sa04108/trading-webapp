@@ -49,7 +49,8 @@ test("작업 목록에서 종료된 기록만 삭제하고 상세를 연다", as
   await page.getByRole("link", { name: "작업", exact: true }).click();
   await expect(page.getByText("진행 작업")).toBeVisible();
   await expect(page.getByText("종료된 작업 기록은 7일간 보관됩니다.", { exact: false })).toBeVisible();
-  await expect(page.getByRole("link", { name: /진행 작업/ }).getByText("계산", { exact: true })).toBeVisible();
+  await expect(page.locator(`a[href="/jobs/${encodeURIComponent(active.id)}"]`).getByText("계산", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "진행 작업 작업 열기" })).toHaveAttribute("href", "/backtests/run-1");
   await page.getByRole("button", { name: "진행 작업 취소" }).click();
   await expect(page.getByRole("alert")).toContainText("취소할 수 없습니다");
   await page.getByRole("button", { name: "편집" }).click();
@@ -65,7 +66,7 @@ test("작업 목록에서 종료된 기록만 삭제하고 상세를 연다", as
 
   jobs = [active, finished];
   await page.reload();
-  await page.getByRole("link", { name: /종료 작업/ }).click();
+  await page.locator(`a[href="/jobs/${encodeURIComponent(finished.id)}"]`).click();
   await expect(page).toHaveURL(/\/jobs\/preparation%3Adone-1$/i);
   await expect(page.getByText("완료", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("progressbar")).toHaveCount(0);

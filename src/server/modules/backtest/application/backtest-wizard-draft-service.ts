@@ -1,16 +1,16 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, eq, notInArray } from "drizzle-orm";
 import {
   backtestWizardDraftPayloadSchemas,
-  type BacktestWizardPageStep,
   type BacktestWizardDraftPayloadMap,
   type BacktestWizardDraftWritePayloadMap,
   type BacktestWizardDraftStep,
 } from "../../../../shared/schemas/backtest-wizard-draft.js";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import { backtestJobs } from "../../../../runtime/shared/db/operations-schema.js";
-import { backtestWizardDrafts } from "../../../shared/db/preparation-owner-schema.js";
+import { backtestWizardDrafts, backtestWizardJobs } from "../../../shared/db/preparation-owner-schema.js";
 import type { Clock } from "../../../../runtime/shared/clock.js";
 import { PreparationReferenceService } from "./preparation-reference-service.js";
+import { BacktestWizardError, requireEditableWizard } from "./backtest-wizard-state.js";
 
 export interface BacktestWizardDraft<
   S extends BacktestWizardDraftStep = BacktestWizardDraftStep,
@@ -20,16 +20,7 @@ export interface BacktestWizardDraft<
   readonly updatedAtMs: number;
 }
 
-export interface BacktestWizardResumeCandidate {
-  readonly sourceJobId: string | null;
-  readonly currentStep: BacktestWizardPageStep;
-  readonly updatedAtMs: number;
-}
-
-const contextOf = (sourceJobId: string | undefined): string =>
-  sourceJobId ?? "";
-
-/** 인증 사용자별 입력을 보존하고 현재 미리보기는 서버의 단일 참조에서 복원한다. */
+/** 인증 사용자별 입력을 보존하고 현재 미리보기는 해당 위저드의 참조에서 복원한다. */
 export class BacktestWizardDraftService {
   private readonly references: PreparationReferenceService;
 
@@ -42,10 +33,10 @@ export class BacktestWizardDraftService {
 
   get<S extends BacktestWizardDraftStep>(
     userId: string,
-    sourceJobId: string | undefined,
+    contextId: string | undefined,
     step: S,
   ): BacktestWizardDraft<S> | null {
-    const context = contextOf(sourceJobId);
+    const context = contextId ?? "";
     const row = this.database.db
       .select()
       .from(backtestWizardDrafts)
@@ -85,50 +76,32 @@ export class BacktestWizardDraftService {
     };
   }
 
-  /** 다른 사용자의 작성 문맥은 최신 초안 조회에도 포함하지 않는다. */
-  getResumeCandidate(userId: string): BacktestWizardResumeCandidate | null {
-    const latest = this.database.db
-      .select({
-        context: backtestWizardDrafts.context,
-        updatedAtMs: backtestWizardDrafts.updatedAtMs,
-      })
-      .from(backtestWizardDrafts)
-      .where(eq(backtestWizardDrafts.userId, userId))
-      .orderBy(desc(backtestWizardDrafts.updatedAtMs))
-      .get();
-    if (!latest) return null;
-    const sourceJobId = latest.context === "" ? undefined : latest.context;
-    const strategy = this.get(userId, sourceJobId, "strategy");
-    return {
-      sourceJobId: sourceJobId ?? null,
-      currentStep: strategy?.payload.currentStep ?? "strategy",
-      updatedAtMs: latest.updatedAtMs,
-    };
-  }
-
   save<S extends BacktestWizardDraftStep>(
     userId: string,
-    sourceJobId: string | undefined,
+    contextId: string | undefined,
     step: S,
     payload: BacktestWizardDraftWritePayloadMap[S],
   ): BacktestWizardDraft<S> {
     return this.database.sqlite
       .transaction(() => {
-        const context = contextOf(sourceJobId);
+        const context = contextId ?? "";
+        const wizard = this.database.db.select().from(backtestWizardJobs).where(eq(backtestWizardJobs.id, context)).get();
+        if (wizard) requireEditableWizard(this.database, userId, context);
         const updatedAtMs = this.clock.now();
         let stored: unknown = payload;
         if (step === "universe") {
           const universe =
             payload as BacktestWizardDraftWritePayloadMap["universe"];
           const requestedId = universe.lastPreview?.preparationJobId;
-          const owner = this.references.getWizard(userId);
+          const owner = this.references.getWizard(userId, context);
           // 신규 미리보기는 POST에서 이미 연결한다. 늦은 자동 저장이 새 참조를 되돌리지 않는다.
           // 복제 위저드는 원본 백테스트가 실제 소유한 ID만 최초 연결할 수 있다.
-          if (requestedId && !owner && sourceJobId) {
+          const cloneSourceId = wizard ? wizard.sourceJobId : contextId;
+          if (requestedId && !owner && cloneSourceId) {
             const source = this.database.db
               .select({ preparationJobId: backtestJobs.preparationJobId })
               .from(backtestJobs)
-              .where(eq(backtestJobs.id, sourceJobId))
+              .where(eq(backtestJobs.id, cloneSourceId))
               .get();
             if (source?.preparationJobId === requestedId) {
               this.references.bindWizard(userId, context, requestedId);
@@ -155,15 +128,23 @@ export class BacktestWizardDraftService {
             set: { payloadJson: values.payloadJson, updatedAtMs },
           })
           .run();
-        return this.get(userId, sourceJobId, step)!;
+        if (wizard) {
+          const strategy = step === "strategy" ? payload as BacktestWizardDraftWritePayloadMap["strategy"] : null;
+          this.database.db.update(backtestWizardJobs).set({ updatedAtMs,
+            ...(strategy?.currentStep ? { currentStep: strategy.currentStep } : {}),
+          }).where(eq(backtestWizardJobs.id, context)).run();
+        }
+        return this.get(userId, contextId, step)!;
       })
       .immediate();
   }
 
-  remove(userId: string, sourceJobId: string | undefined): void {
+  remove(userId: string, contextId: string | undefined): void {
+    if (contextId && this.database.db.select().from(backtestWizardJobs).where(eq(backtestWizardJobs.id, contextId)).get())
+      throw new BacktestWizardError("위저드 작업은 작업 취소 API로 종료하세요.", 409);
     this.database.sqlite
       .transaction(() => {
-        const context = contextOf(sourceJobId);
+        const context = contextId ?? "";
         this.database.db
           .delete(backtestWizardDrafts)
           .where(
@@ -183,9 +164,13 @@ export class BacktestWizardDraftService {
       .transaction(() => {
         this.database.db
           .delete(backtestWizardDrafts)
-          .where(eq(backtestWizardDrafts.userId, userId))
+          .where(and(eq(backtestWizardDrafts.userId, userId), notInArray(backtestWizardDrafts.context,
+            this.database.db.select({ id: backtestWizardJobs.id }).from(backtestWizardJobs))))
           .run();
-        this.references.releaseWizard(userId);
+        // 이전 API의 일괄 초기화가 독립 위저드 작업을 취소하거나 참조를 지우지 않는다.
+        const legacy = this.database.sqlite.prepare(`SELECT context FROM preparation_wizard_references
+          WHERE user_id=? AND context NOT IN (SELECT id FROM backtest_wizard_jobs)`).all(userId) as { context: string }[];
+        for (const row of legacy) this.references.releaseWizard(userId, row.context);
       })
       .immediate();
   }

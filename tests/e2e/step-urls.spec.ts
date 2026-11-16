@@ -45,17 +45,17 @@ test('위저드 단계마다 URL 이 있고 뒤로가기가 직전 단계로 돌
 
   // slug 없는 진입은 첫 단계로 이어진다
   await page.goto('/backtests/new');
-  await expect(page).toHaveURL(/\/backtests\/new\/strategy$/);
+  await expect(page).toHaveURL(/\/backtests\/new\/strategy\?wizard=/);
 
   const strategy = page.getByRole('button', { name: /전고점 돌파/ });
   await strategy.click();
   await expect(strategy).toHaveAttribute('aria-pressed', 'true');
 
   await page.getByRole('button', { name: '다음' }).click();
-  await expect(page).toHaveURL(/\/backtests\/new\/period$/);
+  await expect(page).toHaveURL(/\/backtests\/new\/period\?wizard=/);
 
   await page.goBack();
-  await expect(page).toHaveURL(/\/backtests\/new\/strategy$/);
+  await expect(page).toHaveURL(/\/backtests\/new\/strategy\?wizard=/);
   // 이 단언이 이 설계의 핵심 전제다 — 같은 라우트에서 param 만 바뀌면 위저드가
   // 재마운트되지 않으므로 폼 값이 살아 있다. 재마운트되면 선택이 풀려 여기서 깨진다.
   await expect(page.getByRole('button', { name: /전고점 돌파/ })).toHaveAttribute(
@@ -64,47 +64,29 @@ test('위저드 단계마다 URL 이 있고 뒤로가기가 직전 단계로 돌
   );
 
   await page.goForward();
-  await expect(page).toHaveURL(/\/backtests\/new\/period$/);
+  await expect(page).toHaveURL(/\/backtests\/new\/period\?wizard=/);
 });
-test('다른 페이지로 나간 위저드는 신규 진입에서 동의를 받은 뒤 마지막 단계로 복원한다', async ({
-  page,
-}) => {
+test('두 위저드는 독립적으로 저장되고 작업 목록에서 선택해 이어간다', async ({ page }) => {
   await login(page);
-
   await page.goto('/backtests/new');
   await page.getByRole('button', { name: /전고점 돌파/ }).click();
   await page.getByRole('button', { name: '다음' }).click();
+  const firstId = new URL(page.url()).searchParams.get('wizard')!;
   await page.getByLabel('시작일').fill('2026-01-05');
   await page.getByLabel('종료일').fill('2026-03-31');
-
-  await expect.poll(async () => page.evaluate(async () => {
-    const response = await fetch('/api/v1/backtests/wizard-draft/strategy');
-    const body = await response.json() as {
-      draft: { payload: { currentStep?: string } } | null;
-    };
-    return body.draft?.payload.currentStep ?? null;
-  })).toBe('period');
-
-  await page.getByRole('link', { name: '대시보드' }).click();
-  await page.getByRole('link', { name: '빠른 백테스트' }).click();
-  await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.getByRole('heading', { name: '이전에 준비하던 백테스트가 있습니다' }))
-    .toBeVisible();
-
-  await page.getByRole('button', { name: '이전 작업 이어서 하기' }).click();
-  await expect(page).toHaveURL(/\/backtests\/new\/period$/);
+  await expect.poll(async () => page.evaluate(async (id) => {
+    const response = await fetch(`/api/v1/backtests/wizard-draft/period?wizardId=${id}`);
+    return (await response.json()).draft?.payload.from;
+  }, firstId)).toBe('2026-01-05');
+  await page.goto('/backtests/new');
+  await expect(page.getByRole('button', { name: /전고점 돌파/ })).toBeVisible();
+  const secondId = new URL(page.url()).searchParams.get('wizard')!;
+  expect(secondId).not.toBe(firstId);
+  await page.goto('/jobs');
+  await page.locator(`a[href*="wizard=${firstId}"]`).click();
   await expect(page.getByLabel('시작일')).toHaveValue('2026-01-05');
   await expect(page.getByLabel('종료일')).toHaveValue('2026-03-31');
-
-  await page.getByRole('link', { name: '대시보드' }).click();
-  await page.getByRole('link', { name: '빠른 백테스트' }).click();
-  await expect(page.getByRole('dialog')).toBeVisible();
-  await page.getByRole('button', { name: '새로 시작' }).click();
-  await expect(page).toHaveURL(/\/backtests\/new\/strategy$/);
-  await expect(page.getByRole('button', { name: /전고점 돌파/ })).toHaveAttribute(
-    'aria-pressed',
-    'false',
-  );
+  expect(new URL(page.url()).searchParams.get('wizard')).toBe(firstId);
 });
 
 test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 복원한다', async ({ page }) => {
@@ -117,7 +99,7 @@ test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 
   await page.getByLabel('시작일').fill('2026-01-05');
   await page.getByLabel('종료일').fill('2026-03-31');
   await page.getByRole('button', { name: '다음' }).click();
-  await expect(page).toHaveURL(/\/backtests\/new\/universe$/);
+  await expect(page).toHaveURL(/\/backtests\/new\/universe\?wizard=/);
   await page.locator('#stage-limit-0').fill('1');
   const initialPreview = page.waitForResponse(
     (resp) =>
@@ -135,7 +117,7 @@ test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 
   }
   await expect(page.getByText('리밸런스 일정')).toBeVisible();
   await page.getByRole('button', { name: '다음' }).click();
-  await expect(page).toHaveURL(/\/backtests\/new\/capital$/);
+  await expect(page).toHaveURL(/\/backtests\/new\/capital\?wizard=/);
 
   await page.getByLabel('초기 자본 (KRW)').fill('12345678');
   await page.getByLabel('동시 보유 종목 상한').fill('7');
@@ -143,12 +125,12 @@ test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 
 
   // 디바운스 저장 완료를 서버 응답으로 확인한 뒤 새 문서 탐색을 재현한다.
   await expect.poll(async () => page.evaluate(async () => {
-    const response = await fetch('/api/v1/backtests/wizard-draft/capital');
+    const response = await fetch(`/api/v1/backtests/wizard-draft/capital?wizardId=${new URL(location.href).searchParams.get('wizard')}`);
     const body = await response.json() as { draft: { payload: { initialCash: string } } | null };
     return body.draft?.payload.initialCash ?? null;
   })).toBe('12345678');
   await expect.poll(async () => page.evaluate(async () => {
-    const response = await fetch('/api/v1/backtests/wizard-draft/universe');
+    const response = await fetch(`/api/v1/backtests/wizard-draft/universe?wizardId=${new URL(location.href).searchParams.get('wizard')}`);
     const body = await response.json() as {
       draft: {
         payload: { lastPreview: { result?: { preparationJobId?: string } } | null }
@@ -158,13 +140,13 @@ test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 
   })).toBeTruthy();
 
   await page.reload();
-  await expect(page).toHaveURL(/\/backtests\/new\/capital$/);
+  await expect(page).toHaveURL(/\/backtests\/new\/capital\?wizard=/);
   await expect(page.getByLabel('초기 자본 (KRW)')).toHaveValue('12345678');
   await expect(page.getByLabel('동시 보유 종목 상한')).toHaveValue('7');
   await expect(page.getByLabel('난수 시드')).toHaveValue('99');
 
   await page.getByRole('button', { name: '이전' }).click();
-  await expect(page).toHaveURL(/\/backtests\/new\/universe$/);
+  await expect(page).toHaveURL(/\/backtests\/new\/universe\?wizard=/);
   await expect(page.getByText('리밸런스 일정')).toBeVisible();
   await page.getByRole('button', { name: '이전' }).click();
   await expect(page.getByLabel('시작일')).toHaveValue('2026-01-05');
@@ -187,7 +169,7 @@ test('제출 거절 사유를 실행 화면에 남기고 사용자가 선택한 
   });
   const reason = '미리보기 완료 후 데이터가 변경되었습니다. 미리보기를 다시 확인하세요.';
   let submissions = 0;
-  await page.route('**/api/v1/backtests', async route => {
+  await page.route('**/api/v1/backtests?*', async route => {
     if (route.request().method() !== 'POST') return route.continue();
     submissions += 1;
     return submissions === 1
@@ -200,33 +182,33 @@ test('제출 거절 사유를 실행 화면에 남기고 사용자가 선택한 
   await page.getByLabel('시작일').fill('2026-01-05');
   await page.getByLabel('종료일').fill('2026-03-31');
   await page.getByRole('button', { name: '다음', exact: true }).click();
-  await expect(page).toHaveURL(/\/universe$/);
+  await expect(page).toHaveURL(/\/universe\?wizard=/);
   await page.getByLabel('N', { exact: true }).fill('1');
   await page.getByRole('button', { name: '미리보기', exact: true }).click();
   await expect(page.getByText('리밸런스 일정')).toBeVisible();
   for (const slug of ['capital', 'review', 'run']) {
     await page.getByRole('button', { name: '다음', exact: true }).click();
-    await expect(page).toHaveURL(new RegExp(`/${slug}$`));
+    await expect(page).toHaveURL(new RegExp(`/${slug}\\?wizard=`));
   }
   await page.getByRole('button', { name: '백테스트 실행', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText(reason);
-  await expect(page).toHaveURL(/\/run$/);
+  await expect(page).toHaveURL(/\/run\?wizard=/);
   await expect(page.getByRole('button', { name: '백테스트 실행', exact: true })).toBeDisabled();
   expect(previewRequests).toBe(1);
 
   await page.getByRole('button', { name: '유니버스 다시 확인', exact: true }).click();
-  await expect(page).toHaveURL(/\/universe$/);
+  await expect(page).toHaveURL(/\/universe\?wizard=/);
   await expect(page.getByText('리밸런스 일정')).toBeVisible();
   await expect(page.getByText(reason, { exact: true })).toHaveCount(0);
   expect(previewRequests).toBe(2);
   await page.getByRole('button', { name: '다음', exact: true }).click();
-  await expect(page).toHaveURL(/\/capital$/);
+  await expect(page).toHaveURL(/\/capital\?wizard=/);
   await page.getByRole('button', { name: '이전', exact: true }).click();
-  await expect(page).toHaveURL(/\/universe$/);
+  await expect(page).toHaveURL(/\/universe\?wizard=/);
   await expect(page.getByText('리밸런스 일정')).toBeVisible();
   for (const slug of ['capital', 'review', 'run']) {
     await page.getByRole('button', { name: '다음', exact: true }).click();
-    await expect(page).toHaveURL(new RegExp(`/${slug}$`));
+    await expect(page).toHaveURL(new RegExp(`/${slug}\\?wizard=`));
   }
   // 단계를 다시 연 뒤 검토를 마치고 실제 제출까지 진행해 effect가 요청을 재생하지
   // 않았는지 확인한다. 고정 시간 대기는 쓰지 않는다.
@@ -251,7 +233,7 @@ test('유효한 기간은 벤치마크 조회 없이 유니버스 단계를 연�
   await expect(page.getByText('시작일이 종료일보다 늦습니다')).toBeVisible();
   await page.getByLabel('종료일').fill('2026-01-09');
   await page.getByRole('button', { name: '다음' }).click();
-  await expect(page).toHaveURL(/\/backtests\/new\/universe$/);
+  await expect(page).toHaveURL(/\/backtests\/new\/universe\?wizard=/);
   expect(benchmarkRequests).toEqual([]);
 });
 
@@ -260,7 +242,7 @@ test('갈 수 없는 단계 URL 은 갈 수 있는 마지막 단계로 되돌린
 
   // 빈 폼으로 검토 단계에 딥링크 — 게이트가 첫 단계로 되돌린다
   await page.goto('/backtests/new/review');
-  await expect(page).toHaveURL(/\/backtests\/new\/strategy$/);
+  await expect(page).toHaveURL(/\/backtests\/new\/strategy\?wizard=/);
 
   // replace 라서 튕겨 나온 review 가 이력에 없다 — 뒤로가기는 위저드 밖으로 나간다
   await page.goBack();
@@ -270,102 +252,7 @@ test('갈 수 없는 단계 URL 은 갈 수 있는 마지막 단계로 되돌린
 test('모르는 단계 slug 는 첫 단계로 접힌다', async ({ page }) => {
   await login(page);
   await page.goto('/backtests/new/nonexistent-step');
-  await expect(page).toHaveURL(/\/backtests\/new\/strategy$/);
-});
-
-test('복제 진입의 ?from= 은 단계를 옮겨도 남는다', async ({ page }) => {
-  await login(page);
-
-  // 단계 URL은 이미 시작한 세션이므로 slug 없는 진입의 원본 검증·초안 정리를 거치지
-  // 않는다. 없는 id를 쓰는 이유는 단계 이동 자체의 query 보존만 격리하기 위해서다.
-  await page.goto('/backtests/new/strategy?from=bt_nonexistent');
-  await expect(page).toHaveURL(/\/backtests\/new\/strategy\?from=bt_nonexistent$/);
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-
-  // **단계 이동**도 쿼리를 지켜야 한다 — goToSlug 가
-  // location.search 를 다시 붙이지 않으면 '다음' 을 누른 순간 복제 맥락이 사라진다.
-  await page.getByRole('button', { name: /전고점 돌파/ }).click();
-  await page.getByRole('button', { name: '다음' }).click();
-  await expect(page).toHaveURL(/\/backtests\/new\/period\?from=bt_nonexistent$/);
-});
-
-test('존재하지 않는 복제 원본은 이전 위저드 작업을 지우지 않는다', async ({ page }) => {
-  await login(page);
-  const saved = await page.evaluate(async () => {
-    const response = await fetch('/api/v1/backtests/wizard-draft/strategy', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        strategyId: 'range-breakout',
-        parameters: { lookbackBars: '17' },
-        currentStep: 'period',
-      }),
-    });
-    return response.status;
-  });
-  expect(saved).toBe(200);
-
-  await page.goto('/backtests/new?from=bt_nonexistent');
-  await expect(page.getByRole('alert')).toContainText('재설정 및 복제를 시작하지 못했습니다');
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-
-  const candidate = await page.evaluate(async () => {
-    const response = await fetch('/api/v1/backtests/wizard-draft');
-    return response.json() as Promise<{
-      candidate: { sourceJobId: string | null; currentStep: string } | null;
-    }>;
-  });
-  expect(candidate.candidate).toMatchObject({
-    sourceJobId: null,
-    currentStep: 'period',
-  });
-});
-
-test('유효한 재설정 및 복제는 확인 팝업 없이 이전 작업을 버리고 새 맥락을 만든다', async ({
-  page,
-}) => {
-  await login(page);
-  await page.route('**/api/v1/backtests/bt_clone_fixture/clone-draft', async (route) => {
-    await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(CLONE_DRAFT_FIXTURE),
-    });
-  });
-  const saved = await page.evaluate(async () => {
-    const response = await fetch('/api/v1/backtests/wizard-draft/strategy', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        strategyId: 'range-breakout',
-        parameters: { lookbackBars: '17' },
-        currentStep: 'period',
-      }),
-    });
-    return response.status;
-  });
-  expect(saved).toBe(200);
-
-  await page.goto('/backtests/new?from=bt_clone_fixture');
-  await expect(page.getByRole('heading', { name: '재설정 및 복제' })).toBeVisible();
-  // 복제된 기간은 유효하지만 유니버스 미리보기는 새로 확인해야 한다.
-  await expect(page).toHaveURL(/\/backtests\/new\/universe\?from=bt_clone_fixture$/);
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-
-  const previousDraft = await page.evaluate(async () => {
-    const response = await fetch('/api/v1/backtests/wizard-draft/strategy');
-    return response.json() as Promise<{ draft: unknown }>;
-  });
-  expect(previousDraft).toEqual({ draft: null });
-
-  await expect.poll(async () => page.evaluate(async () => {
-    const response = await fetch(
-      '/api/v1/backtests/wizard-draft/strategy?sourceJobId=bt_clone_fixture',
-    );
-    const body = await response.json() as {
-      draft: { payload: { currentStep?: string } } | null;
-    };
-    return body.draft?.payload.currentStep ?? null;
-  })).toBe('universe');
+  await expect(page).toHaveURL(/\/backtests\/new\/strategy\?wizard=/);
 });
 
 test('재설정 및 복제의 전략 단계는 종목과 비용 프로필을 미리 조회하지 않는다', async ({
@@ -380,6 +267,11 @@ test('재설정 및 복제의 전략 단계는 종목과 비용 프로필을 미
     });
   });
 
+  await page.route('**/api/v1/backtests/wizards/clone-fixture', route => route.fulfill({ json: { wizard: {
+    id: 'clone-fixture', sourceJobId: 'bt_clone_fixture', currentStep: 'strategy', status: 'WAITING', phase: 'DRAFT', error: null,
+    preparationJobId: null, preparationInput: null, backtestJobId: null, createdAtMs: 1, updatedAtMs: 1, finishedAtMs: null, link: '/backtests/new/strategy?wizard=clone-fixture',
+  } } }));
+
   // 새 문서 탐색으로 앱의 Query cache를 비운 뒤 이 진입에서 발생한 요청만 관찰한다.
   const apiRequests: string[] = [];
   page.on('request', (request) => {
@@ -387,7 +279,7 @@ test('재설정 및 복제의 전략 단계는 종목과 비용 프로필을 미
     if (pathname.startsWith('/api/v1/')) apiRequests.push(pathname);
   });
 
-  await page.goto('/backtests/new/strategy?from=bt_clone_fixture');
+  await page.goto('/backtests/new/strategy?wizard=clone-fixture');
   await expect(page.getByRole('heading', { name: '재설정 및 복제' })).toBeVisible();
   await expect(page.getByRole('button', { name: /전고점 돌파/ })).toHaveAttribute(
     'aria-pressed',
@@ -409,7 +301,7 @@ test('제출 화면 URL 을 직접 열면 검토를 거치도록 되돌린다', 
 
   // 빈 폼으로 실행 단계 딥링크 — 큐를 검토 없는 제출로부터 지키는 유일한 방어선이다
   await page.goto('/backtests/new/run');
-  await expect(page).toHaveURL(/\/backtests\/new\/strategy$/);
+  await expect(page).toHaveURL(/\/backtests\/new\/strategy\?wizard=/);
   await expect(page.getByRole('button', { name: '백테스트 실행' })).toHaveCount(0);
 });
 

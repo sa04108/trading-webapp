@@ -15,6 +15,7 @@ import type { CandleCoverageService } from "../../../../runtime/modules/market-d
 import type { SymbolMasterService } from "../../../../runtime/modules/market-data/application/symbol-master-service.js";
 import { sendIfKrxError, sendIfNotCovered } from "./krx-error-mapping.js";
 import type { AgentCoordinator } from "../../agents/application/agent-coordinator.js";
+import type { BacktestWizardService } from "../application/backtest-wizard-service.js";
 
 type PreHandler = (
   request: FastifyRequest,
@@ -22,6 +23,7 @@ type PreHandler = (
 ) => Promise<void>;
 
 export interface BacktestPreparationRouteDeps {
+  readonly wizards?: BacktestWizardService;
   readonly orchestrator: BacktestPreparationOrchestrator;
   readonly financialFacts: Pick<
     FinancialFactAvailabilityService,
@@ -43,6 +45,7 @@ const previewRequestSchema = z.object({
   strategyId: z.string().min(1),
   parameters: z.record(z.string(), z.unknown()),
   sourceJobId: z.string().min(1).optional(),
+  wizardId: z.string().min(1).max(128).optional(),
   completedPreparationJobId: z.string().min(1).optional(),
 });
 
@@ -72,10 +75,11 @@ export function registerBacktestPreparationRoutes(
             .join("; "),
         });
       }
-      const { sourceJobId, completedPreparationJobId, ...input } = parsed.data;
+      const { sourceJobId, wizardId, completedPreparationJobId, ...input } = parsed.data;
+      if (wizardId) deps.wizards!.requireEditable(request.authUser!.id, wizardId);
       const owner = {
         userId: request.authUser!.id,
-        context: sourceJobId ?? "",
+        context: wizardId ?? sourceJobId ?? "",
       };
       if (input.period.from > input.period.to) {
         return reply
@@ -98,7 +102,7 @@ export function registerBacktestPreparationRoutes(
       try {
         // 완료 알림 뒤의 결과 읽기는 새 미리보기 시작과 구분한다. 현재 소유한 작업만 읽는다.
         if (completedPreparationJobId !== undefined) {
-          const owned = orchestrator.getReadyPreviewForWizard(input, owner.userId);
+          const owned = orchestrator.getReadyPreviewForWizard(input, owner.userId, owner.context);
           const ready = owned?.preparationJobId === completedPreparationJobId
             ? orchestrator.getFreshPreviewDetails(input, completedPreparationJobId) : null;
           if (!ready) return reply.code(409).send({
@@ -181,6 +185,7 @@ export function registerBacktestPreparationRoutes(
     { preHandler: requireAuth },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      deps.wizards?.requireStandalonePreparation(id);
       if (!orchestrator.cancel(id)) {
         return reply.code(404).send({ error: "준비 작업을 찾을 수 없습니다." });
       }

@@ -70,16 +70,19 @@ export function JobsPage() {
         {query.isError && <div role="alert" className="flex flex-wrap items-center gap-2 px-6 py-3 text-sm wrap-anywhere text-destructive">작업을 불러오지 못했습니다: {query.error.message}<Button size="sm" variant="outline" onClick={() => void query.refetch()}>다시 불러오기</Button></div>}
         <div data-pagination-content>
         {query.isLoading ? <p className="px-6 py-8 text-sm text-muted-foreground">불러오는 중…</p> : jobs.length === 0 && !query.isError ? <p className="px-6 py-8 text-sm text-muted-foreground">작업이 없습니다.</p> : <ul className="divide-y">
-          {jobs.map((job) => <li key={job.id} className="flex items-start gap-3 px-6 py-3 hover:bg-muted/50">
+          {jobs.map((job) => <li key={job.id} className="flex flex-wrap items-start gap-3 px-6 py-3 hover:bg-muted/50">
             {editing && isFinishedJob(job.status) && <Checkbox className="mt-1" disabled={query.isPlaceholderData} checked={selected.has(job.id)} aria-label={`${job.title} 선택`} onCheckedChange={() => setSelected((prev) => { const next = new Set(prev); if (next.has(job.id)) next.delete(job.id); else next.add(job.id); return next; })} />}
-            <Link to={`/jobs/${encodeURIComponent(job.id)}`} className="min-w-0 flex-1 rounded-sm text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+            <Link to={`/jobs/${encodeURIComponent(job.id)}`} className="min-w-0 flex-[1_1_14rem] rounded-sm text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
               <div className="flex flex-wrap items-center gap-2"><span className="min-w-0 break-words text-sm font-medium">{job.title}</span><JobStatusBadge status={job.status} /></div>
               {job.description && <p className="truncate text-sm text-muted-foreground">{job.description}</p>}
               {job.phase && <p className="wrap-anywhere text-sm text-muted-foreground">{job.phase}</p>}
               <JobProgressDisplay progress={job.progress} />
               <p className="mt-1 text-xs text-muted-foreground">{formatRelativeTime(job.createdAtMs, Date.now())}</p>
             </Link>
-            {!isFinishedJob(job.status) && job.status !== "CANCELLING" && job.cancellable && <Button variant="outline" size="sm" disabled={cancel.isPending || query.isPlaceholderData} aria-label={`${job.title} 취소`} onClick={() => cancel.mutate(job.id)}>취소</Button>}
+            <div className="ml-auto flex shrink-0 gap-2">
+              {job.link && <Button variant="outline" size="sm" asChild><Link to={job.link} aria-label={`${job.title} 작업 열기`}>작업 열기</Link></Button>}
+              {!isFinishedJob(job.status) && job.status !== "CANCELLING" && job.cancellable && <Button variant="outline" size="sm" disabled={cancel.isPending || query.isPlaceholderData} aria-label={`${job.title} 취소`} onClick={() => cancel.mutate(job.id)}>취소</Button>}
+            </div>
           </li>)}
         </ul>}
         </div>

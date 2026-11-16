@@ -1,3 +1,4 @@
+import { summarizeValidationOos } from "./period-validation-summary";
 import { isRefreshRequired, useBacktestRefresh } from "./backtest-refresh-dialog";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -71,6 +72,7 @@ export const STATUS_LABELS: Record<string, string> = {
   RUNNING: "실행 중",
   INTERRUPTED: "중단",
   SKIPPED: "미실행",
+  NOT_EVALUATED: "미평가",
   MISSING: "결과 없음",
   PREPARATION_QUEUED: "데이터 준비 대기",
   PREPARATION_RUNNING: "데이터 준비 중",
@@ -86,6 +88,7 @@ function parameterText(
   config: PeriodValidationConfig,
   specs: NumberParamSpec[],
 ): string {
+  if (trial?.status === "NOT_EVALUATED") return "선택 후보 없음";
   if (!trial?.parameters) return "선택 대기";
   if (config.mode === "HOLDOUT" || trial.role === "BASELINE")
     return "원본 설정";
@@ -95,6 +98,39 @@ function parameterText(
       return `${spec ? paramLabel(spec) : key} ${String(trial.parameters![key])}`;
     })
     .join(" · ");
+}
+
+function CandidateSelection({
+  trial,
+  optimization,
+}: {
+  trial: ValidationTrialDto;
+  optimization: Extract<PeriodValidationConfig, { mode: "WALK_FORWARD" | "OPTIMIZED_HOLDOUT" }>["optimization"];
+}) {
+  const selection = trial.selection;
+  if (!selection) return null;
+  const objective = optimization.objective === "sharpe" ? "Sharpe" : "CAGR";
+  const score = trial.metrics?.[optimization.objective];
+  const trades = trial.metrics?.tradeCount;
+  const drawdown = trial.metrics?.maxDrawdownPct;
+  const finite = (value: number | null | undefined) => typeof value === "number" && Number.isFinite(value);
+  const absoluteDrawdown = finite(drawdown) ? Math.abs(drawdown!) : null;
+  const drawdownText = absoluteDrawdown === null ? "—" : absoluteDrawdown > optimization.maxDrawdownPct && Number(absoluteDrawdown.toFixed(2)) <= optimization.maxDrawdownPct
+    ? `${absoluteDrawdown}%` : `${formatNumber(absoluteDrawdown)}%`;
+  const reasons: Record<string, string> = {
+    OBJECTIVE_UNAVAILABLE: `${objective} 값 없음`,
+    TRADE_COUNT_UNAVAILABLE: "매도 체결 수 없음",
+    INSUFFICIENT_TRADES: "매도 체결 수 미달",
+    DRAWDOWN_UNAVAILABLE: "MDD 값 없음",
+    DRAWDOWN_LIMIT_EXCEEDED: "MDD 한도 초과",
+  };
+  return <div className="space-y-1 text-xs">
+    <p className="font-medium">{selection.eligible ? "조건 충족" : "조건 탈락"}</p>
+    <p>{objective}: {finite(score) ? `${formatNumber(score)}${optimization.objective === "cagrPct" ? "%" : ""}` : "—"} (유효한 값, 최대 선택)</p>
+    <p>매도 체결: {finite(trades) ? `${trades}건` : "—"} / {optimization.minTrades}건 이상</p>
+    <p>MDD 크기: {drawdownText} / {optimization.maxDrawdownPct}% 이하</p>
+    {selection.reasons.map((reason) => <p className="text-destructive" key={reason}>{reasons[reason] ?? reason}</p>)}
+  </div>;
 }
 
 function TrialLink({
@@ -145,10 +181,8 @@ export function ValidationResult({
   const completed = experiment.trials.filter(
     (trial) => trial.status === "COMPLETED",
   ).length;
-  const oos = experiment.trials.filter(
-    (trial) => trial.role === "OOS" && trial.metrics,
-  );
-  const returns = oos.map((trial) => trial.metrics!.totalReturnPct);
+  const summary = summarizeValidationOos(experiment.trials);
+  const notEvaluated = experiment.trials.filter((trial) => trial.status === "NOT_EVALUATED").length;
   return (
     <Card>
       <CardHeader>
@@ -181,7 +215,7 @@ export function ValidationResult({
         </div>
         <p className="text-sm text-muted-foreground">
           {formatDateTime(experiment.createdAtMs)} · 실행 {completed}/
-          {experiment.plan.totalRuns}회 완료 · 각 구간 초기자금{" "}
+          {experiment.plan.totalRuns}회 완료 · 미평가 {notEvaluated}회 · 각 구간 초기자금{" "}
           {formatKrw(experiment.initialCash)}
         </p>
         {experiment.config.mode !== "HOLDOUT" ? (
@@ -203,16 +237,12 @@ export function ValidationResult({
             </AlertDescription>
           </Alert>
         ) : null}
-        {returns.length > 0 ? (
-          <p className="text-sm">
-            {experiment.status === "COMPLETED"
-              ? "OOS 전체 결과"
-              : "완료된 OOS의 부분 결과"}
-            : 수익 구간 {returns.filter((value) => value > 0).length}/
-            {returns.length}개 · 최악 구간{" "}
-            {formatSignedPct(Math.min(...returns))}
-          </p>
-        ) : null}
+        <div className="space-y-1 text-sm">
+          <p>선택 전략 OOS 평가 {summary.evaluated}/{experiment.plan.folds.length}회 · 후보가 없어 미평가 {summary.notEvaluated}회</p>
+          <p>평균 수익률 {summary.mean === null ? "—" : formatSignedPct(summary.mean)} · 수익률 표준편차 {summary.standardDeviation === null ? "—" : `${formatNumber(summary.standardDeviation)}%p`} <InfoHint label="수익률 표준편차 설명">평가된 회차의 수익률로 모집단 표준편차를 계산합니다. 평가된 회차가 두 개 미만이면 —로 표시합니다.</InfoHint> · 수익 회차 {summary.profitable}/{summary.evaluated}회 · 최악 회차 {summary.worst === null ? "—" : formatSignedPct(summary.worst)}</p>
+          {experiment.status === "COMPLETED" && summary.evaluated === 0 ? <p>평가된 선택 전략 OOS가 없습니다.</p> : null}
+          <p className="text-muted-foreground">평가된 회차 기준이며, 전체 기간의 연속 운용 성과가 아닙니다.</p>
+        </div>
         <Table>
           <TableHeader>
             <TableRow>
@@ -243,6 +273,7 @@ export function ValidationResult({
                       ? 0
                       : test?.candidate),
               );
+              const testMetrics = test?.status === "COMPLETED" ? test.metrics : null;
               const baseline = trials.find(
                 (trial) => trial.role === "BASELINE",
               );
@@ -269,21 +300,23 @@ export function ValidationResult({
                   </TableCell>
                   <TableCell>
                     <TrialLink trial={test}>
-                      {test?.metrics
-                        ? formatSignedPct(test.metrics.totalReturnPct)
-                        : STATUS_LABELS[test?.status ?? "PENDING"]}
+                      {testMetrics
+                        ? formatSignedPct(testMetrics.totalReturnPct)
+                        : test?.skipReason === "NO_ELIGIBLE_CANDIDATE"
+                          ? "미평가 (선택 후보 없음)"
+                          : STATUS_LABELS[test?.status ?? "PENDING"]}
                     </TrialLink>
                   </TableCell>
                   <TableCell>
-                    {formatSignedPct(test?.metrics?.cagrPct ?? null)}
+                    {formatSignedPct(testMetrics?.cagrPct ?? null)}
                   </TableCell>
                   <TableCell>
-                    {formatSignedPct(test?.metrics?.maxDrawdownPct ?? null)}
+                    {formatSignedPct(testMetrics?.maxDrawdownPct ?? null)}
                   </TableCell>
                   <TableCell>
-                    {formatNumber(test?.metrics?.sharpe ?? null)}
+                    {formatNumber(testMetrics?.sharpe ?? null)}
                   </TableCell>
-                  <TableCell>{test?.metrics?.tradeCount ?? "-"}</TableCell>
+                  <TableCell>{testMetrics?.tradeCount ?? "-"}</TableCell>
                   {experiment.config.mode !== "HOLDOUT" ? (
                     <TableCell>
                       <TrialLink trial={baseline}>
@@ -308,6 +341,7 @@ export function ValidationResult({
                 <TableHead>회차 / 용도</TableHead>
                 <TableHead>매개변수</TableHead>
                 <TableHead>상태</TableHead>
+                <TableHead>후보 선택 조건</TableHead>
                 <TableHead>수익률</TableHead>
                 <TableHead>CAGR</TableHead>
                 <TableHead>MDD</TableHead>
@@ -341,18 +375,23 @@ export function ValidationResult({
                     ) : null}
                   </TableCell>
                   <TableCell>
-                    {formatSignedPct(trial.metrics?.totalReturnPct ?? null)}
+                    {trial.role === "TRAIN" && experiment.config.mode !== "HOLDOUT" && trial.selection ? (
+                      <CandidateSelection trial={trial} optimization={experiment.config.optimization} />
+                    ) : "—"}
                   </TableCell>
                   <TableCell>
-                    {formatSignedPct(trial.metrics?.cagrPct ?? null)}
+                    {formatSignedPct(trial.status === "NOT_EVALUATED" ? null : trial.metrics?.totalReturnPct ?? null)}
                   </TableCell>
                   <TableCell>
-                    {formatSignedPct(trial.metrics?.maxDrawdownPct ?? null)}
+                    {formatSignedPct((trial.status === "NOT_EVALUATED" ? null : trial.metrics?.cagrPct) ?? null)}
                   </TableCell>
                   <TableCell>
-                    {formatNumber(trial.metrics?.sharpe ?? null)}
+                    {formatSignedPct((trial.status === "NOT_EVALUATED" ? null : trial.metrics?.maxDrawdownPct) ?? null)}
                   </TableCell>
-                  <TableCell>{trial.metrics?.tradeCount ?? "-"}</TableCell>
+                  <TableCell>
+                    {formatNumber((trial.status === "NOT_EVALUATED" ? null : trial.metrics?.sharpe) ?? null)}
+                  </TableCell>
+                  <TableCell>{trial.status === "NOT_EVALUATED" ? "—" : trial.metrics?.tradeCount ?? "—"}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -701,8 +740,7 @@ export function PeriodValidationSection({
               </div>
               <p className="text-sm text-muted-foreground">
                 후보 선택은 IS 성과만 사용합니다. 같은 회차의 후보는 동일 난수
-                시드로 비교하며, 조건을 만족하는 후보가 없으면 실험을
-                중단합니다.
+                시드로 비교하며, 조건을 만족하는 후보가 없으면 해당 회차의 선택 전략 OOS는 미평가로 남기고 다음 회차를 독립적으로 실행합니다. 고정 전략 OOS는 계속 실행합니다.
               </p>
             </>
           ) : null}
@@ -779,7 +817,7 @@ export function PeriodValidationSection({
               <div>
                 <Link className="font-medium underline underline-offset-4" to={`/backtests/validations/${experiment.id}`}>{MODE_LABELS[experiment.config.mode]}</Link>{" "}
                 <InfoHint label={`${MODE_LABELS[experiment.config.mode]} 설명`}>{VALIDATION_MODE_HELP[experiment.config.mode]}</InfoHint>
-                <p className="text-sm text-muted-foreground">{formatDateTime(experiment.createdAtMs)} · {STATUS_LABELS[experiment.status] ?? experiment.status} · 실행 {experiment.trials.filter((trial) => trial.status === "COMPLETED").length}/{experiment.plan.totalRuns}회 완료</p>
+                <p className="text-sm text-muted-foreground">{formatDateTime(experiment.createdAtMs)} · {STATUS_LABELS[experiment.status] ?? experiment.status} · 실행 {experiment.trials.filter((trial) => trial.status === "COMPLETED").length}/{experiment.plan.totalRuns}회 완료 · 미평가 {experiment.trials.filter((trial) => trial.status === "NOT_EVALUATED").length}회</p>
               </div>
               <Button asChild variant="outline" size="sm"><Link to={`/backtests/validations/${experiment.id}`}>상세 보기</Link></Button>
             </CardContent>

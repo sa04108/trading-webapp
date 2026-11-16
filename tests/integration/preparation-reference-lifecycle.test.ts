@@ -102,6 +102,35 @@ describe('preparation reference lifecycle', () => {
     },
   });
 
+  // 기존 단일 문맥 제출 검사는 서로 다른 위저드의 공유 미리보기와 동시 중복 제출을 보호하지 못한다.
+  it('두 위저드가 같은 미리보기로 독립 제출하고 같은 위저드의 중복 제출은 원자적으로 거부한다', async ({ scenario }) => {
+    const { ctx, cookie, userId } = scenario;
+    const a = ctx.container.backtestWizardService.create(userId);
+    const b = ctx.container.backtestWizardService.create(userId);
+    const preview = (wizardId: string) => ctx.app.inject({ method: 'POST', url: '/api/v1/backtests/universe-preview',
+      cookies: { session: cookie }, payload: { wizardId, universeRule: request.universeRule, period: request.period, strategyId: request.strategyId, parameters: request.parameters } });
+    const started = await preview(a.id);
+    expect(started.statusCode).toBe(202);
+    const preparationId = started.json().job.id;
+    await waitForPreparation(ctx, preparationId);
+    expect((await preview(b.id)).statusCode).toBe(200);
+    const submit = (id: string) => ctx.app.inject({ method: 'POST', url: `/api/v1/backtests?wizardId=${id}`, cookies: { session: cookie }, payload: request });
+    const duplicate = await Promise.all([submit(a.id), submit(a.id)]);
+    expect(duplicate.map((response) => response.statusCode).sort()).toEqual([201,409]);
+    const second = await submit(b.id);
+    expect(second.statusCode, second.body).toBe(201);
+    const firstId = duplicate.find((response) => response.statusCode === 201)!.json().job.id;
+    const secondId = second.json().job.id;
+    expect(firstId).not.toBe(secondId);
+    for (const id of [firstId,secondId]) expect(ctx.container.jobQueue.getJob(id)?.preparationJobId).toBe(preparationId);
+    expect(ctx.container.database.sqlite.prepare('SELECT count(*) AS count FROM backtest_jobs').get()).toEqual({ count: 2 });
+    expect(ctx.container.backtestWizardService.get(userId,a.id)).toMatchObject({ status: 'QUEUED', backtestJobId: firstId, link: `/backtests/${firstId}` });
+    expect(ctx.container.backtestWizardService.get(userId,b.id)).toMatchObject({ status: 'QUEUED', backtestJobId: secondId });
+    const jobs = (await ctx.app.inject({ method: 'GET', url: '/api/v1/jobs', cookies: { session: cookie } })).json().jobs;
+    expect(jobs).toHaveLength(2);
+    expect(jobs.every((job: { kind: string }) => job.kind === 'backtest-wizard')).toBe(true);
+  });
+
   it('preview ID만 초안에 저장하고 제출·복제에서 같은 준비 결과를 공유한다', async ({ scenario }) => {
     const { ctx, cookie, otherCookie, userId } = scenario;
     const previewRequest = {

@@ -177,6 +177,17 @@ export interface ValidationMetrics {
   sharpe: number | null;
   tradeCount: number;
 }
+export type ValidationSkipReason = "NO_ELIGIBLE_CANDIDATE";
+export type ValidationCandidateRejection =
+  | "OBJECTIVE_UNAVAILABLE"
+  | "TRADE_COUNT_UNAVAILABLE"
+  | "INSUFFICIENT_TRADES"
+  | "DRAWDOWN_UNAVAILABLE"
+  | "DRAWDOWN_LIMIT_EXCEEDED";
+export interface ValidationCandidateAssessment {
+  eligible: boolean;
+  reasons: ValidationCandidateRejection[];
+}
 export interface ValidationTrialDto {
   id: string;
   fold: number;
@@ -189,6 +200,8 @@ export interface ValidationTrialDto {
   progress: number | null;
   error: string | null;
   metrics: ValidationMetrics | null;
+  skipReason: ValidationSkipReason | null;
+  selection: ValidationCandidateAssessment | null;
 }
 export interface PeriodValidationDto {
   id: string;
@@ -202,22 +215,27 @@ export interface PeriodValidationDto {
   trials: ValidationTrialDto[];
 }
 
+/** 선택과 화면 진단이 같은 조건을 사용하며 한 후보의 여러 탈락 사유를 모두 남긴다. */
+export function evaluateValidationCandidate(
+  metrics: ValidationMetrics,
+  optimization: z.infer<typeof optimizationSchema>,
+): ValidationCandidateAssessment {
+  const reasons: ValidationCandidateRejection[] = [];
+  const score = metrics[optimization.objective];
+  if (score === null || !Number.isFinite(score)) reasons.push("OBJECTIVE_UNAVAILABLE");
+  if (!Number.isFinite(metrics.tradeCount)) reasons.push("TRADE_COUNT_UNAVAILABLE");
+  else if (metrics.tradeCount < optimization.minTrades) reasons.push("INSUFFICIENT_TRADES");
+  if (!Number.isFinite(metrics.maxDrawdownPct)) reasons.push("DRAWDOWN_UNAVAILABLE");
+  else if (Math.abs(metrics.maxDrawdownPct) > optimization.maxDrawdownPct) reasons.push("DRAWDOWN_LIMIT_EXCEEDED");
+  return { eligible: reasons.length === 0, reasons };
+}
+
 /** OOS와 고정 전략 성과는 선택 함수에 전달하지 않는다. 동률이면 후보 입력 순서를 유지한다. */
 export function selectValidationCandidate(
   candidates: readonly { candidate: number; metrics: ValidationMetrics }[],
   optimization: z.infer<typeof optimizationSchema>,
 ): number | null {
-  const eligible = candidates.filter(({ metrics }) => {
-    const score = metrics[optimization.objective];
-    return (
-      score !== null &&
-      Number.isFinite(score) &&
-      Number.isFinite(metrics.maxDrawdownPct) &&
-      Number.isFinite(metrics.tradeCount) &&
-      metrics.tradeCount >= optimization.minTrades &&
-      Math.abs(metrics.maxDrawdownPct) <= optimization.maxDrawdownPct
-    );
-  });
+  const eligible = candidates.filter(({ metrics }) => evaluateValidationCandidate(metrics, optimization).eligible);
   eligible.sort(
     (a, b) =>
       b.metrics[optimization.objective]! - a.metrics[optimization.objective]! ||

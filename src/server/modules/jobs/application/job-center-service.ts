@@ -27,9 +27,10 @@ interface Source {
 }
 
 const sources: Source[] = [
+  { kind: "backtest-wizard", table: "backtest_wizard_jobs", status: "status", updated: "updated_at_ms", finished: "finished_at_ms", where: "owner_id=@owner" },
   { kind: "backtest-refresh", table: "backtest_refresh_jobs", updated: "updated_at_ms", finished: "completed_at_ms", where: "owner_id=@owner" },
-  { kind: "backtest", table: "backtest_jobs", updated: "coalesce(completed_at_ms, last_received_at_ms, last_progress_at_ms, started_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)", where: "clone_batch_id IS NULL AND NOT EXISTS (SELECT 1 FROM backtest_validation_trials t WHERE t.job_id=backtest_jobs.id)" },
-  { kind: "preparation", table: "backtest_preparation_jobs", status: preparationStatus, updated: "updated_at_ms", finished: "coalesce(completed_at_ms, updated_at_ms)" },
+  { kind: "backtest", table: "backtest_jobs", updated: "coalesce(completed_at_ms, last_received_at_ms, last_progress_at_ms, started_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)", where: "clone_batch_id IS NULL AND NOT EXISTS (SELECT 1 FROM backtest_validation_trials t WHERE t.job_id=backtest_jobs.id) AND NOT EXISTS (SELECT 1 FROM backtest_wizard_children w JOIN backtest_wizard_jobs parent ON parent.id=w.wizard_id WHERE parent.owner_id=@owner AND w.kind='backtest' AND w.job_id=backtest_jobs.id)" },
+  { kind: "preparation", table: "backtest_preparation_jobs", status: preparationStatus, updated: "updated_at_ms", finished: "coalesce(completed_at_ms, updated_at_ms)", where: "(NOT EXISTS (SELECT 1 FROM backtest_wizard_children w JOIN backtest_wizard_jobs parent ON parent.id=w.wizard_id WHERE parent.owner_id=@owner AND w.kind='preparation' AND w.job_id=backtest_preparation_jobs.id) OR EXISTS (SELECT 1 FROM preparation_wizard_references r WHERE r.preparation_job_id=backtest_preparation_jobs.id AND r.user_id=@owner AND r.context NOT IN (SELECT id FROM backtest_wizard_jobs)))" },
   { kind: "clone-batch", table: "backtest_clone_batches", updated: "coalesce(completed_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)" },
   { kind: "validation", table: "backtest_validations", updated: "coalesce(completed_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)" },
   { kind: "intraday-backtest", table: "intraday_runs", status: intradayStatus, updated: "updated_at_ms", finished: "updated_at_ms", where: "owner_id=@owner" },
@@ -45,7 +46,7 @@ const jobsCte = `WITH jobs AS (${sources.map((source) => {
     FROM ${source.table}${source.where ? ` WHERE ${source.where}` : ""}`;
 }).join(" UNION ALL ")}
   UNION ALL SELECT id, substr(id, 1, instr(id, ':')-1), id, status, created_at_ms, updated_at_ms, finished_at_ms
-  FROM background_job_history), visible AS (
+  FROM background_job_history h WHERE NOT EXISTS (SELECT 1 FROM backtest_wizard_children w JOIN backtest_wizard_jobs parent ON parent.id=w.wizard_id WHERE parent.owner_id=@owner AND h.id=w.kind || ':' || w.job_id AND NOT (w.kind='preparation' AND EXISTS (SELECT 1 FROM preparation_wizard_references r WHERE r.preparation_job_id=w.job_id AND r.user_id=@owner AND r.context NOT IN (SELECT id FROM backtest_wizard_jobs))))), visible AS (
   SELECT * FROM jobs j WHERE (status IN ${active} OR @cutoff=0 OR finishedAtMs>=@cutoff)
     AND (status IN ${active} OR NOT EXISTS (SELECT 1 FROM job_dismissals d
       WHERE d.user_id=@owner AND d.job_id=j.id AND d.finished_at_ms=j.finishedAtMs)))`;
@@ -74,6 +75,7 @@ export class JobCenterService {
   }
 
   list(owner: string, filter: JobFilter, limit: number, requestedOffset: number): JobsResponse {
+    this.container.backtestWizardService.sync(owner);
     const db = this.container.database.sqlite;
     const bindings = { ...this.bindings(owner), filter };
     const counts = db.prepare(`${jobsCte} SELECT coalesce(sum(CASE WHEN ${filterSql} THEN 1 ELSE 0 END),0) AS total,
@@ -90,6 +92,7 @@ export class JobCenterService {
   }
 
   private metadata(owner: string, id: string, includeDismissed = false): Metadata | null {
+    this.container.backtestWizardService.sync(owner);
     const rows = includeDismissed ? "jobs" : "visible";
     return this.container.database.sqlite.prepare(`${jobsCte} SELECT * FROM ${rows} WHERE id=@id`).get({ ...this.bindings(owner), id }) as Metadata | undefined ?? null;
   }
@@ -101,7 +104,7 @@ export class JobCenterService {
   }
 
   private sharedPreparation(owner: string, id: string): boolean {
-    return Boolean(this.container.database.sqlite.prepare(`SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id=@id AND user_id<>@owner
+    return Boolean(this.container.database.sqlite.prepare(`SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id=@id AND (user_id<>@owner OR context IN (SELECT id FROM backtest_wizard_jobs))
       UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id=@id AND status NOT IN ${terminal}
       UNION ALL SELECT 1 FROM backtest_clone_batches WHERE preparation_job_id=@id AND status IN ('ACTIVE','CANCELLING')
       UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id=@id AND status IN ('QUEUED','PREPARING','SUBMITTING')
@@ -116,6 +119,29 @@ export class JobCenterService {
     const strategyName = (id: string) => this.container.strategyRegistry.describe(id)?.name ?? INTRADAY_STRATEGIES.find((strategy) => strategy.id === id)?.name ?? id;
     const period = (from: string | null, to: string | null) => from && to ? `${from} ~ ${to}` : null;
     switch (row.kind) {
+      case "backtest-wizard": {
+        const wizard = this.container.backtestWizardService.get(owner, row.sourceId);
+        const strategy = this.container.backtestWizardDraftService.get(owner, row.sourceId, "strategy")?.payload.strategyId
+          ?? wizard.preparationInput?.strategyId;
+        const dates = this.container.backtestWizardDraftService.get(owner, row.sourceId, "period")?.payload
+          ?? wizard.preparationInput?.period;
+        job = { ...job, title: `${strategy ? `${strategyName(strategy)} · ` : ""}백테스트 위저드`, phase: wizard.phase,
+          error: wizard.error, description: dates ? period(dates.from, dates.to) : null, link: wizard.link };
+        if (wizard.backtestJobId && !isFinishedJob(wizard.status)) {
+          const child = this.container.jobQueue.getJob(wizard.backtestJobId);
+          if (child && !this.container.jobQueue.isTerminal(child.status)) {
+            const progress = this.container.agentCoordinator.backtestProgress(child);
+            if (progress) job = { ...job, phase: jobPhase(progress.activity), progress: executionJobProgress(progress) };
+          }
+        } else if (wizard.preparationJobId && !isFinishedJob(wizard.status)) {
+          const child = this.container.backtestPreparationOrchestrator.get(wizard.preparationJobId);
+          if (child && !this.container.backtestPreparationOrchestrator.isTerminal(child.status)) {
+            const progress = this.container.agentCoordinator.preparationView(child).progress;
+            job = { ...job, progress: progress ? executionJobProgress(progress) : jobProgress(child.doneSymbols, child.totalSymbols, "종목") };
+          }
+        }
+        break;
+      }
       case "backtest-refresh": {
         const refresh = this.refreshJobs.get(owner, row.sourceId);
         const preparation = refresh.preparationJobId ? this.container.backtestPreparationOrchestrator.get(refresh.preparationJobId) : null;
@@ -127,7 +153,8 @@ export class JobCenterService {
       }
       case "benchmark": case "symbol-master": {
         const saved = db.prepare("SELECT snapshot_json FROM background_job_history WHERE id=?").get(row.id) as { snapshot_json: string };
-        return JSON.parse(saved.snapshot_json) as JobItem;
+        const snapshot = JSON.parse(saved.snapshot_json) as JobItem;
+        return { ...snapshot, link: snapshot.link ?? `/jobs/${encodeURIComponent(row.id)}` };
       }
       case "backtest": {
         const data = db.prepare(`SELECT id, status, strategy_id AS strategyId, execution_activity AS activity, progress_bars AS current,
@@ -152,7 +179,10 @@ export class JobCenterService {
       }
       case "preparation": {
         const archive = db.prepare("SELECT snapshot_json FROM background_job_history WHERE id=?").get(row.id) as { snapshot_json: string } | undefined;
-        if (archive) return JSON.parse(archive.snapshot_json) as JobItem;
+        if (archive) {
+          const snapshot = JSON.parse(archive.snapshot_json) as JobItem;
+          return { ...snapshot, link: snapshot.link ?? `/jobs/${encodeURIComponent(row.id)}` };
+        }
         const data = db.prepare(`SELECT phase, done_symbols AS current, total_symbols AS total, error,
           json_extract(request_json,'$.strategyId') AS strategyId, json_extract(request_json,'$.period.from') AS dateFrom,
           json_extract(request_json,'$.period.to') AS dateTo FROM backtest_preparation_jobs WHERE id=?`).get(row.sourceId) as {
@@ -161,7 +191,7 @@ export class JobCenterService {
         const shared = job.cancellable && this.sharedPreparation(owner, row.sourceId);
         job = { ...job, title: `${data.strategyId ? `${strategyName(data.strategyId)} · ` : ""}유니버스 준비`, phase: jobPhase(data.phase),
           description: [period(data.dateFrom, data.dateTo), shared ? "진행 중인 다른 작업과 공유 중입니다. 연결된 백테스트·실험을 먼저 취소하세요." : null].filter(Boolean).join("\n") || null,
-          error: data.error, progress: row.status === "RUNNING" && data.total > 0 ? jobProgress(data.current, data.total, "종목") : null, cancellable: job.cancellable && !shared };
+          error: data.error, progress: row.status === "RUNNING" && data.total > 0 ? jobProgress(data.current, data.total, "종목") : null, cancellable: job.cancellable && !shared, link: `/jobs/${encodeURIComponent(row.id)}` };
         if (detail && !isFinishedJob(row.status) && row.status !== "CANCELLING") {
           const source = this.container.backtestPreparationOrchestrator.get(row.sourceId);
           const progress = source ? this.container.agentCoordinator.preparationView(source).progress : null;
@@ -177,11 +207,15 @@ export class JobCenterService {
         break;
       }
       case "validation": {
-        const data = db.prepare(`SELECT source_job_id AS sourceJobId, phase, error,
-          json_extract(request_json,'$.strategyId') AS strategyId, json_extract(plan_json,'$.totalRuns') AS total FROM backtest_validations WHERE id=?`).get(row.sourceId) as { sourceJobId: string; phase: string; strategyId: string; total: number; error: string | null };
-        const counts = db.prepare(`SELECT count(*) AS done FROM backtest_validation_trials t JOIN backtest_jobs j ON j.id=t.job_id
-          WHERE t.validation_id=? AND j.status IN ${terminal}`).get(row.sourceId) as { done: number };
-        job = { ...job, title: `${strategyName(data.strategyId)} · 기간 검증`, phase: jobPhase(data.phase), error: data.error, progress: jobProgress(counts.done, data.total, "백테스트"), link: `/backtests/${encodeURIComponent(data.sourceJobId)}#period-validation` };
+        const data = db.prepare(`SELECT phase, error,
+          json_extract(request_json,'$.strategyId') AS strategyId, json_extract(plan_json,'$.totalRuns') AS total FROM backtest_validations WHERE id=?`).get(row.sourceId) as { phase: string; strategyId: string; total: number; error: string | null };
+        const counts = db.prepare(`SELECT count(*) AS done,
+          coalesce(sum(CASE WHEN t.skip_reason IS NOT NULL THEN 1 ELSE 0 END), 0) AS notEvaluated
+          FROM backtest_validation_trials t LEFT JOIN backtest_jobs j ON j.id=t.job_id
+          WHERE t.validation_id=? AND (t.skip_reason IS NOT NULL OR j.status IN ${terminal})`).get(row.sourceId) as { done: number; notEvaluated: number };
+        job = { ...job, title: `${strategyName(data.strategyId)} · 기간 검증`, phase: jobPhase(data.phase), error: data.error,
+          description: counts.notEvaluated ? `선택 가능한 IS 후보가 없어 선택 전략 OOS ${counts.notEvaluated}회 미평가` : null,
+          progress: jobProgress(counts.done, data.total, "실행 처리 (미평가 포함)"), link: `/backtests/validations/${encodeURIComponent(row.sourceId)}` };
         break;
       }
       case "intraday-backtest": {
@@ -197,7 +231,7 @@ export class JobCenterService {
       case "intraday-collection": {
         const data = db.prepare(`SELECT symbol, json_extract(CASE WHEN json_valid(period_json) THEN period_json ELSE '{}' END,'$.from') AS dateFrom, json_extract(CASE WHEN json_valid(period_json) THEN period_json ELSE '{}' END,'$.to') AS dateTo,
           fetched_bars AS bars, pages, error FROM intraday_collections WHERE id=? AND owner_id=?`).get(row.sourceId, owner) as { symbol: string; dateFrom: string; dateTo: string; bars: number; pages: number; error: string | null };
-        job = { ...job, title: `${data.symbol ?? "알 수 없는 종목"} · 분봉 수집`, description: period(data.dateFrom, data.dateTo), progress: jobProgress(data.bars, null, `${data.pages}페이지 · ${data.bars.toLocaleString("ko-KR")}봉 수집`), error: data.error, link: "/datasets/intraday" };
+        job = { ...job, title: `${data.symbol ?? "알 수 없는 종목"} · 분봉 수집`, description: period(data.dateFrom, data.dateTo), progress: jobProgress(data.bars, null, `${data.pages}페이지 · ${data.bars.toLocaleString("ko-KR")}봉 수집`), error: data.error, link: `/datasets/intraday?symbol=${encodeURIComponent(data.symbol ?? "")}` };
         break;
       }
     }
@@ -212,6 +246,7 @@ export class JobCenterService {
     if (job.status === "CANCELLING") return job;
     if (!job.cancellable) throw new JobCenterError("이미 종료되었거나 다른 작업에서 사용 중인 작업은 취소할 수 없습니다.", 409);
     switch (row.kind) {
+      case "backtest-wizard": this.container.backtestWizardService.cancel(owner, row.sourceId); break;
       case "backtest-refresh": this.refreshJobs.cancel(owner, row.sourceId); break;
       case "backtest": this.container.jobOrchestrator.cancel(row.sourceId); break;
       case "preparation": this.container.backtestPreparationOrchestrator.cancel(row.sourceId); break;
