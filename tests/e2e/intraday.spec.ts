@@ -266,7 +266,7 @@ test("일봉과 분봉 경로를 오가며 결과와 체결 시각을 확인한�
     route.fulfill({ json: { runs: [{ ...completed, metrics: result.metrics }], total: 1 } }),
   );
   await page.route("**/api/v1/intraday/runs/done", (route) =>
-    route.fulfill({ json: completed }),
+    route.fulfill({ json: { ...completed, result: { ...result, warnings: ["분봉 1개(1구간)가 누락되었습니다. 누락 구간에서는 신호·체결을 만들지 않습니다."] } } }),
   );
   let revision = "test";
   await page.route("**/api/v1/intraday/chart?**", (route) =>
@@ -275,7 +275,7 @@ test("일봉과 분봉 경로를 오가며 결과와 체결 시각을 확인한�
         symbol: "005930",
         timeframe: "5m",
         revision,
-        gaps: [],
+        gaps: [{ fromMs: at - 60000, toMs: at, missingMinutes: 1 }],
         totalBars: 2,
         truncated: false,
         bars: [at + 300000, at + 600000].map((endMs) => ({
@@ -320,6 +320,9 @@ test("일봉과 분봉 경로를 오가며 결과와 체결 시각을 확인한�
   await checkHeader();
   await page.locator('a[href="/backtests/intraday/done"]').click();
   await expect(page.getByText("12,000원")).toBeVisible();
+  // 완료된 계산의 누락 경고가 결과와 차트에서 모두 보이는지 확인한다.
+  await expect(page.getByRole("alert").filter({ hasText: "분봉 1개(1구간)가 누락" })).toBeVisible();
+  await expect(page.getByRole("alert").filter({ hasText: "누락 구간에서는 매매를 시뮬레이션하지 않습니다" })).toBeVisible();
   await expect(page.getByRole("img", { name: "자산 추이 차트" })).toBeVisible();
   const markers = page.getByRole("list", { name: "차트 신호 및 체결", includeHidden: true });
   await expect(markers).toContainText("신호 BUY");

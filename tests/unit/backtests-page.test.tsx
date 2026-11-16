@@ -92,6 +92,8 @@ describe('백테스트 목록', () => {
 
     expect(html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')).toContain('CAGR +12.34%');
     expect(html).toContain('매도 체결 3건');
+    expect(html).not.toContain('/seeds');
+    expect(html).not.toContain('/validations');
   });
 
   it('실행 대기 상세와 종목 단위를 표시하고 미확정 분모에서 막대 진행률을 쓰지 않는다', () => {
@@ -136,11 +138,14 @@ describe('백테스트 목록', () => {
     expect(toggleAllBacktests(new Set(ids), ids).size).toBe(0);
   });
 
-  it('목록에서 원본과 실험 화면으로 이동한다', () => {
+  it('목록에서 원본과 기록된 실험 화면으로 이동한다', () => {
     const source = job('source', 'COMPLETED');
     const client = new QueryClient();
     client.setQueryData(['backtests', 'groups'], { groups: [{ strategyId: source.strategyId, total: 1 }] });
     client.setQueryData(['backtests', 'history', 'strategyId=range-breakout&sort=createdAt&dir=desc&limit=6&offset=0'], { jobs: [source], total: 1 });
+    client.setQueryData(['backtest-experiments', 'summaries', ['source']], {
+      summaries: [{ jobId: 'source', seed: { batchCount: 1 }, validation: { experimentCount: 1 } }],
+    });
     client.setQueryData(['strategies'], {
       strategies: [{
         id: source.strategyId,

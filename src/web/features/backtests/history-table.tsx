@@ -11,12 +11,12 @@ export function HistoryTable({ columns, busy, children }: {
 }) {
   return (
     <div className="isolate min-w-0 max-w-full">
-      <Table data-pagination-content aria-busy={busy} className="text-xs">
+      <Table data-pagination-content aria-busy={busy} className="text-xs [&_td]:px-1 [&_th]:px-1">
         <TableHeader>
           <TableRow className="bg-muted/50">
-            <TableHead className="sticky left-0 z-10 w-44 min-w-44 bg-background text-muted-foreground">기간</TableHead>
+            <TableHead className="sticky left-0 z-10 w-px bg-background text-muted-foreground">기간</TableHead>
             {columns.map((id) => (
-              <TableHead key={id} className="min-w-24 text-right text-muted-foreground">
+              <TableHead key={id} className="text-right text-muted-foreground">
                 {HISTORY_TABLE_COLUMNS.find((column) => column.id === id)!.label}
                 {id === "seed" ? <InfoHint label="난수 시드 통계 설명">건수는 난수 시드 실험 수이며 괄호는 완료된 실행 중 유효한 수익률의 표본 표준편차입니다.</InfoHint> : null}
                 {id === "validation" ? <InfoHint label="기간 검증 통계 설명">건수는 기간 검증 실험 수이며 괄호는 완료된 실험별 OOS 평균 수익률 분포의 표본 표준편차입니다.</InfoHint> : null}

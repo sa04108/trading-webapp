@@ -518,15 +518,13 @@ export class IntradayService {
           } },
         );
         signal.throwIfAborted();
-        if (!bars.length)
-          throw new IntradayError(
-            `${date}에 토스가 반환한 분봉이 없습니다. 조회 가능 기간·상장일·휴장 여부를 확인하세요.`,
-          );
-        // 다음 날짜의 실패나 서버 재시작에도 이미 채운 날짜는 다시 받지 않는다.
-        await this.options.store.merge(symbol, bars, this.now());
+        // 성공한 빈 응답은 누락으로 남기고 다음 날짜로 진행한다. 실제 요청·파싱 오류는 catch에서 실패로 처리한다.
+        if (bars.length) {
+          await this.options.store.merge(symbol, bars, this.now());
+          oldestEndMs = Math.min(oldestEndMs ?? Infinity, ...bars.map((bar) => bar.endMs));
+        }
         pages += dayPages;
         fetchedBars += bars.length;
-        oldestEndMs = Math.min(oldestEndMs ?? Infinity, ...bars.map((bar) => bar.endMs));
         update({ pages, fetchedBars, oldestEndMs });
       }
       signal.throwIfAborted();

@@ -211,6 +211,7 @@ export function IntradayChartView({
         <p>{number.format(query.data.totalBars)}개 봉 · 누락 구간 {number.format(query.data.gaps.length)}개</p>
         {query.data.gaps.length > 0 && <details><summary className="cursor-pointer">누락 구간 보기</summary><ul className="mt-1 space-y-1">{query.data.gaps.slice(0, 20).map((gap) => <li key={`${gap.fromMs}-${gap.toMs}`}>{formatTime(gap.fromMs)} ~ {formatTime(gap.toMs)} ({gap.missingMinutes}분)</li>)}</ul>{query.data.gaps.length > 20 && <p>외 {number.format(query.data.gaps.length - 20)}개 구간</p>}</details>}
       </div>}
+      {query.data && query.data.gaps.length > 0 && <Alert><AlertDescription>분봉이 누락된 구간이 있습니다. 백테스트는 경고와 함께 계속되며, 누락 구간에서는 매매를 시뮬레이션하지 않습니다.</AlertDescription></Alert>}
       {markers.length > 0 && <ul className="sr-only" aria-label="차트 신호 및 체결">{markers.slice(0, 100).map((marker, index) => <li key={index}>{marker.text} · {formatTime(seconds(marker.time) * 1000)} KST</li>)}</ul>}
       {showMarkers && <p className="text-sm text-muted-foreground">▼ 보라색: 신호 · ● 초록색: 체결 (한국 시각)</p>}
       {bars && bars.length > 0 ? (

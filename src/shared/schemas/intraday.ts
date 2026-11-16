@@ -246,7 +246,7 @@ export interface IntradayResult {
   dataRevision: string;
   quoteScope: "TOSS_UNSPECIFIED";
   adjusted: false;
-  session: "09:00–15:20 Asia/Seoul";
+  session: "09:00–15:20 Asia/Seoul" | "거래일별 개장–15:20 Asia/Seoul";
   fills: IntradayFill[];
   signals: IntradaySignal[];
   orderEvents: IntradayOrderEvent[];

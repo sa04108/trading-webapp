@@ -27,6 +27,7 @@ import {
   useHistoryControls,
 } from "./history-controls";
 import type { HistoryGroup } from "../../../shared/schemas/backtest-history";
+import type { BacktestHistoryExtras } from "../../../shared/schemas/backtest-experiments";
 import { BacktestHeader, NewBacktestButton } from "./backtest-header";
 import {
   formatDateTime,
@@ -59,17 +60,21 @@ export function toggleAllBacktests(
   return allSelected ? new Set() : new Set(deletableIds);
 }
 
-function ExperimentLinks({ jobId }: { jobId: string }) {
+function ExperimentLinks({ jobId, summary }: { jobId: string; summary?: BacktestHistoryExtras }) {
+  const hasSeeds = (summary?.seed.batchCount ?? 0) > 0;
+  const hasValidations = (summary?.validation.experimentCount ?? 0) > 0;
+  if (!hasSeeds && !hasValidations) return null;
   return (
     <span className="relative z-10 inline-flex gap-1">
-      <Button asChild variant="outline" size="sm" className="h-5 px-2 text-xs"><Link to={`/backtests/${jobId}/seeds`}>난수</Link></Button>
-      <Button asChild variant="outline" size="sm" className="h-5 px-2 text-xs"><Link to={`/backtests/${jobId}/validations`}>검증</Link></Button>
+      {hasSeeds ? <Button asChild variant="outline" size="sm" className="h-5 px-2 text-xs"><Link to={`/backtests/${jobId}/seeds`}>난수</Link></Button> : null}
+      {hasValidations ? <Button asChild variant="outline" size="sm" className="h-5 px-2 text-xs"><Link to={`/backtests/${jobId}/validations`}>검증</Link></Button> : null}
     </span>
   );
 }
 
 export function BacktestJobCard({
   job,
+  summary,
   timeframe,
   editing,
   selected,
@@ -77,6 +82,7 @@ export function BacktestJobCard({
   onToggle,
 }: {
   job: JobSummary;
+  summary?: BacktestHistoryExtras;
   timeframe: string | null;
   editing: boolean;
   selected: boolean;
@@ -96,7 +102,7 @@ export function BacktestJobCard({
       <CardContent className="space-y-2 py-4">
         <div className="flex items-start justify-between gap-2">
           <StatusBadge status={job.status} />
-          {!editing ? <ExperimentLinks jobId={job.id} /> : null}
+          {!editing ? <ExperimentLinks jobId={job.id} summary={summary} /> : null}
         </div>
         <div className="flex items-baseline justify-between gap-2 whitespace-nowrap">
           {editing ? (
@@ -368,6 +374,7 @@ export function BacktestsPage() {
                   <div key={job.id} className="min-w-0 max-w-[360px] space-y-2">
                     <BacktestJobCard
                       job={job}
+                      summary={extrasBySource.get(job.id)}
                       timeframe={resolveJobTimeframe(job)}
                       editing={editing}
                       selected={selected.has(job.id)}
@@ -381,36 +388,37 @@ export function BacktestsPage() {
               <HistoryTable columns={columns} busy={query?.isPlaceholderData}>
                   {query?.data?.jobs.map((job) => (
                     <TableRow key={job.id}>
-                        <TableCell className="sticky left-0 z-10 w-44 min-w-44 bg-background py-3 align-top whitespace-normal">
-                          {editing && deletableIds.includes(job.id) ? (
-                            <Checkbox
-                              className="mr-1"
-                              checked={selected.has(job.id)}
-                              onCheckedChange={() => toggleOne(job.id)}
-                              aria-label={`${formatDateTime(job.createdAtMs)} 백테스트 선택`}
-                            />
-                          ) : null}
-                          {editing ? (
-                            <span className="whitespace-nowrap text-[11px] sm:text-xs">
-                              {historyPeriod(
-                                job.request.period.from,
-                                job.request.period.to,
-                              )}
-                            </span>
-                          ) : (
-                            <Link
-                              className="whitespace-nowrap text-[11px] underline sm:text-xs"
-                              to={`/backtests/${job.id}`}
-                            >
-                              {historyPeriod(
-                                job.request.period.from,
-                                job.request.period.to,
-                              )}
-                            </Link>
-                          )}
+                        <TableCell className="sticky left-0 z-10 w-px bg-background py-3 align-top whitespace-normal">
+                          <div className="flex items-center gap-1 whitespace-nowrap">
+                            {editing && deletableIds.includes(job.id) ? (
+                              <Checkbox
+                                checked={selected.has(job.id)}
+                                onCheckedChange={() => toggleOne(job.id)}
+                                aria-label={`${formatDateTime(job.createdAtMs)} 백테스트 선택`}
+                              />
+                            ) : null}
+                            {editing ? (
+                              <span className="whitespace-nowrap">
+                                {historyPeriod(
+                                  job.request.period.from,
+                                  job.request.period.to,
+                                )}
+                              </span>
+                            ) : (
+                              <Link
+                                className="whitespace-nowrap underline"
+                                to={`/backtests/${job.id}`}
+                              >
+                                {historyPeriod(
+                                  job.request.period.from,
+                                  job.request.period.to,
+                                )}
+                              </Link>
+                            )}
+                          </div>
                           <div className="mt-1 flex items-center gap-1 text-muted-foreground">
                             <StatusBadge status={job.status} />
-                            {!editing ? <ExperimentLinks jobId={job.id} /> : null}
+                            {!editing ? <ExperimentLinks jobId={job.id} summary={extrasBySource.get(job.id)} /> : null}
                           </div>
                           {job.error ? (
                             <p className="break-words text-destructive">

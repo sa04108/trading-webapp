@@ -456,28 +456,29 @@ export function IntradayListPage() {
               <HistoryTable columns={columns} busy={query?.isPlaceholderData}>
                   {query?.data?.runs.map((run) => (
                     <TableRow key={run.id}>
-                      <TableCell className="sticky left-0 z-10 w-44 min-w-44 bg-background py-3 align-top whitespace-normal">
-                        {editing ? (
-                          <>
-                            <Checkbox
-                              className="mr-1"
-                              checked={selected.has(run.id)}
-                              disabled={active(run.status) || remove.isPending || query?.isPlaceholderData}
-                              onCheckedChange={() => toggleOne(run.id)}
-                              aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
-                            />
-                            <span className="whitespace-nowrap text-[11px] sm:text-xs">
+                      <TableCell className="sticky left-0 z-10 w-px bg-background py-3 align-top whitespace-normal">
+                        <div className="flex items-center gap-1 whitespace-nowrap">
+                          {editing ? (
+                            <>
+                              <Checkbox
+                                checked={selected.has(run.id)}
+                                disabled={active(run.status) || remove.isPending || query?.isPlaceholderData}
+                                onCheckedChange={() => toggleOne(run.id)}
+                                aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
+                              />
+                              <span className="whitespace-nowrap">
+                                {historyPeriod(run.request.period.from, run.request.period.to)}
+                              </span>
+                            </>
+                          ) : (
+                            <Link
+                              className="whitespace-nowrap underline"
+                              to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
+                            >
                               {historyPeriod(run.request.period.from, run.request.period.to)}
-                            </span>
-                          </>
-                        ) : (
-                          <Link
-                            className="whitespace-nowrap text-[11px] underline sm:text-xs"
-                            to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
-                          >
-                            {historyPeriod(run.request.period.from, run.request.period.to)}
-                          </Link>
-                        )}
+                            </Link>
+                          )}
+                        </div>
                         <div className="mt-1 text-muted-foreground">
                           {statusLabel[run.status]} · {run.request.symbol}
                         </div>
