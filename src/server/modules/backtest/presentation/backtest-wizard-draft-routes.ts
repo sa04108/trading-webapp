@@ -6,6 +6,7 @@ import {
   backtestWizardDraftStepSchema,
 } from "../../../../shared/schemas/backtest-wizard-draft.js";
 import type { BacktestWizardDraftService } from "../application/backtest-wizard-draft-service.js";
+import type { BacktestWizardService } from "../application/backtest-wizard-service.js";
 
 type PreHandler = (
   request: FastifyRequest,
@@ -32,14 +33,21 @@ export function registerBacktestWizardDraftRoutes(
   app: FastifyInstance,
   drafts: BacktestWizardDraftService,
   requireAuth: PreHandler,
+  wizards: BacktestWizardService,
 ): void {
-  app.get(
-    "/backtests/wizard-draft",
-    { preHandler: requireAuth },
-    async (request) => ({
-      candidate: drafts.getResumeCandidate(request.authUser!.id),
-    }),
-  );
+  const createSchema = z.object({ sourceJobId: z.string().min(1).max(128).optional() });
+  app.post("/backtests/wizards", { preHandler: requireAuth }, (request, reply) => {
+    const body = createSchema.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: validationError(body.error) });
+    return reply.code(201).send({ wizard: wizards.create(request.authUser!.id, body.data.sourceJobId) });
+  });
+  app.get("/backtests/wizards/:id", { preHandler: requireAuth }, (request, reply) => {
+    reply.header("cache-control", "no-store");
+    return { wizard: wizards.get(request.authUser!.id, (request.params as { id: string }).id) };
+  });
+  app.post("/backtests/wizards/:id/cancel", { preHandler: requireAuth }, (request) => ({
+    wizard: wizards.cancel(request.authUser!.id, (request.params as { id: string }).id),
+  }));
 
   app.get(
     "/backtests/wizard-draft/:step",
@@ -53,10 +61,11 @@ export function registerBacktestWizardDraftRoutes(
       if (!query.success) {
         return reply.code(400).send({ error: validationError(query.error) });
       }
+      if (query.data.wizardId) wizards.get(request.authUser!.id, query.data.wizardId);
       return {
         draft: drafts.get(
           request.authUser!.id,
-          query.data.sourceJobId,
+          query.data.wizardId ?? query.data.sourceJobId,
           params.data.step,
         ),
       };
@@ -81,10 +90,11 @@ export function registerBacktestWizardDraftRoutes(
       if (!payload.success) {
         return reply.code(400).send({ error: validationError(payload.error) });
       }
+      if (query.data.wizardId) wizards.requireEditable(request.authUser!.id, query.data.wizardId);
       return {
         draft: drafts.save(
           request.authUser!.id,
-          query.data.sourceJobId,
+          query.data.wizardId ?? query.data.sourceJobId,
           params.data.step,
           payload.data,
         ),
@@ -100,6 +110,7 @@ export function registerBacktestWizardDraftRoutes(
       if (!query.success) {
         return reply.code(400).send({ error: validationError(query.error) });
       }
+      if (query.data.wizardId) return reply.code(409).send({ error: "위저드 작업은 작업 취소 API로 종료하세요." });
       if (query.data.all === "true") drafts.removeAll(request.authUser!.id);
       else drafts.remove(request.authUser!.id, query.data.sourceJobId);
       return reply.code(204).send();

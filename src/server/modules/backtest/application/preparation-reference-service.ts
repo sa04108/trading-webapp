@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, notInArray } from "drizzle-orm";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import {
   backtestPreparationJobs,
@@ -7,9 +7,12 @@ import {
 import {
   backtestWizardDrafts,
   preparationWizardReferences,
+  backtestWizardJobs,
+  backtestWizardChildren,
 } from "../../../shared/db/preparation-owner-schema.js";
 import { preparationInputSchema } from "../../../../shared/schemas/backtest-preparation.js";
 import type { BacktestUniversePreview } from "../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js";
+import { requireEditableWizard } from "./backtest-wizard-state.js";
 
 export class PreparationReferenceError extends Error {
   constructor() {
@@ -33,7 +36,7 @@ export class PreparationReferenceService {
           and(
             eq(preparationWizardReferences.userId, userId),
             context === undefined
-              ? undefined
+              ? notInArray(preparationWizardReferences.context, this.database.db.select({ id: backtestWizardJobs.id }).from(backtestWizardJobs))
               : eq(preparationWizardReferences.context, context),
           ),
         )
@@ -44,6 +47,15 @@ export class PreparationReferenceService {
   bindWizard(userId: string, context: string, preparationJobId: string): void {
     this.database.sqlite
       .transaction(() => {
+        const wizard = this.database.db.select().from(backtestWizardJobs).where(eq(backtestWizardJobs.id, context)).get();
+        if (wizard) requireEditableWizard(this.database, userId, context);
+        else {
+          // 이전 API의 단일 작성 문맥은 유지하되 새 위저드의 참조는 건드리지 않는다.
+          this.database.db.delete(preparationWizardReferences).where(and(
+            eq(preparationWizardReferences.userId, userId),
+            notInArray(preparationWizardReferences.context, this.database.db.select({ id: backtestWizardJobs.id }).from(backtestWizardJobs)),
+          )).run();
+        }
         this.requirePreparation(preparationJobId);
         this.database.db
           .insert(preparationWizardReferences)
@@ -53,10 +65,15 @@ export class PreparationReferenceService {
             preparationJobId,
           })
           .onConflictDoUpdate({
-            target: preparationWizardReferences.userId,
-            set: { context, preparationJobId },
+            target: [preparationWizardReferences.userId, preparationWizardReferences.context],
+            set: { preparationJobId },
           })
           .run();
+        if (wizard) {
+          this.database.db.insert(backtestWizardChildren).values({ wizardId: context, kind: "preparation", jobId: preparationJobId }).onConflictDoNothing().run();
+          this.database.db.update(backtestWizardJobs).set({ currentStep: "universe", backtestJobId: null })
+            .where(eq(backtestWizardJobs.id, context)).run();
+        }
         this.database.db
           .update(backtestPreparationJobs)
           .set({ lifecycleManaged: true })
@@ -104,7 +121,17 @@ export class PreparationReferenceService {
     userId: string,
     context: string,
     preparationJobId: string,
+    backtestJobId?: string,
   ): void {
+    const wizard = this.database.db.select().from(backtestWizardJobs).where(eq(backtestWizardJobs.id, context)).get();
+    if (wizard) {
+      requireEditableWizard(this.database, userId, context);
+      if (!backtestJobId) throw new Error("위저드 실행에는 백테스트 ID가 필요합니다.");
+      this.database.db.insert(backtestWizardChildren).values({ wizardId: context, kind: "backtest", jobId: backtestJobId }).run();
+      this.database.db.update(backtestWizardJobs).set({ backtestJobId, currentStep: "run", status: "QUEUED" })
+        .where(eq(backtestWizardJobs.id, context)).run();
+      return;
+    }
     const owner = this.getWizard(userId, context);
     if (owner && owner.preparationJobId !== preparationJobId) return;
     this.database.db
@@ -117,6 +144,14 @@ export class PreparationReferenceService {
       )
       .run();
     if (owner) this.releaseWizard(userId, context);
+  }
+
+  hasConsumers(preparationJobId: string): boolean {
+    return Boolean(this.database.sqlite.prepare(`SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id=@id
+      UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id=@id
+      UNION ALL SELECT 1 FROM backtest_clone_batches WHERE preparation_job_id=@id
+      UNION ALL SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id=@id
+      UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id=@id LIMIT 1`).get({ id: preparationJobId }));
   }
 
   collect(): number {

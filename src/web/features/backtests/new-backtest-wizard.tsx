@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Link,
+  Navigate,
   useLocation,
   useNavigate,
   useParams,
-  useSearchParams,
 } from "react-router";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -58,6 +59,7 @@ import {
   type PreviewParams,
   type UniversePreviewResponseDto,
 } from "./universe-rule-step";
+import type { BacktestWizardJob } from "../../../shared/schemas/backtest-wizard-draft.js";
 import type { UniverseRule } from "../../../shared/schemas/universe-rule.js";
 import { MAX_RANDOM_SEED } from "../../../shared/schemas/backtest-request.js";
 import type { BacktestRequestBody } from "./types";
@@ -147,6 +149,24 @@ function parseStrategyParameters(
 }
 
 export function NewBacktestWizard() {
+  const { search } = useLocation();
+  const wizardId = new URLSearchParams(search).get("wizard");
+  const query = useQuery({
+    queryKey: ["backtests", "wizard", wizardId],
+    queryFn: () => api<{ wizard: BacktestWizardJob }>(`/backtests/wizards/${encodeURIComponent(wizardId!)}`),
+    enabled: !!wizardId,
+    refetchOnMount: "always",
+  });
+  if (!wizardId) return <Navigate to={{ pathname: "/backtests/new", search }} replace />;
+  if (query.isPending) return <Skeleton className="mx-auto h-64 w-full max-w-2xl" />;
+  if (query.isError) return <Alert variant="destructive" role="alert"><AlertDescription>위저드를 불러오지 못했습니다. <Button variant="outline" onClick={() => void query.refetch()}>다시 시도</Button></AlertDescription></Alert>;
+  if (query.data.wizard.link.startsWith("/backtests/") && !query.data.wizard.link.startsWith("/backtests/new/")) return <Navigate to={query.data.wizard.link} replace />;
+  if (["COMPLETED", "CANCELLED", "INTERRUPTED"].includes(query.data.wizard.status)) return <Alert role="status"><AlertDescription>종료된 위저드입니다. <Button variant="outline" asChild><Link to="/jobs">작업 목록</Link></Button></AlertDescription></Alert>;
+  return <WizardSessionView key={wizardId} wizard={query.data.wizard} />;
+}
+
+function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
+  const wizardId = wizard.id;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const params = useParams();
@@ -221,13 +241,12 @@ export function NewBacktestWizard() {
     enabled: strategyId !== null,
   });
 
-  const [searchParams] = useSearchParams();
-  const sourceJobId = searchParams.get("from");
+  const sourceJobId = wizard.sourceJobId;
 
-  const wizardDraftContextKey = sourceJobId ?? "__new__";
+  const wizardDraftContextKey = wizardId;
   const wizardDraft = useQuery({
-    queryKey: ["backtests", "wizard-draft", sourceJobId],
-    queryFn: () => loadBacktestWizardDraft(sourceJobId),
+    queryKey: ["backtests", "wizard-draft", wizardId],
+    queryFn: () => loadBacktestWizardDraft(wizardId),
   });
   const hasStoredWizardDraft =
     wizardDraft.data !== undefined && Object.keys(wizardDraft.data).length > 0;
@@ -536,18 +555,18 @@ export function NewBacktestWizard() {
     }) => {
       // 제출 직전 시작된 자동 저장까지 끝낸 뒤 서버의 원자적 초안 정리를 신뢰한다.
       suppressDraftFlush.current = true;
-      await waitForPendingDraftSaves();
+      await waitForPendingDraftSaves(wizardId);
       return postJson<{ job: { id: string }; warnings?: string[] }>(
         reuseSource && sourceJobId !== null
-          ? `/backtests/${sourceJobId}/clone-configured`
-          : "/backtests",
+          ? `/backtests/${encodeURIComponent(sourceJobId)}/clone-configured?${new URLSearchParams({ wizardId })}`
+          : `/backtests?${new URLSearchParams({ wizardId })}`,
         body,
       );
     },
     onSuccess: async (data) => {
       suppressDraftFlush.current = true;
       queryClient.removeQueries({
-        queryKey: ["backtests", "wizard-draft", sourceJobId],
+        queryKey: ["backtests", "wizard-draft", wizardId],
         exact: true,
       });
       void navigate(`/backtests/${data.job.id}`);
@@ -752,7 +771,7 @@ export function NewBacktestWizard() {
     if (!canAutosave) return;
     const timer = window.setTimeout(() => {
       if (suppressDraftFlush.current) return;
-      void saveBacktestWizardDraftStep(sourceJobId, "strategy", {
+      void saveBacktestWizardDraftStep(wizardId, "strategy", {
         strategyId,
         parameters,
         currentStep: stepSlug(step),
@@ -773,7 +792,7 @@ export function NewBacktestWizard() {
     if (!canAutosave) return;
     const timer = window.setTimeout(() => {
       if (suppressDraftFlush.current) return;
-      void saveBacktestWizardDraftStep(sourceJobId, "period", {
+      void saveBacktestWizardDraftStep(wizardId, "period", {
         from,
         to,
       })
@@ -798,7 +817,7 @@ export function NewBacktestWizard() {
     if (!canAutosave) return;
     const timer = window.setTimeout(() => {
       if (suppressDraftFlush.current) return;
-      void saveBacktestWizardDraftStep(sourceJobId, "universe", {
+      void saveBacktestWizardDraftStep(wizardId, "universe", {
         universeRule,
         lastPreview: draftPreview,
       })
@@ -818,7 +837,7 @@ export function NewBacktestWizard() {
     if (!canAutosave) return;
     const timer = window.setTimeout(() => {
       if (suppressDraftFlush.current) return;
-      void saveBacktestWizardDraftStep(sourceJobId, "capital", {
+      void saveBacktestWizardDraftStep(wizardId, "capital", {
         initialCash,
         maxPositions,
         maxPositionWeightPercent,
@@ -854,7 +873,7 @@ export function NewBacktestWizard() {
       if (suppressDraftFlush.current) return;
       pageHiding.current = true;
       void saveBacktestWizardDraftStep(
-        sourceJobId,
+        wizardId,
         "strategy",
         { strategyId, parameters, currentStep: stepSlug(step) },
         { keepalive: true },
@@ -862,7 +881,7 @@ export function NewBacktestWizard() {
       if (step === 0) return;
       if (step === 1) {
         void saveBacktestWizardDraftStep(
-          sourceJobId,
+          wizardId,
           "period",
           { from, to },
           { keepalive: true },
@@ -871,13 +890,13 @@ export function NewBacktestWizard() {
       }
       if (step === 2) {
         void saveBacktestWizardDraftStep(
-          sourceJobId,
+          wizardId,
           "period",
           { from, to },
           { keepalive: true },
         ).catch(() => undefined);
         void saveBacktestWizardDraftStep(
-          sourceJobId,
+          wizardId,
           "universe",
           { universeRule, lastPreview: draftPreview },
           { keepalive: true },
@@ -885,7 +904,7 @@ export function NewBacktestWizard() {
         return;
       }
       void saveBacktestWizardDraftStep(
-        sourceJobId,
+        wizardId,
         "capital",
         {
           initialCash,
@@ -931,20 +950,20 @@ export function NewBacktestWizard() {
       const saved = latestDraftSnapshot.current;
       if (!saved.canAutosave) return;
       void Promise.all([
-        saveBacktestWizardDraftStep(saved.sourceJobId, "strategy", {
+        saveBacktestWizardDraftStep(wizardId, "strategy", {
           strategyId: saved.strategyId,
           parameters: saved.parameters,
           currentStep: saved.currentStep,
         }),
-        saveBacktestWizardDraftStep(saved.sourceJobId, "period", {
+        saveBacktestWizardDraftStep(wizardId, "period", {
           from: saved.from,
           to: saved.to,
         }),
-        saveBacktestWizardDraftStep(saved.sourceJobId, "universe", {
+        saveBacktestWizardDraftStep(wizardId, "universe", {
           universeRule: saved.universeRule,
           lastPreview: saved.lastPreview,
         }),
-        saveBacktestWizardDraftStep(saved.sourceJobId, "capital", {
+        saveBacktestWizardDraftStep(wizardId, "capital", {
           initialCash: saved.initialCash,
           maxPositions: saved.maxPositions,
           maxPositionWeightPercent: saved.maxPositionWeightPercent,
@@ -992,6 +1011,8 @@ export function NewBacktestWizard() {
       <h2 className="text-lg font-semibold">
         {sourceJobId !== null ? "재설정 및 복제" : "새 백테스트"}
       </h2>
+
+      {wizard.error && <Alert variant="destructive" role="alert"><AlertDescription>{wizard.error} 다시 시도할 수 있습니다.</AlertDescription></Alert>}
 
       {prefillError ? (
         <Alert variant="destructive" role="alert">
@@ -1285,6 +1306,8 @@ export function NewBacktestWizard() {
             period={{ from, to }}
             strategyId={strategyId}
             sourceJobId={sourceJobId}
+            wizardId={wizardId}
+            initialPreparation={wizard.preparationJobId && wizard.preparationInput ? { id: wizard.preparationJobId, params: wizard.preparationInput as PreviewParams } : null}
             parameters={parsedParameters}
             initialResolved={lastPreview ?? sourcePreview}
             previewRetryToken={previewRetryToken}

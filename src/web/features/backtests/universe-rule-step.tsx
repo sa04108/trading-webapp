@@ -185,6 +185,8 @@ export function previewRequestStatusMessage(
 }
 
 export interface UniverseRuleStepProps {
+  wizardId?: string;
+  initialPreparation?: { id: string; params: PreviewParams } | null;
   value: UniverseRule;
   onChange: (rule: UniverseRule) => void;
   /** 위저드 '기간' 단계가 정한 값 — 이 화면에서는 읽기 전용이다(리뷰 fix, 아래 참고) */
@@ -254,6 +256,8 @@ export function UniverseRuleStep({
   period,
   strategyId,
   sourceJobId = null,
+  wizardId,
+  initialPreparation = null,
   parameters,
   initialResolved = null,
   previewRetryToken,
@@ -288,11 +292,14 @@ export function UniverseRuleStep({
     if (resolved === null && initialResolved !== null)
       setResolved(initialResolved);
   }, [initialResolved, resolved]);
+  // 초안에 같은 준비 결과가 이미 있으면 완료 결과를 중복 요청하지 않는다.
+  const restoredPreparation = initialPreparation?.id === initialResolved?.result.preparationJobId
+    ? null : initialPreparation;
   // 준비 작업(job)이 도는 동안만 채워진다 — 완료·취소·실패로 끝나면 비운다.
-  const [preparingJobId, setPreparingJobId] = useState<string | null>(null);
+  const [preparingJobId, setPreparingJobId] = useState<string | null>(restoredPreparation?.id ?? null);
   // 그 job 을 시작시킨 params — COMPLETED 가 왔을 때 "지금 값과 여전히 같은가" 를
   // 판정하는 데 쓴다. ref 인 이유: 이 값이 바뀐다고 다시 그릴 것이 없다.
-  const preparingParamsRef = useRef<PreviewParams | null>(null);
+  const preparingParamsRef = useRef<PreviewParams | null>(restoredPreparation?.params ?? null);
 
   const previewMutation = useMutation({
     mutationFn: (
@@ -307,6 +314,7 @@ export function UniverseRuleStep({
         parameters: params.parameters,
         ...(completedPreparationJobId === undefined ? {} : { completedPreparationJobId }),
         ...(sourceJobId === null ? {} : { sourceJobId }),
+        ...(wizardId === undefined ? {} : { wizardId }),
       }).then(({ status, data }) =>
         status === 202
           ? {
@@ -320,6 +328,10 @@ export function UniverseRuleStep({
         preparingParamsRef.current = params;
         seedPreparationJob(queryClient, startResponse.job);
         setPreparingJobId(startResponse.job.id);
+        if (wizardId) {
+          void queryClient.invalidateQueries({ queryKey: ["backtests", "wizard", wizardId] });
+          void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+        }
         return;
       }
       preparingParamsRef.current = null;
@@ -337,9 +349,17 @@ export function UniverseRuleStep({
 
   const cancelPreparationMutation = useMutation({
     mutationFn: () =>
-      api(`/backtests/preparation-jobs/${preparingJobId}/cancel`, {
+      api(wizardId === undefined
+        ? `/backtests/preparation-jobs/${encodeURIComponent(preparingJobId ?? "")}/cancel`
+        : `/backtests/wizards/${encodeURIComponent(wizardId)}/cancel`, {
         method: "POST",
       }),
+    onSuccess: () => {
+      if (wizardId !== undefined) {
+        void queryClient.invalidateQueries({ queryKey: ["backtests", "wizard", wizardId] });
+        void queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      }
+    },
     onError: (error: unknown) => {
       // 취소 실패를 삼키면 사용자는 버튼을 눌렀는데 아무 일도 안 일어난 것처럼 본다.
       toast.error(
@@ -785,6 +805,7 @@ export function UniverseRuleStep({
         <PreparationProgress
           job={liveJob}
           onCancel={() => cancelPreparationMutation.mutate()}
+          cancelLabel={wizardId === undefined ? "취소" : "위저드 취소"}
           onRestart={
             liveJob.status === "FAILED" || liveJob.status === "CANCELLED"
               ? () => {

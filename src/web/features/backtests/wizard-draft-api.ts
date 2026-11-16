@@ -1,6 +1,5 @@
 import {
   BACKTEST_WIZARD_DRAFT_STEPS,
-  type BacktestWizardPageStep,
   type BacktestWizardDraftPayloadMap,
   type BacktestWizardDraftStep,
 } from "../../../shared/schemas/backtest-wizard-draft.js";
@@ -10,20 +9,16 @@ export type BacktestWizardDraftBundle = {
   [S in BacktestWizardDraftStep]?: BacktestWizardDraftPayloadMap[S];
 };
 
-export interface BacktestWizardResumeCandidate {
-  sourceJobId: string | null;
-  currentStep: BacktestWizardPageStep;
-  updatedAtMs: number;
-}
-
-const pendingDraftSaves = new Set<Promise<unknown>>();
+const pendingDraftSaves = new Map<string, Set<Promise<unknown>>>();
 const lastDraftSaveByKey = new Map<string, Promise<unknown>>();
 
-function trackDraftSave<T>(request: Promise<T>): Promise<T> {
-  pendingDraftSaves.add(request);
+function trackDraftSave<T>(wizardId: string, request: Promise<T>): Promise<T> {
+  const pending = pendingDraftSaves.get(wizardId) ?? new Set();
+  pendingDraftSaves.set(wizardId, pending);
+  pending.add(request);
   void request.then(
-    () => pendingDraftSaves.delete(request),
-    () => pendingDraftSaves.delete(request),
+    () => pending.delete(request),
+    () => pending.delete(request),
   );
   return request;
 }
@@ -32,7 +27,7 @@ function trackDraftSave<T>(request: Promise<T>): Promise<T> {
  * 같은 문맥·단계의 저장은 호출 순서대로 보낸다. 이전 자동 저장이 늦게 끝나 최신
  * unmount 저장을 덮는 경합을 막되, 서로 다른 단계는 병렬로 저장한다.
  */
-function enqueueDraftSave<T>(key: string, write: () => Promise<T>): Promise<T> {
+function enqueueDraftSave<T>(wizardId: string, key: string, write: () => Promise<T>): Promise<T> {
   const previous = lastDraftSaveByKey.get(key);
   const request = (previous ?? Promise.resolve())
     .catch(() => undefined)
@@ -48,25 +43,24 @@ function enqueueDraftSave<T>(key: string, write: () => Promise<T>): Promise<T> {
         lastDraftSaveByKey.delete(key);
     },
   );
-  return trackDraftSave(request);
+  return trackDraftSave(wizardId, request);
 }
 
 /** 같은 문서에서 막 시작한 unload/unmount 저장보다 진입 판정이 앞서는 경합을 막는다. */
-export async function waitForPendingDraftSaves(): Promise<void> {
-  while (pendingDraftSaves.size > 0) {
-    await Promise.allSettled([...pendingDraftSaves]);
-  }
+export async function waitForPendingDraftSaves(wizardId: string): Promise<void> {
+  const pending = pendingDraftSaves.get(wizardId);
+  while (pending && pending.size > 0) await Promise.allSettled([...pending]);
+  pendingDraftSaves.delete(wizardId);
 }
 
-function contextQuery(sourceJobId: string | null): string {
-  if (sourceJobId === null) return "";
-  return `?${new URLSearchParams({ sourceJobId })}`;
+function contextQuery(wizardId: string): string {
+  return `?${new URLSearchParams({ wizardId })}`;
 }
 
 export async function loadBacktestWizardDraft(
-  sourceJobId: string | null,
+  wizardId: string,
 ): Promise<BacktestWizardDraftBundle> {
-  const query = contextQuery(sourceJobId);
+  const query = contextQuery(wizardId);
   const entries = await Promise.all(
     BACKTEST_WIZARD_DRAFT_STEPS.map(async (step) => {
       const response = await api<{
@@ -85,7 +79,7 @@ export async function loadBacktestWizardDraft(
 export async function saveBacktestWizardDraftStep<
   S extends BacktestWizardDraftStep,
 >(
-  sourceJobId: string | null,
+  wizardId: string,
   step: S,
   payload: BacktestWizardDraftPayloadMap[S],
   options: { keepalive?: boolean } = {},
@@ -112,29 +106,16 @@ export async function saveBacktestWizardDraftStep<
         })()
       : payload;
   const write = () =>
-    api(`/backtests/wizard-draft/${step}${contextQuery(sourceJobId)}`, {
+    api(`/backtests/wizard-draft/${step}${contextQuery(wizardId)}`, {
       method: "PUT",
       body: JSON.stringify(requestPayload),
       // 유니버스 미리보기는 준비 작업 ID만 보내므로 keepalive body 상한을 넘지 않는다.
       keepalive: options.keepalive,
     });
-  const key = JSON.stringify([sourceJobId, step]);
+  const key = JSON.stringify([wizardId, step]);
   // pagehide에서는 브라우저가 문서를 곧 폐기하므로 Promise queue 뒤에 두지 않고
   // keepalive 요청을 즉시 시작한다. SPA unmount와 평상시 자동 저장은 순서를 보장한다.
   await (options.keepalive
-    ? trackDraftSave(write())
-    : enqueueDraftSave(key, write));
-}
-
-export async function clearAllBacktestWizardDrafts(): Promise<void> {
-  await waitForPendingDraftSaves();
-  await api("/backtests/wizard-draft?all=true", { method: "DELETE" });
-}
-
-export async function loadBacktestWizardResumeCandidate(): Promise<BacktestWizardResumeCandidate | null> {
-  await waitForPendingDraftSaves();
-  const response = await api<{
-    candidate: BacktestWizardResumeCandidate | null;
-  }>("/backtests/wizard-draft");
-  return response.candidate;
+    ? trackDraftSave(wizardId, write())
+    : enqueueDraftSave(wizardId, key, write));
 }

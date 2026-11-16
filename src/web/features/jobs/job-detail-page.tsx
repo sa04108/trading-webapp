@@ -43,7 +43,7 @@ export function JobDetailPage() {
           <div><dt className="inline">갱신: </dt><dd className="inline">{formatDateTime(job.updatedAtMs)}</dd></div>
           {job.finishedAtMs !== null && <div><dt className="inline">종료 기록: </dt><dd className="inline">{formatDateTime(job.finishedAtMs)}</dd></div>}
         </dl>
-        {job.link && <Button variant="outline" asChild><Link to={job.link}>원본 보기</Link></Button>}
+        {job.link && <Button variant="outline" asChild><Link to={job.link}>작업 열기</Link></Button>}
       </>}
     </CardContent>
   </Card>;

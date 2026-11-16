@@ -1,4 +1,5 @@
 import { assertSubmissionSnapshot, type SubmissionSnapshot } from "./submission-snapshot.js";
+import { preserveCompletedWizards } from "./backtest-wizard-state.js";
 import { PreparationReferenceService } from "./preparation-reference-service.js";
 import { randomInt } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -323,6 +324,7 @@ export class SeedCloneBatchService {
         const plan = this.collectDeletionPlan(batches.map((batch) => batch.id));
         if (!plan) return "NOT_DELETABLE";
         this.executeDeletionPlan(plan);
+        preserveCompletedWizards(this.database, [sourceJobId]);
         this.database.db
           .delete(backtestJobs)
           .where(eq(backtestJobs.id, sourceJobId))
@@ -395,6 +397,7 @@ export class SeedCloneBatchService {
 
   private executeDeletionPlan(plan: SeedCloneDeletionPlan): void {
     if (plan.jobIds.length > 0) {
+      preserveCompletedWizards(this.database, plan.jobIds);
       this.database.db
         .delete(backtestJobs)
         .where(inArray(backtestJobs.id, [...plan.jobIds]))

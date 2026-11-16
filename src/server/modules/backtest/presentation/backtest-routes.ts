@@ -2,6 +2,8 @@ import { registerBacktestExperimentRoutes } from "./backtest-experiment-routes.j
 import { registerBacktestRefreshRoutes } from "./backtest-refresh-routes.js";
 import { BacktestRefreshError, BacktestRefreshService } from "../application/backtest-refresh-service.js";
 import { PreparationReferenceError } from "../application/preparation-reference-service.js";
+import type { BacktestWizardService } from "../application/backtest-wizard-service.js";
+import { BacktestWizardError } from "../application/backtest-wizard-state.js";
 import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
 import { strategySourceHash } from "../../../../runtime/modules/strategy/application/strategy-source-hash.js";
 import type { BacktestRefreshAction, BacktestRefreshJob } from "../../../../shared/schemas/backtest-refresh.js";
@@ -106,6 +108,7 @@ type PreHandler = (
 ) => Promise<void>;
 
 export interface BacktestRouteDeps {
+  readonly wizards?: BacktestWizardService;
   readonly database: DatabaseHandle;
   readonly submissionValidator?: SubmissionValidator;
   readonly onValidationFinished?: (experiment: PeriodValidationDto) => void;
@@ -415,6 +418,15 @@ export function registerBacktestRoutes(
     benchmarks,
     seedCloneBatches,
   } = deps;
+
+  const wizardContext = (request: FastifyRequest): string | undefined => {
+    const raw = (request.query as { wizardId?: unknown }).wizardId;
+    if (raw === undefined) return undefined;
+    if (typeof raw !== "string" || raw.length === 0 || raw.length > 128)
+      throw new BacktestWizardError("위저드 ID가 올바르지 않습니다.", 400);
+    deps.wizards!.requireEditable(request.authUser!.id, raw);
+    return raw;
+  };
 
   const comparisons = new BenchmarkComparisonService(deps.database.db, benchmarks, results);
   registerBenchmarkComparisonRoutes(app, comparisons, queue, requireAuth);
@@ -833,6 +845,7 @@ export function registerBacktestRoutes(
         });
       }
       const body = parsed.data;
+      const wizardId = wizardContext(request);
 
       // 잘못된 요청을 PREPARATION_REQUIRED로 가리면 사용자는 완료할 수 없는 준비를
       // 시작하게 된다. 외부 데이터와 무관한 검증은 preparation hash 조회보다 먼저 한다.
@@ -848,6 +861,7 @@ export function registerBacktestRoutes(
         prepared = preparation.getReadyPreviewForWizard(
           preparationInputOf(body),
           request.authUser!.id,
+          wizardId,
         );
       } catch (error) {
         if (sendIfKrxError(reply, error)) return reply;
@@ -862,7 +876,7 @@ export function registerBacktestRoutes(
       }
       if (!prepared) {
         const reason = preparation.getWizardPreviewUnavailabilityReason(
-          preparationInputOf(body), request.authUser!.id,
+          preparationInputOf(body), request.authUser!.id, wizardId,
         );
         const messages = {
           WIZARD_REFERENCE_MISSING: "사용 중인 미리보기를 찾을 수 없습니다. 미리보기를 다시 확인하세요.",
@@ -925,7 +939,7 @@ export function registerBacktestRoutes(
           estimatedBars: validated.estimatedBars,
           submissionSnapshot: validated.snapshot,
           preparationJobId: prepared.preparationJobId,
-          wizardOwner: { userId: request.authUser!.id, requireMatch: true },
+          wizardOwner: { userId: request.authUser!.id, context: wizardId, requireMatch: true },
         },
       );
       audit.record(request.authUser?.username ?? "admin", "backtest.created", {
@@ -1154,6 +1168,7 @@ export function registerBacktestRoutes(
     { preHandler: requireAuth },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      const wizardId = wizardContext(request);
       const sourceJob = queue.getJob(id);
       if (!sourceJob)
         return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
@@ -1235,7 +1250,7 @@ export function registerBacktestRoutes(
           submissionSnapshot: validated.snapshot,
           cloneSourceJobId: id,
           preparationJobId: reusable.preview.preparationJobId,
-          wizardOwner: { userId: request.authUser!.id, context: id },
+          wizardOwner: { userId: request.authUser!.id, context: wizardId ?? id },
         },
       );
       audit.record(

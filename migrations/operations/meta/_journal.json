@@ -141,6 +141,13 @@
       "when": 1794812317887,
       "tag": "0019_validation_unselected_oos",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1794813757228,
+      "tag": "0020_backtest_wizard_jobs",
+      "breakpoints": true
     }
   ]
 }

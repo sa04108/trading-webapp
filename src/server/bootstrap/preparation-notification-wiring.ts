@@ -94,7 +94,7 @@ export function createPreparationNotificationListener(deps: {
         severity: terminal.severity,
         title: terminal.title,
         body,
-        link: "/backtests/new",
+        link: "/jobs",
       });
     } catch (error) {
       deps.logger.warn(

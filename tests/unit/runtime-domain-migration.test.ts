@@ -6,6 +6,40 @@ import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { describe, expect, it } from 'vitest';
 import { migrateDatabaseRole } from '../../src/runtime/shared/db/database-layout.js';
 
+// 신규 DB 검사는 작성 중인 초안과 단일 준비 참조를 여러 위저드로 옮기는 이행을 보호하지 못한다.
+it('기존 초안과 준비 참조를 독립 위저드로 옮기고 재기동에도 같은 ID를 유지한다', () => {
+  const sqlite = new Database(':memory:');
+  try {
+    sqlite.pragma('foreign_keys = ON');
+    sqlite.exec('CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL, created_at NUMERIC NOT NULL)');
+    for (const migration of readMigrationFiles({ migrationsFolder: 'migrations/operations' }).slice(0, 20)) {
+      for (const statement of migration.sql) sqlite.exec(statement);
+      sqlite.prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)').run(migration.hash, migration.folderMillis);
+    }
+    sqlite.exec(`
+      INSERT INTO users (id,username,password_hash,created_at_ms,updated_at_ms) VALUES ('owner','owner','test',1,1);
+      INSERT INTO backtest_preparation_jobs (id,status,phase,request_hash,request_json,created_at_ms,updated_at_ms)
+        VALUES ('preparing','RUNNING','RESOLVING_STAGES','hash','{}',2,3);
+      INSERT INTO backtest_wizard_drafts (user_id,context,step,payload_json,updated_at_ms)
+        VALUES ('owner','','strategy','{"strategyId":"x","parameters":{},"currentStep":"period"}',2),
+        ('owner','clone','strategy','{"strategyId":"y","parameters":{},"currentStep":"universe"}',3);
+      INSERT INTO preparation_wizard_references (user_id,context,preparation_job_id) VALUES ('owner','clone','preparing');
+    `);
+    migrateDatabaseRole(sqlite, 'operations', 'main');
+    const rows = sqlite.prepare('SELECT id,source_job_id,current_step,status FROM backtest_wizard_jobs ORDER BY created_at_ms').all() as { id: string; source_job_id: string | null; current_step: string; status: string }[];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ source_job_id: null, current_step: 'period', status: 'WAITING' });
+    expect(rows[1]).toMatchObject({ source_job_id: 'clone', current_step: 'universe', status: 'WAITING' });
+    expect(sqlite.prepare('SELECT context FROM backtest_wizard_drafts ORDER BY updated_at_ms').all()).toEqual(rows.map((row) => ({ context: row.id })));
+    expect(sqlite.prepare('SELECT context,preparation_job_id FROM preparation_wizard_references').get()).toEqual({ context: rows[1]!.id, preparation_job_id: 'preparing' });
+    expect(sqlite.prepare('SELECT wizard_id,kind,job_id FROM backtest_wizard_children').get()).toEqual({ wizard_id: rows[1]!.id, kind: 'preparation', job_id: 'preparing' });
+    sqlite.prepare('INSERT INTO preparation_wizard_references (user_id,context,preparation_job_id) VALUES (?,?,?)').run('owner',rows[0]!.id,'preparing');
+    migrateDatabaseRole(sqlite, 'operations', 'main');
+    expect(sqlite.prepare('SELECT id,source_job_id,current_step,status FROM backtest_wizard_jobs ORDER BY created_at_ms').all()).toEqual(rows);
+    expect(sqlite.pragma('foreign_key_check')).toEqual([]);
+  } finally { sqlite.close(); }
+});
+
 describe('실행·검증 버전 DB 이행', () => {
   it('기존 결과와 실험의 출처를 보존하고 알 수 없는 도메인 버전은 NULL로 남긴다', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-domain-migration-'));

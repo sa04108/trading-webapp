@@ -63,6 +63,7 @@ function quotaProvider(job: BacktestPreparationJob): "KRX" | "DART" {
 export interface PreparationProgressProps {
   readonly job: BacktestPreparationJob;
   readonly onCancel: () => void;
+  readonly cancelLabel?: string;
   /** FAILED 의 재시도·CANCELLED 의 다시 준비 — 둘 다 새 준비 요청을 시작하는 같은 동작이다 */
   readonly onRestart?: () => void;
 }
@@ -77,6 +78,7 @@ export interface PreparationProgressProps {
 export function PreparationProgress({
   job,
   onCancel,
+  cancelLabel = "취소",
   onRestart,
 }: PreparationProgressProps) {
   const cancellable = !shouldCloseStream(job.status);
@@ -180,7 +182,7 @@ export function PreparationProgress({
               className="h-11"
               onClick={onCancel}
             >
-              취소
+              {cancelLabel}
             </Button>
           ) : null}
           {job.status === "FAILED" && onRestart ? (

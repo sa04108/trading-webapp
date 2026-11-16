@@ -273,23 +273,23 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
     (resp) =>
       resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST',
   );
-  // 완료 결과 읽기는 작업 ID를 보내며, 새로운 공시 확인 작업을 만들지 않는다.
-  const completedPreview = page.waitForResponse(
-    (resp) =>
-      resp.url().includes('/backtests/universe-preview') && resp.request().method() === 'POST'
-      && resp.status() === 200,
-    { timeout: 200_000 },
-  );
   await page.getByRole('button', { name: '미리보기' }).click();
   const first = await initialPreview;
   expect(first.status()).toBe(202);
   const startedJob = (await first.json()).job as { id: string; phase: string };
   expect(startedJob.phase).toBe('FILING_DISCOVERY');
-  await expect(page.getByText('데이터 준비', { exact: true })).toBeVisible();
-  const completed = await completedPreview;
-  expect(completed.request().postDataJSON().completedPreparationJobId).toBe(startedJob.id);
-  expect((await completed.json()).preparationJobId).toBe(startedJob.id);
+  const wizardId = new URL(page.url()).searchParams.get('wizard')!;
+  await page.goto('/jobs');
+  await expect.poll(async () => page.evaluate(async (id) => {
+    const response = await fetch(`/api/v1/backtests/wizards/${id}`);
+    return (await response.json()).wizard.phase;
+  }, wizardId), { timeout: 200_000 }).toBe('유니버스 준비 완료 · 사용자 입력 대기');
+  await page.locator(`a[href*="wizard=${wizardId}"]`).click();
   await expect(page.getByText('리밸런스 일정')).toBeVisible();
+  expect(await page.evaluate(async (id) => {
+    const response = await fetch(`/api/v1/backtests/wizards/${id}`);
+    return (await response.json()).wizard.preparationJobId;
+  }, wizardId)).toBe(startedJob.id);
   // 기간이 한 달을 넘으므로(주기 초과 차단을 확인하려고 위에서 늘렸다) 리밸런스는
   // 매월 규칙대로 2회다 — 정확한 횟수보다는 준비가 끝나 실제 일정이 그려졌다는
   // 사실이 이 test의 관심사다.
@@ -313,13 +313,17 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
   await page.getByRole('button', { name: '다음' }).click(); // 자본·비용 기본값 → 검토
   await page.getByRole('button', { name: '다음' }).click(); // 검토 → 실행
 
+  const submitted = page.waitForResponse((response) =>
+    response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/v1/backtests');
   await page.getByRole('button', { name: '백테스트 실행' }).click();
+  expect((await submitted).status()).toBe(201);
   await expect(page).toHaveURL(/\/backtests\/bt_/);
   const jobId = page.url().split('/').at(-1)!;
-  await expect.poll(async () => page.evaluate(async () => {
-    const response = await fetch('/api/v1/backtests/wizard-draft');
-    return (await response.json() as { candidate: unknown }).candidate;
-  })).toBeNull();
+  await expect.poll(async () => page.evaluate(async (id) => {
+    const response = await fetch(`/api/v1/backtests/wizards/${id}`);
+    return (await response.json()).wizard.backtestJobId;
+  }, wizardId)).toBe(jobId);
   let clonePreviewRequests = 0;
   page.on('request', (request) => {
     if (
@@ -329,17 +333,18 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
   });
   await page.goto(`/backtests/new?from=${jobId}`);
   await expect(page.getByRole('heading', { name: '재설정 및 복제' })).toBeVisible();
-  await expect.poll(async () => page.evaluate(async (sourceId) => {
-    const response = await fetch(`/api/v1/backtests/wizard-draft/universe?sourceJobId=${sourceId}`);
+  const cloneWizardId = new URL(page.url()).searchParams.get("wizard")!;
+  await expect.poll(async () => page.evaluate(async (id) => {
+    const response = await fetch(`/api/v1/backtests/wizard-draft/universe?wizardId=${id}`);
     const body = await response.json() as {
       draft: { payload: { lastPreview: { result?: { preparationJobId?: string } } | null } } | null;
     };
     return body.draft?.payload.lastPreview?.result?.preparationJobId ?? null;
-  }, jobId)).toBeTruthy();
+  }, cloneWizardId)).toBeTruthy();
   await page.reload();
   await expect(page.getByRole('heading', { name: '재설정 및 복제' })).toBeVisible();
-  await page.getByRole('button', { name: '다음' }).click();
-  await expect(page).toHaveURL(new RegExp(`/backtests/new/universe\\?from=${jobId}$`));
+  await page.getByRole('button', { name: '3. 유니버스', exact: true }).click();
+  await expect(page).toHaveURL(new RegExp(`/backtests/new/universe\\?wizard=${cloneWizardId}$`));
   await expect(page.locator('#stage-direction-0')).toHaveText('하위');
   expect(clonePreviewRequests).toBe(0);
   await page.getByRole('button', { name: '다음' }).click();
@@ -354,8 +359,8 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
   await page.getByRole('button', { name: '백테스트 실행' }).click();
   await cloneSubmit;
   await expect(page).toHaveURL(/\/backtests\/bt_/);
-  await expect.poll(async () => page.evaluate(async () => {
-    const response = await fetch('/api/v1/backtests/wizard-draft');
-    return (await response.json() as { candidate: unknown }).candidate;
-  })).toBeNull();
+  await expect.poll(async () => page.evaluate(async (id) => {
+    const response = await fetch(`/api/v1/backtests/wizards/${id}`);
+    return (await response.json()).wizard.backtestJobId;
+  }, cloneWizardId)).toBeTruthy();
 });
