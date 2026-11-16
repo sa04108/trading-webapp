@@ -178,7 +178,8 @@ describe('백테스트 목록', () => {
     );
     expect(html).toContain('2 (1.25%p)');
     expect(html).toContain('1 (—)');
-    expect(html).toContain('+3.00%');
+    expect(html).not.toContain('초과수익률');
+    expect(html).not.toContain('+3.00%');
   });
 
 });
