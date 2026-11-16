@@ -202,7 +202,8 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
     .locator('a[href^="/backtests/history-"]:not([href$="/seeds"]):not([href$="/validations"])')
     .evaluateAll((nodes) =>
       nodes.map((n) => {
-        const r = n.getBoundingClientRect();
+        // 실험 버튼이 있는 카드와 없는 카드는 제목 높이가 다르므로 카드 자체를 비교한다.
+        const r = n.closest('[data-slot="card"]')!.getBoundingClientRect();
         return { x: r.x, y: r.y, width: r.width };
       }),
     );

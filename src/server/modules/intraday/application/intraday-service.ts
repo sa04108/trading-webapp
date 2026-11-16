@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import {
   historyQuerySchema,
@@ -35,6 +36,7 @@ import {
   intradayGaps,
   type IntradayEngineInput,
 } from "../../../../runtime/modules/intraday/domain/engine.js";
+import { intradayValidations, intradayValidationTrials } from "../../../shared/db/intraday-validation-schema.js";
 import { aggregateChartBars } from "./chart-bars.js";
 
 export class IntradayError extends Error {
@@ -144,6 +146,9 @@ export class IntradayService {
     }, 3_600_000);
     this.timer.unref();
   }
+  private isValidationRun(id: string): boolean {
+    return !!this.options.db.select({ id: intradayValidationTrials.id }).from(intradayValidationTrials).where(eq(intradayValidationTrials.runId, id)).get();
+  }
   /** 저장된 종료 상태만 전달하며 알림 오류는 작업 결과에 영향을 주지 않는다. */
   private notifyTerminal(kind: "collection" | "run", id: string): void {
     if (!this.options.onTerminal) return;
@@ -166,6 +171,7 @@ export class IntradayService {
       } else {
         const row = this.options.db.select().from(intradayRuns).where(eq(intradayRuns.id, id)).get();
         if (!row || (row.status !== "COMPLETED" && row.status !== "FAILED")) return;
+        if (this.isValidationRun(id)) return;
         const request = safeObject(row.requestJson);
         const metrics = safeObject(JSON.stringify(safeObject(row.resultJson).metrics ?? null));
         this.options.onTerminal({ kind, id, ownerId: row.ownerId,
@@ -221,7 +227,7 @@ export class IntradayService {
           error: error instanceof Error ? error.message : "저장된 백테스트 요청을 복구할 수 없습니다." })
           .where(eq(intradayRuns.id, row.id)).run();
         this.notifyTerminal("run", row.id);
-        this.options.onRecoveryFailure?.(true);
+        if (!this.isValidationRun(row.id)) this.options.onRecoveryFailure?.(true);
       }
     }
   }
@@ -552,7 +558,7 @@ export class IntradayService {
             : "분봉 수집에 실패했습니다.",
       });
       if (!signal.aborted) this.notifyTerminal("collection", id);
-      if (!signal.aborted && this.recovering.has(id)) this.options.onRecoveryFailure?.(true);
+      if (!signal.aborted && this.recovering.has(id) && !this.isValidationRun(id)) this.options.onRecoveryFailure?.(true);
       throw error;
     }
   }
@@ -561,7 +567,7 @@ export class IntradayService {
     return this.options.db
       .select({ strategyId, total: count() })
       .from(intradayRuns)
-      .where(eq(intradayRuns.ownerId, ownerId))
+      .where(this.runHistoryWhere(ownerId))
       .groupBy(strategyId)
       .orderBy(asc(strategyId))
       .all();
@@ -569,6 +575,7 @@ export class IntradayService {
   private runHistoryWhere(ownerId: string, strategyId?: string) {
     return and(
       eq(intradayRuns.ownerId, ownerId),
+      sql`NOT EXISTS (SELECT 1 FROM intraday_validation_trials WHERE run_id = ${intradayRuns.id})`,
       strategyId === undefined ? undefined :
         sql`json_extract(${intradayRuns.requestJson}, '$.strategyId') = ${strategyId}`,
     );
@@ -636,6 +643,7 @@ export class IntradayService {
       .where(and(eq(intradayRuns.id, id), eq(intradayRuns.ownerId, ownerId)))
       .get();
     if (!row) throw new IntradayError("분봉 백테스트를 찾을 수 없습니다.", 404);
+    if (this.options.db.select({ id: intradayValidations.id }).from(intradayValidations).where(eq(intradayValidations.sourceJobId, id)).get() || this.options.db.select({ id: intradayValidationTrials.id }).from(intradayValidationTrials).where(eq(intradayValidationTrials.runId, id)).get()) throw new IntradayError("검증 실험에서 참조하는 결과는 삭제할 수 없습니다.", 409);
     if (this.controllers.has(id) || !["COMPLETED", "FAILED", "CANCELLED"].includes(row.status)) {
       throw new IntradayError("실행이 완전히 종료된 백테스트만 삭제할 수 있습니다.", 409);
     }
@@ -670,6 +678,37 @@ export class IntradayService {
     this.enqueueRun(ownerId, id, request);
     return this.getRun(ownerId, id);
   }
+  async storedRevision(request: IntradayRequest): Promise<string> {
+    const { fromMs, toMs } = this.bounds(request.period, true);
+    const data = await this.options.store.read(request.symbol, fromMs, toMs);
+    if (!data.bars.length) throw new IntradayError("저장된 분봉 데이터가 없습니다.");
+    return data.revision;
+  }
+  getRunRequest(ownerId: string, id: string): { request: IntradayRequest; status: string } {
+    const row = this.options.db.select({ requestJson: intradayRuns.requestJson, status: intradayRuns.status }).from(intradayRuns).where(and(eq(intradayRuns.id, id), eq(intradayRuns.ownerId, ownerId))).get();
+    if (!row) throw new IntradayError("분봉 백테스트를 찾을 수 없습니다.", 404);
+    return { request: intradayRequestSchema.parse(JSON.parse(row.requestJson)), status: row.status };
+  }
+  async currentStoredRevision(request: IntradayRequest): Promise<string> {
+    this.bounds(request.period, true);
+    // 보관 범위 밖인 0 구간은 Parquet 봉을 해독하지 않고 manifest revision만 읽는다.
+    return (await this.options.store.read(request.symbol, 0, 0)).revision;
+  }
+  getRunState(ownerId: string, id: string): { status: string; error: string | null } {
+    const row = this.options.db.select({ status: intradayRuns.status, error: intradayRuns.error }).from(intradayRuns).where(and(eq(intradayRuns.id, id), eq(intradayRuns.ownerId, ownerId))).get();
+    if (!row) throw new IntradayError("분봉 백테스트를 찾을 수 없습니다.", 404);
+    return row;
+  }
+  createInternalRun(ownerId: string, request: IntradayRequest, id: string): void {
+    this.checkCapacity();
+    this.bounds(request.period, true);
+    const now = this.now();
+    this.options.db.insert(intradayRuns).values({ id, ownerId, requestJson: JSON.stringify(request), status: "QUEUED", createdAtMs: now, updatedAtMs: now }).run();
+  }
+  startInternalRun(ownerId: string, id: string, request: IntradayRequest): void {
+    if (!this.controllers.has(id) && !this.closing) this.enqueueRun(ownerId, id, request);
+  }
+  isDraining(id: string): boolean { return this.controllers.has(id); }
   private enqueueRun(ownerId: string, id: string, request: IntradayRequest): void {
     const controller = new AbortController();
     this.controllers.set(id, controller);
@@ -727,9 +766,14 @@ export class IntradayService {
         throw new IntradayError(
           `현재 종목의 상장일(${instrument.listDate}) 이후 기간을 선택하세요.`,
         );
+      const linked = this.options.db.select({ revision: intradayValidations.dataRevision, status: intradayValidations.status, executionVersion: intradayValidations.executionVersion, validationVersion: intradayValidations.validationVersion }).from(intradayValidationTrials).innerJoin(intradayValidations, eq(intradayValidationTrials.validationId, intradayValidations.id)).where(eq(intradayValidationTrials.runId, id)).get();
+      const versions = readRuntimeVersions();
+      if (linked && (linked.executionVersion !== versions.executionVersion || linked.validationVersion !== versions.validationVersion)) throw new IntradayError("검증 실행 버전이 변경되었습니다.");
+      if (linked && linked.status !== "ACTIVE") throw new IntradayError("검증 실험이 종료되었습니다.");
       let data = await this.options.store.read(request.symbol, fromMs, toMs);
+      if (linked && (!data.bars.length || data.revision !== linked.revision)) throw new IntradayError("고정된 분봉 데이터가 변경되었거나 만료되었습니다.");
       const recoveredCollection = this.recoveredCollections.get(id);
-      if (recoveredCollection || intradayGaps(data.bars, tradingDates).length > 0) {
+      if (!linked && (recoveredCollection || intradayGaps(data.bars, tradingDates).length > 0)) {
         const collection = recoveredCollection ? this.getCollection(ownerId, recoveredCollection) : this.collect(
           ownerId,
           { symbol: request.symbol, period: request.period },
@@ -761,6 +805,8 @@ export class IntradayService {
         signal,
       );
       signal.throwIfAborted();
+      if (linked && (result.executionVersion !== linked.executionVersion || result.dataRevision !== linked.revision || (await this.currentStoredRevision(request)) !== linked.revision)) throw new IntradayError("검증 중 분봉 데이터가 변경되었습니다.");
+      signal.throwIfAborted();
       update({
         status: "COMPLETED",
         resultJson: JSON.stringify(result),
@@ -780,7 +826,7 @@ export class IntradayService {
             : "분봉 백테스트에 실패했습니다.",
       });
       if (!signal.aborted) this.notifyTerminal("run", id);
-      if (!signal.aborted && this.recovering.has(id)) this.options.onRecoveryFailure?.(true);
+      if (!signal.aborted && this.recovering.has(id) && !this.isValidationRun(id)) this.options.onRecoveryFailure?.(true);
     }
   }
   async close(): Promise<void> {

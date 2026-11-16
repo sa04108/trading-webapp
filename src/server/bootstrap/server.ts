@@ -22,6 +22,7 @@ import { registerSymbolRoutes } from "../modules/market-data/presentation/symbol
 import { registerSymbolLibraryRoutes } from "../modules/market-data/presentation/symbol-library-routes.js";
 import { registerStrategyRoutes } from "../modules/strategy/presentation/strategy-routes.js";
 import { registerTradingRoutes } from "../modules/trading/presentation/trading-routes.js";
+import { registerIntradayValidationRoutes } from "../modules/intraday/presentation/intraday-validation-routes.js";
 import { registerIntradayRoutes } from "../modules/intraday/presentation/intraday-routes.js";
 import { registerBacktestRoutes } from "../modules/backtest/presentation/backtest-routes.js";
 import { registerBacktestWizardDraftRoutes } from "../modules/backtest/presentation/backtest-wizard-draft-routes.js";
@@ -65,7 +66,9 @@ export async function buildServer(
   });
   registerRequestObservability(app);
 
+  let stopIntradayValidations: (() => Promise<void>) | undefined;
   app.addHook("preClose", async () => {
+    await stopIntradayValidations?.();
     await container.intradayService.close();
     await container.tradingService.close();
     await container.submissionValidator?.stop();
@@ -124,6 +127,8 @@ export async function buildServer(
       registerStrategyRoutes(api, container.strategyRegistry, requireAuth);
       registerTradingRoutes(api, container.tradingService, requireAuth);
       registerIntradayRoutes(api, container.intradayService, requireAuth);
+      const intradayValidations = registerIntradayValidationRoutes(api, container.database, container.intradayService, requireAuth);
+      stopIntradayValidations = () => intradayValidations.stop();
       registerBacktestWizardDraftRoutes(
         api,
         container.backtestWizardDraftService,
@@ -215,7 +220,7 @@ export async function buildServer(
         container.notificationService,
         requireAuth,
       );
-      registerJobCenterRoutes(api, container, validations, requireAuth, refreshJobs);
+      registerJobCenterRoutes(api, container, validations, requireAuth, refreshJobs, intradayValidations);
       registerSymbolMasterRoutes(
         api,
         {

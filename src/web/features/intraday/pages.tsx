@@ -1,13 +1,21 @@
 import { IntradayChartView } from "./intraday-chart";
 export { IntradayDataPage } from "./intraday-data-page";
 import { useHistoryQueries } from "../backtests/use-history-queries";
-import { ResultBreadcrumbs } from "../backtests/backtest-breadcrumbs";
+import { BacktestBreadcrumbs } from "../backtests/backtest-breadcrumbs";
+import { ResultActions } from "../backtests/result-actions";
+import { ExperimentSummary } from "../backtests/experiment-summary";
+import { useBacktestHistoryExtras } from "../backtests/experiment-api";
+import { ExperimentLinks, hasExperimentRecords } from "../backtests/experiment-links";
+import { EquityChart } from "../backtests/result-charts";
+import { IntradayTradesSection } from "./intraday-trades-section";
+import { summarizeIntradayTrades } from "@shared/intraday-trades";
+import { downsampleLttb } from "@shared/downsample";
 import {
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { LoaderCircle } from "lucide-react";
 import { toast } from "sonner";
 import { BacktestHeader, NewBacktestButton } from "../backtests/backtest-header";
@@ -21,7 +29,9 @@ import {
   useHistoryControls,
 } from "../backtests/history-controls";
 import type { HistoryGroup } from "../../../shared/schemas/backtest-history";
-import { formatSignedPct, pnlClass, sharpeClass } from "@/lib/format";
+import { formatSignedPct, formatSignedKrw, formatKrw, formatNumber, formatDuration, pnlClass, sharpeClass } from "@/lib/format";
+import { useStockNames } from "@/lib/use-stock-names";
+import { cn } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -37,7 +47,8 @@ import {
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { TableCell, TableRow } from "@/components/ui/table";
@@ -64,7 +75,7 @@ const statusLabel: Record<string, string> = {
   QUEUED: "대기",
   PREPARING: "데이터 준비",
   RUNNING: "진행 중",
-  COMPLETED: "완료",
+  COMPLETED: "",
   FAILED: "실패",
   CANCELLED: "취소",
 };
@@ -279,6 +290,8 @@ export function IntradayListPage() {
     controls.collapsed(groups.data?.groups[index]?.strategyId ?? "") || query.isPlaceholderData
       ? [] : (query.data?.runs ?? []),
   );
+  const extras = useBacktestHistoryExtras(visibleRuns.map((run) => run.id), 5_000, "intraday");
+  const extrasById = new Map(extras.data?.summaries.map((item) => [item.jobId, item]) ?? []);
   const deletableIds = visibleRuns.filter((run) => !active(run.status)).map((run) => run.id);
   const selectedIds = deletableIds.filter((id) => selected.has(id));
   const remove = useMutation({
@@ -378,16 +391,18 @@ export function IntradayListPage() {
               {controls.view === "cards" ? (
                 <div data-pagination-content aria-busy={query?.isPlaceholderData} className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
                   {query?.data?.runs.map((run) => {
+                    const summary = extrasById.get(run.id);
                     const card = (
-                      <Card>
+                      <Card className="relative transition-colors hover:bg-muted/40">
                         <CardContent className="space-y-2 py-4">
-                          <div className="flex justify-between gap-2 text-xs text-muted-foreground">
-                            <span className="flex items-center gap-1">{active(run.status) ? <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" aria-hidden /> : null}{statusLabel[run.status]}</span>
-                          </div>
+                          {run.status !== "COMPLETED" || (!editing && hasExperimentRecords(summary)) ? <div className="flex justify-between gap-2 text-xs text-muted-foreground">
+                            {run.status !== "COMPLETED" ? <span className="flex items-center gap-1">{active(run.status) ? <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" aria-hidden /> : null}{statusLabel[run.status]}</span> : null}
+                            {!editing ? <ExperimentLinks jobId={run.id} summary={summary} mode="intraday" /> : null}
+                          </div> : null}
                           <div className="flex items-baseline justify-between gap-2 whitespace-nowrap">
-                            <p className="text-xs font-medium">
+                            {editing ? <p className="text-xs font-medium">
                               {historyPeriod(run.request.period.from, run.request.period.to)}
-                            </p>
+                            </p> : <Link className="text-xs font-medium underline after:absolute after:inset-0" to={`/backtests/intraday/${encodeURIComponent(run.id)}`}>{historyPeriod(run.request.period.from, run.request.period.to)}</Link>}
                             <time
                               className="shrink-0 text-[11px] text-muted-foreground tabular-nums"
                               dateTime={new Date(run.createdAtMs).toISOString()}
@@ -422,7 +437,7 @@ export function IntradayListPage() {
                           </div>
                           <p className="border-t pt-2 text-xs text-muted-foreground">
                             MDD{" "}
-                            {formatSignedPct(run.metrics?.maxDrawdownPct ?? null)}
+                            <span className={pnlClass(run.metrics?.maxDrawdownPct)}>{formatSignedPct(run.metrics?.maxDrawdownPct ?? null)}</span>
                           </p>
                           {run.error ? (
                             <p className="break-words text-destructive">
@@ -447,7 +462,7 @@ export function IntradayListPage() {
                             <label htmlFor={`intraday-${run.id}`} className="min-w-0 flex-1 cursor-pointer">{card}</label>
                           </div>
                         ) : (
-                          <Link className="block" to={`/backtests/intraday/${encodeURIComponent(run.id)}`}>{card}</Link>
+                          card
                         )}
                       </div>
                     );
@@ -481,8 +496,9 @@ export function IntradayListPage() {
                             )}
                           </div>
                           <div className="mt-1 text-muted-foreground">
-                            {statusLabel[run.status]} · {run.request.symbol}
+                            {run.status !== "COMPLETED" ? `${statusLabel[run.status]} · ` : ""}{run.request.symbol}
                           </div>
+                          {!editing ? <ExperimentLinks jobId={run.id} summary={extrasById.get(run.id)} mode="intraday" /> : null}
                           {run.error ? (
                             <p className="text-destructive">
                               {run.error}
@@ -494,6 +510,8 @@ export function IntradayListPage() {
                           mdd: run.metrics?.maxDrawdownPct,
                           date: run.createdAtMs,
                           sharpe: run.metrics?.sharpe,
+                          seed: extrasById.has(run.id) ? { count: 0, stddev: null } : undefined,
+                          validation: extrasById.has(run.id) ? { count: extrasById.get(run.id)!.validation.experimentCount, stddev: extrasById.get(run.id)!.validation.returns.sampleStdDev } : undefined,
                         }} />
                       </TableRow>
                     ))}
@@ -874,220 +892,115 @@ function ResultChart({
 }
 export function IntradayDetailPage() {
   const { id = "" } = useParams();
+  return <IntradayResult key={id} id={id} />;
+}
+
+function IntradayResult({ id }: { id: string }) {
   const client = useQueryClient();
-  const [tab, setTab] = useState<"chart" | "trades">("chart");
+  const navigate = useNavigate();
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const run = useQuery({
     queryKey: ["intraday-run", id],
     queryFn: () => api<IntradayRun>(`/intraday/runs/${encodeURIComponent(id)}`),
-    refetchInterval: (q) =>
-      q.state.data && active(q.state.data.status) ? 1000 : false,
+    refetchInterval: (q) => q.state.data && active(q.state.data.status) ? 1000 : false,
+    refetchIntervalInBackground: false,
   });
   const cancel = useMutation({
-    mutationFn: () =>
-      api<IntradayRun>(`/intraday/runs/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      }),
-    onSuccess: (run) => {
-      client.setQueryData(["intraday-run", id], run);
+    mutationFn: () => api<IntradayRun>(`/intraday/runs/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    onSuccess: (value) => {
+      client.setQueryData(["intraday-run", id], value);
       void client.invalidateQueries({ queryKey: ["intraday-runs"] });
+    },
+  });
+  const clone = useMutation({
+    mutationFn: () => api<IntradayRun>(`/intraday/runs/${encodeURIComponent(id)}/clone`, { method: "POST" }),
+    onSuccess: (value) => {
+      void client.invalidateQueries({ queryKey: ["intraday-runs"] });
+      void client.invalidateQueries({ queryKey: ["jobs"] });
+      void navigate(`/backtests/intraday/${encodeURIComponent(value.id)}`);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const remove = useMutation({
+    mutationFn: () => api(`/intraday/history/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    onSuccess: () => {
+      client.removeQueries({ queryKey: ["intraday-run", id], exact: true });
+      void client.invalidateQueries({ queryKey: ["intraday-runs"] });
+      void client.invalidateQueries({ queryKey: ["intraday-experiments"] });
+      void client.invalidateQueries({ queryKey: ["jobs"] });
+      void navigate("/backtests/intraday");
     },
   });
   const r = run.data;
   const result = r?.result;
+  const names = useStockNames(r ? [r.request.symbol] : []);
+  const name = r ? names.get(r.request.symbol)?.name : undefined;
+  const trades = useMemo(() => result ? summarizeIntradayTrades(result) : null, [result]);
+  const points = useMemo(() => result ? downsampleLttb(result.equity.map((point) => ({ tsMs: point.endMs, value: point.equity })), 1000) : [], [result]);
   const m = result?.metrics;
-  const equityRange = result?.equity.reduce(
-    (range, point) => ({
-      min: Math.min(range.min, point.equity),
-      max: Math.max(range.max, point.equity),
-    }),
-    { min: Infinity, max: -Infinity },
-  );
-  return (
-    <div className="space-y-4">
-      <ResultBreadcrumbs items={[{ label: "백테스트", href: "/backtests" }, { label: "분봉", href: "/backtests/intraday" }, { label: `결과 ${id.slice(-6)}` }]} />
-      <BacktestHeader mode="intraday" title="백테스트 결과" />
-      {run.isLoading ? (
-        <div role="status" aria-label="백테스트 불러오는 중" className="space-y-3">
-          <Skeleton className="h-10 w-1/2" />
-          <Skeleton className="h-40 w-full" />
+  const commission = result?.fills.reduce((sum, fill) => sum + fill.commission, 0) ?? 0;
+  const tax = result?.fills.reduce((sum, fill) => sum + fill.tax, 0) ?? 0;
+  const slippage = Math.max(0, (m?.totalCosts ?? 0) - commission - tax);
+  const completed = r?.status === "COMPLETED";
+  return <div className="min-w-0 space-y-4">
+    <BacktestBreadcrumbs jobId={id} mode="intraday" />
+    {run.isLoading ? <div role="status" aria-label="백테스트 불러오는 중" className="space-y-3"><Skeleton className="h-10 w-1/2" /><Skeleton className="h-40 w-full" /></div> : null}
+    <ErrorAlert error={run.error || cancel.error || clone.error || (r?.error ? new Error(r.error) : null)} />
+    {r ? <>
+      <header className="min-w-0 space-y-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-lg font-semibold">{getIntradayStrategy(r.request.strategyId).name}</h2>
+          {r.status !== "COMPLETED" ? <span className="text-sm text-muted-foreground">{statusLabel[r.status]}</span> : null}
+          <div className={cn("flex flex-wrap items-center gap-2", active(r.status) ? "ml-auto" : "w-full justify-end sm:ml-auto sm:w-auto")}>
+            {active(r.status) ? <Button variant="outline" className="h-11" disabled={cancel.isPending} onClick={() => cancel.mutate()}>실행 취소</Button> :
+              <ResultActions onClone={() => clone.mutate()} clonePending={clone.isPending}
+                reconfigureHref={`/backtests/intraday/new?clone=${encodeURIComponent(id)}`}
+                exportHref={completed && result ? `/api/v1/intraday/runs/${encodeURIComponent(id)}/export` : undefined}
+                onDelete={() => setDeleteOpen(true)} />}
+          </div>
         </div>
-      ) : null}
-      <ErrorAlert
-        error={
-          run.error || cancel.error || (r?.error ? new Error(r.error) : null)
-        }
-      />
-      {r && (
-        <>
-          <p>
-            {getIntradayStrategy(r.request.strategyId).name} ·{" "}
-            {statusLabel[r.status]} · {r.request.symbol} ·{" "}
-            {r.request.period.from} ~ {r.request.period.to}
-          </p>
-          {active(r.status) && !run.isError ? (
-            <BacktestProgressCard label={cancel.isPending ? "취소 요청 중" : statusLabel[r.status]}>
-              <p className="text-xs text-muted-foreground">
-                {r.status === "QUEUED"
-                  ? "실행 순서를 기다리고 있습니다."
-                  : r.status === "PREPARING"
-                    ? "저장된 분봉을 확인하고 필요한 데이터를 수집하고 있습니다."
-                    : "분봉으로 전략을 계산하고 있습니다."}
-              </p>
-            </BacktestProgressCard>
-          ) : null}
-          <div className="flex flex-wrap items-center gap-2">
-            {active(r.status) && (
-              <Button
-                variant="outline"
-                disabled={cancel.isPending}
-                onClick={() => cancel.mutate()}
-              >
-                실행 취소
-              </Button>
-            )}
-            <Button asChild variant="outline">
-              <Link
-                to={`/backtests/intraday/new?clone=${encodeURIComponent(id)}`}
-              >
-                이 설정으로 다시 실행
-              </Link>
-            </Button>
-          </div>
-        </>
-      )}
-      {result && m && (
-        <>
-          <p className="text-xs text-muted-foreground">
-            전략 버전 {result.strategyVersion} · {result.request.timeframe} ·{" "}
-            {money(result.processedBars)}개 분봉 처리
-          </p>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-            {[
-              ["손익", `${money(m.pnl)}원`],
-              ["수익률", `${money(m.returnPct)}%`],
-              ["최대 낙폭", `${money(m.maxDrawdownPct)}%`],
-              ["일간 최대 낙폭", `${money(m.dailyMaxDrawdownPct)}%`],
-              ["샤프", m.sharpe === null ? "없음" : money(m.sharpe)],
-              ["완료 거래", `${m.completedTrades}건`],
-              ["비용", `${money(m.totalCosts)}원`],
-              [
-                "평균 보유",
-                m.averageHoldingMinutes === null
-                  ? "없음"
-                  : `${money(m.averageHoldingMinutes)}분`,
-              ],
-            ].map(([label, value]) => (
-              <Card key={label}>
-                <CardContent className="py-3">
-                  <p className="text-sm text-muted-foreground">{label}</p>
-                  <p className={label === "샤프" ? sharpeClass(m.sharpe) : undefined}>{value}</p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-          {result.warnings.map((w) => (
-            <Alert key={w}>
-              <AlertDescription>{w}</AlertDescription>
-            </Alert>
-          ))}
-          {result.position.quantity > 0 && (
-            <Alert variant="destructive">
-              <AlertDescription>
-                미청산 수량 {money(result.position.quantity)}주
-              </AlertDescription>
-            </Alert>
-          )}
-          <div className="flex gap-2">
-            <Button
-              variant={tab === "chart" ? "default" : "outline"}
-              onClick={() => setTab("chart")}
-            >
-              차트
-            </Button>
-            <Button
-              variant={tab === "trades" ? "default" : "outline"}
-              onClick={() => setTab("trades")}
-            >
-              체결 및 주문
-            </Button>
-          </div>
-          {tab === "chart" ? (
-            <div className="space-y-4">
-              <ResultChart
-                request={result.request}
-                revision={result.dataRevision}
-                signals={result.signals}
-                fills={result.fills}
-              />
-              <h3 className="font-semibold">자산 추이</h3>
-              {result.equity.length > 0 && (
-                <svg
-                  viewBox="0 0 800 160"
-                  role="img"
-                  aria-label="자산 추이 차트"
-                  className="w-full rounded border"
-                >
-                  <polyline
-                    fill="none"
-                    stroke="currentColor"
-                    points={result.equity
-                      .map((e, i) => {
-                        const min = equityRange?.min ?? 0;
-                        const max = equityRange?.max ?? 0;
-                        return `${(i * 800) / Math.max(1, result.equity.length - 1)},${150 - ((e.equity - min) / (max - min || 1)) * 140}`;
-                      })
-                      .join(" ")}
-                  />
-                </svg>
-              )}
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <h3 className="font-semibold">체결</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr>
-                      <th>신호 시각</th>
-                      <th>체결 시각</th>
-                      <th>방향</th>
-                      <th>수량</th>
-                      <th>가격</th>
-                      <th>비용</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {result.fills.map((f, i) => (
-                      <tr
-                        key={`${f.orderId}-${i}`}
-                        className="border-t text-center"
-                      >
-                        <td>{time(f.signalAtMs)}</td>
-                        <td>{time(f.atMs)}</td>
-                        <td>{f.side}</td>
-                        <td>{money(f.qty)}</td>
-                        <td>{money(f.price)}</td>
-                        <td>{money(f.commission + f.tax)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <h3 className="font-semibold">주문 만료 및 미체결</h3>
-              {result.orderEvents.length === 0 ? (
-                <p>없음</p>
-              ) : (
-                result.orderEvents.map((e, i) => (
-                  <p key={`${e.orderId}-${i}`} className="text-sm">
-                    {time(e.atMs)} · {e.status} · 잔량 {e.remainingQty} ·{" "}
-                    {e.reason}
-                  </p>
-                ))
-              )}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
+        <p className="max-w-full overflow-x-auto whitespace-nowrap pb-1 text-sm text-muted-foreground" aria-label="백테스트 실행 정보">
+          {name ? `${name} (${r.request.symbol})` : r.request.symbol} · {Number.parseInt(r.request.timeframe, 10)}분 · {r.request.period.from} ~ {r.request.period.to} · 생성 {formatIntradayTime(r.createdAtMs)}
+        </p>
+      </header>
+      {active(r.status) && !run.isError ? <BacktestProgressCard label={cancel.isPending ? "취소 요청 중" : statusLabel[r.status]}>
+        <p className="text-xs text-muted-foreground">{r.status === "QUEUED" ? "실행 순서를 기다리고 있습니다." : r.status === "PREPARING" ? "저장된 분봉을 확인하고 필요한 데이터를 수집하고 있습니다." : "분봉으로 전략을 계산하고 있습니다."}</p>
+      </BacktestProgressCard> : null}
+    </> : null}
+    {completed && result && m && trades ? <>
+      <section aria-label="성과 요약" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        {[
+          { label: "누적 수익률", value: formatSignedPct(m.returnPct), className: pnlClass(m.returnPct) },
+          { label: "손익", value: formatSignedKrw(m.pnl), className: pnlClass(m.pnl) },
+          { label: "MDD", value: formatSignedPct(m.maxDrawdownPct), className: pnlClass(m.maxDrawdownPct) },
+          { label: "Sharpe", value: formatNumber(m.sharpe), className: sharpeClass(m.sharpe) },
+          { label: "승률 (매도 체결 기준)", value: trades.winRate === null ? "—" : `${trades.winRate.toFixed(1)}%`, className: "" },
+          { label: "매도 체결 수 (부분청산 포함)", value: `${trades.tradeCount}건`, className: "" },
+        ].map((card) => <Card key={card.label}><CardContent className="px-4 py-3"><p className="text-xs text-muted-foreground">{card.label}</p><p className={cn("break-words text-lg font-semibold tabular-nums", card.className)}>{card.value}</p></CardContent></Card>)}
+        <Card className="col-span-full"><CardContent className="grid grid-cols-2 gap-4 px-4 py-3" aria-label="비용 및 보유기간">
+          <div className="min-w-0"><p className="text-xs text-muted-foreground">총 비용</p><p className="break-words text-lg font-semibold tabular-nums">{formatKrw(Math.round(commission) + Math.round(tax) + Math.round(slippage))}</p><p className="mt-1 text-xs text-muted-foreground"><span className="inline-block">수수료 {formatKrw(commission)}</span> · <span className="inline-block">세금 {formatKrw(tax)}</span> · <span className="inline-block">슬리피지 {formatKrw(slippage)}</span></p></div>
+          <div className="min-w-0"><p className="text-xs text-muted-foreground">평균 보유</p><p className="text-lg font-semibold tabular-nums">{trades.averageHoldingMinutes === null ? "—" : formatDuration(trades.averageHoldingMinutes * 60_000)}</p><p className="mt-1 text-xs text-muted-foreground">매도 체결 기준</p></div>
+        </CardContent></Card>
+      </section>
+      <ExperimentSummary jobId={id} mode="intraday" />
+      <ResultChart key={id} request={result.request} revision={result.dataRevision} signals={result.signals} fills={result.fills} />
+      <EquityChart points={points} formatTimestamp={formatIntradayTime} formatTick={(ts) => formatIntradayTime(ts).slice(result.request.period.from === result.request.period.to ? 11 : 5, result.request.period.from === result.request.period.to ? 16 : 10)} summary={`초기 ${formatKrw(result.request.initialCash)} → 최종 ${formatKrw(result.equity.at(-1)?.equity ?? result.request.initialCash + m.pnl)} (${formatSignedPct(m.returnPct)})${result.equity.length > points.length ? ` · ${result.equity.length.toLocaleString("ko-KR")}포인트를 ${points.length}포인트로 축약 표시` : ""}`} />
+      <IntradayTradesSection result={result} name={name} />
+      <Card aria-label="시세 및 체결 참고"><CardHeader><CardTitle className="text-base">시세 및 체결 참고</CardTitle></CardHeader><CardContent className="space-y-3 text-sm text-muted-foreground">
+        {result.position.quantity > 0 ? <p role="alert" className="text-destructive">미청산 수량 {money(result.position.quantity)}주 · 미청산 손익은 평가금액에 포함되며 승률과 매도 체결 수에서는 제외됩니다.</p> : null}
+        <ul className="list-disc space-y-2 pl-4">{result.warnings.map((warning) => <li role="alert" key={warning}>{warning}</li>)}
+          <li>매도 체결은 부분청산도 각각 한 건으로 집계합니다. 진입 시각·보유기간은 포지션의 최초 진입 기준이며, 진입가는 매도 직전의 이동평균 매수가입니다.</li>
+          <li>거래 표의 비용은 배분된 매수 수수료와 매도 수수료·세금입니다. 순손익과 승률에 이 비용을 반영하며, 체결가에 포함된 슬리피지를 다시 차감하지 않습니다. 총 비용에는 슬리피지 추정 비용도 포함됩니다.</li>
+          <li>시세는 비수정주가이며 시각은 한국 표준시(KST)입니다. 거래 중단·누락 구간에는 신호와 체결을 만들지 않습니다.</li>
+        </ul>
+        <p>전략 버전 {result.strategyVersion} · {money(result.processedBars)}개 분봉 처리 · {result.session}</p>
+        <details><summary className="cursor-pointer">실행 정보</summary><dl className="mt-2 space-y-2 break-all text-xs"><div><dt>시세 버전</dt><dd>{result.dataRevision}</dd></div><div><dt>실행 버전</dt><dd>{result.executionVersion ?? "기록 없음"}</dd></div><div><dt>매개변수</dt><dd>{JSON.stringify(result.request.parameters)}</dd></div><div><dt>체결 가정</dt><dd>{JSON.stringify(result.request.execution)}</dd></div></dl></details>
+      </CardContent></Card>
+    </> : null}
+    <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}><DialogContent><DialogHeader><DialogTitle>백테스트 삭제</DialogTitle><DialogDescription>이 백테스트 결과를 삭제합니다. 기간검증에 연결된 결과는 해당 실험을 먼저 삭제해야 합니다.</DialogDescription></DialogHeader><ErrorAlert error={remove.error} /><DialogFooter><Button variant="outline" onClick={() => setDeleteOpen(false)}>취소</Button><Button variant="destructive" disabled={remove.isPending} onClick={() => remove.mutate()}>삭제</Button></DialogFooter></DialogContent></Dialog>
+  </div>;
+}
+
+function formatIntradayTime(ms: number): string {
+  return new Date(ms + 9 * 3_600_000).toISOString().slice(0, 16).replaceAll("-", ".").replace("T", " ");
 }

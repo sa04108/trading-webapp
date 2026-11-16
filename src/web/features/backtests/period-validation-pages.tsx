@@ -1,56 +1,64 @@
-import { useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams } from "react-router";
+import { Link, useNavigate, useParams } from "react-router";
 import { api } from "@/lib/api-client";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { PeriodValidationDto } from "../../../shared/schemas/period-validation.js";
-import { useBacktestLive, useStrategies } from "./api";
+import type { PeriodValidationDto } from "@shared/schemas/period-validation";
 import { BacktestBreadcrumbs } from "./backtest-breadcrumbs";
-import { extractNumberParams } from "./param-specs";
+import { experimentPaths, type ExperimentMode } from "./experiment-paths";
+import { useExperimentSource } from "./use-experiment-source";
+import { useExperimentParameters } from "./use-experiment-parameters";
 import { active, MODE_LABELS, PeriodValidationSection, ValidationResult } from "./period-validation-section";
 
-export function PeriodValidationPage() {
+export function PeriodValidationPage({ mode = "daily" }: { mode?: ExperimentMode }) {
   const { id = "" } = useParams();
-  const source = useBacktestLive(id);
-  const strategies = useStrategies();
-  if (source.isError) return <Alert variant="destructive"><AlertDescription>{source.error.message}</AlertDescription></Alert>;
-  if (!source.job) return <Skeleton className="h-64 w-full" />;
-  return <div className="space-y-4"><BacktestBreadcrumbs jobId={id} trail={[{ label: "기간 검증" }]} /><div><h2 className="text-lg font-semibold">기간 검증</h2><p className="text-sm text-muted-foreground">{strategies.data?.strategies.find((strategy) => strategy.id === source.job?.strategyId)?.name ?? source.job.strategyId} · {source.job.request.period.from} ~ {source.job.request.period.to}</p></div><PeriodValidationSection jobId={id} request={source.job.request} /></div>;
+  const query = useExperimentSource(id, mode);
+  const source = query.source;
+  if (query.isError) return <Alert variant="destructive"><AlertDescription>{query.error?.message}</AlertDescription></Alert>;
+  if (!source) return <Skeleton className="h-64 w-full" />;
+  return <div className="space-y-4 min-w-0">
+    <BacktestBreadcrumbs jobId={id} mode={mode} trail={[{ label: "기간 검증" }]} />
+    <div><h2 className="text-lg font-semibold">기간 검증</h2><p className="text-sm text-muted-foreground">{source.name} · {source.request.period.from} ~ {source.request.period.to}</p></div>
+    <PeriodValidationSection key={`${mode}:${id}`} jobId={id} request={source.request} mode={mode} />
+    <Button asChild variant="outline"><Link to={experimentPaths(mode).result(id)}>원본 결과</Link></Button>
+  </div>;
 }
 
-export function PeriodValidationDetailPage() {
+export function PeriodValidationDetailPage({ mode = "daily" }: { mode?: ExperimentMode }) {
   const { validationId = "" } = useParams();
+  const paths = experimentPaths(mode);
   const query = useQuery({
-    queryKey: ["period-validation", validationId],
-    queryFn: () => api<{ experiment: PeriodValidationDto }>(`/backtest-validations/${validationId}`),
+    queryKey: [paths.validationKey, validationId],
+    queryFn: () => api<{ experiment: PeriodValidationDto }>(paths.apiValidation(validationId)),
     refetchInterval: (q) => q.state.data && active(q.state.data.experiment) ? 2_000 : false,
+    refetchIntervalInBackground: false,
   });
   const experiment = query.data?.experiment;
   if (query.isError) return <Alert variant="destructive"><AlertDescription>{query.error.message}</AlertDescription></Alert>;
   if (!experiment) return <Skeleton className="h-64 w-full" />;
-  return <PeriodValidationDetail experiment={experiment} validationId={validationId} />;
+  return <PeriodValidationDetail experiment={experiment} mode={mode} />;
 }
 
-function PeriodValidationDetail({ experiment, validationId }: { experiment: PeriodValidationDto; validationId: string }) {
+function PeriodValidationDetail({ experiment, mode }: { experiment: PeriodValidationDto; mode: ExperimentMode }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const source = useBacktestLive(experiment.sourceJobId);
-  const strategyId = source.job?.request.strategyId;
-  const schema = useQuery({
-    queryKey: ["strategy-schema", strategyId],
-    queryFn: () => api<{ schema: Record<string, unknown> }>(`/strategies/${strategyId}/schema`),
-    enabled: Boolean(strategyId), staleTime: 60_000,
-  });
-  const specs = useMemo(() => extractNumberParams(schema.data?.schema), [schema.data]);
-  if (source.isLoading || (Boolean(strategyId) && schema.isLoading)) return <Skeleton className="h-64 w-full" />;
+  const paths = experimentPaths(mode);
+  const source = useExperimentSource(experiment.sourceJobId, mode);
+  const parameters = useExperimentParameters(source.source?.request.strategyId, mode);
+  if (source.isLoading || parameters.isLoading) return <Skeleton className="h-64 w-full" />;
   const refresh = async (deleted = false) => {
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["period-validation", validationId], refetchType: deleted ? "none" : "active" }),
-      queryClient.invalidateQueries({ queryKey: ["period-validations", experiment.sourceJobId] }),
-      queryClient.invalidateQueries({ queryKey: ["backtests"] }),
-      queryClient.invalidateQueries({ queryKey: ["backtest-experiments"] }),
+      queryClient.invalidateQueries({ queryKey: [paths.validationKey, experiment.id], refetchType: deleted ? "none" : "active" }),
+      queryClient.invalidateQueries({ queryKey: [paths.validationsKey, experiment.sourceJobId] }),
+      queryClient.invalidateQueries({ queryKey: [mode === "intraday" ? "intraday-runs" : "backtests"] }),
+      queryClient.invalidateQueries({ queryKey: [paths.summaryKey] }),
+      queryClient.invalidateQueries({ queryKey: ["jobs"] }),
     ]);
   };
-  return <div className="space-y-4"><BacktestBreadcrumbs jobId={experiment.sourceJobId} trail={[{ label: "기간 검증", href: `/backtests/${experiment.sourceJobId}/validations` }, { label: MODE_LABELS[experiment.config.mode] }]} />{source.isError ? <Alert variant="destructive"><AlertDescription>원본 백테스트를 불러오지 못했습니다. 매개변수 이름은 원래 키로 표시합니다. {source.error.message}</AlertDescription></Alert> : null}<ValidationResult experiment={experiment} specs={specs} refresh={refresh} onDeleted={() => void navigate(`/backtests/${experiment.sourceJobId}/validations`)} /></div>;
+  return <div className="space-y-4 min-w-0">
+    <BacktestBreadcrumbs jobId={experiment.sourceJobId} mode={mode} trail={[{ label: "기간 검증", href: paths.validations(experiment.sourceJobId) }, { label: MODE_LABELS[experiment.config.mode] }]} />
+    {source.isError ? <Alert variant="destructive"><AlertDescription>원본 백테스트를 불러오지 못했습니다. 매개변수 이름은 원래 키로 표시합니다. {source.error?.message}</AlertDescription></Alert> : null}
+    <ValidationResult experiment={experiment} specs={parameters.specs} refresh={refresh} mode={mode} onDeleted={() => void navigate(paths.validations(experiment.sourceJobId))} />
+  </div>;
 }

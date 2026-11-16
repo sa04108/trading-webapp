@@ -4,9 +4,11 @@ import { Button } from "@/components/ui/button";
 import { InfoHint } from "@/components/info-hint";
 import { formatNumber } from "@/lib/format";
 import { useBacktestHistoryExtras } from "./experiment-api";
+import { experimentPaths, type ExperimentMode } from "./experiment-paths";
 
-export function ExperimentSummary({ jobId }: { jobId: string }) {
-  const query = useBacktestHistoryExtras([jobId]);
+export function ExperimentSummary({ jobId, mode = "daily" }: { jobId: string; mode?: ExperimentMode }) {
+  const paths = experimentPaths(mode);
+  const query = useBacktestHistoryExtras([jobId], 5_000, mode);
   const summary = query.data?.summaries[0];
   const entries = [
     { title: "난수 시드 실험", path: "seeds", count: summary?.seed.batchCount, active: summary?.seed.activeCount,
@@ -25,7 +27,8 @@ export function ExperimentSummary({ jobId }: { jobId: string }) {
             <p className="text-sm">기록 {entry.count}개{entry.active ? ` · 진행 중 ${entry.active}개` : ""}</p>
             <p className="text-sm text-muted-foreground">{entry.metric} {entry.deviation == null ? "—" : `${formatNumber(entry.deviation)}%p`} · 유효 표본 {entry.samples}개</p>
           </>}
-        <Button variant="outline" asChild><Link to={`/backtests/${encodeURIComponent(jobId)}/${entry.path}`}>{entry.title} 열기</Link></Button>
+        {mode === "intraday" && entry.path === "seeds" ? <p className="text-sm text-muted-foreground">이 전략은 난수를 사용하지 않습니다.</p> : null}
+        <Button variant="outline" asChild><Link to={entry.path === "seeds" ? paths.seeds(jobId) : paths.validations(jobId)}>{entry.title} 열기</Link></Button>
       </CardContent>
     </Card>)}
   </section>;

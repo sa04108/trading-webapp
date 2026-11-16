@@ -1,6 +1,8 @@
 import { InfoHint } from "@/components/info-hint";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useStrategies } from "./api";
+import { INTRADAY_STRATEGIES } from "@shared/schemas/intraday-strategies";
+import type { ExperimentMode } from "./experiment-paths";
 
 export const VALIDATION_MODE_HELP = {
   HOLDOUT: "기간을 IS와 OOS로 한 번 나누고 원본 설정을 각각 실행합니다. OOS는 설정을 고르지 않은 구간의 성과를 확인합니다.",
@@ -18,7 +20,20 @@ const STRATEGY_SEED_HELP: Record<string, string> = {
   "rsi-reversion": "비어 있는 같은 상관 그룹에서 같은 봉에 여러 종목이 진입 자격을 얻으면 시드로 한 종목을 고릅니다.",
 };
 
-export function StrategySeedExplanation({ strategyId, strategyVersion }: { strategyId: string; strategyVersion?: string }) {
+export function StrategySeedExplanation({ mode = "daily", ...props }: { strategyId: string; strategyVersion?: string; mode?: ExperimentMode }) {
+  if (mode === "daily") return <DailyStrategySeedExplanation {...props} />;
+  const strategy = INTRADAY_STRATEGIES.find((item) => item.id === props.strategyId);
+  return <Card>
+    <CardHeader><CardTitle className="flex items-center gap-2 text-base">이 전략의 난수 영향<InfoHint label="난수 시드 설명">현재 분봉 엔진과 기본 분봉 전략은 난수를 사용하지 않습니다.</InfoHint></CardTitle></CardHeader>
+    <CardContent className="space-y-2 text-sm">
+      <p>{strategy?.name ?? props.strategyId} 전략은 가격·거래량과 설정한 매개변수로 신호를 결정합니다. {strategy?.entry}</p>
+      <p>분봉 엔진은 주문 순서를 난수로 섞지 않습니다. 같은 데이터·설정·실행 버전에서는 시드만 바꿔 결과 민감도를 비교할 수 없습니다.</p>
+      <p className="text-muted-foreground">현재 등록된 전략{strategy ? ` (${strategy.version})` : ""} 기준입니다.{props.strategyVersion && props.strategyVersion !== strategy?.version ? ` 이 결과의 전략 버전은 ${props.strategyVersion}입니다.` : ""}</p>
+    </CardContent>
+  </Card>;
+}
+
+function DailyStrategySeedExplanation({ strategyId, strategyVersion }: { strategyId: string; strategyVersion?: string }) {
   const strategies = useStrategies();
   const current = strategies.data?.strategies.find((strategy) => strategy.id === strategyId);
   const explanation = STRATEGY_SEED_HELP[strategyId];

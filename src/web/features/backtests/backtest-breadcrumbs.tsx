@@ -5,6 +5,7 @@ import { Breadcrumb, BreadcrumbList, BreadcrumbItem, BreadcrumbLink, BreadcrumbP
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { useBacktestLineage } from "./experiment-api";
+import { experimentPaths, type ExperimentMode } from "./experiment-paths";
 
 export function ResultBreadcrumbs({ items }: { items: BacktestBreadcrumbEntry[] }) {
   const collapsed = items.length > 3;
@@ -34,10 +35,10 @@ export function ResultBreadcrumbs({ items }: { items: BacktestBreadcrumbEntry[] 
   </Breadcrumb>;
 }
 
-export function BacktestBreadcrumbs({ jobId, trail = [] }: { jobId: string; trail?: BacktestBreadcrumbEntry[] }) {
-  const query = useBacktestLineage(jobId);
+export function BacktestBreadcrumbs({ jobId, trail = [], mode = "daily" }: { jobId: string; trail?: BacktestBreadcrumbEntry[]; mode?: ExperimentMode }) {
+  const query = useBacktestLineage(jobId, mode);
   const items = query.data?.items ?? [{ label: "백테스트", href: "/backtests" },
-    { label: query.isError ? "경로 확인 불가" : "경로 불러오는 중", href: `/backtests/${encodeURIComponent(jobId)}` }];
+    { label: query.isError ? "경로 확인 불가" : "경로 불러오는 중", href: experimentPaths(mode).result(jobId) }];
   return <div className="space-y-1">
     <ResultBreadcrumbs items={[...items, ...trail]} />
     {query.isError ? <p className="text-xs text-destructive" role="alert">상위 결과 경로를 불러오지 못했습니다. <button className="underline" onClick={() => void query.refetch()}>다시 시도</button></p> : query.data?.complete === false ?

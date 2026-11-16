@@ -14,3 +14,5 @@ export * from "./job-center-schema.js";
 export * from "./symbol-library-schema.js";
 export * from "./backtest-benchmark-schema.js";
 export * from "./backtest-refresh-schema.js";
+
+export * from "./intraday-validation-schema.js";

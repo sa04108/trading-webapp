@@ -1,3 +1,4 @@
+import { ExperimentLinks, hasExperimentRecords } from "./experiment-links";
 import { useHistoryQueries } from "./use-history-queries";
 import {
   useMutation,
@@ -7,7 +8,6 @@ import {
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { TableCell, TableRow } from "@/components/ui/table";
@@ -60,18 +60,6 @@ export function toggleAllBacktests(
   return allSelected ? new Set() : new Set(deletableIds);
 }
 
-function ExperimentLinks({ jobId, summary }: { jobId: string; summary?: BacktestHistoryExtras }) {
-  const hasSeeds = (summary?.seed.batchCount ?? 0) > 0;
-  const hasValidations = (summary?.validation.experimentCount ?? 0) > 0;
-  if (!hasSeeds && !hasValidations) return null;
-  return (
-    <span className="relative z-10 inline-flex gap-1">
-      {hasSeeds ? <Button asChild variant="outline" size="sm" className="h-5 px-2 text-xs"><Link to={`/backtests/${jobId}/seeds`}>난수</Link></Button> : null}
-      {hasValidations ? <Button asChild variant="outline" size="sm" className="h-5 px-2 text-xs"><Link to={`/backtests/${jobId}/validations`}>검증</Link></Button> : null}
-    </span>
-  );
-}
-
 export function BacktestJobCard({
   job,
   summary,
@@ -100,10 +88,10 @@ export function BacktestJobCard({
   const card = (
     <Card className="relative transition-colors hover:bg-muted/40">
       <CardContent className="space-y-2 py-4">
-        <div className="flex items-start justify-between gap-2">
+        {job.status !== "COMPLETED" || (!editing && hasExperimentRecords(summary)) ? <div className="flex items-start justify-between gap-2">
           <StatusBadge status={job.status} />
           {!editing ? <ExperimentLinks jobId={job.id} summary={summary} /> : null}
-        </div>
+        </div> : null}
         <div className="flex items-baseline justify-between gap-2 whitespace-nowrap">
           {editing ? (
             <p className="text-xs font-medium">{historyPeriod(job.request.period.from, job.request.period.to)}</p>
@@ -417,10 +405,10 @@ export function BacktestsPage() {
                                 </Link>
                               )}
                             </div>
-                            <div className="mt-1 flex items-center gap-1 text-muted-foreground">
+                            {job.status !== "COMPLETED" || (!editing && hasExperimentRecords(extrasBySource.get(job.id))) ? <div className="mt-1 flex items-center gap-1 text-muted-foreground">
                               <StatusBadge status={job.status} />
                               {!editing ? <ExperimentLinks jobId={job.id} summary={extrasBySource.get(job.id)} /> : null}
-                            </div>
+                            </div> : null}
                             {job.error ? (
                               <p className="text-destructive">
                                 {job.error}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildPeriodValidationPlan, evaluateValidationCandidate, periodValidationConfigSchema, selectValidationCandidate, validationMonthOffset } from '../../src/shared/schemas/period-validation.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
+import { intradayRequestSchema } from '../../src/shared/schemas/intraday.js';
 
 const source: BacktestRequest = {
   strategyId: 'range-breakout', parameters: { lookbackDays: 20 },
@@ -67,5 +68,24 @@ describe('IS 후보 선택', () => {
   });
   it('유효한 후보가 없으면 원본으로 임의 대체하지 않는다', () => {
     expect(selectValidationCandidate([{ candidate: 0, metrics: metrics(Number.NaN) }, { candidate: 1, metrics: metrics(1, 0) }], optimization)).toBeNull();
+  });
+});
+
+// 일봉 계획만 검사하면 분봉 요청이 일봉 스키마로 검증되거나 교차 필드 조건을 건너뛰는 회귀를 놓친다.
+describe('분봉 검증 계획의 요청 경계', () => {
+  const intraday = intradayRequestSchema.parse({ mode: 'intraday', strategyId: 'intraday-ema', symbol: '005930',
+    period: { from: '2026-01-05', to: '2026-10-30' }, timeframe: '5m', initialCash: 10_000_000,
+    parameters: { fast: 3, slow: 5, allocationPct: 95, stopLossPct: 1.5, takeProfitPct: 3 },
+    execution: { holdingPolicy: 'DAY_ONLY', commissionBps: 1.5, taxBps: 20, slippageBps: 5, latencyMs: 1000, orderExpiryMinutes: 3, maxParticipationPct: 1 } });
+  it('분봉 원본을 검증하고 후보마다 EMA 관계와 일중 준비 시간을 적용한다', () => {
+    expect(buildPeriodValidationPlan(intraday, { mode: 'HOLDOUT', splitDate: '2026-07-01' }).totalRuns).toBe(2);
+    for (const axes of [{ key: 'fast', values: [2, 6] }, { key: 'slow', values: [80, 100] }]) {
+      expect(() => buildPeriodValidationPlan(intraday, { mode: 'OPTIMIZED_HOLDOUT', splitDate: '2026-07-01', optimization: { ...optimization, axes: [axes] } })).toThrow();
+    }
+  });
+  it('정의되지 않은 CAGR과 전략 밖의 매개변수 탐색을 거부한다', () => {
+    const config = { mode: 'OPTIMIZED_HOLDOUT' as const, splitDate: '2026-07-01', optimization: { ...optimization, axes: [{ key: 'fast', values: [2, 3] }] } };
+    expect(() => buildPeriodValidationPlan(intraday, { ...config, optimization: { ...config.optimization, objective: 'cagrPct' } })).toThrow('Sharpe');
+    expect(() => buildPeriodValidationPlan(intraday, { ...config, optimization: { ...config.optimization, axes: [{ key: 'initialCash', values: [10000, 20000] }] } })).toThrow('매개변수');
   });
 });

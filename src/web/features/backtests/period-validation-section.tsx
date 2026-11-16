@@ -11,6 +11,7 @@ import {
   formatKrw,
   formatNumber,
   formatSignedPct,
+  pnlClass,
   sharpeClass,
 } from "@/lib/format";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,6 +43,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { backtestRequestSchema } from "../../../shared/schemas/backtest-request.js";
+import { intradayRequestSchema, type IntradayRequest } from "@shared/schemas/intraday";
 import {
   buildPeriodValidationPlan,
   periodValidationConfigSchema,
@@ -50,11 +52,12 @@ import {
   type ValidationTrialDto,
 } from "../../../shared/schemas/period-validation.js";
 import {
-  extractNumberParams,
   paramLabel,
   type NumberParamSpec,
 } from "./param-specs";
 import type { BacktestRequestBody } from "./types";
+import { experimentPaths, type ExperimentMode } from "./experiment-paths";
+import { useExperimentParameters } from "./use-experiment-parameters";
 
 export const MODE_LABELS = {
   HOLDOUT: "홀드아웃",
@@ -63,7 +66,7 @@ export const MODE_LABELS = {
 };
 export const STATUS_LABELS: Record<string, string> = {
   ACTIVE: "진행 중",
-  COMPLETED: "완료",
+  COMPLETED: "",
   FAILED: "실패",
   CANCELLING: "취소 중",
   CANCELLED: "취소",
@@ -71,6 +74,7 @@ export const STATUS_LABELS: Record<string, string> = {
   QUEUED: "실행 대기",
   STARTING: "시작 중",
   RUNNING: "실행 중",
+  PREPARING: "데이터 준비 중",
   INTERRUPTED: "중단",
   SKIPPED: "미실행",
   NOT_EVALUATED: "미평가",
@@ -137,14 +141,16 @@ function CandidateSelection({
 function TrialLink({
   trial,
   children,
+  mode = "daily",
 }: {
   trial: ValidationTrialDto | undefined;
   children: React.ReactNode;
+  mode?: ExperimentMode;
 }) {
   return trial?.jobId ? (
     <Link
       className="underline underline-offset-4"
-      to={`/backtests/${trial.jobId}`}
+      to={experimentPaths(mode).result(trial.jobId)}
     >
       {children}
     </Link>
@@ -158,17 +164,20 @@ export function ValidationResult({
   specs,
   refresh,
   onDeleted,
+  mode = "daily",
 }: {
   experiment: PeriodValidationDto;
   specs: NumberParamSpec[];
   refresh: (deleted?: boolean) => Promise<void>;
   onDeleted?: () => void;
+  mode?: ExperimentMode;
 }) {
+  const paths = experimentPaths(mode);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const mutation = useMutation({
     mutationFn: (action: "cancel" | "delete") =>
       api(
-        `/backtest-validations/${experiment.id}${action === "cancel" ? "/cancel" : ""}`,
+        `${paths.apiValidation(experiment.id)}${action === "cancel" ? "/cancel" : ""}`,
         {
           method: action === "cancel" ? "POST" : "DELETE",
         },
@@ -189,8 +198,7 @@ export function ValidationResult({
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="text-base">
-            {MODE_LABELS[experiment.config.mode]} ·{" "}
-            {STATUS_LABELS[experiment.status]}
+            {MODE_LABELS[experiment.config.mode]}{experiment.status !== "COMPLETED" ? ` · ${STATUS_LABELS[experiment.status]}` : ""}
             <InfoHint label={`${MODE_LABELS[experiment.config.mode]} 설명`} className="ml-2">{VALIDATION_MODE_HELP[experiment.config.mode]}</InfoHint>
           </CardTitle>
           {active(experiment) ? (
@@ -294,24 +302,24 @@ export function ValidationResult({
                       specs,
                     )}
                   </TableCell>
-                  <TableCell>
-                    <TrialLink trial={train}>
+                  <TableCell className={pnlClass(train?.metrics?.totalReturnPct)}>
+                    <TrialLink trial={train} mode={mode}>
                       {formatSignedPct(train?.metrics?.totalReturnPct ?? null)}
                     </TrialLink>
                   </TableCell>
-                  <TableCell>
-                    <TrialLink trial={test}>
+                  <TableCell className={pnlClass(testMetrics?.totalReturnPct)}>
+                    <TrialLink trial={test} mode={mode}>
                       {testMetrics
                         ? formatSignedPct(testMetrics.totalReturnPct)
                         : test?.skipReason === "NO_ELIGIBLE_CANDIDATE"
                           ? "미평가 (선택 후보 없음)"
-                          : STATUS_LABELS[test?.status ?? "PENDING"]}
+                          : STATUS_LABELS[test?.status ?? "PENDING"] || "—"}
                     </TrialLink>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className={pnlClass(testMetrics?.cagrPct)}>
                     {formatSignedPct(testMetrics?.cagrPct ?? null)}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className={pnlClass(testMetrics?.maxDrawdownPct)}>
                     {formatSignedPct(testMetrics?.maxDrawdownPct ?? null)}
                   </TableCell>
                   <TableCell className={sharpeClass(testMetrics?.sharpe)}>
@@ -320,7 +328,7 @@ export function ValidationResult({
                   <TableCell>{testMetrics?.tradeCount ?? "-"}</TableCell>
                   {experiment.config.mode !== "HOLDOUT" ? (
                     <TableCell>
-                      <TrialLink trial={baseline}>
+                      <TrialLink trial={baseline} mode={mode}>
                         {formatSignedPct(
                           baseline?.metrics?.totalReturnPct ?? null,
                         )}
@@ -341,7 +349,7 @@ export function ValidationResult({
               <TableRow>
                 <TableHead>회차 / 용도</TableHead>
                 <TableHead>매개변수</TableHead>
-                <TableHead>상태</TableHead>
+                <TableHead>상태 / 결과</TableHead>
                 <TableHead>후보 선택 조건</TableHead>
                 <TableHead>수익률</TableHead>
                 <TableHead>CAGR</TableHead>
@@ -365,8 +373,8 @@ export function ValidationResult({
                     {parameterText(trial, experiment.config, specs)}
                   </TableCell>
                   <TableCell>
-                    <TrialLink trial={trial}>
-                      {STATUS_LABELS[trial.status] ?? trial.status}
+                    <TrialLink trial={trial} mode={mode}>
+                      {trial.status === "COMPLETED" ? "결과 보기" : STATUS_LABELS[trial.status] ?? trial.status}
                       {trial.progress !== null && trial.status === "RUNNING"
                         ? ` ${Math.floor(trial.progress)}%`
                         : ""}
@@ -428,34 +436,29 @@ export function ValidationResult({
 export function PeriodValidationSection({
   jobId,
   request,
+  mode: backtestMode = "daily",
 }: {
   jobId: string;
-  request: BacktestRequestBody;
+  request: BacktestRequestBody | IntradayRequest;
+  mode?: ExperimentMode;
 }) {
   const queryClient = useQueryClient();
   const refreshFlow = useBacktestRefresh(jobId);
-  const queryKey = ["period-validations", jobId];
+  const paths = experimentPaths(backtestMode);
+  const intraday = backtestMode === "intraday";
+  const queryKey = [paths.validationsKey, jobId];
   const experiments = useQuery({
     queryKey,
     queryFn: () =>
       api<{ experiments: PeriodValidationDto[] }>(
-        `/backtests/${jobId}/validations`,
+        paths.apiValidations(jobId),
       ),
     refetchInterval: (query) =>
       query.state.data?.experiments.some(active) ? 2_000 : false,
+    refetchIntervalInBackground: false,
   });
-  const schema = useQuery({
-    queryKey: ["strategy-schema", request.strategyId],
-    queryFn: () =>
-      api<{ schema: Record<string, unknown> }>(
-        `/strategies/${request.strategyId}/schema`,
-      ),
-    staleTime: 60_000,
-  });
-  const specs = useMemo(
-    () => extractNumberParams(schema.data?.schema),
-    [schema.data],
-  );
+  const schema = useExperimentParameters(request.strategyId, backtestMode);
+  const specs = schema.specs;
   const [mode, setMode] = useState<PeriodValidationConfig["mode"]>("HOLDOUT");
   const [splitDate, setSplitDate] = useState(() => {
     const start = Date.parse(`${request.period.from}T00:00:00Z`);
@@ -466,8 +469,8 @@ export function PeriodValidationSection({
       .toISOString()
       .slice(0, 10);
   });
-  const [trainMonths, setTrainMonths] = useState("36");
-  const [testMonths, setTestMonths] = useState("6");
+  const [trainMonths, setTrainMonths] = useState(intraday ? "3" : "36");
+  const [testMonths, setTestMonths] = useState(intraday ? "1" : "6");
   const [axes, setAxes] = useState([{ key: "", values: "" }]);
   const [objective, setObjective] = useState("sharpe");
   const [minTrades, setMinTrades] = useState("5");
@@ -504,7 +507,7 @@ export function PeriodValidationSection({
       return {
         config: parsed.data,
         plan: buildPeriodValidationPlan(
-          backtestRequestSchema.parse(request),
+          intraday ? intradayRequestSchema.parse(request) : backtestRequestSchema.parse(request),
           parsed.data,
         ),
         error: null,
@@ -518,6 +521,7 @@ export function PeriodValidationSection({
     }
   }, [
     request,
+    intraday,
     mode,
     splitDate,
     trainMonths,
@@ -529,18 +533,19 @@ export function PeriodValidationSection({
   ]);
   const refresh = async (): Promise<void> => {
     await queryClient.invalidateQueries({ queryKey });
-    await queryClient.invalidateQueries({ queryKey: ["backtests"] });
-    await queryClient.invalidateQueries({ queryKey: ["backtest-experiments"] });
+    await queryClient.invalidateQueries({ queryKey: [intraday ? "intraday-runs" : "backtests"] });
+    await queryClient.invalidateQueries({ queryKey: [paths.summaryKey] });
+    await queryClient.invalidateQueries({ queryKey: ["jobs"] });
   };
   const create = useMutation({
     mutationFn: (config: PeriodValidationConfig) =>
-      api(`/backtests/${jobId}/validations`, {
+      api(paths.apiValidations(jobId), {
         method: "POST",
         body: JSON.stringify(config),
       }),
     onSuccess: refresh,
     onError: (error, config) => {
-      if (isRefreshRequired(error)) refreshFlow.offer({ kind: "PERIOD_VALIDATION", config }, error);
+      if (!intraday && isRefreshRequired(error)) refreshFlow.offer({ kind: "PERIOD_VALIDATION", config }, error);
     },
   });
   return (
@@ -549,18 +554,18 @@ export function PeriodValidationSection({
       className="space-y-4 min-w-0"
       aria-label="기간 검증"
     >
-      {refreshFlow.modal}
+      {!intraday ? refreshFlow.modal : null}
       <Card>
         <CardHeader>
           <CardTitle>새 기간검증</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            각 IS/OOS를 초기자금 {formatKrw(request.capital.initialCash)}과
-            무포지션 상태에서 다시 실행합니다. 지표 준비에는 시작일 이전
-            데이터를 사용하며, 구간 말 미청산 보유분은 평가금액으로 반영합니다.
+            각 IS/OOS를 초기자금 {formatKrw("initialCash" in request ? request.initialCash : request.capital.initialCash)}과
+            무포지션 상태에서 다시 실행합니다. {intraday ? "분봉 지표는 매일 초기화하며 해당 날짜의 확정 봉만 사용합니다." : "지표 준비에는 시작일 이전 데이터를 사용합니다."} 구간 말 미청산 보유분은 평가금액으로 반영합니다.
             구간 수익률을 연속 운용 수익률로 합산하지 않습니다.
           </p>
+          {intraday ? <p className="text-sm text-muted-foreground">실험을 생성할 때 보관된 시세와 현재 실행 버전을 기준으로 계산합니다. 실험 도중 데이터나 실행 버전이 바뀌면 중단합니다. 난수는 사용하지 않습니다.</p> : null}
           <p className="text-sm text-muted-foreground">
             이미 확인한 기간을 나누는 실험입니다. OOS 결과를 보고 설정을
             수정하면 미사용 데이터에 대한 검증으로 해석할 수 없습니다.
@@ -711,7 +716,7 @@ export function PeriodValidationSection({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="sharpe">Sharpe 최대</SelectItem>
-                      <SelectItem value="cagrPct">CAGR 최대</SelectItem>
+                      {!intraday ? <SelectItem value="cagrPct">CAGR 최대</SelectItem> : null}
                     </SelectContent>
                   </Select>
                 </div>
@@ -740,8 +745,7 @@ export function PeriodValidationSection({
                 </div>
               </div>
               <p className="text-sm text-muted-foreground">
-                후보 선택은 IS 성과만 사용합니다. 같은 회차의 후보는 동일 난수
-                시드로 비교하며, 조건을 만족하는 후보가 없으면 해당 회차의 선택 전략 OOS는 미평가로 남기고 다음 회차를 독립적으로 실행합니다. 고정 전략 OOS는 계속 실행합니다.
+                후보 선택은 IS 성과만 사용합니다. {intraday ? "같은 회차의 후보는 동일한 보관 시세로 비교하며, " : "같은 회차의 후보는 동일 난수 시드로 비교하며, "}조건을 만족하는 후보가 없으면 해당 회차의 선택 전략 OOS는 미평가로 남기고 다음 회차를 독립적으로 실행합니다. 고정 전략 OOS는 계속 실행합니다.
               </p>
             </>
           ) : null}
@@ -816,11 +820,11 @@ export function PeriodValidationSection({
           <Card key={experiment.id}>
             <CardContent className="flex flex-wrap items-center justify-between gap-2 pt-6">
               <div>
-                <Link className="font-medium underline underline-offset-4" to={`/backtests/validations/${experiment.id}`}>{MODE_LABELS[experiment.config.mode]}</Link>{" "}
+                <Link className="font-medium underline underline-offset-4" to={paths.validation(experiment.id)}>{MODE_LABELS[experiment.config.mode]}</Link>{" "}
                 <InfoHint label={`${MODE_LABELS[experiment.config.mode]} 설명`}>{VALIDATION_MODE_HELP[experiment.config.mode]}</InfoHint>
-                <p className="text-sm text-muted-foreground">{formatDateTime(experiment.createdAtMs)} · {STATUS_LABELS[experiment.status] ?? experiment.status} · 실행 {experiment.trials.filter((trial) => trial.status === "COMPLETED").length}/{experiment.plan.totalRuns}회 완료 · 미평가 {experiment.trials.filter((trial) => trial.status === "NOT_EVALUATED").length}회</p>
+                <p className="text-sm text-muted-foreground">{formatDateTime(experiment.createdAtMs)}{experiment.status !== "COMPLETED" ? ` · ${STATUS_LABELS[experiment.status] ?? experiment.status}` : ""} · 실행 {experiment.trials.filter((trial) => trial.status === "COMPLETED").length}/{experiment.plan.totalRuns}회 완료 · 미평가 {experiment.trials.filter((trial) => trial.status === "NOT_EVALUATED").length}회</p>
               </div>
-              <Button asChild variant="outline" size="sm"><Link to={`/backtests/validations/${experiment.id}`}>상세 보기</Link></Button>
+              <Button asChild variant="outline" size="sm"><Link to={paths.validation(experiment.id)}>상세 보기</Link></Button>
             </CardContent>
           </Card>
         ))}

@@ -27,6 +27,7 @@ const STATUS_VARIANTS: Record<
 };
 
 export function StatusBadge({ status }: { status: BacktestStatus }) {
+  if (status === "COMPLETED") return null;
   return (
     <Badge variant={STATUS_VARIANTS[status]}>{STATUS_LABELS[status]}</Badge>
   );
