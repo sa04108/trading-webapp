@@ -1,0 +1,49 @@
+/* 전략별 shadcn 표가 내용 기반 열 너비와 가로 스크롤을 함께 사용한다. */
+.history-table-layout {
+  overflow-x: auto;
+  container-type: inline-size;
+
+  :is([data-slot="collapsible"], [data-slot="collapsible-content"]:not([hidden]),
+      [data-slot="table-container"], [data-slot="table"], [data-slot="table-header"],
+      [data-slot="table-body"], [data-slot="table-row"]) {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    min-width: 0;
+  }
+
+  [data-slot="collapsible"] {
+    row-gap: 0.5rem;
+  }
+
+  [data-slot="collapsible-content"] {
+    row-gap: 0.75rem;
+  }
+
+  [data-slot="collapsible"] > *,
+  [data-slot="collapsible-content"] > * {
+    grid-column: 1 / -1;
+    margin-block: 0;
+  }
+
+  /* 제목과 페이지 버튼은 가로로 넘겨도 화면 안에 남긴다. */
+  [data-slot="collapsible"] > :first-child,
+  [data-pagination-controls] {
+    position: sticky;
+    left: 0;
+    max-width: 100cqw;
+  }
+
+  [data-slot="table-container"] {
+    overflow: visible;
+  }
+
+  :is([data-slot="table-head"], [data-slot="table-cell"]) {
+    align-content: center;
+  }
+
+  [data-slot="table-cell"]:first-child {
+    align-content: start;
+    overflow-wrap: anywhere;
+  }
+}
