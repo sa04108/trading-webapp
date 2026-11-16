@@ -578,6 +578,7 @@ export class IntradayService {
     const periodEnd = sql`json_extract(${intradayRuns.requestJson}, '$.period.to')`;
     const returnPct = sql<number | null>`CASE WHEN ${intradayRuns.status} = 'COMPLETED' THEN json_extract(${intradayRuns.resultJson}, '$.metrics.returnPct') END`;
     const maxDrawdownPct = sql<number | null>`CASE WHEN ${intradayRuns.status} = 'COMPLETED' THEN json_extract(${intradayRuns.resultJson}, '$.metrics.maxDrawdownPct') END`;
+    const sharpe = sql<number | null>`CASE WHEN ${intradayRuns.status} = 'COMPLETED' THEN json_extract(${intradayRuns.resultJson}, '$.metrics.sharpe') END`;
     const columns = {
       createdAt: intradayRuns.createdAtMs,
       periodEnd,
@@ -587,7 +588,7 @@ export class IntradayService {
     };
     const column = columns[query.sort];
     return this.options.db
-      .select({ ...runColumns, returnPct, maxDrawdownPct })
+      .select({ ...runColumns, returnPct, maxDrawdownPct, sharpe })
       .from(intradayRuns)
       .where(this.runHistoryWhere(ownerId, query.strategyId))
       .orderBy(
@@ -603,7 +604,7 @@ export class IntradayService {
         ...this.run(row),
         metrics: row.returnPct === null || row.maxDrawdownPct === null
           ? null
-          : { returnPct: row.returnPct, maxDrawdownPct: row.maxDrawdownPct },
+          : { returnPct: row.returnPct, maxDrawdownPct: row.maxDrawdownPct, sharpe: row.sharpe },
       }));
   }
   getRun(ownerId: string, id: string): IntradayRun {

@@ -284,7 +284,7 @@ export interface IntradayRun {
 
 /** 이력 목록에는 체결·자산 곡선을 전송하지 않고 필요한 지표만 포함한다. */
 export interface IntradayRunSummary extends IntradayRun {
-  metrics: { returnPct: number; maxDrawdownPct: number } | null;
+  metrics: { returnPct: number; maxDrawdownPct: number; sharpe: number | null } | null;
 }
 
 export function intradayDate(endMs: number): string {

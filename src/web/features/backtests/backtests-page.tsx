@@ -8,9 +8,11 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { InfoHint } from "@/components/info-hint";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { TableCell, TableRow } from "@/components/ui/table";
+import { HistoryMetricCells, HistoryTable } from "./history-table";
+import { useHistoryTablePreferences } from "./history-table-preferences";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api-client";
@@ -64,10 +66,6 @@ function ExperimentLinks({ jobId }: { jobId: string }) {
       <Button asChild variant="outline" size="sm" className="h-5 px-2 text-xs"><Link to={`/backtests/${jobId}/validations`}>검증</Link></Button>
     </span>
   );
-}
-
-function distribution(count: number | undefined, stddev: number | null | undefined): string {
-  return count === undefined ? "—" : `${count} (${stddev == null ? "—" : `${stddev.toFixed(2)}%p`})`;
 }
 
 export function BacktestJobCard({
@@ -199,6 +197,8 @@ export function BacktestJobCard({
 export function BacktestsPage() {
   const client = useQueryClient();
   const controls = useHistoryControls();
+  const tablePreferences = useHistoryTablePreferences();
+  const columns = tablePreferences.visibleColumns.map((column) => column.id);
   const strategies = useStrategies();
   const [editing, setEditing] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -378,27 +378,10 @@ export function BacktestsPage() {
                 ))}
               </div>
             ) : (
-              <table data-pagination-content aria-busy={query?.isPlaceholderData} className="w-full table-fixed text-xs">
-                <thead>
-                  <tr className="text-muted-foreground">
-                    <th className="w-[48%] py-2 text-left sm:w-[32%] lg:w-[25%]">기간</th>
-                    <th className="text-right">수익률</th>
-                    <th className="text-right">CAGR</th>
-                    <th className="hidden text-right sm:table-cell">MDD</th>
-                    <th className="hidden text-right lg:table-cell">Sharpe</th>
-                    <th className="hidden text-right md:table-cell">
-                      난수 <InfoHint label="난수 시드 통계 설명">건수는 난수 시드 실험 수이며 괄호는 완료된 실행 중 유효한 수익률의 표본 표준편차입니다.</InfoHint>
-                    </th>
-                    <th className="hidden text-right md:table-cell">
-                      검증 <InfoHint label="기간 검증 통계 설명">건수는 기간 검증 실험 수이며 괄호는 완료된 실험별 OOS 평균 수익률 분포의 표본 표준편차입니다.</InfoHint>
-                    </th>
-                    <th className="hidden text-right sm:table-cell">실행일</th>
-                  </tr>
-                </thead>
-                <tbody>
+              <HistoryTable columns={columns} busy={query?.isPlaceholderData}>
                   {query?.data?.jobs.map((job) => (
-                    <tr key={job.id} className="border-t">
-                        <td className="py-3 align-top">
+                    <TableRow key={job.id}>
+                        <TableCell className="sticky left-0 z-10 w-44 min-w-44 bg-background py-3 align-top whitespace-normal">
                           {editing && deletableIds.includes(job.id) ? (
                             <Checkbox
                               className="mr-1"
@@ -425,12 +408,9 @@ export function BacktestsPage() {
                               )}
                             </Link>
                           )}
-                          <div className="text-muted-foreground">
-                            <StatusBadge status={job.status} />{" "}
-                            {!editing ? <ExperimentLinks jobId={job.id} /> : null}{" "}
-                            <span className="sm:hidden">
-                              {formatDateTime(job.createdAtMs)}
-                            </span>
+                          <div className="mt-1 flex items-center gap-1 text-muted-foreground">
+                            <StatusBadge status={job.status} />
+                            {!editing ? <ExperimentLinks jobId={job.id} /> : null}
                           </div>
                           {job.error ? (
                             <p className="break-words text-destructive">
@@ -456,32 +436,25 @@ export function BacktestsPage() {
                               %
                             </p>
                           ) : null}
-                        </td>
-                        <td
-                          className={`text-right ${pnlClass(job.metrics?.totalReturnPct ?? null)}`}
-                        >
-                          {formatSignedPct(job.metrics?.totalReturnPct ?? null)}
-                        </td>
-                        <td
-                          className={`text-right ${pnlClass(job.metrics?.cagrPct ?? null)}`}
-                        >
-                          {formatSignedPct(job.metrics?.cagrPct ?? null)}
-                        </td>
-                        <td className={`hidden text-right sm:table-cell ${pnlClass(job.metrics?.maxDrawdownPct)}`}>
-                          {formatSignedPct(job.metrics?.maxDrawdownPct ?? null)}
-                        </td>
-                        <td className={`hidden text-right lg:table-cell ${job.metrics?.sharpe == null ? "text-muted-foreground" : job.metrics.sharpe < 0 ? "text-loss" : job.metrics.sharpe >= 1 ? "text-gain" : "text-foreground"}`}>
-                          {job.metrics?.sharpe == null ? "—" : job.metrics.sharpe.toFixed(2)}
-                        </td>
-                        <td className="hidden text-right md:table-cell">{distribution(extrasBySource.get(job.id)?.seed.batchCount, extrasBySource.get(job.id)?.seed.returns.sampleStdDev)}</td>
-                        <td className="hidden text-right md:table-cell">{distribution(extrasBySource.get(job.id)?.validation.experimentCount, extrasBySource.get(job.id)?.validation.returns.sampleStdDev)}</td>
-                        <td className="hidden pl-2 text-right sm:table-cell">
-                          {formatDateTime(job.createdAtMs)}
-                        </td>
-                      </tr>
+                        </TableCell>
+                        <HistoryMetricCells columns={columns} values={{
+                          return: job.metrics?.totalReturnPct,
+                          cagr: job.metrics?.cagrPct,
+                          mdd: job.metrics?.maxDrawdownPct,
+                          date: job.createdAtMs,
+                          sharpe: job.metrics?.sharpe,
+                          seed: extrasBySource.has(job.id) ? {
+                            count: extrasBySource.get(job.id)!.seed.batchCount,
+                            stddev: extrasBySource.get(job.id)!.seed.returns.sampleStdDev,
+                          } : undefined,
+                          validation: extrasBySource.has(job.id) ? {
+                            count: extrasBySource.get(job.id)!.validation.experimentCount,
+                            stddev: extrasBySource.get(job.id)!.validation.returns.sampleStdDev,
+                          } : undefined,
+                        }} />
+                      </TableRow>
                   ))}
-                </tbody>
-              </table>
+              </HistoryTable>
             )}
             {query?.data ? (
               <HistoryPager
