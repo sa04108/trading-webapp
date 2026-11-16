@@ -11,6 +11,8 @@ services:
     environment:
       APP_BIND_ADDRESS: 0.0.0.0
       APP_PORT: '3000'
+      # SQLite 임시 저널은 /tmp의 64MiB 제한을 넘을 수 있어 쓰기 가능한 데이터 볼륨을 사용한다.
+      SQLITE_TMPDIR: /var/lib/quant-platform
       TRUST_PROXY_LOOPBACK: 'false'
       TRUST_PROXY_ADDRESSES: ${TRAEFIK_TRUSTED_IPS:-}
     volumes:
