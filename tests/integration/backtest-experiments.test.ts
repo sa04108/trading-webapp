@@ -31,7 +31,7 @@ describe("백테스트 실험 요약과 결과 경로", () => {
   it("완료된 실험의 독립 OOS 평균을 집계하고 표본 수와 기록 수를 구분한다", async ({ ctx, cookie }) => {
     const database = ctx.container.database;
     const f = fixtures(database);
-    f.job("source", 25, { benchmarkJson: JSON.stringify({ benchmarkId: "KOSPI", name: "코스피", source: "KRX_OPEN_API", sourceVersion: "v1", period: { from: "2020-01-01", to: "2021-01-01" }, covered: true, points: [{ date: "2020-01-01", close: 100 }, { date: "2021-01-01", close: 110 }] }) });
+    f.job("source", 25);
     f.job("other");
     f.batch("batch", "source");
     f.seed("batch", "source", "seed-1", 10, 0);

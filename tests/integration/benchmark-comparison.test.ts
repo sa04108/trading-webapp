@@ -13,7 +13,7 @@ describe("결과 화면의 벤치마크 비교", () => {
   // 기존 pin 비교 테스트는 선택 저장·현재 데이터 재조회·원본 불변성을 확인하지 못했다.
   it("옛 결과는 미선택으로 열고 ID만 저장해 현재 가격으로 비교하며 원본을 보존한다", async ({ ctx, cookie }) => {
     const db = ctx.container.database.db;
-    const legacy = { id: "legacy", strategyId: "range-breakout", status: "COMPLETED", requestJson: JSON.stringify({ period, benchmarkId: "KOSPI" }), universeRuleJson: "{}", universeScheduleJson: "[]", benchmarkJson: "{옛 형식", benchmarkHash: "old-hash", createdAtMs: 1 };
+    const legacy = { id: "legacy", strategyId: "range-breakout", status: "COMPLETED", requestJson: JSON.stringify({ period, benchmarkId: "KOSPI" }), universeRuleJson: "{}", universeScheduleJson: "[]", createdAtMs: 1 };
     db.insert(backtestJobs).values(legacy).run();
     db.insert(backtestMetrics).values({ jobId: legacy.id, totalReturnPct: 25, maxDrawdownPct: -5, tradeCount: 1, metricsJson: JSON.stringify({ totalReturnPct: 25 }) }).run();
     for (const [benchmarkId, closes] of [["KOSPI", [100, 80, 110]], ["SP500", [100, 120, 108]]] as const) {

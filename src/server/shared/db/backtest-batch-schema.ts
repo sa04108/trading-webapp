@@ -30,8 +30,6 @@ export const backtestCloneBatches = sqliteTable(
     provenancePinJson: text("provenance_pin_json"),
     universeJson: text("universe_json"),
     universeHash: text("universe_hash"),
-    benchmarkJson: text("benchmark_json"),
-    benchmarkHash: text("benchmark_hash"),
     submitWarningsJson: text("submit_warnings_json"),
     error: text("error"),
     createdAtMs: integer("created_at_ms").notNull(),

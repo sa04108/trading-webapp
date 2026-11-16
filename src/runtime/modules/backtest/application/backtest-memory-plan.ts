@@ -38,7 +38,7 @@ export function backtestMemoryPlan(
     const days = Math.max(1, Math.ceil((Date.parse(request.period.to) - Date.parse(request.period.from)) / 86_400_000) + 1);
     const years = Math.ceil(days / 365) + 4;
     const batchBars = Math.max(minimumBatchBars, symbols.size);
-    const pinnedBytes = ["requestJson", "universeScheduleJson", "universeJson", "benchmarkJson"]
+    const pinnedBytes = ["requestJson", "universeScheduleJson", "universeJson"]
       .reduce((bytes, key) => bytes + Buffer.byteLength(String(payload[key] ?? "")), 0);
     // 최근 이력은 typed array, 결과는 날짜별 평가와 포지션별 거래가 누적된다.
     // 재무는 한 종목씩 읽으므로 최대 종목의 행 수만, 자본변동은 전체 행 수를 더한다.

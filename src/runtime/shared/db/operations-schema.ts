@@ -103,9 +103,6 @@ export const backtestJobs = sqliteTable(
      */
     universeJson: text("universe_json"),
     universeHash: text("universe_hash"),
-    /** 제출 시점의 벤치마크 종가와 그 해시. 데이터가 부족해도 부분 pin은 남긴다. */
-    benchmarkJson: text("benchmark_json"),
-    benchmarkHash: text("benchmark_hash"),
     /** 난수 시드 일괄 복제 묶음과 원본 계보. 일반 제출은 둘 다 null이다. */
     cloneBatchId: text("clone_batch_id"),
     cloneSourceJobId: text("clone_source_job_id"),
