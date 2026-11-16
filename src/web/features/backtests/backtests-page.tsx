@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { TableCell, TableRow } from "@/components/ui/table";
-import { HistoryMetricCells, HistoryTable } from "./history-table";
+import { HistoryLayout, HistoryMetricCells, HistoryTable } from "./history-table";
 import { useHistoryTablePreferences } from "./history-table-preferences";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -344,142 +344,144 @@ export function BacktestsPage() {
       {groups.data?.groups.length === 0 ? (
         <p>백테스트가 없습니다. 새 백테스트를 실행해 보세요.</p>
       ) : null}
-      {(groups.data?.groups ?? []).map((group, index) => {
-        const query = pages[index];
-        const strategy = strategies.data?.strategies.find(
-          (s) => s.id === group.strategyId,
-        );
-        const name = strategy?.name ?? group.strategyId;
-        return (
-          <HistoryStrategyGroup
-            key={group.strategyId}
-            name={name}
-            description={strategy?.description}
-            total={group.total}
-            collapsed={controls.collapsed(group.strategyId)}
-            onToggle={() => {
-              controls.toggle(group.strategyId);
-              clear();
-            }}
-          >
-            {query?.isError ? (
-              <p role="alert" className="text-destructive">
-                이력을 불러오지 못했습니다.
-              </p>
-            ) : null}
-            {query?.isLoading ? <Skeleton className="h-24 w-full" /> : null}
-            {controls.view === "cards" ? (
-              <div data-pagination-content aria-busy={query?.isPlaceholderData} className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
-                {query?.data?.jobs.map((job) => (
-                  <div key={job.id} className="min-w-0 max-w-[360px] space-y-2">
-                    <BacktestJobCard
-                      job={job}
-                      summary={extrasBySource.get(job.id)}
-                      timeframe={resolveJobTimeframe(job)}
-                      editing={editing}
-                      selected={selected.has(job.id)}
-                      deletable={deletableIds.includes(job.id)}
-                      onToggle={() => toggleOne(job.id)}
-                    />
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <HistoryTable columns={columns} busy={query?.isPlaceholderData}>
+      <HistoryLayout columns={columns} view={controls.view}>
+        {(groups.data?.groups ?? []).map((group, index) => {
+          const query = pages[index];
+          const strategy = strategies.data?.strategies.find(
+            (s) => s.id === group.strategyId,
+          );
+          const name = strategy?.name ?? group.strategyId;
+          return (
+            <HistoryStrategyGroup
+              key={group.strategyId}
+              name={name}
+              description={strategy?.description}
+              total={group.total}
+              collapsed={controls.collapsed(group.strategyId)}
+              onToggle={() => {
+                controls.toggle(group.strategyId);
+                clear();
+              }}
+            >
+              {query?.isError ? (
+                <p role="alert" className="text-destructive">
+                  이력을 불러오지 못했습니다.
+                </p>
+              ) : null}
+              {query?.isLoading ? <Skeleton className="h-24 w-full" /> : null}
+              {controls.view === "cards" ? (
+                <div data-pagination-content aria-busy={query?.isPlaceholderData} className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
                   {query?.data?.jobs.map((job) => (
-                    <TableRow key={job.id}>
-                        <TableCell className="sticky left-0 z-10 w-px bg-background py-3 align-top whitespace-normal">
-                          <div className="flex items-center gap-1 whitespace-nowrap">
-                            {editing && deletableIds.includes(job.id) ? (
-                              <Checkbox
-                                checked={selected.has(job.id)}
-                                onCheckedChange={() => toggleOne(job.id)}
-                                aria-label={`${formatDateTime(job.createdAtMs)} 백테스트 선택`}
+                    <div key={job.id} className="min-w-0 max-w-[360px] space-y-2">
+                      <BacktestJobCard
+                        job={job}
+                        summary={extrasBySource.get(job.id)}
+                        timeframe={resolveJobTimeframe(job)}
+                        editing={editing}
+                        selected={selected.has(job.id)}
+                        deletable={deletableIds.includes(job.id)}
+                        onToggle={() => toggleOne(job.id)}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <HistoryTable columns={columns} busy={query?.isPlaceholderData}>
+                    {query?.data?.jobs.map((job) => (
+                      <TableRow key={job.id}>
+                          <TableCell className="sticky left-0 z-10 bg-background py-3 align-top whitespace-normal">
+                            <div className="flex items-center gap-1 whitespace-nowrap">
+                              {editing && deletableIds.includes(job.id) ? (
+                                <Checkbox
+                                  checked={selected.has(job.id)}
+                                  onCheckedChange={() => toggleOne(job.id)}
+                                  aria-label={`${formatDateTime(job.createdAtMs)} 백테스트 선택`}
+                                />
+                              ) : null}
+                              {editing ? (
+                                <span className="whitespace-nowrap">
+                                  {historyPeriod(
+                                    job.request.period.from,
+                                    job.request.period.to,
+                                  )}
+                                </span>
+                              ) : (
+                                <Link
+                                  className="whitespace-nowrap underline"
+                                  to={`/backtests/${job.id}`}
+                                >
+                                  {historyPeriod(
+                                    job.request.period.from,
+                                    job.request.period.to,
+                                  )}
+                                </Link>
+                              )}
+                            </div>
+                            <div className="mt-1 flex items-center gap-1 text-muted-foreground">
+                              <StatusBadge status={job.status} />
+                              {!editing ? <ExperimentLinks jobId={job.id} summary={extrasBySource.get(job.id)} /> : null}
+                            </div>
+                            {job.error ? (
+                              <p className="text-destructive">
+                                {job.error}
+                              </p>
+                            ) : null}
+                            {job.progress && !isTerminal(job.status) ? (
+                              <ExecutionProgressSummary
+                                progress={job.progress}
+                                compact
                               />
                             ) : null}
-                            {editing ? (
-                              <span className="whitespace-nowrap">
-                                {historyPeriod(
-                                  job.request.period.from,
-                                  job.request.period.to,
+                            {!job.progress &&
+                            !isTerminal(job.status) &&
+                            job.progressBars !== null &&
+                            job.totalBars !== null &&
+                            job.totalBars > 0 ? (
+                              <p className="text-muted-foreground">
+                                진행률{" "}
+                                {Math.round(
+                                  (job.progressBars / job.totalBars) * 100,
                                 )}
-                              </span>
-                            ) : (
-                              <Link
-                                className="whitespace-nowrap underline"
-                                to={`/backtests/${job.id}`}
-                              >
-                                {historyPeriod(
-                                  job.request.period.from,
-                                  job.request.period.to,
-                                )}
-                              </Link>
-                            )}
-                          </div>
-                          <div className="mt-1 flex items-center gap-1 text-muted-foreground">
-                            <StatusBadge status={job.status} />
-                            {!editing ? <ExperimentLinks jobId={job.id} summary={extrasBySource.get(job.id)} /> : null}
-                          </div>
-                          {job.error ? (
-                            <p className="break-words text-destructive">
-                              {job.error}
-                            </p>
-                          ) : null}
-                          {job.progress && !isTerminal(job.status) ? (
-                            <ExecutionProgressSummary
-                              progress={job.progress}
-                              compact
-                            />
-                          ) : null}
-                          {!job.progress &&
-                          !isTerminal(job.status) &&
-                          job.progressBars !== null &&
-                          job.totalBars !== null &&
-                          job.totalBars > 0 ? (
-                            <p className="text-muted-foreground">
-                              진행률{" "}
-                              {Math.round(
-                                (job.progressBars / job.totalBars) * 100,
-                              )}
-                              %
-                            </p>
-                          ) : null}
-                        </TableCell>
-                        <HistoryMetricCells columns={columns} values={{
-                          return: job.metrics?.totalReturnPct,
-                          cagr: job.metrics?.cagrPct,
-                          mdd: job.metrics?.maxDrawdownPct,
-                          date: job.createdAtMs,
-                          sharpe: job.metrics?.sharpe,
-                          seed: extrasBySource.has(job.id) ? {
-                            count: extrasBySource.get(job.id)!.seed.batchCount,
-                            stddev: extrasBySource.get(job.id)!.seed.returns.sampleStdDev,
-                          } : undefined,
-                          validation: extrasBySource.has(job.id) ? {
-                            count: extrasBySource.get(job.id)!.validation.experimentCount,
-                            stddev: extrasBySource.get(job.id)!.validation.returns.sampleStdDev,
-                          } : undefined,
-                        }} />
-                      </TableRow>
-                  ))}
-              </HistoryTable>
-            )}
-            {query?.data ? (
-              <HistoryPager
-                strategyName={name}
-                page={controls.page(group.strategyId)}
-                total={query.data.total}
-                limit={limit}
-                pending={query.isPlaceholderData}
-                onPage={(page) => {
-                  controls.setPage(group.strategyId, page);
-                  clear();
-                }}
-              />
-            ) : null}
-          </HistoryStrategyGroup>
-        );
-      })}
+                                %
+                              </p>
+                            ) : null}
+                          </TableCell>
+                          <HistoryMetricCells columns={columns} values={{
+                            return: job.metrics?.totalReturnPct,
+                            cagr: job.metrics?.cagrPct,
+                            mdd: job.metrics?.maxDrawdownPct,
+                            date: job.createdAtMs,
+                            sharpe: job.metrics?.sharpe,
+                            seed: extrasBySource.has(job.id) ? {
+                              count: extrasBySource.get(job.id)!.seed.batchCount,
+                              stddev: extrasBySource.get(job.id)!.seed.returns.sampleStdDev,
+                            } : undefined,
+                            validation: extrasBySource.has(job.id) ? {
+                              count: extrasBySource.get(job.id)!.validation.experimentCount,
+                              stddev: extrasBySource.get(job.id)!.validation.returns.sampleStdDev,
+                            } : undefined,
+                          }} />
+                        </TableRow>
+                    ))}
+                </HistoryTable>
+              )}
+              {query?.data ? (
+                <HistoryPager
+                  strategyName={name}
+                  page={controls.page(group.strategyId)}
+                  total={query.data.total}
+                  limit={limit}
+                  pending={query.isPlaceholderData}
+                  onPage={(page) => {
+                    controls.setPage(group.strategyId, page);
+                    clear();
+                  }}
+                />
+              ) : null}
+            </HistoryStrategyGroup>
+          );
+        })}
+      </HistoryLayout>
     </div>
   );
 }

@@ -30,7 +30,7 @@ async function historyFixture(page: Page) {
     progressBars: null,
     totalBars: null,
     progressLabel: null,
-    error: i === 11 ? "예시 실행 오류" : null,
+    error: i === 11 ? `예시 실행 오류: ${"COLLECTION_FAILED_".repeat(20)}` : null,
     createdAtMs: Date.UTC(2026, 10, 15 - i),
     startedAtMs: null,
     completedAtMs: Date.UTC(2026, 10, 15 - i),
@@ -40,7 +40,7 @@ async function historyFixture(page: Page) {
       i === 11
         ? null
         : {
-            totalReturnPct: i === 10 ? 99 : i,
+            totalReturnPct: i === 12 ? 12345.67 : i === 10 ? 99 : i,
             cagrPct: i,
             maxDrawdownPct: -5,
             tradeCount: 1,
@@ -118,6 +118,19 @@ async function historyFixture(page: Page) {
   return { jobs, requests, deleted };
 }
 
+// 기존 건수·보기 검사는 전략마다 별도 표의 열 경계가 달라지는 회귀를 잡지 못한다.
+async function expectAlignedHistoryColumns(page: Page) {
+  await expect.poll(() => page.getByRole("table").evaluateAll((tables) => {
+    const columns = Array.from(tables[0]!.querySelectorAll("th"), (cell) => cell.getBoundingClientRect());
+    return Math.max(0, ...tables.flatMap((table) => Array.from(table.querySelectorAll("tr"), (row) =>
+      Array.from(row.children, (cell, index) => {
+        const bounds = cell.getBoundingClientRect(), header = columns[index]!;
+        return Math.max(Math.abs(bounds.left - header.left), Math.abs(bounds.right - header.right));
+      }),
+    ).flat()));
+  })).toBeLessThanOrEqual(1);
+}
+
 // 기존 목록 검사는 첫 화면만 확인한다. 실제 조작으로 페이지·뒤로가기·삭제 범위가 유지되는지 검증한다.
 test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 뒤로 돌아온다", async ({
   page,
@@ -155,9 +168,14 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
   await expect(group.getByRole("columnheader")).toHaveText(["기간", "수익률", "CAGR", "MDD", "실행일"]);
 
   await expect(other.locator("tbody > tr")).toHaveCount(1);
+  await expectAlignedHistoryColumns(page);
   await group.getByRole("button", { name: "다음", exact: true }).click();
   await expect(group.locator("tbody > tr")).toHaveCount(2);
   await expect(other.locator("tbody > tr")).toHaveCount(1);
+  await expectAlignedHistoryColumns(page);
+  // 공백 없는 오류 코드도 기간 열을 화면 밖으로 밀어내지 않아야 한다.
+  await expect.poll(async () => (await group.getByRole("columnheader", { name: "기간", exact: true }).boundingBox())!.width)
+    .toBeLessThan(page.viewportSize()!.width);
   await group.locator('a[href="/backtests/history-11"]').click();
   await expect(page).toHaveURL(/\/backtests\/history-11$/);
   await page.goBack();
@@ -206,6 +224,19 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
     path: testInfo.outputPath("history.png"),
     fullPage: true,
   });
+  if (testInfo.project.name === "desktop") {
+    const period = group.getByRole("columnheader", { name: "기간", exact: true });
+    const before = await period.boundingBox();
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await expect.poll(async () => (await period.boundingBox())!.width).toBeLessThan(before!.width);
+    await expectAlignedHistoryColumns(page);
+  } else {
+    const history = page.getByRole("region", { name: "백테스트 이력", exact: true });
+    await history.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect.poll(() => history.evaluate((node) => node.scrollLeft)).toBeGreaterThan(0);
+    await expectAlignedHistoryColumns(page);
+  }
 });
 
 test("삭제는 펼친 전략의 현재 페이지에 한정하고 빈 마지막 페이지를 보정한다", async ({
@@ -239,13 +270,17 @@ test("삭제는 펼친 전략의 현재 페이지에 한정하고 빈 마지막 
 test("표시 항목과 순서를 저장하고 일봉·분봉에 같은 표 구성을 적용한다", async ({ page }, testInfo) => {
   await login(page);
   await historyFixture(page);
-  await page.route("**/api/v1/intraday/runs/groups", (route) => route.fulfill({ json: { groups: [{ strategyId: "intraday-ema", total: 1 }] } }));
-  await page.route("**/api/v1/intraday/runs?**", (route) => route.fulfill({ json: {
-    total: 1, runs: [{ id: "columns-intraday", status: "COMPLETED", error: null, createdAtMs: Date.UTC(2026, 10, 15),
-      request: { strategyId: "intraday-ema", symbol: "005930", timeframe: "5m", period: { from: "2026-01-01", to: "2026-02-01" } },
-      metrics: { returnPct: 5, maxDrawdownPct: -3, sharpe: 1.25 },
-    }],
-  } }));
+  const strategies = ["intraday-ema", "intraday-orb"];
+  await page.route("**/api/v1/intraday/runs/groups", (route) => route.fulfill({ json: { groups: strategies.map((strategyId) => ({ strategyId, total: 1 })) } }));
+  await page.route("**/api/v1/intraday/runs?**", (route) => {
+    const strategyId = new URL(route.request().url()).searchParams.get("strategyId");
+    return route.fulfill({ json: {
+      total: 1, runs: [{ id: `columns-${strategyId}`, status: "COMPLETED", error: null, createdAtMs: Date.UTC(2026, 10, 15),
+        request: { strategyId, symbol: "005930", timeframe: "5m", period: { from: "2026-01-01", to: "2026-02-01" } },
+        metrics: { returnPct: strategyId === "intraday-ema" ? 5 : 12345.67, maxDrawdownPct: -3, sharpe: 1.25 },
+      }],
+    } });
+  });
   const mobile = testInfo.project.name === "mobile";
   if (mobile) await page.setViewportSize({ width: 320, height: 844 });
   await page.goto("/backtests?view=table");
@@ -301,8 +336,11 @@ test("표시 항목과 순서를 저장하고 일봉·분봉에 같은 표 구�
   await page.keyboard.press("Escape");
   await page.reload();
   await expect(table.getByRole("columnheader")).toHaveText(headers);
+  await expectAlignedHistoryColumns(page);
   await page.goto("/backtests/intraday?view=table");
   await expect(table.getByRole("columnheader")).toHaveText(headers);
+  await expect(page.getByRole("table")).toHaveCount(2);
+  await expectAlignedHistoryColumns(page);
   await expect(table.locator("tbody tr").first().getByRole("cell").nth(3)).toHaveText("1.25");
   await expect(table.locator("tbody tr").first().getByRole("cell").nth(5)).toHaveText("—");
   await page.getByRole("button", { name: "표시 항목", exact: true }).click();

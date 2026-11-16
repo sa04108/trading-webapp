@@ -41,7 +41,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { TableCell, TableRow } from "@/components/ui/table";
-import { HistoryMetricCells, HistoryTable } from "../backtests/history-table";
+import { HistoryLayout, HistoryMetricCells, HistoryTable } from "../backtests/history-table";
 import { useHistoryTablePreferences } from "../backtests/history-table-preferences";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, postJson } from "@/lib/api-client";
@@ -355,165 +355,167 @@ export function IntradayListPage() {
         </p>
       ) : null}
       {groups.data?.groups.length === 0 ? <p>백테스트가 없습니다.</p> : null}
-      {(groups.data?.groups ?? []).map((group, index) => {
-        const query = pages[index];
-        const strategy = INTRADAY_STRATEGIES.find(
-          (s) => s.id === group.strategyId,
-        );
-        const name = strategy?.name ?? group.strategyId;
-        return (
-          <HistoryStrategyGroup
-            key={group.strategyId}
-            name={name}
-            description={strategy?.description}
-            total={group.total}
-            collapsed={controls.collapsed(group.strategyId)}
-            onToggle={() => {
-              controls.toggle(group.strategyId);
-              clear();
-            }}
-          >
-            <ErrorAlert error={query?.error} />
-            {controls.view === "cards" ? (
-              <div data-pagination-content aria-busy={query?.isPlaceholderData} className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
-                {query?.data?.runs.map((run) => {
-                  const card = (
-                    <Card>
-                      <CardContent className="space-y-2 py-4">
-                        <div className="flex justify-between gap-2 text-xs text-muted-foreground">
-                          <span className="flex items-center gap-1">{active(run.status) ? <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" aria-hidden /> : null}{statusLabel[run.status]}</span>
-                        </div>
-                        <div className="flex items-baseline justify-between gap-2 whitespace-nowrap">
-                          <p className="text-xs font-medium">
-                            {historyPeriod(run.request.period.from, run.request.period.to)}
-                          </p>
-                          <time
-                            className="shrink-0 text-[11px] text-muted-foreground tabular-nums"
-                            dateTime={new Date(run.createdAtMs).toISOString()}
-                            title={time(run.createdAtMs)}
-                          >
-                            {new Date(run.createdAtMs).toLocaleString("sv-SE", {
-                              timeZone: "Asia/Seoul", year: "2-digit", month: "2-digit", day: "2-digit",
-                              hour: "2-digit", minute: "2-digit",
-                            }).replaceAll("-", ".")}
-                          </time>
-                        </div>
-                        <p className="text-xs text-muted-foreground">
-                          {run.request.symbol} · {run.request.timeframe}
-                        </p>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <p className="text-xs text-muted-foreground">
-                              수익률
-                            </p>
-                            <p
-                              className={`text-xl font-semibold tabular-nums ${pnlClass(run.metrics?.returnPct ?? null)}`}
-                            >
-                              {formatSignedPct(run.metrics?.returnPct ?? null)}
-                            </p>
+      <HistoryLayout columns={columns} view={controls.view}>
+        {(groups.data?.groups ?? []).map((group, index) => {
+          const query = pages[index];
+          const strategy = INTRADAY_STRATEGIES.find(
+            (s) => s.id === group.strategyId,
+          );
+          const name = strategy?.name ?? group.strategyId;
+          return (
+            <HistoryStrategyGroup
+              key={group.strategyId}
+              name={name}
+              description={strategy?.description}
+              total={group.total}
+              collapsed={controls.collapsed(group.strategyId)}
+              onToggle={() => {
+                controls.toggle(group.strategyId);
+                clear();
+              }}
+            >
+              <ErrorAlert error={query?.error} />
+              {controls.view === "cards" ? (
+                <div data-pagination-content aria-busy={query?.isPlaceholderData} className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
+                  {query?.data?.runs.map((run) => {
+                    const card = (
+                      <Card>
+                        <CardContent className="space-y-2 py-4">
+                          <div className="flex justify-between gap-2 text-xs text-muted-foreground">
+                            <span className="flex items-center gap-1">{active(run.status) ? <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" aria-hidden /> : null}{statusLabel[run.status]}</span>
                           </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">
-                              CAGR
-                            </p>
-                            <p className="text-xl font-semibold">—</p>
-                          </div>
-                        </div>
-                        <p className="border-t pt-2 text-xs text-muted-foreground">
-                          MDD{" "}
-                          {formatSignedPct(run.metrics?.maxDrawdownPct ?? null)}
-                        </p>
-                        {run.error ? (
-                          <p className="break-words text-destructive">
-                            {run.error}
-                          </p>
-                        ) : null}
-                      </CardContent>
-                    </Card>
-                  );
-                  return (
-                    <div key={run.id} className="min-w-0 max-w-[360px]">
-                      {editing ? (
-                        <div className="flex items-start gap-3">
-                          <Checkbox
-                            id={`intraday-${run.id}`}
-                            className="mt-5"
-                            checked={selected.has(run.id)}
-                            disabled={active(run.status) || remove.isPending || query?.isPlaceholderData}
-                            onCheckedChange={() => toggleOne(run.id)}
-                            aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
-                          />
-                          <label htmlFor={`intraday-${run.id}`} className="min-w-0 flex-1 cursor-pointer">{card}</label>
-                        </div>
-                      ) : (
-                        <Link className="block" to={`/backtests/intraday/${encodeURIComponent(run.id)}`}>{card}</Link>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <HistoryTable columns={columns} busy={query?.isPlaceholderData}>
-                  {query?.data?.runs.map((run) => (
-                    <TableRow key={run.id}>
-                      <TableCell className="sticky left-0 z-10 w-px bg-background py-3 align-top whitespace-normal">
-                        <div className="flex items-center gap-1 whitespace-nowrap">
-                          {editing ? (
-                            <>
-                              <Checkbox
-                                checked={selected.has(run.id)}
-                                disabled={active(run.status) || remove.isPending || query?.isPlaceholderData}
-                                onCheckedChange={() => toggleOne(run.id)}
-                                aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
-                              />
-                              <span className="whitespace-nowrap">
-                                {historyPeriod(run.request.period.from, run.request.period.to)}
-                              </span>
-                            </>
-                          ) : (
-                            <Link
-                              className="whitespace-nowrap underline"
-                              to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
-                            >
+                          <div className="flex items-baseline justify-between gap-2 whitespace-nowrap">
+                            <p className="text-xs font-medium">
                               {historyPeriod(run.request.period.from, run.request.period.to)}
-                            </Link>
-                          )}
-                        </div>
-                        <div className="mt-1 text-muted-foreground">
-                          {statusLabel[run.status]} · {run.request.symbol}
-                        </div>
-                        {run.error ? (
-                          <p className="break-words text-destructive">
-                            {run.error}
+                            </p>
+                            <time
+                              className="shrink-0 text-[11px] text-muted-foreground tabular-nums"
+                              dateTime={new Date(run.createdAtMs).toISOString()}
+                              title={time(run.createdAtMs)}
+                            >
+                              {new Date(run.createdAtMs).toLocaleString("sv-SE", {
+                                timeZone: "Asia/Seoul", year: "2-digit", month: "2-digit", day: "2-digit",
+                                hour: "2-digit", minute: "2-digit",
+                              }).replaceAll("-", ".")}
+                            </time>
+                          </div>
+                          <p className="text-xs text-muted-foreground">
+                            {run.request.symbol} · {run.request.timeframe}
                           </p>
-                        ) : null}
-                      </TableCell>
-                      <HistoryMetricCells columns={columns} values={{
-                        return: run.metrics?.returnPct,
-                        mdd: run.metrics?.maxDrawdownPct,
-                        date: run.createdAtMs,
-                        sharpe: run.metrics?.sharpe,
-                      }} />
-                    </TableRow>
-                  ))}
-              </HistoryTable>
-            )}
-            {query?.data ? (
-              <HistoryPager
-                strategyName={name}
-                page={controls.page(group.strategyId)}
-                total={query.data.total}
-                limit={limit}
-                pending={query.isPlaceholderData}
-                onPage={(page) => {
-                  controls.setPage(group.strategyId, page);
-                  clear();
-                }}
-              />
-            ) : null}
-          </HistoryStrategyGroup>
-        );
-      })}
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <p className="text-xs text-muted-foreground">
+                                수익률
+                              </p>
+                              <p
+                                className={`text-xl font-semibold tabular-nums ${pnlClass(run.metrics?.returnPct ?? null)}`}
+                              >
+                                {formatSignedPct(run.metrics?.returnPct ?? null)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-muted-foreground">
+                                CAGR
+                              </p>
+                              <p className="text-xl font-semibold">—</p>
+                            </div>
+                          </div>
+                          <p className="border-t pt-2 text-xs text-muted-foreground">
+                            MDD{" "}
+                            {formatSignedPct(run.metrics?.maxDrawdownPct ?? null)}
+                          </p>
+                          {run.error ? (
+                            <p className="break-words text-destructive">
+                              {run.error}
+                            </p>
+                          ) : null}
+                        </CardContent>
+                      </Card>
+                    );
+                    return (
+                      <div key={run.id} className="min-w-0 max-w-[360px]">
+                        {editing ? (
+                          <div className="flex items-start gap-3">
+                            <Checkbox
+                              id={`intraday-${run.id}`}
+                              className="mt-5"
+                              checked={selected.has(run.id)}
+                              disabled={active(run.status) || remove.isPending || query?.isPlaceholderData}
+                              onCheckedChange={() => toggleOne(run.id)}
+                              aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
+                            />
+                            <label htmlFor={`intraday-${run.id}`} className="min-w-0 flex-1 cursor-pointer">{card}</label>
+                          </div>
+                        ) : (
+                          <Link className="block" to={`/backtests/intraday/${encodeURIComponent(run.id)}`}>{card}</Link>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <HistoryTable columns={columns} busy={query?.isPlaceholderData}>
+                    {query?.data?.runs.map((run) => (
+                      <TableRow key={run.id}>
+                        <TableCell className="sticky left-0 z-10 bg-background py-3 align-top whitespace-normal">
+                          <div className="flex items-center gap-1 whitespace-nowrap">
+                            {editing ? (
+                              <>
+                                <Checkbox
+                                  checked={selected.has(run.id)}
+                                  disabled={active(run.status) || remove.isPending || query?.isPlaceholderData}
+                                  onCheckedChange={() => toggleOne(run.id)}
+                                  aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
+                                />
+                                <span className="whitespace-nowrap">
+                                  {historyPeriod(run.request.period.from, run.request.period.to)}
+                                </span>
+                              </>
+                            ) : (
+                              <Link
+                                className="whitespace-nowrap underline"
+                                to={`/backtests/intraday/${encodeURIComponent(run.id)}`}
+                              >
+                                {historyPeriod(run.request.period.from, run.request.period.to)}
+                              </Link>
+                            )}
+                          </div>
+                          <div className="mt-1 text-muted-foreground">
+                            {statusLabel[run.status]} · {run.request.symbol}
+                          </div>
+                          {run.error ? (
+                            <p className="text-destructive">
+                              {run.error}
+                            </p>
+                          ) : null}
+                        </TableCell>
+                        <HistoryMetricCells columns={columns} values={{
+                          return: run.metrics?.returnPct,
+                          mdd: run.metrics?.maxDrawdownPct,
+                          date: run.createdAtMs,
+                          sharpe: run.metrics?.sharpe,
+                        }} />
+                      </TableRow>
+                    ))}
+                </HistoryTable>
+              )}
+              {query?.data ? (
+                <HistoryPager
+                  strategyName={name}
+                  page={controls.page(group.strategyId)}
+                  total={query.data.total}
+                  limit={limit}
+                  pending={query.isPlaceholderData}
+                  onPage={(page) => {
+                    controls.setPage(group.strategyId, page);
+                    clear();
+                  }}
+                />
+              ) : null}
+            </HistoryStrategyGroup>
+          );
+        })}
+      </HistoryLayout>
       <details className="space-y-3">
         <summary className="cursor-pointer font-semibold">
           분봉 전략 소개
