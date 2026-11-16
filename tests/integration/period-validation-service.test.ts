@@ -194,13 +194,56 @@ describe('독립 구간 검증 실행', () => {
     expect(deps.onFinished).toHaveBeenCalledWith(expect.objectContaining({ status: 'COMPLETED' }));
   });
 
-  it('조건을 만족하는 후보가 없으면 회차를 건너뛰지 않고 실패한다', async () => {
-    const experiment = service.create(sourceId, optimized);
-    await until(() => service.get(experiment.id)!.trials.filter((trial) => trial.jobId).length === 2);
-    for (const trial of service.get(experiment.id)!.trials.filter((trial) => trial.role === 'TRAIN')) complete(trial.jobId!, metrics(1, 0));
-    await service.pump();
-    expect(service.get(experiment.id)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('만족하는 후보가 없습니다') });
-    expect(service.get(experiment.id)!.trials.filter((trial) => trial.role !== 'TRAIN').every((trial) => trial.jobId === null)).toBe(true);
+  it('후보가 없는 첫 회차는 미평가로 보존하고 다음 회차와 고정 전략은 독립 실행한다', async () => {
+    const original = results.getRun(sourceId);
+    const experiment = service.create(sourceId, { mode: 'WALK_FORWARD', trainMonths: 36, testMonths: 4, optimization });
+    expect(experiment.plan.folds).toHaveLength(3);
+    await until(() => service.get(experiment.id)!.trials.filter((trial) => trial.fold === 0 && trial.role === 'TRAIN' && trial.jobId).length === 2);
+    for (const trial of service.get(experiment.id)!.trials.filter((trial) => trial.fold === 0 && trial.role === 'TRAIN')) complete(trial.jobId!, metrics(1, 0));
+    await until(() => service.get(experiment.id)!.trials.find((trial) => trial.fold === 0 && trial.role === 'OOS')!.status === 'NOT_EVALUATED');
+    const skipped = service.get(experiment.id)!.trials.find((trial) => trial.fold === 0 && trial.role === 'OOS')!;
+    expect(skipped).toMatchObject({ status: 'NOT_EVALUATED', skipReason: 'NO_ELIGIBLE_CANDIDATE', jobId: null, metrics: null, parameters: null });
+    expect(service.get(experiment.id)!.trials.filter((trial) => trial.fold === 0 && trial.role === 'TRAIN').every((trial) => trial.selection?.eligible === false && trial.selection.reasons.includes('INSUFFICIENT_TRADES'))).toBe(true);
+    await service.stop();
+    service = new PeriodValidationService(deps);
+    const other = new PeriodValidationService(deps);
+    try {
+      await Promise.all([service.pump(), other.pump(), service.pump()]);
+      for (let i = 0; i < 150 && service.get(experiment.id)!.status === 'ACTIVE'; i += 1) {
+        await service.pump();
+        for (const trial of service.get(experiment.id)!.trials.filter((trial) => trial.status === 'QUEUED')) complete(trial.jobId!, metrics(trial.candidate === 1 ? 3 : 1));
+      }
+      const detail = service.get(experiment.id)!;
+      expect(detail.status).toBe('COMPLETED');
+      expect(detail.trials.filter((trial) => trial.role === 'OOS').map((trial) => trial.status)).toEqual(['NOT_EVALUATED', 'COMPLETED', 'COMPLETED']);
+      expect(detail.trials.filter((trial) => trial.role === 'BASELINE').every((trial) => trial.status === 'COMPLETED')).toBe(true);
+      expect(detail.trials.find((trial) => trial.fold === 0 && trial.role === 'OOS')).toMatchObject({ jobId: null, metrics: null, skipReason: 'NO_ELIGIBLE_CANDIDATE' });
+      const skipRow = database.sqlite.prepare("SELECT preparation_job_id, job_id FROM backtest_validation_trials WHERE id=?").get(skipped.id);
+      expect(skipRow).toEqual({ preparation_job_id: null, job_id: null });
+      for (const trial of detail.trials.filter((item) => item.jobId)) {
+        const request = JSON.parse(queue.getJob(trial.jobId!)!.requestJson) as BacktestRequest;
+        expect(request.capital).toEqual(source.capital);
+        expect(request.randomSeed).toBe(source.randomSeed);
+      }
+      expect(results.getRun(sourceId)).toEqual(original);
+    } finally { await other.stop(); }
+  });
+
+  it.each([
+    optimized,
+    { mode: 'WALK_FORWARD', trainMonths: 36, testMonths: 4, optimization } as const,
+  ])('모든 후보가 조건에 미달해도 미평가 OOS와 고정 전략을 보존하고 완료한다: $mode', async (config) => {
+    const experiment = service.create(sourceId, config);
+    for (let i = 0; i < 150 && service.get(experiment.id)!.status === 'ACTIVE'; i += 1) {
+      await service.pump();
+      for (const trial of service.get(experiment.id)!.trials.filter((trial) => trial.status === 'QUEUED')) complete(trial.jobId!, metrics(1, trial.role === 'TRAIN' ? 0 : 10));
+    }
+    const detail = service.get(experiment.id)!;
+    expect(detail.status).toBe('COMPLETED');
+    expect(detail.error).toBeNull();
+    expect(detail.trials.filter((trial) => trial.role === 'OOS')).toHaveLength(detail.plan.folds.length);
+    expect(detail.trials.filter((trial) => trial.role === 'OOS').every((trial) => trial.status === 'NOT_EVALUATED' && trial.skipReason === 'NO_ELIGIBLE_CANDIDATE' && trial.jobId === null && trial.metrics === null)).toBe(true);
+    expect(detail.trials.filter((trial) => trial.role === 'BASELINE').every((trial) => trial.status === 'COMPLETED' && trial.metrics !== null)).toBe(true);
   });
 
   it('데이터 revision이 바뀌면 기존 후보를 다른 데이터로 이어 비교하지 않는다', async () => {
@@ -213,11 +256,11 @@ describe('독립 구간 검증 실행', () => {
     expect(service.get(experiment.id)!.trials.filter((trial) => trial.jobId)).toHaveLength(1);
   });
 
-  it('서버의 실행 버전이 달라지거나 하위 작업이 중단되면 실패한다', async () => {
+  it.each(['FAILED', 'INTERRUPTED'] as const)('하위 작업이 %s이거나 실행 버전이 달라지면 실패한다', async (status) => {
     const experiment = service.create(sourceId, optimized);
     await until(() => service.get(experiment.id)!.trials.some((trial) => trial.jobId));
     const jobId = service.get(experiment.id)!.trials.find((trial) => trial.jobId)!.jobId!;
-    queue.setStatus(jobId, 'INTERRUPTED');
+    queue.setStatus(jobId, status);
     await service.pump();
     expect(service.get(experiment.id)!.status).toBe('FAILED');
     const another = service.create(sourceId, optimized);

@@ -170,6 +170,8 @@ export async function buildServer(
           },
           onValidationFinished: (experiment) => {
             try {
+              const evaluated = experiment.trials.filter((trial) => trial.role === "OOS" && trial.status === "COMPLETED").length;
+              const notEvaluated = experiment.trials.filter((trial) => trial.role === "OOS" && trial.skipReason !== null).length;
               container.notificationService.create({
                 type: "backtest",
                 severity: experiment.status === "FAILED" ? "error" : "info",
@@ -181,7 +183,7 @@ export async function buildServer(
                       : "기간 검증이 취소되었습니다",
                 body:
                   experiment.error ??
-                  `${experiment.plan.folds.length}개 구간 · ${experiment.plan.totalRuns}회 실행 계획`,
+                  `선택 전략 OOS ${evaluated}/${experiment.plan.folds.length}회 평가 · 후보 없음으로 ${notEvaluated}회 미평가`,
                 link: `/backtests/${experiment.sourceJobId}#period-validation`,
               });
             } catch (error) {

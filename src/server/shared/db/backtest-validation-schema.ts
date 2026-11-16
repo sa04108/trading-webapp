@@ -1,6 +1,7 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import { backtestPreparationJobs } from "../../../runtime/shared/db/operations-schema.js";
 import { backtestJobs } from "../../../runtime/shared/db/operations-schema.js";
+import type { ValidationSkipReason } from "../../../shared/schemas/period-validation.js";
 
 /** 독립 평가 실험은 원본 설정과 선택 규칙을 고정하고 단계별 복구 위치를 보관한다. */
 export const backtestValidations = sqliteTable(
@@ -40,6 +41,8 @@ export const backtestValidationTrials = sqliteTable(
     fold: integer("fold").notNull(),
     role: text("role").notNull(),
     candidate: integer("candidate"),
+    /** 선택 불가 OOS를 대기·실패와 구분해 재시작 후에도 실행하지 않는다. */
+    skipReason: text("skip_reason").$type<ValidationSkipReason>(),
     requestJson: text("request_json"),
     preparationJobId: text("preparation_job_id").references(
       () => backtestPreparationJobs.id,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildPeriodValidationPlan, periodValidationConfigSchema, selectValidationCandidate, validationMonthOffset } from '../../src/shared/schemas/period-validation.js';
+import { buildPeriodValidationPlan, evaluateValidationCandidate, periodValidationConfigSchema, selectValidationCandidate, validationMonthOffset } from '../../src/shared/schemas/period-validation.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 
 const source: BacktestRequest = {
@@ -55,6 +55,12 @@ describe('IS 후보 선택', () => {
       { candidate: 0, metrics: metrics(10, 1) }, { candidate: 1, metrics: metrics(5, 20, -40) },
       { candidate: 2, metrics: metrics(null) }, { candidate: 3, metrics: metrics(0.5) },
     ], optimization)).toBe(3);
+  });
+  it('선택 진단은 경계값을 통과시키고 사용할 수 없는 값과 조건 미달을 구분한다', () => {
+    expect(evaluateValidationCandidate(metrics(-1, 5, -30), optimization)).toEqual({ eligible: true, reasons: [] });
+    expect(evaluateValidationCandidate(metrics(null, 4, -31), optimization)).toEqual({ eligible: false, reasons: ['OBJECTIVE_UNAVAILABLE', 'INSUFFICIENT_TRADES', 'DRAWDOWN_LIMIT_EXCEEDED'] });
+    expect(evaluateValidationCandidate(metrics(1, Number.NaN, Number.NaN), optimization)).toEqual({ eligible: false, reasons: ['TRADE_COUNT_UNAVAILABLE', 'DRAWDOWN_UNAVAILABLE'] });
+    expect(selectValidationCandidate([{ candidate: 0, metrics: metrics(-1, 5, -30) }], optimization)).toBe(0);
   });
   it('음수 점수도 비교하며 동률은 완료 순서와 무관하게 결정한다', () => {
     expect(selectValidationCandidate([{ candidate: 2, metrics: metrics(-1) }, { candidate: 1, metrics: metrics(-1) }, { candidate: 0, metrics: metrics(-2) }], optimization)).toBe(1);

@@ -179,9 +179,13 @@ export class JobCenterService {
       case "validation": {
         const data = db.prepare(`SELECT source_job_id AS sourceJobId, phase, error,
           json_extract(request_json,'$.strategyId') AS strategyId, json_extract(plan_json,'$.totalRuns') AS total FROM backtest_validations WHERE id=?`).get(row.sourceId) as { sourceJobId: string; phase: string; strategyId: string; total: number; error: string | null };
-        const counts = db.prepare(`SELECT count(*) AS done FROM backtest_validation_trials t JOIN backtest_jobs j ON j.id=t.job_id
-          WHERE t.validation_id=? AND j.status IN ${terminal}`).get(row.sourceId) as { done: number };
-        job = { ...job, title: `${strategyName(data.strategyId)} · 기간 검증`, phase: jobPhase(data.phase), error: data.error, progress: jobProgress(counts.done, data.total, "백테스트"), link: `/backtests/${encodeURIComponent(data.sourceJobId)}#period-validation` };
+        const counts = db.prepare(`SELECT count(*) AS done,
+          coalesce(sum(CASE WHEN t.skip_reason IS NOT NULL THEN 1 ELSE 0 END), 0) AS notEvaluated
+          FROM backtest_validation_trials t LEFT JOIN backtest_jobs j ON j.id=t.job_id
+          WHERE t.validation_id=? AND (t.skip_reason IS NOT NULL OR j.status IN ${terminal})`).get(row.sourceId) as { done: number; notEvaluated: number };
+        job = { ...job, title: `${strategyName(data.strategyId)} · 기간 검증`, phase: jobPhase(data.phase), error: data.error,
+          description: counts.notEvaluated ? `선택 가능한 IS 후보가 없어 선택 전략 OOS ${counts.notEvaluated}회 미평가` : null,
+          progress: jobProgress(counts.done, data.total, "실행 처리 (미평가 포함)"), link: `/backtests/${encodeURIComponent(data.sourceJobId)}#period-validation` };
         break;
       }
       case "intraday-backtest": {

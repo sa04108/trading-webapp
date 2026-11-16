@@ -1,6 +1,7 @@
 import { and, asc, eq, inArray } from "drizzle-orm";
 import {
   buildPeriodValidationPlan,
+  evaluateValidationCandidate,
   periodValidationConfigSchema,
   selectValidationCandidate,
   type PeriodValidationConfig,
@@ -225,11 +226,12 @@ export class PeriodValidationService {
     if (!experiment) return null;
     const plan = JSON.parse(experiment.planJson) as PeriodValidationPlan;
     const source = JSON.parse(experiment.requestJson) as BacktestRequest;
+    const config = JSON.parse(experiment.configJson) as PeriodValidationConfig;
     return {
       id,
       sourceJobId: experiment.sourceJobId,
       status: experiment.status as ValidationStatus,
-      config: JSON.parse(experiment.configJson) as PeriodValidationConfig,
+      config,
       plan,
       initialCash: source.capital.initialCash,
       createdAtMs: experiment.createdAtMs,
@@ -242,6 +244,7 @@ export class PeriodValidationService {
         const prep = trial.preparationJobId
           ? this.deps.preparation.get(trial.preparationJobId)
           : null;
+        const metrics = !trial.skipReason && job?.status === "COMPLETED" ? this.metrics(job.id) : null;
         return {
           id: trial.id,
           fold: trial.fold,
@@ -251,7 +254,7 @@ export class PeriodValidationService {
           parameters: request?.parameters ?? null,
           jobId: trial.jobId,
           status:
-            job?.status ??
+            trial.skipReason ? "NOT_EVALUATED" : job?.status ??
             (experiment.status === "ACTIVE"
               ? prep && prep.status !== "COMPLETED"
                 ? `PREPARATION_${prep.status}`
@@ -263,7 +266,10 @@ export class PeriodValidationService {
             ? Math.min(100, ((job.progressBars ?? 0) / job.totalBars) * 100)
             : null,
           error: job?.error ?? prep?.error ?? null,
-          metrics: job?.status === "COMPLETED" ? this.metrics(job.id) : null,
+          metrics,
+          skipReason: trial.skipReason,
+          selection: trial.role === "TRAIN" && metrics && config.mode !== "HOLDOUT"
+            ? evaluateValidationCandidate(metrics, config.optimization) : null,
         };
       }),
     };
@@ -455,6 +461,7 @@ export class PeriodValidationService {
       const group = this.trials(experiment.id).filter(
         (trial) =>
           trial.fold === experiment.fold &&
+          trial.skipReason === null &&
           (training ? trial.role === "TRAIN" : trial.role !== "TRAIN"),
       );
       if (experiment.phase.startsWith("PREPARING_")) {
@@ -685,10 +692,6 @@ export class PeriodValidationService {
               })),
               config.optimization,
             );
-      if (candidate === null)
-        throw new Error(
-          `${experiment.fold + 1}회차 IS에서 선택 조건을 만족하는 후보가 없습니다. 이 회차를 제외하지 않고 실험을 중단했습니다.`,
-        );
       const source = JSON.parse(experiment.requestJson) as BacktestRequest;
       this.deps.database.sqlite
         .transaction(() => {
@@ -699,7 +702,8 @@ export class PeriodValidationService {
             .update(backtestValidationTrials)
             .set({
               candidate,
-              requestJson: JSON.stringify({
+              skipReason: candidate === null ? "NO_ELIGIBLE_CANDIDATE" : null,
+              requestJson: candidate === null ? null : JSON.stringify({
                 ...source,
                 parameters: plan.candidates[candidate],
                 period: plan.folds[experiment.fold]!.test,
