@@ -297,7 +297,7 @@ export function BacktestsPage() {
       return next;
     });
   return (
-    <div className="space-y-4">
+    <div className="isolate space-y-4">
       <BacktestHeader
         mode="daily"
         actions={<NewBacktestButton mode="daily" />}
