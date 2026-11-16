@@ -385,7 +385,6 @@ export function BacktestsPage() {
                     <th className="text-right">수익률</th>
                     <th className="text-right">CAGR</th>
                     <th className="hidden text-right sm:table-cell">MDD</th>
-                    <th className="hidden text-right lg:table-cell">초과수익률</th>
                     <th className="hidden text-right lg:table-cell">Sharpe</th>
                     <th className="hidden text-right md:table-cell">
                       난수 <InfoHint label="난수 시드 통계 설명">건수는 난수 시드 실험 수이며 괄호는 완료된 실행 중 유효한 수익률의 표본 표준편차입니다.</InfoHint>
@@ -470,9 +469,6 @@ export function BacktestsPage() {
                         </td>
                         <td className={`hidden text-right sm:table-cell ${pnlClass(job.metrics?.maxDrawdownPct)}`}>
                           {formatSignedPct(job.metrics?.maxDrawdownPct ?? null)}
-                        </td>
-                        <td className={`hidden text-right lg:table-cell ${pnlClass(extrasBySource.get(job.id)?.benchmarkExcessReturnPct)}`}>
-                          {formatSignedPct(extrasBySource.get(job.id)?.benchmarkExcessReturnPct ?? null)}
                         </td>
                         <td className={`hidden text-right lg:table-cell ${job.metrics?.sharpe == null ? "text-muted-foreground" : job.metrics.sharpe < 0 ? "text-loss" : job.metrics.sharpe >= 1 ? "text-gain" : "text-foreground"}`}>
                           {job.metrics?.sharpe == null ? "—" : job.metrics.sharpe.toFixed(2)}
