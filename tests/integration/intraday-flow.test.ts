@@ -227,26 +227,47 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  // 일반일 재사용 검사는 특별 개장일의 차트 결측·반복 수집·별도 계산 프로세스가 같은 일정을 쓰는지 보호하지 못한다.
-  it("연초 10시 개장일의 저장된 분봉을 차트와 백테스트에서 재수집 없이 사용한다", async () => {
+  // 빈 응답이 기존 저장 봉을 지우거나 자식 계산을 막지 않고 누락 경고까지 저장하는지 보호한다.
+  it("개장 구간이 비어 있으면 재조회 후에도 누락을 표시하고 실제 저장 봉으로 결과를 만든다", async () => {
     const day = "2026-01-02";
     const open = Date.parse(`${day}T10:00:00+09:00`);
     const stored = bars.slice(0, 320).map((bar, i) => ({ ...bar, endMs: open + (i + 1) * 60_000 }));
-    const fetch = vi.fn<IntradaySource["fetch"]>(async () => { throw new Error("저장된 특별 개장일을 다시 요청했습니다"); });
+    const fetch = vi.fn<IntradaySource["fetch"]>(async () => []);
     const { service, store } = await fixture(fetch);
     await store.merge("005930", stored, now);
     const period = { from: day, to: day };
     const chart = await service.chart("005930", period, "1h");
-    expect(chart.gaps).toEqual([]);
+    expect(chart.gaps).toEqual([{ fromMs: open - 60 * 60_000, toMs: open, missingMinutes: 60 }]);
     expect(chart.bars).toHaveLength(6);
     expect(chart.bars[0]!.endMs).toBe(Date.parse(`${day}T11:00:00+09:00`));
     const run = service.submit("owner", { ...request, period });
     await vi.waitFor(() => expect(service.getRun("owner", run.id).status).toBe("COMPLETED"), { timeout: 15_000 });
-    expect(service.getRun("owner", run.id).result?.processedBars).toBe(320);
+    const result = service.getRun("owner", run.id).result!;
+    expect(result.processedBars).toBe(320);
+    expect(result.warnings.join(" ")).toContain("분봉 60개(1구간)가 누락");
+    expect(fetch).toHaveBeenCalledOnce();
     const collection = service.collect("owner", { symbol: "005930", period });
     await vi.waitFor(() => expect(service.getCollection("owner", collection.id).status).toBe("COMPLETED"));
-    expect(service.getCollection("owner", collection.id)).toMatchObject({ fetchedBars: 0, pages: 0 });
-    expect(fetch).not.toHaveBeenCalled();
+    expect(service.getCollection("owner", collection.id)).toMatchObject({ fetchedBars: 0, pages: 0, oldestEndMs: null, error: null });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect((await service.chart("005930", period, "1m")).bars).toHaveLength(320);
+  });
+
+  it("자료가 전혀 없는 결과도 경고와 함께 완료하고 빈 응답 다음 날짜의 수집을 계속한다", async () => {
+    const emptyDay = "2026-11-11";
+    const fetch = vi.fn<IntradaySource["fetch"]>(async (_symbol, from) =>
+      from === Date.parse(`${date}T00:00:00+09:00`) ? bars : [],
+    );
+    const { service } = await fixture(fetch);
+    const run = service.submit("owner", { ...request, period: { from: emptyDay, to: emptyDay } });
+    await vi.waitFor(() => expect(service.getRun("owner", run.id).status).toBe("COMPLETED"), { timeout: 15_000 });
+    const result = service.getRun("owner", run.id).result!;
+    expect(result).toMatchObject({ processedBars: 0, fills: [], signals: [], position: { quantity: 0 }, metrics: { pnl: 0, returnPct: 0, completedTrades: 0, sharpe: null } });
+    expect(result.warnings.join(" ")).toContain("사용 가능한 분봉이 없어 매매를 수행하지 않았습니다");
+    const collection = service.collect("owner", { symbol: "005930", period: { from: emptyDay, to: date } });
+    await vi.waitFor(() => expect(service.getCollection("owner", collection.id).status).toBe("COMPLETED"));
+    expect(service.getCollection("owner", collection.id)).toMatchObject({ fetchedBars: 380, oldestEndMs: bars[0]!.endMs, error: null });
+    expect(fetch.mock.calls.map(([, from]) => from)).toEqual([emptyDay, emptyDay, date].map((day) => Date.parse(`${day}T00:00:00+09:00`)));
   });
 
   it("알림 전달 오류가 완료된 수집의 상태를 실패로 바꾸지 않는다", async () => {

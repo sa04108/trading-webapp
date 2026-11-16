@@ -1,5 +1,4 @@
 import { getIntradayStrategy } from "../../../../shared/schemas/intraday-strategies.js";
-import { INTRADAY_CLOSE_MINUTE, intradaySession } from "../../../../shared/intraday-session.js";
 import { createIntradaySignalModel } from "./signal-model.js";
 import {
   MINUTE_MS,
@@ -19,7 +18,8 @@ import {
 } from "../../backtest/domain/cost-profiles.js";
 import { roundToTick } from "../../backtest/domain/execution.js";
 
-const CLOSE = INTRADAY_CLOSE_MINUTE;
+const OPEN = 9 * 60;
+const CLOSE = 15 * 60 + 20;
 const ENTRY_CUTOFF = 15 * 60 + 10;
 const EXIT = 15 * 60 + 15;
 function minuteOfDay(ms: number): number {
@@ -27,7 +27,7 @@ function minuteOfDay(ms: number): number {
 }
 export function isIntradaySessionBar(bar: IntradayBar): boolean {
   const minute = minuteOfDay(bar.endMs);
-  return minute > intradaySession(intradayDate(bar.endMs)).openMinute && minute <= CLOSE;
+  return minute > OPEN && minute <= CLOSE;
 }
 
 /** 봉 종료 시각을 유지한다. 누락된 1분봉이 있는 구간은 집계 봉을 만들지 않는다. */
@@ -42,7 +42,7 @@ export function aggregateIntradayBars(
   if (minutes === 1) return bars;
   const groups = new Map<number, IntradayBar[]>();
   for (const bar of bars) {
-    const elapsed = minuteOfDay(bar.endMs) - intradaySession(intradayDate(bar.endMs)).openMinute;
+    const elapsed = minuteOfDay(bar.endMs) - OPEN;
     const end =
       bar.endMs +
       (Math.ceil(elapsed / minutes) * minutes - elapsed) * MINUTE_MS;
@@ -79,10 +79,9 @@ export function intradayGaps(
   const times = new Set(input.map((b) => b.endMs));
   const gaps: IntradayGap[] = [];
   for (const date of dates) {
-    const session = intradaySession(date);
-    const start = Date.parse(`${date}T${session.openTime}:00+09:00`);
+    const start = Date.parse(`${date}T09:00:00+09:00`);
     let gap: IntradayGap | null = null;
-    for (let i = 1; i <= CLOSE - session.openMinute; i++) {
+    for (let i = 1; i <= CLOSE - OPEN; i++) {
       const end = start + i * MINUTE_MS;
       if (!times.has(end)) {
         if (!gap) {
@@ -121,12 +120,6 @@ export function runIntradayBacktest(
   if (bars.some((b, i) => i > 0 && b.endMs === bars[i - 1]!.endMs))
     throw new Error("중복된 분봉이 있습니다.");
   const gaps = intradayGaps(bars, input.tradingDates);
-  if (gaps.length) {
-    const first = gaps[0]!;
-    throw new Error(
-      `${intradayDate(first.fromMs)} 분봉 ${gaps.reduce((s, g) => s + g.missingMinutes, 0)}개가 없습니다. 무거래·거래정지·개장 시각 변경 여부가 확인되지 않아 실행할 수 없습니다.`,
-    );
-  }
   const aggregated = new Map(
     aggregateIntradayBars(bars, request.timeframe).map((b) => [b.endMs, b]),
   );
@@ -136,7 +129,7 @@ export function runIntradayBacktest(
     dataRevision: input.dataRevision,
     quoteScope: "TOSS_UNSPECIFIED",
     adjusted: false,
-    session: "거래일별 개장–15:20 Asia/Seoul",
+    session: "09:00–15:20 Asia/Seoul",
     fills: [],
     signals: [],
     orderEvents: [],
@@ -145,10 +138,6 @@ export function runIntradayBacktest(
       "토스 제공 시세의 거래소 구성은 확인되지 않았습니다. 지정 시간 구간을 사용하는 모의 체결입니다.",
       "지표와 시초 범위는 매일 초기화합니다. 손절·익절은 확정된 신호 봉 종가로 판단하며 체결 지연·비용은 입력한 가정입니다.",
       "미체결 매도 주문이 있으면 청산을 계속 시도하며 후속 신호로 주문 지연·만료 시간을 연장하지 않습니다.",
-      ...[...expected].flatMap((date) => {
-        const session = intradaySession(date);
-        return session.reason ? [`${date}: ${session.reason}으로 ${session.openTime} 개장. 개장 전 구간은 결측 검사와 전략 입력에서 제외했습니다.`] : [];
-      }),
     ],
     processedBars: 0,
     position: { quantity: 0, averagePrice: 0, lastPrice: 0 },
@@ -164,6 +153,22 @@ export function runIntradayBacktest(
       averageHoldingMinutes: null,
     },
   };
+  if (gaps.length) {
+    const first = gaps[0]!;
+    const time = (ms: number) =>
+      new Date(ms + 9 * 3_600_000).toISOString().slice(0, 16).replace("T", " ");
+    result.warnings.push(
+      `분봉 ${gaps.reduce((sum, gap) => sum + gap.missingMinutes, 0)}개(${gaps.length}구간)가 누락되었습니다. 최초 구간: ${time(first.fromMs)} ~ ${time(first.toMs)} KST. 누락 구간에서는 신호·체결을 만들지 않으며 수신된 확정 봉만으로 지표와 성과를 계산합니다.`,
+    );
+    if (request.strategyId === "intraday-orb")
+      result.warnings.push(
+        "09:00부터의 시초 범위에 누락된 분봉이 있으면 해당 날짜의 시초가 범위 돌파 진입을 생략합니다.",
+      );
+  }
+  if (!bars.length)
+    result.warnings.push(
+      "조회 기간에 사용 가능한 분봉이 없어 매매를 수행하지 않았습니다.",
+    );
   type Order = {
     id: string;
     signal: IntradaySignal;
@@ -249,24 +254,44 @@ export function runIntradayBacktest(
     };
   };
   const tickRules = getKrxExecutionRules("KOSPI");
+  // 가격 봉이 없어도 주문 기한은 흐른다. 가장 먼저 도달한 종료 조건을 실제 시각에 기록한다.
+  const settlePending = (untilMs: number) => {
+    if (!pending) return;
+    const orderDay = intradayDate(pending.signal.atMs);
+    const closeAt = Date.parse(`${orderDay}T15:20:00+09:00`);
+    const cutoffAt = pending.signal.side === "BUY"
+      ? Date.parse(`${orderDay}T15:10:00+09:00`)
+      : closeAt;
+    const terminalAt = Math.min(pending.expiresAtMs, cutoffAt, closeAt);
+    if (untilMs < terminalAt) return;
+    if (terminalAt === pending.expiresAtMs)
+      event("EXPIRED", terminalAt, "주문 유효 시간이 지났습니다.");
+    else if (pending.signal.side === "BUY")
+      event("CANCELLED", terminalAt, "신규 진입 마감입니다.");
+    else event("UNFILLED", terminalAt, "세션 종료 후 미체결 주문입니다.");
+  };
+  let finalizedDay = "";
+  // 마지막 봉이 누락되어도 날짜 경계에서 주문과 잔량을 정리한다. 관측하지 않은 가격으로 청산하지 않는다.
+  const finishDay = () => {
+    if (!day || finalizedDay === day) return;
+    finalizedDay = day;
+    settlePending(Date.parse(`${day}T15:20:00+09:00`));
+    if (quantity > 0)
+      result.warnings.push(
+        `${day} 당일 청산에 실패해 ${quantity}주가 남았습니다. 마지막 관측 가격으로 평가하고 이 날짜에서 계산을 종료했습니다.`,
+      );
+  };
   for (const bar of bars) {
     const barDay = intradayDate(bar.endMs),
       minute = minuteOfDay(bar.endMs),
       openAt = bar.endMs - MINUTE_MS;
     if (day !== barDay) {
+      finishDay();
       if (quantity > 0) break;
       day = barDay;
       previousVolume = 0;
-      event("CANCELLED", openAt, "세션 종료로 주문을 취소했습니다.");
     }
-    if (
-      pending &&
-      pending.signal.side === "BUY" &&
-      minuteOfDay(openAt) >= ENTRY_CUTOFF
-    )
-      event("CANCELLED", openAt, "신규 진입 마감입니다.");
-    if (pending && openAt >= pending.expiresAtMs)
-      event("EXPIRED", openAt, "주문 유효 시간이 지났습니다.");
+    settlePending(openAt);
     if (pending && openAt >= pending.eligibleAtMs) {
       const side = pending.signal.side;
       const slipped =
@@ -333,6 +358,7 @@ export function runIntradayBacktest(
         if (pending.quantity === 0) pending = null;
       }
     }
+    settlePending(bar.endMs);
     const signalBar = aggregated.get(bar.endMs);
     const decision = signalModel.onMinute(bar, signalBar);
     if (signalBar) {
@@ -378,17 +404,8 @@ export function runIntradayBacktest(
     result.processedBars++;
     previousVolume = bar.volume;
     result.position = { quantity, averagePrice, lastPrice: bar.close };
-    if (minute === CLOSE) {
-      event("UNFILLED", bar.endMs, "세션 종료 후 미체결 주문입니다.");
-      if (quantity > 0) {
-        result.warnings.push(
-          `${day} 당일 청산에 실패해 ${quantity}주가 남았습니다. 마지막 관측 가격으로 평가하고 이 날짜에서 계산을 종료했습니다.`,
-        );
-        break;
-      }
-    }
   }
-  event("UNFILLED", bars.at(-1)?.endMs ?? 0, "평가 기간이 종료되었습니다.");
+  finishDay();
   const finalEquity = result.equity.at(-1)?.equity ?? request.initialCash;
   result.metrics.pnl = finalEquity - request.initialCash;
   result.metrics.returnPct = (result.metrics.pnl / request.initialCash) * 100;

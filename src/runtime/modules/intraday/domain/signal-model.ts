@@ -4,7 +4,6 @@ import {
   type IntradayRequest,
   type IntradaySignal,
 } from "../../../../shared/schemas/intraday.js";
-import { intradaySession } from "../../../../shared/intraday-session.js";
 
 type Decision = {
   entry: IntradaySignal["reason"] | null;
@@ -67,7 +66,7 @@ export function createIntradaySignalModel(request: IntradayRequest) {
         day = nextDay;
       }
       const elapsed =
-        ((((bar.endMs / 60_000 + 540) % 1440) + 1440) % 1440) - intradaySession(nextDay).openMinute;
+        ((((bar.endMs / 60_000 + 540) % 1440) + 1440) % 1440) - 540;
       if (
         request.strategyId === "intraday-orb" &&
         elapsed <= request.parameters.openingMinutes

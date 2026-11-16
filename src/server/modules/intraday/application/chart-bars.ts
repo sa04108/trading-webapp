@@ -1,6 +1,5 @@
 import { intradayDate, MINUTE_MS, type IntradayBar, type IntradayChartTimeframe } from "../../../../shared/schemas/intraday.js";
 import { isIntradaySessionBar } from "../../../../runtime/modules/intraday/domain/engine.js";
-import { intradaySession } from "../../../../shared/intraday-session.js";
 
 /** 조회 범위에 실제로 저장된 봉만 합친다. 누락·진행 중인 구간을 가상의 거래로 채우지 않는다. */
 export function aggregateChartBars(input: readonly IntradayBar[], timeframe: IntradayChartTimeframe): IntradayBar[] {
@@ -18,7 +17,7 @@ export function aggregateChartBars(input: readonly IntradayBar[], timeframe: Int
     } else if (timeframe === "1d") key = date;
     else {
       const minutes = timeframe === "1h" ? 60 : Number.parseInt(timeframe, 10);
-      const open = Date.parse(`${date}T${intradaySession(date).openTime}:00+09:00`);
+      const open = Date.parse(`${date}T09:00:00+09:00`);
       key = `${date}:${Math.floor((bar.endMs - open - MINUTE_MS) / (minutes * MINUTE_MS))}`;
     }
     const previous = groups.get(key);
