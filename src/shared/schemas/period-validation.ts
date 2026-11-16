@@ -189,7 +189,6 @@ export interface ValidationTrialDto {
   progress: number | null;
   error: string | null;
   metrics: ValidationMetrics | null;
-  benchmarkReturnPct: number | null;
 }
 export interface PeriodValidationDto {
   id: string;

@@ -6,7 +6,6 @@ import { backtestJobs } from "../../../../runtime/shared/db/operations-schema.js
 import { backtestMetrics } from "../../../shared/db/backtest-result-schema.js";
 import { backtestCloneBatches, backtestCloneBatchItems } from "../../../shared/db/backtest-batch-schema.js";
 import { backtestValidations, backtestValidationTrials } from "../../../shared/db/backtest-validation-schema.js";
-import { benchmarkPinSchema } from "../../../../shared/schemas/benchmark.js";
 import type { BacktestBreadcrumbEntry, BacktestHistoryExtras, BacktestLineage, ExperimentReturnDistribution } from "../../../../shared/schemas/backtest-experiments.js";
 
 const modes = { HOLDOUT: "홀드아웃", OPTIMIZED_HOLDOUT: "최적화 홀드아웃", WALK_FORWARD: "워크포워드" } as const;
@@ -28,8 +27,7 @@ const finite = (value: number | null): value is number => value !== null && Numb
 /** 목록에 보이는 원본의 스칼라 지표만 일괄 조회한다. 실험 결과 본문과 매매 시계열은 읽지 않는다. */
 export function historyExtras(database: DatabaseHandle, ids: string[]): BacktestHistoryExtras[] {
   const db = database.db;
-  const jobs = db.select({ id: backtestJobs.id, status: backtestJobs.status, benchmark: backtestJobs.benchmarkJson, returns: backtestMetrics.totalReturnPct })
-    .from(backtestJobs).leftJoin(backtestMetrics, eq(backtestMetrics.jobId, backtestJobs.id)).where(inArray(backtestJobs.id, ids)).all();
+  const jobs = db.select({ id: backtestJobs.id }).from(backtestJobs).where(inArray(backtestJobs.id, ids)).all();
   const batches = db.select({ id: backtestCloneBatches.id, source: backtestCloneBatches.sourceJobId, status: backtestCloneBatches.status })
     .from(backtestCloneBatches).where(inArray(backtestCloneBatches.sourceJobId, ids)).all();
   const seedRuns = db.select({ source: backtestCloneBatches.sourceJobId, status: backtestJobs.status, returns: backtestMetrics.totalReturnPct })
@@ -44,16 +42,6 @@ export function historyExtras(database: DatabaseHandle, ids: string[]): Backtest
     .leftJoin(backtestMetrics, eq(backtestMetrics.jobId, backtestJobs.id))
     .where(and(inArray(backtestValidations.sourceJobId, ids), eq(backtestValidationTrials.role, "OOS"))).all();
   return jobs.map((job) => {
-    let benchmarkExcessReturnPct: number | null = null;
-    if (job.status === "COMPLETED" && finite(job.returns) && job.benchmark) {
-      try {
-        const pin = benchmarkPinSchema.safeParse(JSON.parse(job.benchmark));
-        if (pin.success && pin.data.covered && pin.data.points.length >= 2) {
-          const excess = job.returns - (pin.data.points.at(-1)!.close / pin.data.points[0]!.close - 1) * 100;
-          if (Number.isFinite(excess)) benchmarkExcessReturnPct = excess;
-        }
-      } catch { /* 손상된 벤치마크를 0%로 추정하지 않는다. */ }
-    }
     const ownBatches = batches.filter((b) => b.source === job.id);
     const completeSeeds = seedRuns.filter((run) => run.source === job.id && run.status === "COMPLETED");
     const ownExperiments = experiments.filter((e) => e.source === job.id);
@@ -69,7 +57,7 @@ export function historyExtras(database: DatabaseHandle, ids: string[]): Backtest
       const mode = modeOf(experiment.config);
       if (mode) modeCounts[mode]++;
     }
-    return { jobId: job.id, benchmarkExcessReturnPct,
+    return { jobId: job.id,
       seed: { batchCount: ownBatches.length, activeCount: ownBatches.filter((b) => b.status === "ACTIVE" || b.status === "CANCELLING").length,
         completedCount: completeSeeds.length, returns: distribution(completeSeeds.map((r) => r.returns).filter(finite)) },
       validation: { experimentCount: ownExperiments.length, activeCount: ownExperiments.filter((e) => ["ACTIVE", "CANCELLING"].includes(e.status)).length,

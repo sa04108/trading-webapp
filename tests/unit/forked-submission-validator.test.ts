@@ -103,7 +103,7 @@ appTest('실제 읽기 전용 worker 결과는 같은 검증과 일치하고 변
     c.database.sqlite.prepare("UPDATE krx_daily_bars SET close = 106 WHERE date = '2026-01-06'").run();
     await expect(validator.validate(request)).rejects.toBeInstanceOf(PreparationReferenceError);
     if (direct.ok) {
-      expect(() => c.jobQueue.enqueue(request.body, direct.resolved.schedule, direct.universe, direct.provenancePin, [], undefined, { submissionSnapshot: direct.snapshot })).toThrow(PreparationReferenceError);
+      expect(() => c.jobQueue.enqueue(request.body, direct.resolved.schedule, direct.universe, direct.provenancePin, [], { submissionSnapshot: direct.snapshot })).toThrow(PreparationReferenceError);
       expect(c.jobQueue.countByStatus(['QUEUED'])).toBe(0);
     }
   } finally { await validator.stop(); }

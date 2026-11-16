@@ -23,7 +23,6 @@ import { newId } from "../../../../runtime/shared/ids.js";
 import type { BacktestRequest } from "../../../../shared/schemas/backtest-request.js";
 import type { ProvenancePin } from "../../../../shared/schemas/provenance-pin.js";
 import type { LegacyUniverseScheduleEntry } from "../../../../runtime/modules/backtest/application/universe-rule-resolver.js";
-import type { BenchmarkPin } from "../../../../shared/schemas/benchmark.js";
 import type { ExecutionActivity } from "../../../../shared/execution-progress.js";
 
 export type BacktestJobStatus =
@@ -124,7 +123,6 @@ export class JobQueue {
      * 기본값 `[]` 는 `schedule` 과 같은 이유다: 단위 테스트가 매번 채우지 않아도 된다.
      */
     submitWarnings: readonly string[] = [],
-    benchmark?: { pin: BenchmarkPin; hash: string },
     metadata: EnqueueMetadata = {},
   ): BacktestJobRow {
     const job = this.handle.sqlite
@@ -176,8 +174,6 @@ export class JobQueue {
             ? JSON.stringify(pinnedUniverse.entries)
             : null,
           universeHash: pinnedUniverse?.hash ?? null,
-          benchmarkJson: benchmark ? JSON.stringify(benchmark.pin) : null,
-          benchmarkHash: benchmark?.hash ?? null,
           cloneBatchId: metadata.cloneBatchId ?? null,
           cloneSourceJobId: metadata.cloneSourceJobId ?? null,
           submitWarningsJson:

@@ -226,7 +226,6 @@ export function ValidationResult({
               {experiment.config.mode !== "HOLDOUT" ? (
                 <TableHead>고정 전략 OOS</TableHead>
               ) : null}
-              <TableHead>벤치마크 OOS</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -293,9 +292,6 @@ export function ValidationResult({
                       </TrialLink>
                     </TableCell>
                   ) : null}
-                  <TableCell>
-                    {formatSignedPct(test?.benchmarkReturnPct ?? null)}
-                  </TableCell>
                 </TableRow>
               );
             })}

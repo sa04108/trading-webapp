@@ -36,8 +36,6 @@ describe('backtest wizard draft routes', () => {
       period: {
         from: '2026-01-05',
         to: '2026-03-31',
-        benchmarkId: 'KOSPI',
-        benchmarkCoverageVerifiedFor: 'KOSPI:2026-01-05:2026-03-31',
       },
       universe: {
         universeRule: {

@@ -16,6 +16,36 @@ export type BenchmarkId = z.infer<typeof benchmarkIdSchema>;
 export type KrxBenchmarkId = (typeof KRX_BENCHMARK_IDS)[number];
 export type FredBenchmarkId = (typeof FRED_BENCHMARK_IDS)[number];
 
+export const benchmarkSelectionSchema = z.object({
+  benchmarkIds: z.array(benchmarkIdSchema).max(BENCHMARK_IDS.length)
+    .refine((ids) => new Set(ids).size === ids.length, "벤치마크가 중복되었습니다."),
+}).strict();
+
+export interface BenchmarkComparison {
+  benchmarkId: BenchmarkId;
+  name: string;
+  available: boolean;
+  unavailableReason: string | null;
+  totalReturnPct: number | null;
+  maxDrawdownPct: number | null;
+  excessReturnPct: number | null;
+  /** 조회 기간 첫 값을 0%로 맞춘 표시용 수익률이다. 결과에는 저장하지 않는다. */
+  points: Array<{ tsMs: number; value: number }>;
+}
+
+export interface BenchmarkComparisons {
+  benchmarkIds: BenchmarkId[];
+  comparisons: BenchmarkComparison[];
+  backfill: {
+    benchmarkId: BenchmarkId | null;
+    state: "IDLE" | "RUNNING" | "FAILED";
+    cursorDate: string | null;
+    from: string | null;
+    to: string | null;
+    error: string | null;
+  };
+}
+
 export const BENCHMARK_NAMES: Record<BenchmarkId, string> = {
   KOSPI: "코스피",
   KOSDAQ: "코스닥",
@@ -39,15 +69,3 @@ export const benchmarkPointSchema = z.object({
   close: z.number().positive(),
 });
 export type BenchmarkPoint = z.infer<typeof benchmarkPointSchema>;
-
-export const benchmarkPinSchema = z.object({
-  benchmarkId: benchmarkIdSchema,
-  name: z.string().min(1),
-  source: z.enum(["KRX_OPEN_API", "FRED_API"]),
-  sourceVersion: z.literal("v1"),
-  period: z.object({ from: z.string(), to: z.string() }),
-  points: z.array(benchmarkPointSchema),
-  covered: z.boolean(),
-});
-
-export type BenchmarkPin = z.infer<typeof benchmarkPinSchema>;

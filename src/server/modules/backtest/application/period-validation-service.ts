@@ -263,10 +263,6 @@ export class PeriodValidationService {
             : null,
           error: job?.error ?? prep?.error ?? null,
           metrics: job?.status === "COMPLETED" ? this.metrics(job.id) : null,
-          benchmarkReturnPct:
-            job?.status === "COMPLETED"
-              ? (this.deps.results.getBenchmark(job.id)?.totalReturnPct ?? null)
-              : null,
         };
       }),
     };

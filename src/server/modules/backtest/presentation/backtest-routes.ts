@@ -1,4 +1,6 @@
 import { registerBacktestExperimentRoutes } from "./backtest-experiment-routes.js";
+import { registerBenchmarkComparisonRoutes } from "./benchmark-comparison-routes.js";
+import { BenchmarkComparisonService } from "../application/benchmark-comparison-service.js";
 import { historyQuerySchema } from "../../../../shared/schemas/backtest-history.js";
 import { datasetIdentity } from "../../../../runtime/shared/db/database-layout.js";
 import { withDiagnostics, measureAsync } from "../../../../runtime/shared/diagnostics.js";
@@ -57,7 +59,6 @@ import type {
 import type { StrategyRegistry } from "../../../../runtime/modules/strategy/application/strategy-registry.js";
 import { strategyRequiresFinancialData } from "../../../../runtime/modules/strategy/domain/strategy.js";
 import type { BenchmarkService } from "../../market-data/application/benchmark-service.js";
-import { benchmarkPinSchema } from "../../../../shared/schemas/benchmark.js";
 
 import {
   listCostProfiles,
@@ -407,6 +408,9 @@ export function registerBacktestRoutes(
     seedCloneBatches,
   } = deps;
 
+  const comparisons = new BenchmarkComparisonService(deps.database.db, benchmarks, results);
+  registerBenchmarkComparisonRoutes(app, comparisons, queue, requireAuth);
+
   const serializeJobSummary = (job: BacktestJobRow) => ({
     ...serializeJob(job, deps.database, deps.executionProgress?.(job)),
     metrics: job.status === "COMPLETED" ? results.getMetrics(job.id) : null,
@@ -552,10 +556,6 @@ export function registerBacktestRoutes(
     schedule: LegacyUniverseScheduleEntry[];
     universe: ConsumedVersionSnapshot;
     provenancePin: ProvenancePin;
-    benchmark: {
-      pin: ReturnType<typeof benchmarkPinSchema.parse>;
-      hash: string;
-    };
     response: BacktestUniversePreview & { fundamentalSymbols: string[] };
   } | null> => {
     if (job.preparationJobId === null) return null;
@@ -605,33 +605,6 @@ export function registerBacktestRoutes(
       return null;
     }
 
-    if (job.benchmarkJson === null || job.benchmarkHash === null) return null;
-    let benchmark: {
-      pin: ReturnType<typeof benchmarkPinSchema.parse>;
-      hash: string;
-    };
-    try {
-      const parsed = benchmarkPinSchema.safeParse(
-        JSON.parse(job.benchmarkJson),
-      );
-      const requestedBenchmarkId = sourceRequest.benchmarkId ?? "KOSPI";
-      if (
-        !parsed.success ||
-        parsed.data.benchmarkId !== requestedBenchmarkId ||
-        parsed.data.period.from !== sourceRequest.period.from ||
-        parsed.data.period.to !== sourceRequest.period.to
-      ) {
-        return null;
-      }
-      const actualHash = createHash("sha256")
-        .update(JSON.stringify(parsed.data))
-        .digest("hex");
-      if (actualHash !== job.benchmarkHash) return null;
-      benchmark = { pin: parsed.data, hash: job.benchmarkHash };
-    } catch {
-      return null;
-    }
-
     const factCutoffs = financialFactCutoffsFromCoverage({
       period: sourceRequest.period,
       schedule,
@@ -668,7 +641,6 @@ export function registerBacktestRoutes(
       schedule,
       universe,
       provenancePin,
-      benchmark,
       response: {
         ...preview,
         fundamentalSymbols: resolved.unionSymbols.filter((code) =>
@@ -749,17 +721,14 @@ export function registerBacktestRoutes(
             `독립 평가 시작 전 지표 준비 데이터가 부족합니다 (필요 ${warmupBars}거래일, 확보 ${prior.count}거래일). 과거 데이터를 준비한 뒤 다시 실행하세요.`,
           );
         }
-        const benchmarkId = body.benchmarkId ?? "KOSPI";
-        const benchmark = benchmarks.pin(benchmarkId, body.period);
         return () => {
           if (queueDepthError()) return null;
           return queue.enqueue(
-            { ...body, benchmarkId, timeframe: validated.timeframe },
+            { ...body, timeframe: validated.timeframe },
             validated.resolved.schedule,
             validated.universe,
             validated.provenancePin,
             validated.warnings,
-            benchmark,
             {
               estimatedBars: validated.estimatedBars,
               submissionSnapshot: validated.snapshot,
@@ -872,15 +841,12 @@ export function registerBacktestRoutes(
       // 해소한 소비 봉을 요청에 박아 저장한다 — 워커가 다시 추론하면 두 곳의 규칙이
       // 갈라질 수 있고, 실행 기록도 "무엇을 소비했나" 에 답하지 못한다.
       // provenancePin 은 여기서 조립한 것 그대로 저장한다 — 클라이언트가 준 값이 아니다.
-      const benchmarkId = body.benchmarkId ?? "KOSPI";
-      const benchmark = benchmarks.pin(benchmarkId, body.period);
       const job = queue.enqueue(
-        { ...body, benchmarkId, timeframe: validated.timeframe },
+        { ...body, timeframe: validated.timeframe },
         validated.resolved.schedule,
         validated.universe,
         validated.provenancePin,
         validated.warnings,
-        benchmark,
         {
           estimatedBars: validated.estimatedBars,
           submissionSnapshot: validated.snapshot,
@@ -893,8 +859,6 @@ export function registerBacktestRoutes(
         strategyId: body.strategyId,
         universeRule: body.universeRule,
         scheduleHash: validated.provenancePin.scheduleHash,
-        benchmarkId,
-        benchmarkHash: benchmark.hash,
       });
       return reply
         .code(201)
@@ -935,7 +899,6 @@ export function registerBacktestRoutes(
         job: serializeJob(job, deps.database, deps.executionProgress?.(job)),
         run: results.getRun(id),
         metrics: results.getMetrics(id),
-        benchmark: results.getBenchmark(id),
         // job 이 제출 시점부터 갖고 있다 — run 완료를 기다릴 필요가 없다 (Task 12).
         // 완료 후에는 backtestRuns.provenancePinJson 에 같은 값이 복사돼 있다.
         provenancePin: parseProvenancePin(
@@ -1071,16 +1034,13 @@ export function registerBacktestRoutes(
       if (reply.raw.destroyed) return reply;
 
       // 응답과 저장이 같은 합집합을 써야 한다 — 한쪽만 고치면 화면과 기록이 갈라진다
-      const benchmarkId = cloneRequest.benchmarkId ?? "KOSPI";
-      const benchmark = benchmarks.pin(benchmarkId, cloneRequest.period);
       const cloneWarnings = [...rebased.warnings, ...validated.warnings];
       const cloned = queue.enqueue(
-        { ...cloneRequest, benchmarkId, timeframe: validated.timeframe },
+        { ...cloneRequest, timeframe: validated.timeframe },
         reusable?.schedule ?? validated.resolved.schedule,
         reusable?.universe ?? validated.universe,
         reusable?.provenancePin ?? validated.provenancePin,
         cloneWarnings,
-        reusable?.benchmark ?? benchmark,
         {
           estimatedBars: validated.estimatedBars,
           submissionSnapshot: validated.snapshot,
@@ -1189,21 +1149,13 @@ export function registerBacktestRoutes(
       if (resourceError) return reply.code(507).send({ error: resourceError });
       if (reply.raw.destroyed) return reply;
 
-      const benchmarkId = body.benchmarkId ?? "KOSPI";
-      const sourceBenchmarkId = rebased.request.benchmarkId ?? "KOSPI";
-      // 검토 단계에서 누락분을 동기화했다면 불완전한 원본 pin을 다시 복제하지 않는다.
-      const benchmark =
-        benchmarkId === sourceBenchmarkId && reusable.benchmark.pin.covered
-          ? reusable.benchmark
-          : benchmarks.pin(benchmarkId, body.period);
       const cloneWarnings = [...rebased.warnings, ...validated.warnings];
       const cloned = queue.enqueue(
-        { ...body, benchmarkId, timeframe: validated.timeframe },
+        { ...body, timeframe: validated.timeframe },
         reusable.schedule,
         reusable.universe,
         reusable.provenancePin,
         cloneWarnings,
-        benchmark,
         {
           estimatedBars: validated.estimatedBars,
           submissionSnapshot: validated.snapshot,
@@ -1295,16 +1247,14 @@ export function registerBacktestRoutes(
       if (resourceError) return reply.code(507).send({ error: resourceError });
       if (reply.raw.destroyed) return reply;
 
-      const benchmarkId = body.benchmarkId ?? "KOSPI";
       const warnings = [...rebased.warnings, ...validated.warnings];
       const batch = seedCloneBatches.create(id, countBody.data.count, {
         submissionSnapshot: validated.snapshot,
         preparationJobId: reusable.preview.preparationJobId,
-        request: { ...body, benchmarkId, timeframe: validated.timeframe },
+        request: { ...body, timeframe: validated.timeframe },
         schedule: reusable.schedule,
         universe: reusable.universe,
         provenancePin: reusable.provenancePin,
-        benchmark: reusable.benchmark,
         warnings,
       });
       audit.record(
@@ -1571,7 +1521,7 @@ export function registerBacktestRoutes(
         `attachment; filename="backtest-${id}.json"`,
       );
       const fullExport = results.getFullExport(id);
-      return { job: serializeJob(job, deps.database, deps.executionProgress?.(job)), ...fullExport };
+      return { job: serializeJob(job, deps.database, deps.executionProgress?.(job)), ...fullExport, benchmarkIds: comparisons.selection(request.authUser!.id, id) };
     },
   );
 

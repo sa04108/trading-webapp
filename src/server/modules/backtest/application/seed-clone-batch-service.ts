@@ -4,10 +4,6 @@ import { randomInt } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import {
-  benchmarkPinSchema,
-  type BenchmarkPin,
-} from "../../../../shared/schemas/benchmark.js";
-import {
   backtestRequestSchema,
   MAX_RANDOM_SEED,
   type BacktestRequest,
@@ -36,7 +32,6 @@ export interface SeedCloneBatchSnapshot {
   readonly schedule: readonly LegacyUniverseScheduleEntry[];
   readonly universe: ConsumedVersionSnapshot;
   readonly provenancePin: ProvenancePin;
-  readonly benchmark: { readonly pin: BenchmarkPin; readonly hash: string };
   readonly warnings: readonly string[];
 }
 
@@ -124,8 +119,6 @@ export class SeedCloneBatchService {
             provenancePinJson: JSON.stringify(snapshot.provenancePin),
             universeJson: JSON.stringify(snapshot.universe.entries),
             universeHash: snapshot.universe.hash,
-            benchmarkJson: JSON.stringify(snapshot.benchmark.pin),
-            benchmarkHash: snapshot.benchmark.hash,
             submitWarningsJson:
               snapshot.warnings.length > 0
                 ? JSON.stringify(snapshot.warnings)
@@ -213,7 +206,6 @@ export class SeedCloneBatchService {
               snapshot.universe,
               snapshot.provenancePin,
               snapshot.warnings,
-              snapshot.benchmark,
               {
                 cloneBatchId: batch.id,
                 cloneSourceJobId: batch.sourceJobId,
@@ -506,9 +498,6 @@ function parseSnapshot(batch: SeedCloneBatchRow): SeedCloneBatchSnapshot {
   const provenancePin = JSON.parse(
     batch.provenancePinJson ?? "null",
   ) as ProvenancePin | null;
-  const benchmark = benchmarkPinSchema.parse(
-    JSON.parse(batch.benchmarkJson ?? "null"),
-  );
   const warnings =
     batch.submitWarningsJson === null
       ? []
@@ -518,7 +507,7 @@ function parseSnapshot(batch: SeedCloneBatchRow): SeedCloneBatchSnapshot {
   if (!Array.isArray(universeEntries) || batch.universeHash === null) {
     throw new Error("저장된 유니버스 버전 pin이 없습니다.");
   }
-  if (provenancePin === null || batch.benchmarkHash === null) {
+  if (provenancePin === null) {
     throw new Error("저장된 재현성 pin이 없습니다.");
   }
   return {
@@ -527,7 +516,6 @@ function parseSnapshot(batch: SeedCloneBatchRow): SeedCloneBatchSnapshot {
     schedule,
     universe: { entries: universeEntries, hash: batch.universeHash },
     provenancePin,
-    benchmark: { pin: benchmark, hash: batch.benchmarkHash },
     warnings,
   };
 }

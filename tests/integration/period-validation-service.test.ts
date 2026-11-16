@@ -73,7 +73,7 @@ describe('독립 구간 검증 실행', () => {
       collectPreparations: () => new PreparationReferenceService(database).collect(),
       database, clock, queue, results, preparation, strategies: new StrategyRegistry([strategy]),
       validateRequest: () => [],
-      buildEnqueue: vi.fn(async (request, preview) => () => queue.enqueue(request, [], undefined, null, [], undefined, { preparationJobId: preview.preparationJobId })),
+      buildEnqueue: vi.fn(async (request, preview) => () => queue.enqueue(request, [], undefined, null, [], { preparationJobId: preview.preparationJobId })),
       cancelJob: (id) => { queue.setStatus(id, 'CANCELLED'); },
     };
     service = new PeriodValidationService(deps);

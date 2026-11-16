@@ -166,7 +166,7 @@ test('full MVP flow', async ({ page }) => {
   // 2-1. 기간 — 유니버스 미리보기가 리밸런스 날짜 계산에 이 값을 쓰므로 유니버스보다 앞이다
   await page.getByLabel('시작일').fill(PERIOD.from);
   await page.getByLabel('종료일').fill(PERIOD.to);
-  await advanceFromPeriod(page); // 기간 → 벤치마크 동기화(필요 시) → 유니버스
+  await advanceFromPeriod(page); // 기간 → 유니버스
 
   // 2-2. 유니버스 규칙을 설정하고 미리보기를 확인한다.
   await expect(page.getByRole('button', { name: '3. 유니버스' })).toHaveAttribute(
@@ -315,15 +315,14 @@ test('full MVP flow', async ({ page }) => {
     .poll(() => page.url(), { timeout: 10_000 })
     .not.toBe(originalUrl);
 
-  // 7-1. 재무 결손 제외 — 픽스처의 보통주 후보는 DART 재무가 없으므로 preparation이
-  // 종목별로 제외한다. 대체 가능한 정상 후보도 없어서 이 규칙으로는 빈 유니버스가 되고,
-  // 전체를 조용히 실행하는 대신 준비 실패 원인을 화면에 남긴다.
+  // 7-1. 픽스처의 보통주 후보는 DART corp_code 매핑에 없으므로 재무 수집이
+  // 차단 gap을 남긴다. 준비가 실패하고 해당 종목과 원인을 화면에 표시해야 한다.
   await page.goto('/backtests/new');
   await page.getByRole('button', { name: /밸류·퀄리티 랭킹/ }).click();
   await page.getByRole('button', { name: '다음' }).click(); // 전략 → 기간
   await page.getByLabel('시작일').fill(PERIOD.from);
   await page.getByLabel('종료일').fill(PERIOD.to);
-  await advanceFromPeriod(page); // 기간 → 벤치마크 동기화(필요 시) → 유니버스
+  await advanceFromPeriod(page); // 기간 → 유니버스
   await page.getByLabel('N', { exact: true }).fill(String(TOP_N));
   const incompletePreview = page.waitForResponse(
     (resp) => resp.url().includes('/backtests/universe-preview')
@@ -334,9 +333,9 @@ test('full MVP flow', async ({ page }) => {
   await expect(page.getByText('준비 실패', { exact: true })).toBeVisible({
     timeout: PREPARATION_WAIT_TIMEOUT_MS,
   });
-  await expect(
-    page.getByRole('alert').filter({ hasText: '선정된 종목이 없어 유니버스를 만들 수 없습니다' }),
-  ).toBeVisible();
+  const financialGap = page.getByRole('alert').filter({ hasText: 'DART 재무 수집 결과에 실행을 막는 원천·파서 gap' });
+  await expect(financialGap).toContainText('005930');
+  await expect(financialGap).toContainText('DART corp_code 매핑에 없는 종목코드입니다');
   // 앞 단계로 가는 버튼이 잠기고 이유를 들고 있다. `disabled` 로 죽이지 않고
   // `aria-disabled` + title 로 두는 것이 §17 규칙이다 — 왜 못 가는지 모른 채 회색
   // 버튼만 보는 상태를 만들지 않는다. (그래서 클릭이 아니라 상태를 검증한다.)
@@ -407,7 +406,7 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
 
   await page.getByLabel('시작일').fill(period.from);
   await page.getByLabel('종료일').fill(period.to);
-  await advanceFromPeriod(page); // 기간 → 벤치마크 동기화(필요 시) → 유니버스
+  await advanceFromPeriod(page); // 기간 → 유니버스
 
   await page.getByLabel('N', { exact: true }).fill(String(TOP_N));
 
@@ -466,7 +465,7 @@ test('backtest run completes using only KRX daily bars for a delisted stock', as
 
   await page.getByLabel('시작일').fill(period.from);
   await page.getByLabel('종료일').fill(period.to);
-  await advanceFromPeriod(page); // 기간 → 벤치마크 동기화(필요 시) → 유니버스
+  await advanceFromPeriod(page); // 기간 → 유니버스
 
   await page.getByLabel('N', { exact: true }).fill('2');
   await previewAndSyncUniverse(page);
