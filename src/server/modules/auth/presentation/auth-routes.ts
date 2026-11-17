@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AuthService } from "../application/auth-service.js";
+import type { OpenApiTokenService } from "../application/openapi-token-service.js";
 
 export const SESSION_COOKIE = "session";
 
@@ -16,6 +17,7 @@ const totpBodySchema = z.object({
 export interface AuthRouteDeps {
   readonly authService: AuthService;
   readonly secureCookies: boolean;
+  readonly openApiTokens?: OpenApiTokenService;
 }
 
 function setSessionCookie(
@@ -124,11 +126,21 @@ export function registerAuthRoutes(
 }
 
 /** 보호 라우트용 preHandler — request.authUser 를 채운다. */
-export function createRequireAuth(deps: AuthRouteDeps) {
-  return async (
+export function createRequireAuth(deps: AuthRouteDeps, options: { sessionOnly?: boolean } = {}) {
+  const handler = async (
     request: FastifyRequest,
     reply: FastifyReply,
   ): Promise<void> => {
+    const authorization = request.headers.authorization;
+    if (authorization !== undefined) {
+      if (options.sessionOnly) { await reply.code(403).send({ error: "토큰 관리는 로그인한 브라우저 세션에서만 가능합니다." }); return; }
+      const token = /^Bearer (qpo_[A-Za-z0-9_-]{43})$/i.exec(authorization)?.[1];
+      const authenticated = token ? deps.openApiTokens?.authenticate(token) : null;
+      if (!authenticated) { await reply.code(401).send({ error: "유효한 OpenAPI 토큰이 필요합니다." }); return; }
+      if (authenticated.scope === "READ_ONLY" && !["GET", "HEAD", "OPTIONS"].includes(request.method)) { await reply.code(403).send({ error: "조회 전용 토큰으로는 작업을 실행하거나 변경할 수 없습니다." }); return; }
+      request.authUser = authenticated.user;
+      return;
+    }
     const sessionId = readSessionId(request);
     const user = sessionId ? deps.authService.authenticate(sessionId) : null;
     if (!user) {
@@ -137,4 +149,5 @@ export function createRequireAuth(deps: AuthRouteDeps) {
     }
     request.authUser = user;
   };
+  return Object.assign(handler, { apiAuthentication: options.sessionOnly ? "SESSION" : "SESSION_OR_TOKEN" });
 }

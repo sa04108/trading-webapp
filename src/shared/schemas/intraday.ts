@@ -240,6 +240,8 @@ export interface IntradayEquity {
   quantity: number;
 }
 export interface IntradayResult {
+  /** 이전 결과는 일별 관측 범위를 저장하지 않았으므로 이 필드가 없다. */
+  dailyEvaluation?: import("./intraday-daily.js").IntradayDailyReport;
   executionVersion?: string;
   request: IntradayRequest;
   strategyVersion: string;

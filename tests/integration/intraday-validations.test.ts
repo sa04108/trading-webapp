@@ -20,7 +20,8 @@ function fixture(synthetic = false, block?: Promise<void>, source = request) {
   const database = openDatabase(":memory:"); let revision = "rev1";
   const firstBarMs = Date.parse(`${source.period.from}T09:01:00+09:00`);
   const days = (Date.parse(source.period.to) - Date.parse(source.period.from)) / 86_400_000 + 1;
-  const bars = Array.from({ length: days }, (_, i) => ({ endMs: firstBarMs + i * 86_400_000, open: 1000, high: 1000, low: 1000, close: 1000, volume: 100 }));
+  // 후보 선택용 모의 점수도 완전한 관측 기간에서만 비교할 수 있다.
+  const bars = Array.from({ length: days }, (_, i) => Array.from({ length: synthetic ? 380 : 1 }, (_, minute) => ({ endMs: firstBarMs + i * 86_400_000 + minute * 60_000, open: 1000, high: 1000, low: 1000, close: 1000, volume: 100 }))).flat();
   const captured: IntradayRequest[] = [];
   const reads: { from: number; to: number }[] = [];
   const runs = new IntradayService({ db: database.db, now: () => Date.parse("2026-11-01T00:00:00Z"), store: { list: async () => [], read: async (_symbol, from, to) => { reads.push({ from, to }); return { revision, bars: bars.filter(b => b.endMs >= from && b.endMs <= to) }; }, merge: async () => { throw Error("unexpected collection"); }, prune: async () => {} }, source: null, calendar: { classify: () => ({ state: "OPEN" }) }, search: async () => [], execute: async (input) => { captured.push(input.request); if (block) await block; const result = runIntradayBacktest(input); result.executionVersion = readRuntimeVersions().executionVersion; if (synthetic) {
@@ -185,6 +186,19 @@ describe("분봉 기간 검증", () => {
     expect(response.json().complete).toBe(true);
     expect(response.json().items.filter((x: { label: string }) => x.label === "기간검증")).toHaveLength(2);
     expect((await get(grandchild, "other")).statusCode).toBe(404);
+    // 일별 본문도 실험 소유권과 구간의 실험 소속을 모두 확인한다.
+    const oos = b.trials.find(t => t.role === "OOS")!;
+    const daily = (experimentId: string, owner = "owner") => app.inject({ method: "GET", url: `/intraday/validations/${experimentId}/trials/${oos.id}/daily`, headers: { authorization: owner } });
+    const report = await daily(b.id);
+    expect(report.statusCode).toBe(200);
+    expect(report.json().report.summary).toMatchObject({ isComplete: false, evaluatedDays: 0, partialDays: 3 });
+    expect(report.json().report.days).toHaveLength(3);
+    expect((await daily(b.id, "other")).statusCode).toBe(404);
+    expect((await daily(a.id)).statusCode).toBe(404);
+    const legacy = f.runs.getRun("owner", grandchild).result!;
+    delete legacy.dailyEvaluation;
+    f.database.db.update(intradayRuns).set({ resultJson: JSON.stringify(legacy) }).where(eq(intradayRuns.id, grandchild)).run();
+    expect((await daily(b.id)).json()).toEqual({ report: null });
     f.database.db.update(intradayValidations).set({ sourceJobId: grandchild }).where(eq(intradayValidations.id, first.id)).run();
     expect((await get(grandchild)).json().complete).toBe(false);
   });

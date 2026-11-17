@@ -388,10 +388,12 @@ export class SeedCloneBatchService {
           `
       SELECT 1 FROM backtest_validations WHERE source_job_id = ?
       UNION ALL SELECT 1 FROM backtest_validation_trials WHERE job_id = ?
+      UNION ALL SELECT 1 FROM configuration_searches WHERE mode='daily' AND source_job_id = ?
+      UNION ALL SELECT 1 FROM configuration_search_items WHERE job_id = ?
       UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE source_job_id = ? AND status IN ('QUEUED','PREPARING','SUBMITTING') LIMIT 1
     `,
         )
-        .get(jobId, jobId, jobId) !== undefined
+        .get(jobId, jobId, jobId, jobId, jobId) !== undefined
     );
   }
 

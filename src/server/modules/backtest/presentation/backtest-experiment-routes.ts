@@ -6,6 +6,7 @@ import { backtestJobs } from "../../../../runtime/shared/db/operations-schema.js
 import { backtestMetrics } from "../../../shared/db/backtest-result-schema.js";
 import { backtestCloneBatches, backtestCloneBatchItems } from "../../../shared/db/backtest-batch-schema.js";
 import { backtestValidations, backtestValidationTrials } from "../../../shared/db/backtest-validation-schema.js";
+import { configurationSearches, configurationSearchItems } from "../../../shared/db/configuration-search-schema.js";
 import type { BacktestBreadcrumbEntry, BacktestHistoryExtras, BacktestLineage, ExperimentReturnDistribution } from "../../../../shared/schemas/backtest-experiments.js";
 import { periodValidationConfigSchema, periodValidationLabel, type PeriodValidationConfig } from "../../../../shared/schemas/period-validation.js";
 
@@ -24,7 +25,12 @@ function distribution(values: number[]): ExperimentReturnDistribution {
 const finite = (value: number | null): value is number => value !== null && Number.isFinite(value);
 
 /** 목록에 보이는 원본의 스칼라 지표만 일괄 조회한다. 실험 결과 본문과 매매 시계열은 읽지 않는다. */
-export function historyExtras(database: DatabaseHandle, ids: string[]): BacktestHistoryExtras[] {
+export function searchCounts(database: DatabaseHandle, mode: "daily" | "intraday", ids: string[], ownerId?: string) {
+  const rows = database.db.select({ source: configurationSearches.sourceJobId, status: configurationSearches.status }).from(configurationSearches)
+    .where(and(eq(configurationSearches.mode, mode), inArray(configurationSearches.sourceJobId, ids), ownerId ? eq(configurationSearches.ownerId, ownerId) : undefined)).all();
+  return (id: string) => { const own = rows.filter(row => row.source === id && row.status !== "PREVIEW"); return { experimentCount: own.length, activeCount: own.filter(row => row.status === "ACTIVE" || row.status === "CANCELLING").length, completedCount: own.filter(row => row.status === "COMPLETED").length }; };
+}
+export function historyExtras(database: DatabaseHandle, ids: string[], ownerId?: string): BacktestHistoryExtras[] {
   const db = database.db;
   const jobs = db.select({ id: backtestJobs.id }).from(backtestJobs).where(inArray(backtestJobs.id, ids)).all();
   const batches = db.select({ id: backtestCloneBatches.id, source: backtestCloneBatches.sourceJobId, status: backtestCloneBatches.status })
@@ -40,6 +46,7 @@ export function historyExtras(database: DatabaseHandle, ids: string[]): Backtest
     .leftJoin(backtestJobs, eq(backtestValidationTrials.jobId, backtestJobs.id))
     .leftJoin(backtestMetrics, eq(backtestMetrics.jobId, backtestJobs.id))
     .where(and(inArray(backtestValidations.sourceJobId, ids), eq(backtestValidationTrials.role, "OOS"))).all();
+  const searches = searchCounts(database, "daily", ids, ownerId);
   return jobs.map((job) => {
     const ownBatches = batches.filter((b) => b.source === job.id);
     const completeSeeds = seedRuns.filter((run) => run.source === job.id && run.status === "COMPLETED");
@@ -56,7 +63,7 @@ export function historyExtras(database: DatabaseHandle, ids: string[]): Backtest
       const config = configOf(experiment.config);
       if (config) modeCounts[config.mode]++;
     }
-    return { jobId: job.id,
+    return { jobId: job.id, search: searches(job.id),
       seed: { batchCount: ownBatches.length, activeCount: ownBatches.filter((b) => b.status === "ACTIVE" || b.status === "CANCELLING").length,
         completedCount: completeSeeds.length, returns: distribution(completeSeeds.map((r) => r.returns).filter(finite)) },
       validation: { experimentCount: ownExperiments.length, activeCount: ownExperiments.filter((e) => ["ACTIVE", "CANCELLING"].includes(e.status)).length,
@@ -65,7 +72,7 @@ export function historyExtras(database: DatabaseHandle, ids: string[]): Backtest
 }
 
 /** 방문 이력 대신 저장된 작업 관계를 따라가므로 직접 링크도 동일한 경로를 보여준다. */
-export function backtestLineage(database: DatabaseHandle, id: string): BacktestLineage | null {
+export function backtestLineage(database: DatabaseHandle, id: string, ownerId?: string): BacktestLineage | null {
   const db = database.db;
   const jobById = (jobId: string) => db.select({ id: backtestJobs.id, source: backtestJobs.cloneSourceJobId, batch: backtestJobs.cloneBatchId })
     .from(backtestJobs).where(eq(backtestJobs.id, jobId)).get();
@@ -86,6 +93,15 @@ export function backtestLineage(database: DatabaseHandle, id: string): BacktestL
       return [{ label: "삭제된 상위 백테스트", description: jobId }];
     }
     const own: BacktestBreadcrumbEntry = { label: `결과 ${jobId.slice(-6)}`, href: `/backtests/${encodeURIComponent(jobId)}`, description: jobId };
+    const search = db.select({ parent: configurationSearches.sourceJobId, id: configurationSearches.id, ordinal: configurationSearchItems.ordinal }).from(configurationSearchItems)
+      .innerJoin(configurationSearches, eq(configurationSearchItems.searchId, configurationSearches.id))
+      .where(and(eq(configurationSearchItems.jobId, jobId), eq(configurationSearches.mode, "daily"), ownerId ? eq(configurationSearches.ownerId, ownerId) : undefined)).get();
+    if (search) {
+      const label = `조합 ${search.ordinal + 1}`;
+      if (jobId === id) { kind = "search"; roleLabel = label; }
+      return [...walk(search.parent), { label: "설정 탐색 실험", href: `/backtests/${encodeURIComponent(search.parent)}/search` },
+        { label: `실험 ${search.id.slice(-6)}`, href: `/backtests/searches/${encodeURIComponent(search.id)}` }, { ...own, label }];
+    }
     const trial = db.select({ parent: backtestValidations.sourceJobId, experiment: backtestValidations.id, config: backtestValidations.configJson,
       role: backtestValidationTrials.role, fold: backtestValidationTrials.fold, candidate: backtestValidationTrials.candidate })
       .from(backtestValidationTrials).innerJoin(backtestValidations, eq(backtestValidationTrials.validationId, backtestValidations.id))
@@ -122,10 +138,10 @@ export function registerBacktestExperimentRoutes(app: FastifyInstance, database:
   app.get("/backtests/history-extras", { preHandler: requireAuth }, async (request, reply) => {
     const parsed = z.object({ jobIds: z.string().min(1).max(13_000).transform((value) => value.split(",")).pipe(z.array(z.string().min(1).max(128)).max(100)) }).safeParse(request.query);
     if (!parsed.success) return reply.code(400).send({ error: "INVALID_JOB_IDS" });
-    return { summaries: historyExtras(database, [...new Set(parsed.data.jobIds)]) };
+    return { summaries: historyExtras(database, [...new Set(parsed.data.jobIds)], request.authUser!.id) };
   });
   app.get<{ Params: { id: string } }>("/backtests/:id/lineage", { preHandler: requireAuth }, async (request, reply) => {
-    const lineage = backtestLineage(database, request.params.id);
+    const lineage = backtestLineage(database, request.params.id, request.authUser!.id);
     return lineage ?? reply.code(404).send({ error: "NOT_FOUND" });
   });
 }

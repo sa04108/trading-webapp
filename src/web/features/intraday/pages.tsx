@@ -954,7 +954,7 @@ function IntradayResult({ id }: { id: string }) {
           {r.status !== "COMPLETED" ? <span className="text-sm text-muted-foreground">{statusLabel[r.status]}</span> : null}
           <div className={cn("flex flex-wrap items-center gap-2", active(r.status) ? "ml-auto" : "w-full justify-end sm:ml-auto sm:w-auto")}>
             {active(r.status) ? <Button variant="outline" className="h-11" disabled={cancel.isPending} onClick={() => cancel.mutate()}>실행 취소</Button> :
-              <ResultActions onClone={() => clone.mutate()} clonePending={clone.isPending}
+              <ResultActions onClone={() => clone.mutate()} clonePending={clone.isPending} searchHref={`/backtests/intraday/${encodeURIComponent(id)}/search`}
                 reconfigureHref={`/backtests/intraday/new?clone=${encodeURIComponent(id)}`}
                 exportHref={completed && result ? `/api/v1/intraday/runs/${encodeURIComponent(id)}/export` : undefined}
                 onDelete={() => setDeleteOpen(true)} />}

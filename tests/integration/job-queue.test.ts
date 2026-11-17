@@ -37,6 +37,7 @@ import {
   yearRange,
 } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
+import { preparedPreviewToResolved } from '../../src/server/modules/backtest/application/submission-validation.js';
 
 const DAY = 86_400_000;
 
@@ -186,6 +187,71 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         restoreDart();
       }
     },
+  });
+
+  it('설정 탐색의 유니버스별 자식은 각각의 준비 결과와 고정 일정을 사용한다', async ({ scenario }) => {
+    const { ctx, cookie } = scenario;
+    registerSymbols(ctx.container, 'KR', ['000660']);
+    seedDailyBars(ctx.container.database.db, [
+      { symbol: '000660', market: 'KR', timeframe: '1d', tsMs: Date.parse('2025-12-31T00:00:00Z'), open: 100, high: 102, low: 99, close: 101, volume: 1000 },
+      ...buildTrendingDailyCandles('000660'),
+    ]);
+    await seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
+    const request = buildRequest();
+    await scenario.prepare(request);
+    await scenario.prepare({ ...request, universeRule: universeRule(2) });
+    const source = ctx.container.jobQueue.enqueue(request);
+    expect(ctx.container.jobQueue.setStatus(source.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
+    const original = ctx.container.jobQueue.getJob(source.id)!;
+    await withSparseQueuePreparation(ctx, request, async () => {
+      const base = `/api/v1/backtests/${source.id}/configuration-search`;
+      const preview = await ctx.app.inject({ method: 'POST', url: `${base}/preview`, cookies: { session: cookie }, payload: {
+        requestId: randomUUID(), config: { count: 2, settings: { 'universeRule.stages.0.limit': { kind: 'RANGE', min: 1, max: 2 } } },
+      } });
+      expect(preview.statusCode, preview.body).toBe(201);
+      const searchId = preview.json().experiment.id as string;
+      const start = () => ctx.app.inject({ method: 'POST', url: `/api/v1/configuration-searches/${searchId}/start`, cookies: { session: cookie } });
+      expect((await start()).statusCode).toBe(202);
+      expect((await start()).statusCode).toBe(202);
+      let items: Array<{ jobId: string | null; status: string }> = [];
+      await vi.waitFor(async () => {
+        const result = await ctx.app.inject({ method: 'GET', url: `/api/v1/configuration-searches/${searchId}`, cookies: { session: cookie } });
+        items = result.json().experiment.items;
+        expect(items).toHaveLength(2);
+        expect(items.map(item => item.status)).not.toContain('FAILED');
+        expect(items.every(item => item.jobId !== null)).toBe(true);
+      }, { timeout: 20_000, interval: 100 });
+      const children = items.map(item => ctx.container.jobQueue.getJob(item.jobId!)!);
+      const byLimit = new Map(children.map(child => [(JSON.parse(child.requestJson) as BacktestRequest).universeRule.stages[0]!.limit, child]));
+      expect([...byLimit.keys()].sort()).toEqual([1, 2]);
+      for (const [limit, child] of byLimit) {
+        const childRequest = JSON.parse(child.requestJson) as BacktestRequest;
+        expect(childRequest.randomSeed).toBe(42);
+        const schedule = JSON.parse(child.universeScheduleJson!) as Array<{ symbols: string[] }>;
+        expect(schedule[0]!.symbols).toHaveLength(limit);
+        expect(schedule[0]!.symbols).toContain('005930');
+        if (limit === 2) expect(schedule[0]!.symbols).toContain('000660');
+        expect(child.preparationJobId).not.toBeNull();
+        const preparation = ctx.container.database.sqlite.prepare('SELECT request_json, preview_json FROM backtest_preparation_jobs WHERE id = ?').get(child.preparationJobId) as { request_json: string; preview_json: string };
+        expect(JSON.parse(preparation.request_json).universeRule).toEqual(childRequest.universeRule);
+        expect(JSON.parse(preparation.request_json).parameters).toEqual(childRequest.parameters);
+        const resolved = preparedPreviewToResolved(JSON.parse(preparation.preview_json));
+        expect(schedule).toEqual(resolved.schedule);
+        expect(JSON.parse(child.provenancePinJson!).scheduleHash).toBe(resolved.scheduleHash);
+        const currentVersions = ctx.container.symbolService.versionSnapshotFor([...new Set(schedule.flatMap(entry => entry.symbols))]);
+        expect(JSON.parse(child.universeJson!)).toEqual(currentVersions.entries);
+        expect(child.universeHash).toBe(currentVersions.hash);
+        const lineage = await ctx.app.inject({ method: 'GET', url: `/api/v1/backtests/${child.id}/lineage`, cookies: { session: cookie } });
+        expect(lineage.json()).toMatchObject({ kind: 'search', complete: true });
+        expect(lineage.json().items.map((entry: { href?: string }) => entry.href)).toContain(`/backtests/searches/${searchId}`);
+      }
+      expect(new Set(children.map(child => child.preparationJobId)).size).toBe(2);
+      expect(ctx.container.jobQueue.getJob(source.id)).toEqual(original);
+      const history = await ctx.app.inject({ method: 'GET', url: '/api/v1/backtests?limit=200', cookies: { session: cookie } });
+      const historyIds = history.json().jobs.map((job: { id: string }) => job.id);
+      expect(historyIds).toContain(source.id);
+      for (const child of children) expect(historyIds).not.toContain(child.id);
+    });
   });
 
   it('상세 조회는 멤버 원문 대신 최초 구성과 편입·편출 요약을 반환한다', async ({ scenario }) => {

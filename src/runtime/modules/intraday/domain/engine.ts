@@ -1,5 +1,6 @@
 import { getIntradayStrategy } from "../../../../shared/schemas/intraday-strategies.js";
-import { computeSharpe, missingRateWarning, type DatedReturn } from "../../backtest/domain/sharpe.js";
+import { missingRateWarning } from "../../backtest/domain/sharpe.js";
+import { buildIntradayDailyReport } from "./daily-evaluation.js";
 import { RISK_FREE_RATE_SEED } from "../../backtest/domain/risk-free-rate-seed.js";
 import type { RiskFreeRateHistory } from "../../../../shared/schemas/risk-free-rate.js";
 import { createIntradaySignalModel } from "./signal-model.js";
@@ -413,19 +414,21 @@ export function runIntradayBacktest(
   const finalEquity = result.equity.at(-1)?.equity ?? request.initialCash;
   result.metrics.pnl = finalEquity - request.initialCash;
   result.metrics.returnPct = (result.metrics.pnl / request.initialCash) * 100;
-  const returns: DatedReturn[] = [];
-  let prior = request.initialCash,
-    dailyPeak = prior;
-  for (const [date, equity] of dailyEquities) {
-    returns.push({ date, value: equity / prior - 1 });
-    prior = equity;
+  let dailyPeak = request.initialCash;
+  for (const equity of dailyEquities.values()) {
     dailyPeak = Math.max(dailyPeak, equity);
     result.metrics.dailyMaxDrawdownPct = Math.min(
       result.metrics.dailyMaxDrawdownPct,
       (equity / dailyPeak - 1) * 100,
     );
   }
-  Object.assign(result.metrics, computeSharpe(returns, input.riskFreeRates ?? RISK_FREE_RATE_SEED));
+  result.dailyEvaluation = buildIntradayDailyReport(result, input.tradingDates, CLOSE - OPEN, input.riskFreeRates ?? RISK_FREE_RATE_SEED);
+  result.metrics.sharpe = result.dailyEvaluation.summary.sharpe;
+  result.metrics.sharpeBasis = result.dailyEvaluation.sharpeBasis;
+  const coverage = result.dailyEvaluation.summary;
+  if (!coverage.isComplete) result.warnings.push(
+    `일별 통계와 Sharpe는 전체 ${coverage.expectedDays}거래일 중 시세가 완전하고 당일 청산한 ${coverage.evaluatedDays}일만 사용합니다. 부분 누락 ${coverage.partialDays}일, 전체 누락 ${coverage.missingDays}일, 청산 실패 ${coverage.exitFailedDays}일, 미실행 ${coverage.notRunDays}일은 제외하며 전체 기간 성과로 해석할 수 없습니다.`,
+  );
   const rateWarning = missingRateWarning(result.metrics.sharpeBasis);
   if (rateWarning) result.warnings.push(rateWarning);
   if (result.metrics.completedTrades) {

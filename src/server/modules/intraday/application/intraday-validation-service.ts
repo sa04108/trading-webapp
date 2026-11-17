@@ -10,7 +10,7 @@ import { intradayRuns } from "../../../shared/db/intraday-schema.js";
 import { intradayValidations, intradayValidationTrials } from "../../../shared/db/intraday-validation-schema.js";
 import { IntradayError, type IntradayService } from "./intraday-service.js";
 
-const metrics = (result: IntradayResult): ValidationMetrics => ({ totalReturnPct: result.metrics.returnPct, cagrPct: null, maxDrawdownPct: result.metrics.maxDrawdownPct, sharpe: result.metrics.sharpe, tradeCount: summarizeIntradayTrades(result).tradeCount });
+const metrics = (result: IntradayResult): ValidationMetrics => ({ totalReturnPct: result.metrics.returnPct, cagrPct: null, maxDrawdownPct: result.metrics.maxDrawdownPct, sharpe: result.metrics.sharpe, tradeCount: summarizeIntradayTrades(result).tradeCount, ...(result.dailyEvaluation ? { intradayDaily: result.dailyEvaluation.summary } : {}) });
 type Row = typeof intradayValidations.$inferSelect;
 export class IntradayValidationService {
   private pumping: Promise<void> | null = null;
@@ -63,12 +63,22 @@ export class IntradayValidationService {
     if (row.status === "ACTIVE") this.database.db.update(intradayValidations).set({ status: "CANCELLING" }).where(eq(intradayValidations.id, id)).run();
     void this.pump(); return this.get(owner, id);
   }
+  dailyReport(owner: string, id: string, trialId: string) {
+    if (!this.row(owner, id)) throw new IntradayError("검증 실험을 찾을 수 없습니다.", 404);
+    const trial = this.database.db.select().from(intradayValidationTrials).where(and(eq(intradayValidationTrials.id, trialId), eq(intradayValidationTrials.validationId, id))).get();
+    if (!trial) throw new IntradayError("검증 구간을 찾을 수 없습니다.", 404);
+    // 목록 응답에는 요약만 싣고 선택한 구간의 일별 자료를 요청할 때만 결과를 읽는다.
+    if (!trial.runId) return null;
+    const run = this.runs.getRun(owner, trial.runId);
+    return run.status === "COMPLETED" ? run.result?.dailyEvaluation ?? null : null;
+  }
   delete(owner: string, id: string): boolean {
     const row = this.row(owner, id); if (!row) return false;
     const trials = this.trials(id);
     if (["ACTIVE", "CANCELLING"].includes(row.status) || trials.some(t => t.runId && this.runs.isDraining(t.runId))) throw new IntradayError("종료된 검증 실험만 삭제할 수 있습니다.");
     this.database.sqlite.transaction(() => {
       const ids = trials.flatMap(t => t.runId ? [t.runId] : []);
+      if (ids.some(id => this.database.sqlite.prepare("SELECT 1 FROM configuration_searches WHERE mode='intraday' AND source_job_id=? LIMIT 1").get(id))) throw new IntradayError("하위 결과에서 만든 설정 탐색 실험을 먼저 삭제하세요.", 409);
       if (ids.length && this.database.db.select({ id: intradayValidations.id }).from(intradayValidations).where(inArray(intradayValidations.sourceJobId, ids)).get()) throw new IntradayError("하위 결과를 참조하는 검증이 있습니다.");
       this.database.db.delete(intradayValidationTrials).where(eq(intradayValidationTrials.validationId, id)).run();
       if (ids.length) this.database.db.delete(intradayRuns).where(and(eq(intradayRuns.ownerId, owner), inArray(intradayRuns.id, ids))).run();

@@ -53,7 +53,7 @@ test('복제 액션 그룹은 모바일에서 2 + 1 패널로 이어진다', asy
 
   const group = page.getByRole('group', { name: '백테스트 복제' });
   const sameClone = group.getByRole('button', { name: '그대로 복제' });
-  const randomClone = group.getByRole('button', { name: '새 난수로 복제' });
+  const randomClone = group.getByRole('link', { name: '설정 탐색 실험' });
   const resetClone = group.getByRole('link', { name: '재설정 및 복제' });
   await expect(group).toBeVisible();
 
@@ -86,7 +86,7 @@ test('복제 액션 그룹은 모바일에서 2 + 1 패널로 이어진다', asy
   }
 });
 
-test('난수 비의존 전략은 난수 복제를 비활성화하고 재현 정보에서 시드를 숨긴다', async ({ page }) => {
+test('난수 비의존 전략도 설정 탐색을 제공하고 재현 정보에서 시드를 숨긴다', async ({ page }) => {
   await login(page);
   await page.route('**/api/v1/strategies', (route) => route.fulfill({ json: { strategies: [{
     id: 'range-breakout', version: 'test-version', name: '검증 전략', description: '',
@@ -102,7 +102,7 @@ test('난수 비의존 전략은 난수 복제를 비활성화하고 재현 정�
     },
   } }));
   await page.goto(`/backtests/${JOB_ID}`);
-  await expect(page.getByRole('button', { name: '새 난수로 복제', exact: true })).toBeDisabled();
+  await expect(page.getByRole('link', { name: '설정 탐색 실험', exact: true })).toHaveAttribute('href', `/backtests/${JOB_ID}/search`);
   await expect(page.getByRole('button', { name: '그대로 복제', exact: true })).toBeEnabled();
   await expect(page.getByText('재현 정보', { exact: true })).toBeVisible();
   await expect(page.getByText('난수 시드', { exact: true })).toHaveCount(0);

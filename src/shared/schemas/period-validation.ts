@@ -22,6 +22,7 @@ const optimizationSchema = z.object({
     .max(2),
   objective: z.enum(["sharpe", "cagrPct"]).default("sharpe"),
   minTrades: z.number().int().min(1).max(100_000).default(5),
+  minTradingDays: z.number().int().min(1).max(365).optional(),
   maxDrawdownPct: z.number().positive().max(100).default(30),
 });
 
@@ -106,6 +107,8 @@ export function buildPeriodValidationPlan(
 ): PeriodValidationPlan {
   const intraday = "mode" in source && source.mode === "intraday";
   const optimization = getValidationOptimization(config);
+  if (!intraday && optimization?.minTradingDays !== undefined)
+    throw new Error("실제 거래일 조건은 분봉 검증에만 사용할 수 있습니다.");
   if (intraday && optimization) {
     if (optimization.objective !== "sharpe")
       throw new Error("분봉 기간검증은 Sharpe를 기준으로 최적화합니다.");
@@ -207,6 +210,7 @@ export type ValidationStatus =
   "ACTIVE" | "COMPLETED" | "FAILED" | "CANCELLING" | "CANCELLED";
 export type ValidationRole = "TRAIN" | "OOS" | "BASELINE";
 export interface ValidationMetrics {
+  intradayDaily?: import("./intraday-daily.js").IntradayDailySummary;
   totalReturnPct: number;
   cagrPct: number | null;
   maxDrawdownPct: number;
@@ -215,6 +219,9 @@ export interface ValidationMetrics {
 }
 export type ValidationSkipReason = "NO_ELIGIBLE_CANDIDATE";
 export type ValidationCandidateRejection =
+  | "INCOMPLETE_PERIOD"
+  | "TRADING_DAYS_UNAVAILABLE"
+  | "INSUFFICIENT_TRADING_DAYS"
   | "OBJECTIVE_UNAVAILABLE"
   | "TRADE_COUNT_UNAVAILABLE"
   | "INSUFFICIENT_TRADES"
@@ -257,6 +264,11 @@ export function evaluateValidationCandidate(
   optimization: ValidationOptimization,
 ): ValidationCandidateAssessment {
   const reasons: ValidationCandidateRejection[] = [];
+  if (metrics.intradayDaily && !metrics.intradayDaily.isComplete) reasons.push("INCOMPLETE_PERIOD");
+  if (optimization.minTradingDays !== undefined) {
+    if (!metrics.intradayDaily) reasons.push("TRADING_DAYS_UNAVAILABLE");
+    else if (metrics.intradayDaily.activeDays < optimization.minTradingDays) reasons.push("INSUFFICIENT_TRADING_DAYS");
+  }
   const score = metrics[optimization.objective];
   if (score === null || !Number.isFinite(score)) reasons.push("OBJECTIVE_UNAVAILABLE");
   if (!Number.isFinite(metrics.tradeCount)) reasons.push("TRADE_COUNT_UNAVAILABLE");

@@ -1,3 +1,6 @@
+import { Link } from "react-router";
+import { Button } from "@/components/ui/button";
+import { OpenApiTokenSettings } from "./openapi-token-settings";
 import { AgentSettings } from "./agent-settings";
 import { useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
@@ -71,6 +74,8 @@ export function SettingsPage() {
         </CardContent>
       </Card>
 
+      <Card><CardHeader><CardTitle className="text-base">API 명세</CardTitle></CardHeader><CardContent className="space-y-3"><p className="text-sm text-muted-foreground">API 경로와 요청·응답 형식을 확인합니다.</p><Button asChild variant="outline"><Link to="/settings/api-reference">API 명세 열기</Link></Button></CardContent></Card>
+      <OpenApiTokenSettings />
       <AgentSettings />
 
       <Card>

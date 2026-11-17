@@ -612,6 +612,7 @@ export class JobQueue {
       sql`NOT EXISTS (
         SELECT 1 FROM backtest_validation_trials v WHERE v.job_id = ${backtestJobs.id}
       )`,
+      sql`NOT EXISTS (SELECT 1 FROM configuration_search_items s WHERE s.job_id = ${backtestJobs.id})`,
       strategyId === undefined
         ? undefined
         : eq(backtestJobs.strategyId, strategyId),
@@ -742,6 +743,8 @@ export class JobQueue {
   deleteJob(jobId: string): boolean {
     return this.handle.sqlite
       .transaction(() => {
+        if (this.handle.sqlite.prepare(`SELECT 1 FROM configuration_searches WHERE mode='daily' AND source_job_id=?
+          UNION ALL SELECT 1 FROM configuration_search_items WHERE job_id=? LIMIT 1`).get(jobId, jobId)) return false;
         const job = this.getJob(jobId);
         if (
           !job ||

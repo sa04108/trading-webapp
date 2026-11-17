@@ -52,7 +52,8 @@ test("원본 요약에서 난수·기간검증으로 이동하고 직접 열린 
   await expect(page.getByRole("region", { name: "기간 검증" })).toHaveCount(0);
   const summaries = page.getByRole("region", { name: "백테스트 실험" });
   await expect(summaries).toContainText("기록 1개");
-  await summaries.getByRole("link", { name: "난수 시드 실험 열기" }).click();
+  await expect(summaries.getByRole("link", { name: "설정 탐색 실험 열기" })).toHaveAttribute("href", `/backtests/${sourceId}/search`);
+  await page.goto(`/backtests/${sourceId}/seeds`);
   await expect(page).toHaveURL(`/backtests/${sourceId}/seeds`);
   await expect(page.getByText("모멘텀 점수가 같은 종목끼리 순서를 정할 때 시드를 사용합니다.")).toBeVisible();
   await expect(page.getByRole("link", { name: "실험 보기", exact: true })).toHaveAttribute("href", "/backtests/batches/navigation-batch");

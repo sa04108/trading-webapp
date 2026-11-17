@@ -14,6 +14,10 @@ import { buildPinoOptions } from "../shared/logger.js";
 import { registerSecurity } from "../shared/security.js";
 import "../shared/fastify-augment.js";
 import { registerSystemRoutes } from "../modules/system/presentation/health-routes.js";
+import { installApiReference } from "../modules/system/application/api-reference.js";
+import { registerApiReferenceRoutes } from "../modules/system/presentation/api-reference-routes.js";
+import { OpenApiTokenService } from "../modules/auth/application/openapi-token-service.js";
+import { registerOpenApiTokenRoutes } from "../modules/auth/presentation/openapi-token-routes.js";
 import { registerRiskFreeRateRoutes } from "../modules/market-data/presentation/risk-free-rate-routes.js";
 import {
   createRequireAuth,
@@ -26,6 +30,10 @@ import { registerTradingRoutes } from "../modules/trading/presentation/trading-r
 import { registerIntradayValidationRoutes } from "../modules/intraday/presentation/intraday-validation-routes.js";
 import { registerIntradayRoutes } from "../modules/intraday/presentation/intraday-routes.js";
 import { registerBacktestRoutes } from "../modules/backtest/presentation/backtest-routes.js";
+import { registerConfigurationSearchRoutes } from "../modules/backtest/presentation/configuration-search-routes.js";
+import { ConfigurationSearchService } from "../modules/backtest/application/configuration-search-service.js";
+import { createIntradaySearchAdapter } from "../modules/backtest/application/intraday-search-adapter.js";
+import { PreparationReferenceService } from "../modules/backtest/application/preparation-reference-service.js";
 import { registerBacktestWizardDraftRoutes } from "../modules/backtest/presentation/backtest-wizard-draft-routes.js";
 import { registerBacktestPreparationRoutes } from "../modules/backtest/presentation/backtest-preparation-routes.js";
 import { registerNotificationRoutes } from "../modules/notification/presentation/notification-routes.js";
@@ -67,9 +75,12 @@ export async function buildServer(
     bodyLimit: 10 * 1024 * 1024,
   });
   registerRequestObservability(app);
+  const apiReference = installApiReference(app);
 
   let stopIntradayValidations: (() => Promise<void>) | undefined;
+  let stopConfigurationSearches: (() => Promise<void>) | undefined;
   app.addHook("preClose", async () => {
+    await stopConfigurationSearches?.();
     await stopIntradayValidations?.();
     await container.intradayService.close();
     await container.tradingService.close();
@@ -112,17 +123,21 @@ export async function buildServer(
   const authDeps = {
     authService: container.authService,
     secureCookies: config.nodeEnv === "production",
+    openApiTokens: new OpenApiTokenService(container.database, container.clock, container.auditLog),
   };
   const requireAuth = createRequireAuth(authDeps);
+  const requireSession = createRequireAuth(authDeps, { sessionOnly: true });
 
   await app.register(
     async (api) => {
       registerSystemRoutes(api, container, requireAuth);
+      registerApiReferenceRoutes(api, apiReference, requireAuth);
+      registerOpenApiTokenRoutes(api, authDeps.openApiTokens, requireSession);
       registerRiskFreeRateRoutes(api, container.riskFreeRateService, requireAuth);
       registerAgentManagementRoutes(
         api,
         container.agentCoordinator,
-        requireAuth,
+        requireSession,
       );
       registerAuthRoutes(api, authDeps);
       registerSymbolRoutes(api, container.symbolInfoService, requireAuth);
@@ -138,7 +153,7 @@ export async function buildServer(
         requireAuth,
         container.backtestWizardService,
       );
-      const { validations, refreshJobs } = registerBacktestRoutes(
+      const { validations, refreshJobs, searchAdapter } = registerBacktestRoutes(
         api,
         {
           submissionValidator: container.submissionValidator,
@@ -204,6 +219,17 @@ export async function buildServer(
         },
         requireAuth,
       );
+      const configurationSearches = new ConfigurationSearchService({
+        database: container.database, clock: container.clock,
+        adapters: { daily: searchAdapter, intraday: createIntradaySearchAdapter(container.database, container.intradayService, container.strategyRegistry) },
+        collectPreparations: () => { new PreparationReferenceService(container.database).collect(); },
+        onFinished: experiment => { container.notificationService.create({ type: "backtest", severity: experiment.status === "FAILED" ? "error" : "info",
+          title: experiment.status === "COMPLETED" ? "설정 탐색 실험이 완료되었습니다" : experiment.status === "FAILED" ? "설정 탐색 실험에 실패한 작업이 있습니다" : "설정 탐색 실험을 취소했습니다",
+          body: experiment.error ?? `완료 ${experiment.completedCount}/${experiment.totalCount} · 실패 ${experiment.failedCount}`,
+          link: `/backtests/searches/${encodeURIComponent(experiment.id)}` }); },
+      });
+      stopConfigurationSearches = () => configurationSearches.stop();
+      registerConfigurationSearchRoutes(api, configurationSearches, requireAuth);
       registerBacktestPreparationRoutes(
         api,
         {
@@ -224,7 +250,7 @@ export async function buildServer(
         container.notificationService,
         requireAuth,
       );
-      registerJobCenterRoutes(api, container, validations, requireAuth, refreshJobs, intradayValidations);
+      registerJobCenterRoutes(api, container, validations, requireAuth, refreshJobs, intradayValidations, configurationSearches);
       registerSymbolMasterRoutes(
         api,
         {

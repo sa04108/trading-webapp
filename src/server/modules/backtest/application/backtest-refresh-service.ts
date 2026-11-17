@@ -165,8 +165,9 @@ export class BacktestRefreshService {
       UNION ALL SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id=?
       UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id=?
       UNION ALL SELECT 1 FROM backtest_clone_batches WHERE preparation_job_id=?
-      UNION ALL SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id=? LIMIT 1
-    `).get(id, id, id, id, id);
+      UNION ALL SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id=?
+      UNION ALL SELECT 1 FROM configuration_search_items WHERE preparation_job_id=? LIMIT 1
+    `).get(id, id, id, id, id, id);
     if (!shared) this.deps.preparation.cancel(id);
   }
 

@@ -4,6 +4,7 @@ import type { IntradayValidationService } from "../../intraday/application/intra
 import type { Container } from "../../../bootstrap/container.js";
 import type { PeriodValidationService } from "../../backtest/application/period-validation-service.js";
 import type { BacktestRefreshService } from "../../backtest/application/backtest-refresh-service.js";
+import type { ConfigurationSearchService } from "../../backtest/application/configuration-search-service.js";
 import { JobCenterError, JobCenterService } from "../application/job-center-service.js";
 import { BackgroundJobHistory } from "../application/background-job-history.js";
 
@@ -21,6 +22,7 @@ export function registerJobCenterRoutes(
   requireAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<void>,
   refreshJobs: BacktestRefreshService,
   intradayValidations?: IntradayValidationService,
+  searches?: ConfigurationSearchService,
 ): void {
   const history = new BackgroundJobHistory(container.database, container.clock, container.logger,
     [container.symbolMasterBackfill, container.benchmarkService], (job) => {
@@ -35,7 +37,7 @@ export function registerJobCenterRoutes(
       }
     });
   app.addHook("onClose", async () => { await history.close(); });
-  const service = new JobCenterService(container, validations, refreshJobs, intradayValidations);
+  const service = new JobCenterService(container, validations, refreshJobs, intradayValidations, searches);
   const handle = (request: FastifyRequest, reply: FastifyReply, action: () => unknown): unknown => {
     // 사용자별 이력과 작업 소유권이 섞인 응답은 공유 캐시에 저장하지 않는다.
     reply.header("cache-control", "no-store");
