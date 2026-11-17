@@ -5,7 +5,6 @@ import {
   getValidationOptimization,
   periodValidationConfigSchema,
   selectValidationCandidate,
-  type PeriodValidationConfig,
   type PeriodValidationDto,
   type PeriodValidationPlan,
   type ValidationMetrics,
@@ -228,7 +227,7 @@ export class PeriodValidationService {
     if (!experiment) return null;
     const plan = JSON.parse(experiment.planJson) as PeriodValidationPlan;
     const source = JSON.parse(experiment.requestJson) as BacktestRequest;
-    const config = JSON.parse(experiment.configJson) as PeriodValidationConfig;
+    const config = periodValidationConfigSchema.parse(JSON.parse(experiment.configJson));
     const optimization = getValidationOptimization(config);
     return {
       id,
@@ -682,7 +681,7 @@ export class PeriodValidationService {
       )
     )
       return;
-    const config = JSON.parse(experiment.configJson) as PeriodValidationConfig;
+    const config = periodValidationConfigSchema.parse(JSON.parse(experiment.configJson));
     const plan = JSON.parse(experiment.planJson) as PeriodValidationPlan;
     if (training) {
       const optimization = getValidationOptimization(config);

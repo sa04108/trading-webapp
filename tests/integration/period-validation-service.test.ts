@@ -32,7 +32,7 @@ const source: BacktestRequest = {
   risk: { maxPositions: 5, maxPositionWeightPercent: 12.5 }, randomSeed: 42,
 };
 const optimization = { axes: [{ key: 'window', values: [5, 20] }], objective: 'sharpe' as const, minTrades: 5, maxDrawdownPct: 30 };
-const optimized: PeriodValidationConfig = { mode: 'OPTIMIZED_HOLDOUT', splitDate: '2023-01-01', optimization };
+const optimized: PeriodValidationConfig = { mode: 'HOLDOUT', splitDate: '2023-01-01', optimization };
 const metrics = (sharpe = 1, tradeCount = 10): ValidationMetrics => ({ totalReturnPct: 12, cagrPct: 8, maxDrawdownPct: -5, sharpe, tradeCount });
 
 describe('독립 구간 검증 실행', () => {
@@ -170,6 +170,12 @@ describe('독립 구간 검증 실행', () => {
     complete(baseline.jobId!, metrics(10));
     await until(() => service.get(experiment.id)!.status === 'COMPLETED');
     expect(service.get(experiment.id)!.trials.find((trial) => trial.role === 'OOS')!.candidate).toBe(1);
+    const completed = service.get(experiment.id)!;
+    expect(completed.config).toEqual(optimized);
+    const legacy = JSON.stringify({ ...optimized, mode: 'OPTIMIZED_HOLDOUT' });
+    database.db.update(backtestValidations).set({ configJson: legacy }).where(eq(backtestValidations.id, experiment.id)).run();
+    expect(service.get(experiment.id)).toEqual(completed);
+    expect(database.db.select().from(backtestValidations).where(eq(backtestValidations.id, experiment.id)).get()!.configJson).toBe(legacy);
   });
 
   it('재시작·중복 pump 후에도 이미 생성한 후보 작업을 중복 실행하지 않는다', async () => {

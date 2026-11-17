@@ -8,7 +8,7 @@ import type { PeriodValidationDto, ValidationTrialDto } from "../../src/shared/s
 
 const period = { from: "2020-01-01", to: "2020-06-30" };
 const base = { fold: 0, candidate: 0, period, parameters: { x: 10 }, jobId: null, progress: null, error: null, skipReason: null, selection: null };
-const config: PeriodValidationDto["config"] = { mode: "OPTIMIZED_HOLDOUT", splitDate: "2020-07-01", optimization: { axes: [{ key: "x", values: [10, 20] }], objective: "sharpe", minTrades: 5, maxDrawdownPct: 30 } };
+const config: PeriodValidationDto["config"] = { mode: "HOLDOUT", splitDate: "2020-07-01", optimization: { axes: [{ key: "x", values: [10, 20] }], objective: "sharpe", minTrades: 5, maxDrawdownPct: 30 } };
 const experiment = (trials: ValidationTrialDto[]): PeriodValidationDto => ({
   id: "v", sourceJobId: "source", status: "COMPLETED", config,
   plan: { folds: [{ ordinal: 0, train: period, test: period }], candidates: [{ x: 10 }, { x: 20 }], totalRuns: 4, unusedPeriod: null },
@@ -21,6 +21,7 @@ const render = (trials: ValidationTrialDto[], validation = experiment(trials)) =
 describe("기간 검증 결과 표시", () => {
   it("후보 없는 회차를 0 수익률이 아닌 미평가로 나타낸다", () => {
     const html = render([{ ...base, id: "oos", role: "OOS", status: "NOT_EVALUATED", candidate: null, parameters: null, metrics: null, skipReason: "NO_ELIGIBLE_CANDIDATE" }]);
+    expect(html).toContain("홀드아웃 · 최적화 켜짐");
     expect(html).toContain("미평가 (선택 후보 없음)");
     expect(html).toContain("평균 수익률 —");
     expect(html).toContain("표준편차 —");
@@ -38,6 +39,7 @@ describe("기간 검증 결과 표시", () => {
   it("최적화 없는 워크포워드는 원본 설정 OOS를 표시하고 선택 조건을 숨긴다", () => {
     const validation: PeriodValidationDto = { ...experiment([{ ...base, id: "train", role: "TRAIN", status: "COMPLETED", metrics: null }]), config: { mode: "WALK_FORWARD", trainMonths: 3, testMonths: 1 } };
     const html = render([{ ...base, id: "train", role: "TRAIN", status: "COMPLETED", metrics: null }], validation);
+    expect(html).toContain("워크포워드 · 최적화 꺼짐");
     expect(html).toContain("원본 설정 OOS 평가");
     expect(html).toContain("원본 설정 IS");
     expect(html).not.toContain("후보 선택 조건");

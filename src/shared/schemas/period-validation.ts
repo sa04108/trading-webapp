@@ -26,7 +26,12 @@ const optimizationSchema = z.object({
 });
 
 export const periodValidationConfigSchema = z.discriminatedUnion("mode", [
-  z.object({ mode: z.literal("HOLDOUT"), splitDate: isoDateSchema }),
+  z.object({
+    mode: z.literal("HOLDOUT"),
+    splitDate: isoDateSchema,
+    optimization: optimizationSchema.optional(),
+  }),
+  // 기존 저장 설정과 대기 중인 후속 요청은 최적화가 켜진 홀드아웃으로 읽는다.
   z.object({
     mode: z.literal("OPTIMIZED_HOLDOUT"),
     splitDate: isoDateSchema,
@@ -38,18 +43,29 @@ export const periodValidationConfigSchema = z.discriminatedUnion("mode", [
     testMonths: z.number().int().min(1).max(60),
     optimization: optimizationSchema.optional(),
   }),
-]);
+]).transform((config) => config.mode === "OPTIMIZED_HOLDOUT"
+  ? { ...config, mode: "HOLDOUT" as const }
+  : config);
 
 export type PeriodValidationConfig = z.infer<
   typeof periodValidationConfigSchema
 >;
 export type ValidationOptimization = z.infer<typeof optimizationSchema>;
 
-/** 최적화 설정이 없는 워크포워드는 원본 매개변수로만 검증한다. */
+export const PERIOD_VALIDATION_MODE_LABELS = {
+  HOLDOUT: "홀드아웃",
+  WALK_FORWARD: "워크포워드",
+} as const;
+
+export function periodValidationLabel(config: PeriodValidationConfig): string {
+  return `${PERIOD_VALIDATION_MODE_LABELS[config.mode]} · 최적화 ${config.optimization ? "켜짐" : "꺼짐"}`;
+}
+
+/** 검증 방식과 관계없이 최적화 설정이 없으면 원본 매개변수로만 검증한다. */
 export function getValidationOptimization(
   config: PeriodValidationConfig,
 ): ValidationOptimization | undefined {
-  return config.mode === "HOLDOUT" ? undefined : config.optimization;
+  return config.optimization;
 }
 
 export interface ValidationFold {

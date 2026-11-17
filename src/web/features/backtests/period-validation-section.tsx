@@ -47,6 +47,8 @@ import { intradayRequestSchema, type IntradayRequest } from "@shared/schemas/int
 import {
   buildPeriodValidationPlan,
   getValidationOptimization,
+  PERIOD_VALIDATION_MODE_LABELS,
+  periodValidationLabel,
   type ValidationOptimization,
   periodValidationConfigSchema,
   type PeriodValidationConfig,
@@ -61,11 +63,6 @@ import type { BacktestRequestBody } from "./types";
 import { experimentPaths, type ExperimentMode } from "./experiment-paths";
 import { useExperimentParameters } from "./use-experiment-parameters";
 
-export const MODE_LABELS = {
-  HOLDOUT: "홀드아웃",
-  OPTIMIZED_HOLDOUT: "최적화 홀드아웃",
-  WALK_FORWARD: "워크포워드",
-};
 export const STATUS_LABELS: Record<string, string> = {
   ACTIVE: "진행 중",
   COMPLETED: "",
@@ -201,8 +198,8 @@ export function ValidationResult({
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="text-base">
-            {MODE_LABELS[experiment.config.mode]}{experiment.status !== "COMPLETED" ? ` · ${STATUS_LABELS[experiment.status]}` : ""}
-            <InfoHint label={`${MODE_LABELS[experiment.config.mode]} 설명`} className="ml-2">{VALIDATION_MODE_HELP[experiment.config.mode]}</InfoHint>
+            {periodValidationLabel(experiment.config)}{experiment.status !== "COMPLETED" ? ` · ${STATUS_LABELS[experiment.status]}` : ""}
+            <InfoHint label={`${PERIOD_VALIDATION_MODE_LABELS[experiment.config.mode]} 설명`} className="ml-2">{VALIDATION_MODE_HELP[experiment.config.mode]}</InfoHint>
           </CardTitle>
           {active(experiment) ? (
             <Button
@@ -474,8 +471,7 @@ export function PeriodValidationSection({
   });
   const [trainMonths, setTrainMonths] = useState(intraday ? "3" : "36");
   const [testMonths, setTestMonths] = useState(intraday ? "1" : "6");
-  const [walkForwardOptimization, setWalkForwardOptimization] = useState(false);
-  const optimizationEnabled = mode === "OPTIMIZED_HOLDOUT" || (mode === "WALK_FORWARD" && walkForwardOptimization);
+  const [optimizationEnabled, setOptimizationEnabled] = useState(false);
   const [axes, setAxes] = useState([{ key: "", values: "" }]);
   const [objective, setObjective] = useState("sharpe");
   const [minTrades, setMinTrades] = useState("5");
@@ -495,15 +491,13 @@ export function PeriodValidationSection({
       };
       const input =
         mode === "HOLDOUT"
-          ? { mode, splitDate }
-          : mode === "OPTIMIZED_HOLDOUT"
-            ? { mode, splitDate, optimization }
-            : {
-                mode,
-                trainMonths: Number(trainMonths),
-                testMonths: Number(testMonths),
-                ...(optimizationEnabled ? { optimization } : {}),
-              };
+          ? { mode, splitDate, ...(optimizationEnabled ? { optimization } : {}) }
+          : {
+              mode,
+              trainMonths: Number(trainMonths),
+              testMonths: Number(testMonths),
+              ...(optimizationEnabled ? { optimization } : {}),
+            };
       const parsed = periodValidationConfigSchema.safeParse(input);
       if (!parsed.success)
         throw new Error(
@@ -582,7 +576,7 @@ export function PeriodValidationSection({
             <div className="space-y-2">
               <div className="flex items-center gap-1">
                 <Label htmlFor="validation-mode">검증 방식</Label>
-                <InfoHint label={`${MODE_LABELS[mode]} 설명`}>{VALIDATION_MODE_HELP[mode]}</InfoHint>
+                <InfoHint label={`${PERIOD_VALIDATION_MODE_LABELS[mode]} 설명`}>{VALIDATION_MODE_HELP[mode]}</InfoHint>
               </div>
               <Select
                 value={mode}
@@ -592,7 +586,7 @@ export function PeriodValidationSection({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(MODE_LABELS).map(([value, label]) => (
+                  {Object.entries(PERIOD_VALIDATION_MODE_LABELS).map(([value, label]) => (
                     <SelectItem key={value} value={value}>
                       {label}
                     </SelectItem>
@@ -639,13 +633,11 @@ export function PeriodValidationSection({
               </div>
             )}
           </div>
-          {mode === "WALK_FORWARD" ? (
-            <div className="flex items-center gap-2">
-              <input id="validation-optimize" type="checkbox" checked={walkForwardOptimization} onChange={(event) => setWalkForwardOptimization(event.target.checked)} />
-              <Label htmlFor="validation-optimize">파라미터 최적화</Label>
-            </div>
-          ) : null}
-          {mode === "WALK_FORWARD" && !optimizationEnabled ? (
+          <div className="flex items-center gap-2">
+            <input id="validation-optimize" type="checkbox" checked={optimizationEnabled} onChange={(event) => setOptimizationEnabled(event.target.checked)} />
+            <Label htmlFor="validation-optimize">파라미터 최적화</Label>
+          </div>
+          {!optimizationEnabled ? (
             <p className="text-sm text-muted-foreground">각 회차에서 원본 설정으로 IS와 OOS를 독립적으로 실행합니다. IS 성과와 관계없이 원본 설정을 OOS에 사용합니다.</p>
           ) : null}
           {optimizationEnabled ? (
@@ -837,8 +829,8 @@ export function PeriodValidationSection({
           <Card key={experiment.id}>
             <CardContent className="flex flex-wrap items-center justify-between gap-2 pt-6">
               <div>
-                <Link className="font-medium underline underline-offset-4" to={paths.validation(experiment.id)}>{MODE_LABELS[experiment.config.mode]}</Link>{" "}
-                <InfoHint label={`${MODE_LABELS[experiment.config.mode]} 설명`}>{VALIDATION_MODE_HELP[experiment.config.mode]}</InfoHint>
+                <Link className="font-medium underline underline-offset-4" to={paths.validation(experiment.id)}>{periodValidationLabel(experiment.config)}</Link>{" "}
+                <InfoHint label={`${PERIOD_VALIDATION_MODE_LABELS[experiment.config.mode]} 설명`}>{VALIDATION_MODE_HELP[experiment.config.mode]}</InfoHint>
                 <p className="text-sm text-muted-foreground">{formatDateTime(experiment.createdAtMs)}{experiment.status !== "COMPLETED" ? ` · ${STATUS_LABELS[experiment.status] ?? experiment.status}` : ""} · 실행 {experiment.trials.filter((trial) => trial.status === "COMPLETED").length}/{experiment.plan.totalRuns}회 완료 · 미평가 {experiment.trials.filter((trial) => trial.status === "NOT_EVALUATED").length}회</p>
               </div>
               <Button asChild variant="outline" size="sm"><Link to={paths.validation(experiment.id)}>상세 보기</Link></Button>

@@ -84,7 +84,7 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/v1/intraday/experiments/summary?**", (route) => {
     const ids = new URL(route.request().url()).searchParams.get("jobIds")!.split(",");
     const returns = { count: 0, mean: null, sampleStdDev: null };
-    return route.fulfill({ json: { summaries: ids.map(jobId => ({ jobId, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns, modes: { HOLDOUT: 0, OPTIMIZED_HOLDOUT: 0, WALK_FORWARD: 0 } } })) } });
+    return route.fulfill({ json: { summaries: ids.map(jobId => ({ jobId, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns, modes: { HOLDOUT: 0, WALK_FORWARD: 0 } } })) } });
   });
   await page.route("**/api/v1/intraday/runs/*/lineage", (route) => {
     const id = new URL(route.request().url()).pathname.split("/").at(-2)!;
@@ -550,6 +550,10 @@ test("분봉 실험 페이지를 재사용하고 검증 하위 결과와 일반 
   await page.keyboard.press("Escape");
   await form.getByLabel("검증 방식", { exact: true }).click();
   await page.getByRole("option", { name: "홀드아웃", exact: true }).click();
+  await expect(form.getByLabel("파라미터 최적화")).toBeChecked();
+  await expect(form.getByLabel("IS 선택 기준")).toBeVisible();
+  await form.getByLabel("파라미터 최적화").uncheck();
+  await expect(form.getByLabel("IS 선택 기준")).toHaveCount(0);
   await form.getByLabel("OOS 시작일").fill("2026-07-01");
   await form.getByRole("button", { name: "검증 실험 실행" }).click();
   await form.getByRole("link", { name: "상세 보기" }).click();

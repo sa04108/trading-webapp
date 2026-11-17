@@ -46,7 +46,7 @@ export function registerIntradayValidationRoutes(app: FastifyInstance, database:
     const ids = [...new Set(raw.split(","))]; if (ids.length > 100 || ids.some(x => !x || x.length > 128)) throw new IntradayError("잘못된 작업 ID입니다.", 400);
     const distribution = (v: number[]) => { const mean = v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; return { count: v.length, mean, sampleStdDev: v.length > 1 ? Math.sqrt(v.reduce((a, b) => a + (b - mean!) ** 2, 0) / (v.length - 1)) : null }; };
     const summaries: BacktestHistoryExtras[] = ids.map(jobId => {
-      const experiments = service.list(request.authUser!.id, jobId), modes = { HOLDOUT: 0, OPTIMIZED_HOLDOUT: 0, WALK_FORWARD: 0 };
+      const experiments = service.list(request.authUser!.id, jobId), modes = { HOLDOUT: 0, WALK_FORWARD: 0 };
       const samples: number[] = []; for (const e of experiments) { modes[e.config.mode]++; if (e.status !== "COMPLETED") continue; const oos = e.trials.filter(t => t.role === "OOS"); if (oos.length && oos.every(t => t.status === "COMPLETED" && t.metrics && Number.isFinite(t.metrics.totalReturnPct))) samples.push(oos.reduce((sum, t) => sum + t.metrics!.totalReturnPct / oos.length, 0)); }
       return { jobId, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: distribution([]) }, validation: { experimentCount: experiments.length, activeCount: experiments.filter(e => e.status === "ACTIVE" || e.status === "CANCELLING").length, completedCount: experiments.filter(e => e.status === "COMPLETED").length, returns: distribution(samples), modes } };
     }); return { summaries };

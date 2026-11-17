@@ -15,7 +15,7 @@ const request: BacktestRequest = {
 const metrics = { initialCash: 10000000, finalEquity: 11000000, totalReturnPct: 10, cagrPct: 3, maxDrawdownPct: -5, sharpe: 1, tradeCount: 12, winRate: 50, totalCommission: 100, totalTax: 100, totalSlippage: 100 };
 const rootItems = [{ label: "백테스트", href: "/backtests" }, { label: "결과 source", href: `/backtests/${sourceId}` }];
 const seedItems = [...rootItems, { label: "난수 시드 실험", href: `/backtests/${sourceId}/seeds` }, { label: "실험 batch", href: "/backtests/batches/navigation-batch" }, { label: "시드 77", href: `/backtests/${seedId}` }];
-const oosItems = [...rootItems, { label: "기간검증", href: `/backtests/${sourceId}/validations` }, { label: "홀드아웃 validation", href: "/backtests/validations/navigation-validation" }, { label: "1회차 · OOS 검증", href: `/backtests/${oosId}` }];
+const oosItems = [...rootItems, { label: "기간검증", href: `/backtests/${sourceId}/validations` }, { label: "홀드아웃 · 최적화 꺼짐 validation", href: "/backtests/validations/navigation-validation" }, { label: "1회차 · OOS 검증", href: `/backtests/${oosId}` }];
 
 async function setup(page: Page) {
   await login(page);
@@ -32,7 +32,7 @@ async function setup(page: Page) {
     await page.route(`**/api/v1/backtests/${id}/trades?**`, (route) => route.fulfill({ json: { trades: [], total: 0 } }));
     await page.route(`**/api/v1/backtests/${id}/lineage`, (route) => route.fulfill({ json: { items: id === seedId ? seedItems : id === oosId ? oosItems : rootItems, kind: id === seedId ? "seed" : id === oosId ? "validation" : "original", roleLabel: id === seedId ? "난수 시드 77" : id === oosId ? "1회차 · OOS 검증" : "결과", complete: true } }));
   }
-  await page.route("**/api/v1/backtests/history-extras?**", (route) => route.fulfill({ json: { summaries: new URL(route.request().url()).searchParams.get("jobIds")!.split(",").map((jobId) => ({ jobId, benchmarkExcessReturnPct: 3, seed: { batchCount: 1, activeCount: 0, completedCount: 2, returns: { count: 2, mean: 10, sampleStdDev: 2 } }, validation: { experimentCount: 1, activeCount: 0, completedCount: 1, returns: { count: 1, mean: 10, sampleStdDev: null }, modes: { HOLDOUT: 1, OPTIMIZED_HOLDOUT: 0, WALK_FORWARD: 0 } } })) } }));
+  await page.route("**/api/v1/backtests/history-extras?**", (route) => route.fulfill({ json: { summaries: new URL(route.request().url()).searchParams.get("jobIds")!.split(",").map((jobId) => ({ jobId, benchmarkExcessReturnPct: 3, seed: { batchCount: 1, activeCount: 0, completedCount: 2, returns: { count: 2, mean: 10, sampleStdDev: 2 } }, validation: { experimentCount: 1, activeCount: 0, completedCount: 1, returns: { count: 1, mean: 10, sampleStdDev: null }, modes: { HOLDOUT: 1, WALK_FORWARD: 0 } } })) } }));
   const batch = { id: "navigation-batch", sourceJobId: sourceId, strategyId: request.strategyId, request, status: "COMPLETED", totalCount: 1, completedCount: 1, failedCount: 0, cancelledCount: 0, interruptedCount: 0, deletedCount: 0, pendingCount: 0, queuedCount: 0, runningCount: 0, createdAtMs: 1, completedAtMs: 2, error: null, items: [{ ordinal: 0, randomSeed: 77, jobId: seedId, status: "COMPLETED", metrics }] };
   await page.route("**/api/v1/backtest-clone-batches?**", (route) => route.fulfill({ json: { batches: [batch] } }));
   await page.route("**/api/v1/backtest-clone-batches/navigation-batch", (route) => route.fulfill({ json: { batch } }));
@@ -75,7 +75,7 @@ test("원본 요약에서 난수·기간검증으로 이동하고 직접 열린 
   const crumbs = page.getByRole("navigation", { name: "백테스트 경로" });
   await expect(crumbs.locator('[aria-current="page"]')).toHaveText("1회차 · OOS 검증");
   if (testInfo.project.name === "mobile") await crumbs.getByRole("button", { name: "상위 백테스트 경로 펼치기" }).click();
-  await expect(page.getByRole("link", { name: "홀드아웃 validation", exact: true }).filter({ visible: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "홀드아웃 · 최적화 꺼짐 validation", exact: true }).filter({ visible: true })).toBeVisible();
   if (testInfo.project.name === "mobile") await page.keyboard.press("Escape");
   for (const width of testInfo.project.name === "mobile" ? [320, 390] : [1440]) {
     await page.setViewportSize({ width, height: 900 });
