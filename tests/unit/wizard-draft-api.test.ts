@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  loadBacktestWizardDraft,
   saveBacktestWizardDraftStep,
   waitForPendingDraftSaves,
 } from '../../src/web/features/backtests/wizard-draft-api.js';
@@ -56,14 +57,14 @@ describe('backtest wizard draft API', () => {
     ]);
   });
 
-  it('pending autosave가 실제로 끝날 때까지 대기한다', async () => {
+  it('재개 시 pending autosave가 끝난 뒤 최신 초안을 읽는다', async () => {
     let release!: () => void;
     const blocked = new Promise<void>((resolve) => {
       release = resolve;
     });
     const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
       if (init?.method === 'PUT') await blocked;
-      return new Response(JSON.stringify({ draft: {} }), {
+      return new Response(JSON.stringify({ draft: null }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
@@ -78,15 +79,17 @@ describe('backtest wizard draft API', () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     let finished = false;
-    const waiting = waitForPendingDraftSaves('wizard-1').then(() => {
+    const waiting = loadBacktestWizardDraft('wizard-1').then(() => {
       finished = true;
     });
     await Promise.resolve();
     expect(finished).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
     release();
     await Promise.all([save, waiting]);
     expect(finished).toBe(true);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method !== 'PUT')).toHaveLength(4);
   });
 
   it('다른 위저드의 저장은 기다리지 않는다', async () => {

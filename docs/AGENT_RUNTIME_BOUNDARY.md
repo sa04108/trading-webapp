@@ -183,6 +183,15 @@ Git SHA는 상태 화면·실행 결과의 배포 출처에 사용한다. Agent 
 기간 검증은 `executionVersion`과 `validationVersion`을 기준으로 한다. 파일 checksum과
 임대 토큰의 SHA-256은 무결성·인증 용도이며 계산 코드 버전과 구분한다.
 
+위저드와 준비 작업은 생성 시점의 `protocolVersion`·`previewVersion`·`executionVersion`을
+`runtime_versions_json`에 기록한다. 준비 작업은 현재 런타임에서 실제 검증이 끝났을 때만
+새 검증 버전을 기록한다. 위저드 부팅 복구는 이 세 버전이 달라진 진행 작업을
+새 준비 작업으로 교체하고 입력 확인을 기다린다. active 준비 작업의 중복 재사용도 같은
+버전 조합에서만 허용하며, 버전 기록이 없는 이전 active 작업은 새 요청에 재사용하지 않는다.
+완료 미리보기 재사용과 제출도 같은 버전 조합 및 기존 `previewVersion`·데이터 revision을
+확인한다. 복구 실패 뒤 이전 완료 미리보기가 실행 게이트를 다시 열지 못하게 한다.
+이 버전 조합은 배포 SHA·`agentVersion`·`validationVersion`을 포함하지 않는다.
+
 `ENGINE_VERSION`, 전략의 명시적 버전, 데이터셋 ID/revision, DB 스키마 버전, 통신 규약 버전은
 각자의 의미를 유지한다. 실행 코드 해시는 명시적 버전을 올리지 않은 구현 변경도 감지한다.
 결과 파일 저장 ABI는 경고 요약과 전체 원문을 분리하면서 3으로 올렸다.

@@ -153,12 +153,20 @@ export function NewBacktestWizard() {
   const wizardId = new URLSearchParams(search).get("wizard");
   const query = useQuery({
     queryKey: ["backtests", "wizard", wizardId],
-    queryFn: () => api<{ wizard: BacktestWizardJob }>(`/backtests/wizards/${encodeURIComponent(wizardId!)}`),
+    queryFn: async () => {
+      await waitForPendingDraftSaves(wizardId!);
+      return api<{ wizard: BacktestWizardJob }>(`/backtests/wizards/${encodeURIComponent(wizardId!)}`);
+    },
     enabled: !!wizardId,
     refetchOnMount: "always",
+    refetchInterval: (query) => {
+      const wizard = query.state.data?.wizard;
+      return wizard?.recovery?.status === "PREPARING" ? 2000 : false;
+    },
   });
   if (!wizardId) return <Navigate to={{ pathname: "/backtests/new", search }} replace />;
-  if (query.isPending) return <Skeleton className="mx-auto h-64 w-full max-w-2xl" />;
+  // 재진입 때 캐시에 남은 작업으로 먼저 마운트하면 이전 단계·준비 작업을 복원한다.
+  if (query.isPending || !query.isFetchedAfterMount) return <Skeleton className="mx-auto h-64 w-full max-w-2xl" />;
   if (query.isError) return <Alert variant="destructive" role="alert"><AlertDescription>위저드를 불러오지 못했습니다. <Button variant="outline" onClick={() => void query.refetch()}>다시 시도</Button></AlertDescription></Alert>;
   if (query.data.wizard.link.startsWith("/backtests/") && !query.data.wizard.link.startsWith("/backtests/new/")) return <Navigate to={query.data.wizard.link} replace />;
   if (["COMPLETED", "CANCELLED", "INTERRUPTED"].includes(query.data.wizard.status)) return <Alert role="status"><AlertDescription>종료된 위저드입니다. <Button variant="outline" asChild><Link to="/jobs">작업 목록</Link></Button></AlertDescription></Alert>;
@@ -246,6 +254,7 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
   const wizardDraft = useQuery({
     queryKey: ["backtests", "wizard-draft", wizardId],
     queryFn: () => loadBacktestWizardDraft(wizardId),
+    refetchOnMount: "always",
   });
   const hasStoredWizardDraft =
     wizardDraft.data !== undefined && Object.keys(wizardDraft.data).length > 0;
@@ -264,6 +273,7 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
         reusablePreview: UniversePreviewResponseDto | null;
       }>(`/backtests/${sourceJobId}/clone-draft`),
     enabled: sourceJobId !== null,
+    refetchOnMount: "always",
   });
 
   const selectedStrategy =
@@ -301,7 +311,7 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
   };
   const sourcePreview = useMemo(
     () =>
-      !sourceReuseRejected && draft.data?.reusablePreview
+      !sourceReuseRejected && draft.isFetchedAfterMount && draft.data?.reusablePreview
         ? {
             params: {
               universeRule: draft.data.request.universeRule,
@@ -312,7 +322,7 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
             result: draft.data.reusablePreview,
           }
         : null,
-    [sourceReuseRejected, draft.data],
+    [sourceReuseRejected, draft.isFetchedAfterMount, draft.data],
   );
   const draftPreview = lastPreview ?? sourcePreview;
   const freshPreviewMatches =
@@ -359,7 +369,7 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
 
   // 서버 초안 복원은 전략 스키마 기본값 시딩과 복제 프리필보다 먼저 한 번만 적용한다.
   useEffect(() => {
-    if (!wizardDraft.isSuccess) return;
+    if (!wizardDraft.isSuccess || !wizardDraft.isFetchedAfterMount) return;
     if (restoredWizardDraftContext === wizardId) return;
     const saved = wizardDraft.data;
     const savedStrategyId = saved.strategy?.strategyId ?? null;
@@ -397,15 +407,21 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
       setRandomSeed(saved.capital.randomSeed);
     }
     if (hasStoredWizardDraft) {
-      // 현재 URL 단계도 초안의 일부다. 실행 URL은 검토를 통과한 세션만 만들 수 있다.
-      const restoredStep = urlStep ?? 0;
+      // 작업 목록의 링크가 오래됐어도 서버가 마지막으로 저장한 단계에서 재개한다.
+      const restoredStep = stepIndexOf(wizard.currentStep) ?? 0;
       setTraversed(Math.min(restoredStep, REVIEW_STEP));
       setReviewPassed(restoredStep === RUN_STEP);
+      if (urlStep !== restoredStep) {
+        void navigate({ pathname: `/backtests/new/${stepSlug(restoredStep)}`, search: location.search }, { replace: true });
+        // URL 이동까지 끝나야 복원 완료다. 이전 URL이 실행 단계의 검토 통과를 지우지 않게 한다.
+        return;
+      }
       if (sourceJobId !== null) prefilledFrom.current = sourceJobId;
     }
     setRestoredWizardDraftContext(wizardId);
   }, [
     wizardDraft.isSuccess,
+    wizardDraft.isFetchedAfterMount,
     wizardDraft.data,
     restoredWizardDraftContext,
     wizardId,
@@ -414,6 +430,9 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
     strategies.isError,
     sourceJobId,
     urlStep,
+    wizard.currentStep,
+    navigate,
+    location.search,
   ]);
   useEffect(() => {
     if (strategyId === null || paramSpecs.length === 0) return;
@@ -723,6 +742,7 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
   // 서버 초안과 전략 스키마가 모두 복원될 때까지 빈 기본값으로 URL을 좁히지 않는다.
   const draftRestorePending =
     wizardDraft.isPending ||
+    !wizardDraft.isFetchedAfterMount ||
     (wizardDraft.isSuccess &&
       restoredWizardDraftContext !== wizardId);
   const storedDraftSchemaPending =
@@ -734,6 +754,7 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
   const prefilling =
     draftRestorePending ||
     storedDraftSchemaPending ||
+    (sourceJobId !== null && !draft.isFetchedAfterMount) ||
     (sourceJobId !== null &&
       (prefilledFrom.current !== sourceJobId || cloneSchemaPending) &&
       !prefillError);
@@ -996,13 +1017,14 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
   // 단계가 바뀌면 앞 단계의 오류 문장을 지운다. 단계의 출처가 URL 이므로 이동 함수가
   // 아니라 단계 변화에 매단다 — 뒤로가기로 온 이동도 같이 걸린다.
   useEffect(() => {
+    if (prefilling) return;
     setStepError(null);
     // 검토보다 앞으로 돌아가면 '검토를 지났다' 를 취소한다 — 설정을 고친 뒤 앞으로가기로
     // 제출 화면에 되돌아오는 길을 막는다. 다시 들어가려면 검토에서 '다음' 을 눌러야 한다.
     if (step < REVIEW_STEP) setReviewPassed(false);
     // 실행 화면을 벗어나면 다음 진입은 새 시도다 — 낡은 제출 실패가 흔적으로 남지 않게 한다.
     if (step !== RUN_STEP) submitMutation.reset();
-  }, [step]);
+  }, [step, prefilling]);
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
@@ -1010,7 +1032,11 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
         {sourceJobId !== null ? "재설정 및 복제" : "새 백테스트"}
       </h2>
 
-      {wizard.error && <Alert variant="destructive" role="alert"><AlertDescription>{wizard.error} 다시 시도할 수 있습니다.</AlertDescription></Alert>}
+      {wizard.recovery ? (
+        <Alert variant={wizard.recovery.error ? "destructive" : "default"} role={wizard.recovery.error ? "alert" : "status"}>
+          <AlertDescription>{wizard.recovery.message}{wizard.recovery.error ? ` ${wizard.recovery.error}` : ""}</AlertDescription>
+        </Alert>
+      ) : wizard.error && <Alert variant="destructive" role="alert"><AlertDescription>{wizard.error} 다시 시도할 수 있습니다.</AlertDescription></Alert>}
 
       {prefillError ? (
         <Alert variant="destructive" role="alert">

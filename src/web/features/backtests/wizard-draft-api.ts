@@ -59,6 +59,7 @@ function contextQuery(wizardId: string): string {
 export async function loadBacktestWizardDraft(
   wizardId: string,
 ): Promise<BacktestWizardDraftBundle> {
+  await waitForPendingDraftSaves(wizardId);
   const query = contextQuery(wizardId);
   const entries = await Promise.all(
     BACKTEST_WIZARD_DRAFT_STEPS.map(async (step) => {

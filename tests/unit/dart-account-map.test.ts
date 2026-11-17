@@ -33,6 +33,7 @@ describe('DART 순이익·자본총계 계정 mapping', () => {
     ['ifrs-full_ShorttermBorrowings', '유동성장기차입금', 'CURRENT_LONG_TERM_DEBT'],
     ['ifrs_ShorttermBorrowings', '유동성장기차입금 및 유동성사채', 'CURRENT_LONG_TERM_DEBT'],
     ['ifrs-full_LongtermBorrowings', '사채', 'BONDS'],
+    ['dart_LongTermBorrowingsGross', '사채', 'BONDS'],
     ['dart_CurrentPortionOfBonds', '무관', 'BONDS'],
     ['ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued', '무관', 'BONDS'],
     ['ifrs-full_NoncurrentPortionOfNoncurrentLoansReceived', '장기차입금', 'LONG_TERM_BORROWINGS'],

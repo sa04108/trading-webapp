@@ -78,6 +78,21 @@ test('두 위저드는 독립적으로 저장되고 작업 목록에서 선택�
     const response = await fetch(`/api/v1/backtests/wizard-draft/period?wizardId=${id}`);
     return (await response.json()).draft?.payload.from;
   }, firstId)).toBe('2026-01-05');
+  // 새 문서 탐색은 Query 캐시를 비워 재개 버그를 숨긴다. 앱 안에서 작업을 다시 연다.
+  // 작업 목록의 링크가 이전 단계여도 서버에 저장한 마지막 단계가 우선한다.
+  await page.route('**/api/v1/jobs?*', async route => {
+    const response = await route.fetch();
+    const body = await response.json();
+    for (const job of body.jobs) {
+      if (job.id === `backtest-wizard:${firstId}`) job.link = `/backtests/new/strategy?wizard=${firstId}`;
+    }
+    await route.fulfill({ response, json: body });
+  }, { times: 1 });
+  await page.getByRole('link', { name: '작업', exact: true }).click();
+  await page.locator(`a[href*="wizard=${firstId}"]`).click();
+  await expect(page).toHaveURL(new RegExp(`/backtests/new/period\\?wizard=${firstId}$`));
+  await expect(page.getByLabel('시작일')).toHaveValue('2026-01-05');
+  await expect(page.getByLabel('종료일')).toHaveValue('2026-03-31');
   await page.goto('/backtests/new');
   await expect(page.getByRole('button', { name: /전고점 돌파/ })).toBeVisible();
   const secondId = new URL(page.url()).searchParams.get('wizard')!;
@@ -139,6 +154,15 @@ test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 
     return body.draft?.payload.lastPreview?.result?.preparationJobId ?? null;
   })).toBeTruthy();
 
+  let resumedPreviewRequests = 0;
+  page.on('request', request => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/backtests/universe-preview') resumedPreviewRequests += 1;
+  });
+  const wizardId = new URL(page.url()).searchParams.get('wizard')!;
+  await page.getByRole('link', { name: '작업', exact: true }).click();
+  await page.locator(`a[href*="wizard=${wizardId}"]`).click();
+  await expect(page).toHaveURL(/\/backtests\/new\/capital\?wizard=/);
+  await expect(page.getByLabel('초기 자본 (KRW)')).toHaveValue('12345678');
   await page.reload();
   await expect(page).toHaveURL(/\/backtests\/new\/capital\?wizard=/);
   await expect(page.getByLabel('초기 자본 (KRW)')).toHaveValue('12345678');
@@ -148,11 +172,22 @@ test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 
   await page.getByRole('button', { name: '이전' }).click();
   await expect(page).toHaveURL(/\/backtests\/new\/universe\?wizard=/);
   await expect(page.getByText('리밸런스 일정')).toBeVisible();
+  expect(resumedPreviewRequests).toBe(0);
   await page.getByRole('button', { name: '이전' }).click();
   await expect(page.getByLabel('시작일')).toHaveValue('2026-01-05');
   await expect(page.getByLabel('종료일')).toHaveValue('2026-03-31');
   await page.getByRole('button', { name: '이전' }).click();
   await expect(page.getByLabel('돌파 기준 봉 수', { exact: true })).toHaveValue('17');
+
+  // 검토를 마치고 실행 직전까지 간 작업도 복원 중 임시 게이트에 밀리지 않는다.
+  await page.getByRole('button', { name: '5. 검토', exact: true }).click();
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await expect(page).toHaveURL(/\/backtests\/new\/run\?wizard=/);
+  await page.getByRole('link', { name: '작업', exact: true }).click();
+  await page.locator(`a[href*="wizard=${wizardId}"]`).click();
+  await expect(page).toHaveURL(/\/backtests\/new\/run\?wizard=/);
+  await expect(page.getByRole('button', { name: '백테스트 실행', exact: true })).toBeEnabled();
+  expect(resumedPreviewRequests).toBe(0);
 });
 
 
@@ -270,6 +305,7 @@ test('재설정 및 복제의 전략 단계는 종목과 비용 프로필을 미
   await page.route('**/api/v1/backtests/wizards/clone-fixture', route => route.fulfill({ json: { wizard: {
     id: 'clone-fixture', sourceJobId: 'bt_clone_fixture', currentStep: 'strategy', status: 'WAITING', phase: 'DRAFT', error: null,
     preparationJobId: null, preparationInput: null, backtestJobId: null, createdAtMs: 1, updatedAtMs: 1, finishedAtMs: null, link: '/backtests/new/strategy?wizard=clone-fixture',
+    recovery: { status: 'WAITING_INPUT', message: '버전 변경 재준비 완료 · 사용자 입력 대기', error: null },
   } } }));
 
   // 새 문서 탐색으로 앱의 Query cache를 비운 뒤 이 진입에서 발생한 요청만 관찰한다.
@@ -281,6 +317,7 @@ test('재설정 및 복제의 전략 단계는 종목과 비용 프로필을 미
 
   await page.goto('/backtests/new/strategy?wizard=clone-fixture');
   await expect(page.getByRole('heading', { name: '재설정 및 복제' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '버전 변경 재준비 완료 · 사용자 입력 대기' })).toBeVisible();
   await expect(page.getByRole('button', { name: /전고점 돌파/ })).toHaveAttribute(
     'aria-pressed',
     'true',

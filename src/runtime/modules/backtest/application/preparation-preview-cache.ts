@@ -7,6 +7,7 @@ import {
   preparationPreviewCache,
 } from "../../../shared/db/schema.js";
 import type { ReadyPreviewDetails } from "./backtest-preparation-orchestrator.js";
+import { preparationRuntimeVersionsJson } from "./preparation-runtime-versions.js";
 
 export type PreviewUnavailabilityReason =
   | "PREPARATION_INPUT_CHANGED"
@@ -49,6 +50,7 @@ export class PreparationPreviewCache {
           and(
             eq(backtestPreparationJobs.id, preparationJobId),
             eq(backtestPreparationJobs.status, "COMPLETED"),
+            eq(backtestPreparationJobs.runtimeVersionsJson, preparationRuntimeVersionsJson()),
             eq(preparationPreviewCache.validationVersion, this.previewVersion),
             eq(
               preparationPreviewCache.dataRevision,
@@ -67,6 +69,7 @@ export class PreparationPreviewCache {
     const row = this.database.db
       .select({
         requestHash: backtestPreparationJobs.requestHash,
+        runtimeVersionsJson: backtestPreparationJobs.runtimeVersionsJson,
         status: backtestPreparationJobs.status,
         hasPreview: sql<number>`${backtestPreparationJobs.previewJson} IS NOT NULL`,
         receiptJobId: preparationPreviewCache.jobId,
@@ -82,7 +85,8 @@ export class PreparationPreviewCache {
     if (row.requestHash !== requestHash) return "PREPARATION_INPUT_CHANGED";
     if (row.status !== "COMPLETED" || !row.hasPreview || !row.receiptJobId)
       return "PREPARATION_UNAVAILABLE";
-    if (row.validationVersion !== this.previewVersion) return "PREVIEW_VERSION_CHANGED";
+    if (row.validationVersion !== this.previewVersion || row.runtimeVersionsJson !== preparationRuntimeVersionsJson())
+      return "PREVIEW_VERSION_CHANGED";
     if (row.currentRevision !== null && row.dataRevision !== row.currentRevision)
       return "DATA_REVISION_CHANGED";
     return "PREPARATION_UNAVAILABLE";
@@ -111,6 +115,7 @@ export class PreparationPreviewCache {
             ? undefined
             : eq(backtestPreparationJobs.id, preparationJobId),
           eq(backtestPreparationJobs.status, "COMPLETED"),
+          eq(backtestPreparationJobs.runtimeVersionsJson, preparationRuntimeVersionsJson()),
           eq(preparationPreviewCache.validationVersion, this.previewVersion),
           eq(
             preparationPreviewCache.dataRevision,
@@ -154,22 +159,28 @@ export class PreparationPreviewCache {
     revision: number,
     fundamentalSymbols: readonly string[],
   ): void {
-    this.database.db
-      .insert(preparationPreviewCache)
-      .values({
-        jobId,
-        dataRevision: revision,
-        validationVersion: this.previewVersion,
-        fundamentalSymbolsJson: JSON.stringify(fundamentalSymbols),
-      })
-      .onConflictDoUpdate({
-        target: preparationPreviewCache.jobId,
-        set: {
+    this.database.sqlite.transaction(() => {
+      // 현재 런타임에서 실제 검증을 마친 시점에만 버전을 갱신한다. 읽기·부팅은 갱신하지 않는다.
+      this.database.db.update(backtestPreparationJobs)
+        .set({ runtimeVersionsJson: preparationRuntimeVersionsJson() })
+        .where(eq(backtestPreparationJobs.id, jobId)).run();
+      this.database.db
+        .insert(preparationPreviewCache)
+        .values({
+          jobId,
           dataRevision: revision,
           validationVersion: this.previewVersion,
           fundamentalSymbolsJson: JSON.stringify(fundamentalSymbols),
-        },
-      })
-      .run();
+        })
+        .onConflictDoUpdate({
+          target: preparationPreviewCache.jobId,
+          set: {
+            dataRevision: revision,
+            validationVersion: this.previewVersion,
+            fundamentalSymbolsJson: JSON.stringify(fundamentalSymbols),
+          },
+        })
+        .run();
+    }).immediate();
   }
 }

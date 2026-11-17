@@ -20,7 +20,10 @@ const REQUEST = {
   symbols: ['005930'], fromYear: 2016, toYear: 2017, consolidated: true, mode: 'INCREMENTAL' as const,
 };
 
-function setup(database: DatabaseHandle, now: number, corrected = false) {
+function setup(database: DatabaseHandle, now: number, corrected = false, options?: {
+  collectionVersion?: string;
+  financialRows?: (year: string, report: string) => readonly Record<string, string>[] | undefined;
+}) {
   const calls: string[] = [];
   const clock = { now: () => now };
   const pending = new SqliteDartPendingFilingStore(database.sqlite);
@@ -38,6 +41,8 @@ function setup(database: DatabaseHandle, now: number, corrected = false) {
         }] : [] });
       }
       if (parsed.pathname.includes('fnlttSinglAcntAll')) {
+        const fixture = options?.financialRows?.(year!, report!);
+        if (fixture !== undefined) return Response.json({ status: '000', list: fixture });
         return Response.json({ status: '000', list: [{
           rcept_no: isCorrection ? '20260913000001' : `${year}0515000001`,
           reprt_code: report, bsns_year: year, sj_div: 'BS',
@@ -66,7 +71,7 @@ function setup(database: DatabaseHandle, now: number, corrected = false) {
     },
   });
   const facts = new SqliteFactRepository(database.db);
-  const coverage = new SqliteFactCoverageStore(database.db);
+  const coverage = new SqliteFactCoverageStore(database.db, options?.collectionVersion ? { collectionVersion: options.collectionVersion } : undefined);
   const actions = new SqliteCorporateActionCoverageStore(database.db);
   return {
     calls, facts, coverage, actions, pending, policy, discovery,
@@ -79,6 +84,66 @@ function seed(database: DatabaseHandle): void {
 }
 
 describe('DART 수집 중단 후 SQLite 재개', () => {
+  it('새 수집 버전은 차단된 연도의 저장 원문을 재해석하고 팩트와 gap을 교체한다', async () => {
+    const database = openDatabase(':memory:');
+    try {
+      seed(database);
+      const financialRows = (year: string, report: string) => {
+        if (year !== '2019' && year !== '2020') return undefined;
+        const lines: readonly (readonly [string, string, string, string])[] = year === '2019' ? [
+          ['1', 'ifrs_CurrentLiabilities', '유동부채', '2850327454058'],
+          ['2', 'dart_CurrentPortionOfBonds', '유동성사채', '199953500839'],
+          ['3', '-표준계정코드 미사용-', '소유주분배예정부채집단', '262883413682'],
+          ['4', 'ifrs_NoncurrentLiabilities', '비유동부채', '1647142175954'],
+          ['5', 'dart_BondsIssued', '비유동사채', '898561179354'],
+          ['6', 'ifrs_Liabilities', '부채총계', '4760353043694'],
+        ] : [
+          ['1', 'ifrs_CurrentLiabilities', '유동부채', '1000'],
+          ['2', 'dart_CurrentPortionOfBonds', '사채', '20'],
+          ['3', 'dart_BondsIssued', '사채', '30'],
+          ['4', 'ifrs_NoncurrentLiabilities', '비유동부채', '2000'],
+          ['5', 'ifrs_Liabilities', '부채총계', '3000'],
+        ];
+        return lines.map(([ord, account_id, account_nm, thstrm_amount]) => ({
+          rcept_no: `${year}0515000001`, reprt_code: report, bsns_year: year, sj_div: 'BS',
+          ord, account_id, account_nm, thstrm_amount, currency: 'KRW', account_detail: '-',
+        }));
+      };
+      const request = { ...REQUEST, fromYear: 2018, toYear: 2020 };
+      const old = setup(database, START, false, { collectionVersion: 'a'.repeat(64), financialRows });
+      await old.service.sync(request);
+      const goodYear = (await old.facts.getFacts({ scope: 'SYMBOL' })).filter(fact => fact.periodKey.startsWith('2018'));
+      expect(goodYear.length).toBeGreaterThan(0);
+      await old.facts.replaceSymbolFinancialFactsForYear('005930', 2019, [{
+        scope: 'SYMBOL', key: '005930', field: 'BONDS', periodKey: '2019Q4',
+        asOfTsMs: START, value: 1, unit: 'KRW',
+      }]);
+      const oldGap = (year: number) => ({ symbol: '005930', periodKey: `${year}Q4`, field: 'BONDS' as const,
+        reason: '이전 사채 충돌', severity: 'BLOCKING' as const, kind: 'CONFLICT' as const });
+      old.coverage.addCoverageResult('005930', [2019, 2020], [oldGap(2019), oldGap(2020)], START);
+
+      const current = setup(database, START + 1, false, { collectionVersion: 'b'.repeat(64), financialRows });
+      expect(current.coverage.getCoveredYears(['005930']).get('005930')).toEqual([2018]);
+      const replay = await current.service.sync(request);
+      expect(replay.stopReason).toBeNull();
+      expect(current.calls).toEqual([]);
+      const facts = await current.facts.getFacts({ scope: 'SYMBOL' });
+      expect(facts.filter(fact => fact.periodKey.startsWith('2018'))).toEqual(goodYear);
+      expect(facts.filter(fact => fact.field === 'BONDS' && fact.periodKey === '2019Q4'))
+        .toEqual([expect.objectContaining({ value: 1098514680193 })]);
+      const state = current.coverage.getCoverageState(['005930']).get('005930');
+      expect(state?.verifiedYears).toEqual([2018, 2019, 2020]);
+      expect(state?.blockingGapYears).toEqual([2020]);
+      expect(state?.blockingGapDetails[0]?.gaps).toEqual(expect.arrayContaining([
+        expect.objectContaining({ field: 'BONDS', kind: 'CONFLICT' }),
+      ]));
+      const again = await current.service.sync(request);
+      expect(again.savedFacts).toBe(0);
+      expect(current.calls).toEqual([]);
+      expect(current.coverage.getCoverageState(['005930']).get('005930')).toEqual(state);
+    } finally { database.close(); }
+  });
+
   it.each([7, 20])('원문 %i건 저장 후 중단해도 다음 날 DB 재개는 받은 응답을 다시 호출하지 않는다', async (limit) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dart-resume-'));
     const databasePath = path.join(dir, 'app.sqlite');

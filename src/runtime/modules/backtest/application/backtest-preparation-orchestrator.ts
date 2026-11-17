@@ -16,6 +16,7 @@ import type { Clock } from "../../../shared/clock.js";
 import type { DatabaseHandle } from "../../../shared/db/database.js";
 import { backtestPreparationJobs } from "../../../shared/db/schema.js";
 import { newId } from "../../../shared/ids.js";
+import { preparationRuntimeVersionsJson } from "./preparation-runtime-versions.js";
 import type { Logger } from "pino";
 import type { ExternalApiUsage } from "../../../shared/external-api-usage.js";
 import type { CorporateActionCoverageStore } from "../../facts/application/corporate-action-coverage.js";
@@ -354,6 +355,7 @@ export class BacktestPreparationOrchestrator {
     input: PreparationInput,
     owner?: { userId: string; context: string },
     beforeQueue?: () => Promise<void>,
+    options: { reuseActive?: boolean } = {},
   ): BacktestPreparationJobDto {
     const strategy = this.requireStrategy(input);
     const requestHash = backtestPreparationRequestHash(input, strategy);
@@ -368,13 +370,15 @@ export class BacktestPreparationOrchestrator {
           .where(
             and(
               eq(backtestPreparationJobs.requestHash, requestHash),
+              eq(backtestPreparationJobs.runtimeVersionsJson, preparationRuntimeVersionsJson()),
               inArray(backtestPreparationJobs.status, [...ACTIVE_STATUSES]),
             ),
           )
           .orderBy(desc(backtestPreparationJobs.createdAtMs))
           .limit(1)
           .get();
-        if (existing) {
+        // 버전 복구는 다른 소비자가 소유한 이전 실행과 분리해서 시작한다.
+        if (existing && options.reuseActive !== false) {
           if (owner) this.bindWizard(owner.userId, owner.context, existing.id);
           return { row: existing, inserted: false } as const;
         }
@@ -387,6 +391,7 @@ export class BacktestPreparationOrchestrator {
             id,
             requestHash,
             requestJson: JSON.stringify(input),
+            runtimeVersionsJson: preparationRuntimeVersionsJson(),
             lifecycleManaged: owner !== undefined,
             status: beforeQueue ? "WAITING_DATA" : "QUEUED",
             phase: beforeQueue ? "FILING_DISCOVERY" : "MARKET_DATA",
@@ -459,6 +464,7 @@ export class BacktestPreparationOrchestrator {
       .where(
         and(
           eq(backtestPreparationJobs.requestHash, requestHash),
+          eq(backtestPreparationJobs.runtimeVersionsJson, preparationRuntimeVersionsJson()),
           inArray(backtestPreparationJobs.status, [...ACTIVE_STATUSES]),
         ),
       )
@@ -510,8 +516,8 @@ export class BacktestPreparationOrchestrator {
     const hash = backtestPreparationRequestHash(input, strategy);
     const completedId = preparationJobId ?? this.latestCompletedPreviewId(hash);
     if (completedId === null) return null;
-    const row = this.getDtoRow(completedId);
-    if (row?.status !== "COMPLETED" || row.requestHash !== hash) return null;
+    const row = this.getRow(completedId);
+    if (row?.status !== "COMPLETED" || row.requestHash !== hash || row.runtimeVersionsJson !== preparationRuntimeVersionsJson()) return null;
     const preview = this.getPreview(completedId);
     if (
       !preview ||
@@ -2408,6 +2414,7 @@ export class BacktestPreparationOrchestrator {
           and(
             eq(backtestPreparationJobs.requestHash, requestHash),
             eq(backtestPreparationJobs.status, "COMPLETED"),
+            eq(backtestPreparationJobs.runtimeVersionsJson, preparationRuntimeVersionsJson()),
             isNotNull(backtestPreparationJobs.previewJson),
           ),
         )

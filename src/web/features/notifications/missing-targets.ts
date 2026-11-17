@@ -3,7 +3,7 @@ import { useSyncExternalStore } from "react";
 /**
  * 대상이 사라진 알림 링크 모음.
  *
- * 컴포넌트 state 로 두지 않는 이유 — 항목을 누르면 그 페이지로 이동하면서 알림 화면이
+ * 컴포넌트 state 로 두지 않는 이유 — 이동 버튼을 누르면 해당 페이지로 이동하면서 알림 화면이
  * 언마운트된다. state 에 담으면 돌아왔을 때 「정보를 찾을 수 없음」 표시가 사라진다.
  */
 let missing: ReadonlySet<string> = new Set<string>();

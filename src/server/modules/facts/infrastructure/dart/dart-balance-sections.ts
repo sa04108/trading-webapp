@@ -1,10 +1,11 @@
 import type { FundamentalField } from "../../../../../runtime/modules/facts/domain/fact.js";
-import { normalizeDartAccountId } from "./dart-account-map.js";
+import { normalizeDartAccountId, resolveAccount } from "./dart-account-map.js";
 import type { DartFinancialRow } from "./dart-report-parser.js";
 
 type Section = "CURRENT_ASSETS" | "NONCURRENT_ASSETS" | "FINANCIAL_ASSETS"
   | "CURRENT_LIABILITIES" | "NONCURRENT_LIABILITIES" | "FINANCIAL_LIABILITIES";
-type Boundary = Section | "ASSETS" | "LIABILITIES" | "OTHER";
+type Disposal = "DISPOSAL_ASSETS" | "DISPOSAL_LIABILITIES";
+type Boundary = Section | Disposal | "ASSETS" | "LIABILITIES" | "OTHER";
 
 const BY_ID: Readonly<Record<string, Boundary>> = {
   "ifrs-full_CurrentAssets": "CURRENT_ASSETS",
@@ -13,6 +14,8 @@ const BY_ID: Readonly<Record<string, Boundary>> = {
   "ifrs-full_CurrentLiabilities": "CURRENT_LIABILITIES",
   "ifrs-full_NoncurrentLiabilities": "NONCURRENT_LIABILITIES",
   "ifrs-full_Liabilities": "LIABILITIES",
+  "ifrs-full_NoncurrentAssetsOrDisposalGroupsClassifiedAsHeldForSale": "DISPOSAL_ASSETS",
+  "ifrs-full_LiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale": "DISPOSAL_LIABILITIES",
   "ifrs-full_Equity": "OTHER",
   "ifrs-full_EquityAndLiabilities": "OTHER",
   "ifrs-full_EquityAttributableToOwnersOfParent": "OTHER",
@@ -22,6 +25,10 @@ const BY_NAME: Readonly<Record<string, Boundary>> = {
   유동자산: "CURRENT_ASSETS", 비유동자산: "NONCURRENT_ASSETS", 금융업자산: "FINANCIAL_ASSETS",
   자산총계: "ASSETS", 유동부채: "CURRENT_LIABILITIES", 비유동부채: "NONCURRENT_LIABILITIES",
   금융업부채: "FINANCIAL_LIABILITIES", 부채총계: "LIABILITIES",
+  소유주분배예정자산집단: "DISPOSAL_ASSETS", 소유주분배예정부채집단: "DISPOSAL_LIABILITIES",
+  소유주분배예정자산: "DISPOSAL_ASSETS", 소유주분배예정부채: "DISPOSAL_LIABILITIES",
+  매각예정자산집단: "DISPOSAL_ASSETS", 매각예정부채집단: "DISPOSAL_LIABILITIES",
+  매각예정자산: "DISPOSAL_ASSETS", 매각예정부채: "DISPOSAL_LIABILITIES",
   자본총계: "OTHER", 자본과부채총계: "OTHER", 부채와자본총계: "OTHER",
   지배기업주주지분: "OTHER", 비지배지분: "OTHER",
 };
@@ -68,16 +75,11 @@ export function analyzeBalanceSections(
     return value !== null && Number.isSafeInteger(value) && value >= 0 ? value : null;
   };
   if (valid) {
-    let active: Section | undefined;
-    for (const row of [...bs].sort((a, b) => Number(a.ord) - Number(b.ord))) {
+    const ordered = [...bs].sort((a, b) => Number(a.ord) - Number(b.ord));
+    const standaloneDisposals = new Set<DartFinancialRow>();
+    for (const row of ordered) {
       const kind = boundary(row);
-      if (kind !== undefined) {
-        headers.set(kind, [...(headers.get(kind) ?? []), row]);
-        active = kind === "ASSETS" || kind === "LIABILITIES" || kind === "OTHER" ? undefined : kind;
-      } else if (active !== undefined) {
-        sectionByRow.set(row, active);
-        children.set(active, [...(children.get(active) ?? []), row]);
-      }
+      if (kind !== undefined) headers.set(kind, [...(headers.get(kind) ?? []), row]);
     }
     for (const side of ["ASSETS", "LIABILITIES"] as const) {
       const sections: Section[] = [`CURRENT_${side}`, `NONCURRENT_${side}`];
@@ -86,8 +88,30 @@ export function analyzeBalanceSections(
       if (total?.length !== 1 || sections.some(section => headers.get(section)?.length !== 1)) continue;
       const values = sections.map(section => amount(headers.get(section)?.[0]));
       const sum = values.reduce<number>((acc, value) => acc + (value ?? 0), 0);
-      if (values.some(value => value === null) || !Number.isSafeInteger(sum) || sum !== amount(total[0])) continue;
+      if (values.some(value => value === null) || !Number.isSafeInteger(sum)) continue;
+      if (sum !== amount(total[0])) {
+        // 매각·소유주 분배 예정 집단을 유동/비유동 밖에 따로 표시한 공시는 이 금액까지 총계와 대조한다.
+        // 이미 유동/비유동 소계에 포함된 경우에는 다시 더하지 않는다.
+        const disposal = headers.get(`DISPOSAL_${side}`);
+        if (disposal?.length !== 1) continue;
+        const adjustment = amount(disposal[0]);
+        if (adjustment === null || !Number.isSafeInteger(sum + adjustment) || sum + adjustment !== amount(total[0])) continue;
+        standaloneDisposals.add(disposal[0]!);
+      }
       for (const section of sections) proven.add(section);
+    }
+    let active: Section | undefined;
+    for (const row of ordered) {
+      const kind = boundary(row);
+      if (kind === "DISPOSAL_ASSETS" || kind === "DISPOSAL_LIABILITIES") {
+        if (standaloneDisposals.has(row)) active = undefined;
+        else if (active !== undefined) children.set(active, [...(children.get(active) ?? []), row]);
+      } else if (kind !== undefined) {
+        active = kind === "ASSETS" || kind === "LIABILITIES" || kind === "OTHER" ? undefined : kind;
+      } else if (active !== undefined) {
+        sectionByRow.set(row, active);
+        children.set(active, [...(children.get(active) ?? []), row]);
+      }
     }
   }
   const section = (row: DartFinancialRow, field: FundamentalField): Section | undefined => {
@@ -114,10 +138,18 @@ export function analyzeBalanceSections(
       if (field !== "SHORT_TERM_BORROWINGS" || candidates.length !== 2 ||
           candidates.some(row => section(row, field) !== "CURRENT_LIABILITIES")) return false;
       const names = candidates.map(row => row.account_nm.replace(/\s/g, ""));
-      if (!names.includes("단기차입금") || !names.includes("유동차입금") ||
-          !candidates.some(row => row.account_nm.replace(/\s/g, "") === "유동차입금" &&
+      const currentName = names.includes("유동차입금") ? "유동차입금" : "유동차입금(사채포함)";
+      if (!names.includes("단기차입금") || !names.includes(currentName) ||
+          !candidates.some(row => row.account_nm.replace(/\s/g, "") === currentName &&
             normalizeDartAccountId(row.account_id) === "ifrs-full_ShorttermBorrowings")) return false;
-      const values = (children.get("CURRENT_LIABILITIES") ?? []).map(amount);
+      const currentChildren = children.get("CURRENT_LIABILITIES") ?? [];
+      // 사채 포함 행은 별도 유동 차입금·사채와 범위가 겹칠 수 있다.
+      if (currentName === "유동차입금(사채포함)" && currentChildren.some(row => {
+        if (candidates.includes(row) || typeof row.account_id !== "string" || typeof row.account_nm !== "string") return false;
+        const mapped = resolveAccount(row.account_id, row.account_nm);
+        return mapped !== null && ["BONDS", "CURRENT_LONG_TERM_DEBT", "LONG_TERM_BORROWINGS"].includes(mapped.field) && amount(row) !== 0;
+      })) return false;
+      const values = currentChildren.map(amount);
       const sum = values.reduce<number>((acc, value) => acc + (value ?? 0), 0);
       return values.length > 0 && values.every(value => value !== null) && Number.isSafeInteger(sum) &&
         sum === amount(headers.get("CURRENT_LIABILITIES")?.[0]);

@@ -13,6 +13,7 @@ import {
 import { preparationInputSchema } from "../../../../shared/schemas/backtest-preparation.js";
 import type { BacktestUniversePreview } from "../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js";
 import { requireEditableWizard } from "./backtest-wizard-state.js";
+import { wizardRuntimeVersionsJson } from "./backtest-wizard-versions.js";
 
 export class PreparationReferenceError extends Error {
   constructor() {
@@ -71,7 +72,8 @@ export class PreparationReferenceService {
           .run();
         if (wizard) {
           this.database.db.insert(backtestWizardChildren).values({ wizardId: context, kind: "preparation", jobId: preparationJobId }).onConflictDoNothing().run();
-          this.database.db.update(backtestWizardJobs).set({ currentStep: "universe", backtestJobId: null })
+          this.database.db.update(backtestWizardJobs).set({ currentStep: "universe", backtestJobId: null,
+            runtimeVersionsJson: wizardRuntimeVersionsJson(), recoveryMessage: null, recoveryError: null })
             .where(eq(backtestWizardJobs.id, context)).run();
         }
         this.database.db
@@ -128,7 +130,8 @@ export class PreparationReferenceService {
       requireEditableWizard(this.database, userId, context);
       if (!backtestJobId) throw new Error("위저드 실행에는 백테스트 ID가 필요합니다.");
       this.database.db.insert(backtestWizardChildren).values({ wizardId: context, kind: "backtest", jobId: backtestJobId }).run();
-      this.database.db.update(backtestWizardJobs).set({ backtestJobId, currentStep: "run", status: "QUEUED" })
+      this.database.db.update(backtestWizardJobs).set({ backtestJobId, currentStep: "run", status: "QUEUED",
+        runtimeVersionsJson: wizardRuntimeVersionsJson(), recoveryMessage: null, recoveryError: null })
         .where(eq(backtestWizardJobs.id, context)).run();
       return;
     }
