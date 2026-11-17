@@ -26,6 +26,7 @@ export const backtestPreparationJobs = sqliteTable(
     id: text("id").primaryKey(),
     requestHash: text("request_hash").notNull(),
     requestJson: text("request_json").notNull(),
+    runtimeVersionsJson: text("runtime_versions_json"),
     /** 소유자 참조 이관이 끝난 준비 작업만 자동 정리한다. */
     lifecycleManaged: integer("lifecycle_managed", { mode: "boolean" })
       .notNull()

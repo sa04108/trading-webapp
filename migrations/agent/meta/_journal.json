@@ -15,6 +15,13 @@
       "when": 1794796083789,
       "tag": "0001_remove_benchmark_pins",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794913287488,
+      "tag": "0002_preparation_runtime_versions",
+      "breakpoints": true
     }
   ]
 }

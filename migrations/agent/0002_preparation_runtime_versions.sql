@@ -1,0 +1,1 @@
+ALTER TABLE `backtest_preparation_jobs` ADD `runtime_versions_json` text;

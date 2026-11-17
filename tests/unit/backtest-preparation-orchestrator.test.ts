@@ -12,6 +12,7 @@ import {
   type BacktestPreparationJobDto,
 } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import { backtestPreparationRequestHash } from '../../src/runtime/modules/backtest/application/backtest-preparation-plan.js';
+import { preparationRuntimeVersionsJson } from '../../src/runtime/modules/backtest/application/preparation-runtime-versions.js';
 import { StrategyRegistry } from '../../src/runtime/modules/strategy/application/strategy-registry.js';
 import { KrxQuotaError } from '../../src/runtime/modules/market-data/application/ports.js';
 import type { SymbolMasterEntry } from '../../src/runtime/modules/market-data/domain/symbol-master.js';
@@ -885,6 +886,7 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
     const base = {
       requestHash: row.requestHash,
       requestJson: row.requestJson,
+      runtimeVersionsJson: row.runtimeVersionsJson,
       phase: 'FINALIZING',
       updatedAtMs: 200,
     };
@@ -1174,16 +1176,16 @@ describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () =>
       setTimeout(() => {
         db.prepare(\`
           INSERT INTO backtest_preparation_jobs
-            (id, request_hash, request_json, status, phase, created_at_ms, updated_at_ms)
-          VALUES (?, ?, ?, 'RUNNING', 'MARKET_DATA', 1, 1)
-        \`).run(workerData.id, workerData.requestHash, workerData.requestJson);
+            (id, request_hash, request_json, runtime_versions_json, status, phase, created_at_ms, updated_at_ms)
+          VALUES (?, ?, ?, ?, 'RUNNING', 'MARKET_DATA', 1, 1)
+        \`).run(workerData.id, workerData.requestHash, workerData.requestJson, workerData.runtimeVersionsJson);
         db.exec('COMMIT');
         db.close();
         parentPort.postMessage('COMMITTED');
       }, 100);
     `, {
       eval: true,
-      workerData: { databasePath, id: competitorId, requestHash, requestJson: JSON.stringify(INPUT) },
+      workerData: { databasePath, id: competitorId, requestHash, requestJson: JSON.stringify(INPUT), runtimeVersionsJson: preparationRuntimeVersionsJson() },
     });
     await new Promise<void>((resolve, reject) => {
       worker.once('message', (message) => message === 'LOCKED' && resolve());

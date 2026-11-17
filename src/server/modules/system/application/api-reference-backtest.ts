@@ -44,7 +44,7 @@ add('GET', '/backtests/preparation-jobs/:id', '준비 작업 상세', '준비 �
 add('POST', '/backtests/preparation-jobs/:id/cancel', '준비 작업 취소', '준비 작업 취소를 요청하고 job을 반환합니다.');
 add('GET', '/backtests/preparation-jobs/:id/events', '준비 진행 이벤트', '준비 작업 상태를 SSE로 전송합니다.', { contentType: 'text/event-stream' });
 add('POST', '/backtests/wizards', '백테스트 위저드 생성', '사용자별 wizard를 생성합니다.', { input: body('선택적 sourceJobId 문자열.', schema(z.object({ sourceJobId: z.string().min(1).max(128).optional() }))), status: 201 });
-add('GET', '/backtests/wizards/:id', '위저드 조회', '사용자별 wizard를 반환합니다.');
+add('GET', '/backtests/wizards/:id', '위저드 조회', '사용자별 wizard와 재개 단계·링크를 반환합니다. 서버 부팅 후 버전 변경으로 자동 재준비하면 recovery에 상태(PREPARING·WAITING_INPUT·FAILED), message, error가 표시됩니다. 완료 뒤에는 사용자 실행 확인을 기다립니다.');
 add('POST', '/backtests/wizards/:id/cancel', '위저드 취소', '위저드를 취소하고 wizard를 반환합니다.');
 const draftQuery = [query('wizardId', 'string', '위저드 ID, 1~128자. 지정하면 sourceJobId보다 우선합니다.'), query('sourceJobId', 'string', '복제 원본 ID, 1~128자.')];
 add('GET', '/backtests/wizard-draft/:step', '위저드 초안 조회', '단계별 draft를 반환합니다. step은 strategy, period, universe, capital 중 하나입니다.', { params: draftQuery, errors: [400, 404] });

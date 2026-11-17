@@ -183,6 +183,13 @@
       "when": 1794903403932,
       "tag": "0025_agent_reported_versions",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1794913284277,
+      "tag": "0026_wizard_version_recovery",
+      "breakpoints": true
     }
   ]
 }

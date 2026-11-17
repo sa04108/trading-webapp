@@ -159,6 +159,10 @@ export function NewBacktestWizard() {
     },
     enabled: !!wizardId,
     refetchOnMount: "always",
+    refetchInterval: (query) => {
+      const wizard = query.state.data?.wizard;
+      return wizard?.recovery?.status === "PREPARING" ? 2000 : false;
+    },
   });
   if (!wizardId) return <Navigate to={{ pathname: "/backtests/new", search }} replace />;
   // 재진입 때 캐시에 남은 작업으로 먼저 마운트하면 이전 단계·준비 작업을 복원한다.
@@ -1028,7 +1032,11 @@ function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {
         {sourceJobId !== null ? "재설정 및 복제" : "새 백테스트"}
       </h2>
 
-      {wizard.error && <Alert variant="destructive" role="alert"><AlertDescription>{wizard.error} 다시 시도할 수 있습니다.</AlertDescription></Alert>}
+      {wizard.recovery ? (
+        <Alert variant={wizard.recovery.error ? "destructive" : "default"} role={wizard.recovery.error ? "alert" : "status"}>
+          <AlertDescription>{wizard.recovery.message}{wizard.recovery.error ? ` ${wizard.recovery.error}` : ""}</AlertDescription>
+        </Alert>
+      ) : wizard.error && <Alert variant="destructive" role="alert"><AlertDescription>{wizard.error} 다시 시도할 수 있습니다.</AlertDescription></Alert>}
 
       {prefillError ? (
         <Alert variant="destructive" role="alert">

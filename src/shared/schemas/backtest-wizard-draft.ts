@@ -165,4 +165,9 @@ export interface BacktestWizardJob {
   readonly updatedAtMs: number;
   readonly finishedAtMs: number | null;
   readonly link: string;
+  readonly recovery?: {
+    readonly status: "PREPARING" | "WAITING_INPUT" | "FAILED";
+    readonly message: string;
+    readonly error: string | null;
+  } | null;
 }

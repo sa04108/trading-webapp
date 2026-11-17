@@ -7,6 +7,7 @@ import { preparationInputSchema } from "../../../../shared/schemas/backtest-prep
 import { backtestWizardJobs } from "../../../shared/db/preparation-owner-schema.js";
 import { PreparationReferenceService } from "./preparation-reference-service.js";
 import { BacktestWizardError, requireEditableWizard, requireWizard } from "./backtest-wizard-state.js";
+import { wizardRuntimeVersionsJson } from "./backtest-wizard-versions.js";
 
 const terminal = ["COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"];
 type Row = typeof backtestWizardJobs.$inferSelect;
@@ -30,6 +31,7 @@ export class BacktestWizardService {
     this.database.db.insert(backtestWizardJobs).values({
       id, ownerId, sourceJobId: sourceJobId ?? null, currentStep: sourceJobId ? "review" : "strategy",
       status: "WAITING", createdAtMs: now, updatedAtMs: now,
+      runtimeVersionsJson: wizardRuntimeVersionsJson(),
     }).run();
     return this.get(ownerId, id);
   }
@@ -83,12 +85,26 @@ export class BacktestWizardService {
     else if (preparation?.status === "COMPLETED") phase = "유니버스 준비 완료 · 사용자 입력 대기";
     else if (preparation && !terminal.includes(preparation.status)) phase = "유니버스 준비 중";
     else if (preparation) phase = "유니버스 준비 재시도 대기";
-    const parsed = preparation ? preparationInputSchema.safeParse(JSON.parse(preparation.requestJson)) : null;
+    const recoveryError = row.recoveryError ?? (row.recoveryMessage && preparation && ["FAILED", "CANCELLED", "INTERRUPTED"].includes(preparation.status)
+      ? preparation.error ?? "자동 재준비가 완료되지 않았습니다. 유니버스 미리보기를 다시 확인하세요." : null);
+    const recoveryStatus = recoveryError ? "FAILED" : preparation?.status === "COMPLETED" ? "WAITING_INPUT" : "PREPARING";
+    if (row.recoveryMessage && row.status !== "CANCELLED" && row.status !== "COMPLETED") {
+      phase = recoveryStatus === "FAILED" ? "버전 변경 후 자동 복구 실패 · 사용자 확인 필요"
+        : recoveryStatus === "WAITING_INPUT" ? "버전 변경 재준비 완료 · 사용자 입력 대기"
+        : "버전 변경 감지 · 유니버스 자동 재준비 중";
+    }
+    let preparationInput: BacktestWizardJob["preparationInput"] = null;
+    try {
+      const parsed = preparation ? preparationInputSchema.safeParse(JSON.parse(preparation.requestJson)) : null;
+      if (parsed?.success) preparationInput = parsed.data;
+    } catch { /* 손상된 이전 요청 때문에 복구 실패 안내까지 숨기지 않는다. */ }
     return {
       id: row.id, sourceJobId: row.sourceJobId, currentStep: row.currentStep as BacktestWizardPageStep,
       status: row.status as BacktestWizardJob["status"], phase,
-      error: row.status === "CANCELLED" ? null : child?.error ?? null,
-      preparationJobId: preparation?.id ?? null, preparationInput: parsed?.success ? parsed.data : null,
+      error: row.status === "CANCELLED" ? null : recoveryError ?? child?.error ?? null,
+      recovery: row.recoveryMessage && !["CANCELLED", "COMPLETED"].includes(row.status)
+        ? { status: recoveryStatus, message: `${row.recoveryMessage} ${phase}.`, error: recoveryError } : null,
+      preparationJobId: preparation?.id ?? null, preparationInput,
       backtestJobId: row.backtestJobId, createdAtMs: row.createdAtMs, updatedAtMs: row.updatedAtMs,
       finishedAtMs: row.finishedAtMs,
       link: backtest && (row.status === "COMPLETED" || (row.status !== "CANCELLED" && !terminal.includes(backtest.status)))

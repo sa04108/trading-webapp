@@ -32,11 +32,11 @@ async function main(): Promise<void> {
 
   // 부팅 복구는 포트를 열기 **전에** 끝낸다.
   // 열고 나서 하면 그 사이에 들어온 요청이 아직 안 거둔 `RUNNING` 행을 본다.
-  // 지금은 두 줄이 붙어 있어 안전하지만, 사이에 `await` 이 하나만 끼어도 되살아난다.
-  //
-  // CLI 서브커맨드도 같은 컨테이너를 만들지만 이 두 메서드는 부르지 않는다.
+  // 위저드 버전 복구와 기존 큐 복구 사이에는 외부 요청이나 결과를 받지 않는다.
+  // CLI 서브커맨드도 같은 컨테이너를 만들지만 부팅 복구는 실행하지 않는다.
   // 서버 부팅 경로에서만 불러야 하는 근거는 `recoverOrphaned` 의 주석을 참고한다.
-  // 유효한 에이전트 리스는 재접속할 수 있도록 보존한다.
+  // 버전이 바뀐 위저드는 이전 임대를 먼저 막는다. 같은 버전의 임대는 재접속을 허용한다.
+  container.backtestWizardRecoveryService.recover();
   container.jobOrchestrator.start();
   container.agentCoordinator.start();
   container.seedCloneBatchService.recover();

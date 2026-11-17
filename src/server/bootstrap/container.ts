@@ -82,6 +82,7 @@ import { JobQueue } from "../modules/backtest/application/job-queue.js";
 import { PreparationReferenceService } from "../modules/backtest/application/preparation-reference-service.js";
 import { BacktestWizardDraftService } from "../modules/backtest/application/backtest-wizard-draft-service.js";
 import { BacktestWizardService } from "../modules/backtest/application/backtest-wizard-service.js";
+import { BacktestWizardRecoveryService } from "../modules/backtest/application/backtest-wizard-recovery-service.js";
 import { ResultsService } from "../modules/backtest/application/results-service.js";
 import {
   createSeedCloneBatchJobListener,
@@ -150,6 +151,7 @@ export interface Container {
   readonly intradayService: IntradayService;
   readonly backtestWizardDraftService: BacktestWizardDraftService;
   readonly backtestWizardService: BacktestWizardService;
+  readonly backtestWizardRecoveryService: BacktestWizardRecoveryService;
   readonly jobQueue: JobQueue;
   readonly jobOrchestrator: JobOrchestrator;
   readonly backtestLeaseService: BacktestLeaseService;
@@ -466,6 +468,8 @@ export function createContainer(
     backtest: (id) => jobOrchestrator.cancel(id),
     preparation: (id) => backtestPreparationOrchestrator.cancel(id),
   });
+  const backtestWizardRecoveryService = new BacktestWizardRecoveryService(database, clock, backtestWizardService,
+    backtestPreparationOrchestrator, notification => { notificationService.events.emit("notification", notification); }, collection.refreshProviderFilings);
 
   const jobQueue = new JobQueue(database, clock, () => collection.filingDiscovery.freshness());
   const backtestResultCompleter = new ForkedBacktestResultCompleter(
@@ -752,6 +756,7 @@ export function createContainer(
     intradayService,
     backtestWizardDraftService,
     backtestWizardService,
+    backtestWizardRecoveryService,
     jobQueue,
     jobOrchestrator,
     backtestLeaseService,

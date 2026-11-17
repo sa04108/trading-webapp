@@ -305,6 +305,7 @@ test('재설정 및 복제의 전략 단계는 종목과 비용 프로필을 미
   await page.route('**/api/v1/backtests/wizards/clone-fixture', route => route.fulfill({ json: { wizard: {
     id: 'clone-fixture', sourceJobId: 'bt_clone_fixture', currentStep: 'strategy', status: 'WAITING', phase: 'DRAFT', error: null,
     preparationJobId: null, preparationInput: null, backtestJobId: null, createdAtMs: 1, updatedAtMs: 1, finishedAtMs: null, link: '/backtests/new/strategy?wizard=clone-fixture',
+    recovery: { status: 'WAITING_INPUT', message: '버전 변경 재준비 완료 · 사용자 입력 대기', error: null },
   } } }));
 
   // 새 문서 탐색으로 앱의 Query cache를 비운 뒤 이 진입에서 발생한 요청만 관찰한다.
@@ -316,6 +317,7 @@ test('재설정 및 복제의 전략 단계는 종목과 비용 프로필을 미
 
   await page.goto('/backtests/new/strategy?wizard=clone-fixture');
   await expect(page.getByRole('heading', { name: '재설정 및 복제' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: '버전 변경 재준비 완료 · 사용자 입력 대기' })).toBeVisible();
   await expect(page.getByRole('button', { name: /전고점 돌파/ })).toHaveAttribute(
     'aria-pressed',
     'true',

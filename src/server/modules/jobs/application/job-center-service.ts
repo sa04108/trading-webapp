@@ -119,6 +119,7 @@ export class JobCenterService {
 
   private hydrate(owner: string, row: Metadata, detail: boolean): JobItem {
     const db = this.container.database.sqlite;
+    let recoveryActive = false;
     let job: JobItem = { id: row.id, kind: row.kind, status: row.status, title: "작업", phase: jobPhase(row.status), description: null, progress: null, error: null,
       createdAtMs: row.createdAtMs, updatedAtMs: row.updatedAtMs, finishedAtMs: row.finishedAtMs, cancellable: !isFinishedJob(row.status) && row.status !== "CANCELLING", link: null };
     const strategyName = (id: string) => this.container.strategyRegistry.describe(id)?.name ?? INTRADAY_STRATEGIES.find((strategy) => strategy.id === id)?.name ?? id;
@@ -132,6 +133,7 @@ export class JobCenterService {
       }
       case "backtest-wizard": {
         const wizard = this.container.backtestWizardService.get(owner, row.sourceId);
+        recoveryActive = Boolean(wizard.recovery);
         const strategy = this.container.backtestWizardDraftService.get(owner, row.sourceId, "strategy")?.payload.strategyId
           ?? wizard.preparationInput?.strategyId;
         const dates = this.container.backtestWizardDraftService.get(owner, row.sourceId, "period")?.payload
@@ -142,7 +144,7 @@ export class JobCenterService {
           const child = this.container.jobQueue.getJob(wizard.backtestJobId);
           if (child && !this.container.jobQueue.isTerminal(child.status)) {
             const progress = this.container.agentCoordinator.backtestProgress(child);
-            if (progress) job = { ...job, phase: jobPhase(progress.activity), progress: executionJobProgress(progress) };
+            if (progress) job = { ...job, phase: wizard.recovery ? wizard.phase : jobPhase(progress.activity), progress: executionJobProgress(progress) };
           }
         } else if (wizard.preparationJobId && !isFinishedJob(wizard.status)) {
           const child = this.container.backtestPreparationOrchestrator.get(wizard.preparationJobId);
@@ -258,7 +260,7 @@ export class JobCenterService {
         break;
       }
     }
-    if (row.status === "CANCELLING") job = { ...job, phase: "진행 중인 처리가 끝나면 취소됩니다", cancellable: false };
+    if (row.status === "CANCELLING") job = { ...job, phase: recoveryActive ? job.phase : "진행 중인 처리가 끝나면 취소됩니다", cancellable: false };
     return job;
   }
 

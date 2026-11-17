@@ -6,6 +6,7 @@ import { openDatabase, type DatabaseHandle } from '../../src/runtime/shared/db/d
 import * as runtimeVersions from '../../src/runtime/shared/runtime-versions.js';
 import * as buildInfo from '../../src/runtime/shared/build-info.js';
 import { PreparationPreviewCache } from '../../src/runtime/modules/backtest/application/preparation-preview-cache.js';
+import { preparationRuntimeVersionsJson } from '../../src/runtime/modules/backtest/application/preparation-runtime-versions.js';
 
 describe('PreparationPreviewCache source invalidation', () => {
   let directory: string;
@@ -22,9 +23,9 @@ describe('PreparationPreviewCache source invalidation', () => {
     writer = openDatabase(filename);
     cache = new PreparationPreviewCache(database);
     database.sqlite.prepare(`INSERT INTO backtest_preparation_jobs
-      (id, request_hash, request_json, status, phase, preview_json, created_at_ms, updated_at_ms)
-      VALUES ('prep_test', 'request', '{}', 'COMPLETED', 'FINALIZING', ?, 1, 1)`)
-      .run(JSON.stringify(preview));
+      (id, request_hash, request_json, runtime_versions_json, status, phase, preview_json, created_at_ms, updated_at_ms)
+      VALUES ('prep_test', 'request', '{}', ?, 'COMPLETED', 'FINALIZING', ?, 1, 1)`)
+      .run(preparationRuntimeVersionsJson(), JSON.stringify(preview));
     writer.sqlite.exec(`INSERT INTO symbols (code, market, created_at_ms) VALUES ('005930', 'KR', 1)`);
     cache.store('prep_test', cache.beginValidation(), ['005930']);
   });
@@ -129,23 +130,23 @@ describe('PreparationPreviewCache source invalidation', () => {
     expect(cache.get('request')).toBeNull();
   });
 
-  it('미리보기 버전이 같으면 배포 SHA와 다른 도메인 버전이 바뀌어도 재사용한다', () => {
+  it('준비·계산 버전이 같으면 배포 SHA와 에이전트·검증 버전이 바뀌어도 재사용한다', () => {
     const versions = runtimeVersions.readRuntimeVersions();
     const receipt = database.sqlite.prepare('SELECT validation_version AS version FROM preparation_preview_cache').get();
     expect(receipt).toEqual({ version: versions.previewVersion });
     vi.spyOn(buildInfo, 'readGitCommitSha').mockReturnValue('another-deployment');
     vi.spyOn(runtimeVersions, 'readRuntimeVersions').mockReturnValue({
       ...versions, agentVersion: 'new-agent', collectionVersion: 'new-collection',
-      executionVersion: 'new-execution', validationVersion: 'new-validation',
+      validationVersion: 'new-validation',
     });
     const restarted = new PreparationPreviewCache(database);
     expect(restarted.isFresh('prep_test')).toBe(true);
     expect(restarted.get('request')?.preview).toEqual(expectedPreview);
   });
 
-  it('미리보기 버전이 바뀌면 데이터 revision이 같아도 이전 결과를 거절한다', () => {
+  it.each(['previewVersion', 'executionVersion'] as const)('%s가 바뀌면 데이터 revision이 같아도 이전 결과를 거절한다', (version) => {
     vi.spyOn(runtimeVersions, 'readRuntimeVersions').mockReturnValue({
-      ...runtimeVersions.readRuntimeVersions(), previewVersion: 'changed-preview',
+      ...runtimeVersions.readRuntimeVersions(), [version]: 'changed-version',
     });
     const changed = new PreparationPreviewCache(database);
     expect(changed.isFresh('prep_test')).toBe(false);
