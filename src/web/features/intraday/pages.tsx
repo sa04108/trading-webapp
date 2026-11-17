@@ -3,7 +3,7 @@ export { IntradayDataPage } from "./intraday-data-page";
 import { useHistoryQueries } from "../backtests/use-history-queries";
 import { BacktestBreadcrumbs } from "../backtests/backtest-breadcrumbs";
 import { ResultActions } from "../backtests/result-actions";
-import { ReproductionInfoCard } from "../backtests/reproduction-info-card";
+import { IntradayReproductionInfo } from "./intraday-reproduction-info";
 import { ExperimentSummary } from "../backtests/experiment-summary";
 import { useBacktestHistoryExtras } from "../backtests/experiment-api";
 import { ExperimentLinks, hasExperimentRecords } from "../backtests/experiment-links";
@@ -987,12 +987,7 @@ function IntradayResult({ id }: { id: string }) {
       <ResultChart key={id} request={result.request} revision={result.dataRevision} signals={result.signals} fills={result.fills} />
       <EquityChart points={points} formatTimestamp={formatIntradayTime} formatTick={(ts) => formatIntradayTime(ts).slice(result.request.period.from === result.request.period.to ? 11 : 5, result.request.period.from === result.request.period.to ? 16 : 10)} summary={`초기 ${formatKrw(result.request.initialCash)} → 최종 ${formatKrw(result.equity.at(-1)?.equity ?? result.request.initialCash + m.pnl)} (${formatSignedPct(m.returnPct)})${result.equity.length > points.length ? ` · ${result.equity.length.toLocaleString("ko-KR")}포인트를 ${points.length}포인트로 축약 표시` : ""}`} />
       <IntradayTradesSection result={result} name={name} />
-      <ReproductionInfoCard rows={[
-        ["시세 버전", result.dataRevision],
-        ["실행 버전", result.executionVersion ?? "기록 없음"],
-        ["매개변수", JSON.stringify(result.request.parameters)],
-        ["체결 가정", JSON.stringify(result.request.execution)],
-      ]} />
+      <IntradayReproductionInfo result={result} />
       <Card aria-label="시세 및 체결 참고"><CardHeader><CardTitle className="text-base">시세 및 체결 참고</CardTitle></CardHeader><CardContent className="space-y-3 text-sm text-muted-foreground">
         {result.position.quantity > 0 ? <p role="alert" className="text-destructive">미청산 수량 {money(result.position.quantity)}주 · 미청산 손익은 평가금액에 포함되며 승률과 매도 체결 수에서는 제외됩니다.</p> : null}
         <ul className="list-disc space-y-2 pl-4">{result.warnings.map((warning) => <li role="alert" key={warning}>{warning}</li>)}
