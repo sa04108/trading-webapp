@@ -67,6 +67,7 @@ import { createTossClient } from "../modules/broker/infrastructure/toss/toss-cli
 import { createIntradayService } from "../modules/intraday/infrastructure/create-intraday-service.js";
 import type { IntradayService } from "../modules/intraday/application/intraday-service.js";
 import { createTossTradingBroker } from "../modules/broker/infrastructure/toss/toss-trading-broker.js";
+import { createPaperTradingBroker } from "../modules/trading/infrastructure/paper-trading-broker.js";
 import { TradingService } from "../modules/trading/application/trading-service.js";
 import { StrategyArtifacts } from "../modules/trading/infrastructure/strategy-artifacts.js";
 import { DailyTradingEngine } from "../modules/trading/infrastructure/daily-trading-engine.js";
@@ -361,11 +362,16 @@ export function createContainer(
     usage: externalApiUsage,
     progress: (id, message, error) => tradingService.preparationProgress(id, message, error),
   });
+  const tradingMarketData = createTossTradingBroker(tossConfig, logger, { client: tossClient });
   const tradingService = new TradingService({
     database,
-    broker: createTossTradingBroker(tossConfig, logger, { client: tossClient }),
+    broker: createPaperTradingBroker({
+      database,
+      marketData: { quotes: (symbols) => tradingMarketData.quotes(symbols), dailyCandles: (symbol, from, to) => tradingMarketData.dailyCandles(symbol, from, to) },
+      now: () => clock.now(),
+      getName: (symbol) => symbolService.getLocalNames([symbol]).get(symbol)?.name,
+    }),
     artifacts: tradingArtifacts,
-    enabled: config.liveTradingEnabled,
     now: () => clock.now(),
     engine: new DailyTradingEngine({
       databasePath: config.databasePath,

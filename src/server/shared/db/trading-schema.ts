@@ -5,6 +5,7 @@ import { check, index, integer, real, sqliteTable, text, uniqueIndex } from "dri
 export const tradingControl = sqliteTable("trading_control", {
   singleton: integer("singleton").primaryKey(),
   revision: integer("revision").notNull().default(0),
+  mode: text("mode", { enum: ["LIVE", "PAPER"] }).notNull().default("LIVE"),
   accountId: text("account_id"),
   accountsJson: text("accounts_json").notNull().default("[]"),
   snapshotJson: text("snapshot_json"),
@@ -17,6 +18,7 @@ export const tradingControl = sqliteTable("trading_control", {
 export const tradingDeployments = sqliteTable("trading_deployments", {
   id: text("id").primaryKey(),
   slot: integer("slot"),
+  mode: text("mode", { enum: ["LIVE", "PAPER"] }).notNull().default("LIVE"),
   setupJson: text("setup_json").notNull(),
   name: text("name").notNull(),
   version: text("version").notNull(),
@@ -65,3 +67,17 @@ export const tradingEvents = sqliteTable("trading_events", {
   message: text("message").notNull(),
   createdAtMs: integer("created_at_ms").notNull(),
 }, table => [index("trading_events_time").on(table.createdAtMs)]);
+
+/** 모의 잔고는 전략을 제거하거나 서버를 다시 시작해도 유지한다. */
+export const paperTradingAccount = sqliteTable("paper_trading_account", {
+  singleton: integer("singleton").primaryKey(),
+  cash: real("cash").notNull(),
+  holdingsJson: text("holdings_json").notNull().default("{}"),
+}, table => [check("paper_trading_singleton", sql`${table.singleton} = 1`)]);
+
+/** 주문 ID의 유일성과 잔고 갱신을 같은 트랜잭션으로 묶어 중복 체결을 막는다. */
+export const paperTradingOrders = sqliteTable("paper_trading_orders", {
+  id: text("id").primaryKey(),
+  payloadJson: text("payload_json").notNull(),
+  createdAtMs: integer("created_at_ms").notNull(),
+}, table => [index("paper_trading_orders_time").on(table.createdAtMs)]);

@@ -6,11 +6,11 @@ import { TradingError, type TradingService } from "../application/trading-servic
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 const activationSchema = tradingRevisionSchema.extend({ acknowledged: z.literal(true) });
 const versionSchema = tradingRevisionSchema.extend({ artifactHash: z.string().regex(/^[a-f0-9]{64}$/), parameters: z.record(z.string(), z.unknown()) });
-const accountSchema = tradingRevisionSchema.extend({ accountId: z.string().min(1).max(200) });
 const resolveSchema = tradingRevisionSchema.extend({ acknowledged: z.literal(true), brokerOrderId: z.string().trim().min(1).max(500).nullable() });
 const orderParamsSchema = z.object({ orderId: z.string().max(100).uuid() }).strict();
 const emptySchema = z.object({}).strict();
 const sourceParamsSchema = z.object({ jobId: z.string().min(1).max(100) }).strict();
+const quoteParamsSchema = z.object({ symbol: z.string().regex(/^[A-Za-z0-9]{6}$/) }).strict();
 
 async function respond(reply: FastifyReply, operation: () => unknown): Promise<unknown> {
   try {
@@ -25,6 +25,7 @@ async function respond(reply: FastifyReply, operation: () => unknown): Promise<u
 export function registerTradingRoutes(app: FastifyInstance, service: TradingService, requireAuth: PreHandler): void {
   const auth = { preHandler: requireAuth };
   app.get("/trading", auth, async (_request, reply) => respond(reply, () => service.snapshot()));
+  app.get("/trading/quotes/:symbol", auth, async (request, reply) => respond(reply, () => service.quote(quoteParamsSchema.parse(request.params).symbol)));
   app.get("/trading/strategies", auth, async (_request, reply) => respond(reply, () => ({ strategies: service.artifacts() })));
   app.get("/trading/source/:jobId", auth, async (request, reply) => respond(reply, () => service.source(sourceParamsSchema.parse(request.params).jobId)));
   app.post("/trading/strategy", auth, async (request, reply) => respond(reply, () => {
@@ -48,7 +49,7 @@ export function registerTradingRoutes(app: FastifyInstance, service: TradingServ
     return service.activate(expectedRevision, request.authUser!.id);
   }));
   app.post("/trading/deactivate", auth, async (request, reply) => respond(reply, () => {
-    const { expectedRevision } = tradingRevisionSchema.parse(request.body);
+    const { expectedRevision } = activationSchema.parse(request.body);
     return service.deactivate(expectedRevision, request.authUser!.id);
   }));
   app.post("/trading/orders/:orderId/resolve", auth, async (request, reply) => respond(reply, () => {
@@ -59,9 +60,5 @@ export function registerTradingRoutes(app: FastifyInstance, service: TradingServ
   app.post("/trading/refresh", auth, async (request, reply) => respond(reply, () => {
     emptySchema.parse(request.body);
     return service.refresh();
-  }));
-  app.put("/trading/account", auth, async (request, reply) => respond(reply, () => {
-    const { accountId, expectedRevision } = accountSchema.parse(request.body);
-    return service.selectAccount(accountId, expectedRevision, request.authUser!.id);
   }));
 }
