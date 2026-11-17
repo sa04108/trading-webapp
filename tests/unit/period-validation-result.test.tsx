@@ -53,4 +53,39 @@ describe("기간 검증 결과 표시", () => {
     expect(html).toContain("MDD 한도 초과");
   });
 
+  it("분봉 과거 결과에 일별 보고서가 없으면 수익률을 만들지 않고 기존 결과 링크를 유지한다", () => {
+    const oos: ValidationTrialDto = { ...base, id: "oos", role: "OOS", status: "COMPLETED", jobId: "run", metrics: { totalReturnPct: 2, cagrPct: null, maxDrawdownPct: -1, sharpe: null, tradeCount: 2 } };
+    const client = new QueryClient();
+    client.setQueryData(["intraday-validation-daily", "v", "oos"], { report: null });
+    const html = renderToStaticMarkup(<QueryClientProvider client={client}><MemoryRouter><TooltipProvider><ValidationResult experiment={experiment([oos])} specs={[]} refresh={async () => {}} mode="intraday" /></TooltipProvider></MemoryRouter></QueryClientProvider>);
+    expect(html).toContain("이 기록에는 일별 관측 정보가 저장되지 않았습니다");
+    expect(html).toContain("+2.00%");
+    expect(html).toContain('/backtests/intraday/run');
+    expect(html).toContain("후보별 실행과 상세 결과");
+    expect(html).not.toContain("0.00%");
+  });
+  it("분봉 미평가 회차는 보고서와 수익률을 만들어내지 않는다", () => {
+    const oos: ValidationTrialDto = { ...base, id: "oos", role: "OOS", status: "NOT_EVALUATED", candidate: null, parameters: null, metrics: null, skipReason: "NO_ELIGIBLE_CANDIDATE" };
+    const html = renderToStaticMarkup(<QueryClientProvider client={new QueryClient()}><MemoryRouter><TooltipProvider><ValidationResult experiment={experiment([oos])} specs={[]} refresh={async () => {}} mode="intraday" /></TooltipProvider></MemoryRouter></QueryClientProvider>);
+    expect(html).toContain("선택 후보가 없어 미평가되었습니다");
+    expect(html).not.toContain("0.00%");
+  });
+
+  it("조기 종료 구간의 불완전한 일자를 표시하고 전체 구간 수익률로 제시하지 않는다", () => {
+    const summary = { isComplete: false, expectedDays: 3, evaluatedDays: 1, partialDays: 0, missingDays: 1, notRunDays: 0, exitFailedDays: 1, activeDays: 1, profitableDays: 1, meanReturnPct: 0.1, medianReturnPct: 0.1, standardDeviationPct: null, profitableDayPct: 100, worstReturnPct: 0.1, worstDate: "2020-01-01", sharpe: null, maxConsecutiveLossDays: 0, worstIntradayDrawdownPct: -0.2, top3ProfitSharePct: 100, earlyTermination: { date: "2020-01-03", remainingQuantity: 2 } };
+    const oos: ValidationTrialDto = { ...base, id: "oos", role: "OOS", status: "COMPLETED", metrics: { totalReturnPct: 99, cagrPct: null, maxDrawdownPct: -1, sharpe: null, tradeCount: 2, intradayDaily: summary } };
+    const baseline: ValidationTrialDto = { ...oos, id: "baseline", role: "BASELINE" };
+    const client = new QueryClient();
+    client.setQueryData(["intraday-validation-daily", "v", "oos"], { report: { summary, days: [{ date: "2020-01-02", status: "MISSING", pnl: null, missingMinutes: 10 }, { date: "2020-01-03", status: "EXIT_FAILED", pnl: -25, missingMinutes: 0 }] } });
+    const html = renderToStaticMarkup(<QueryClientProvider client={client}><MemoryRouter><TooltipProvider><ValidationResult experiment={experiment([oos, baseline])} specs={[]} refresh={async () => {}} mode="intraday" /></TooltipProvider></MemoryRouter></QueryClientProvider>);
+    expect(html).toContain("정상 평가 1 / 3일");
+    expect(html).toContain("청산 실패로 조기 종료");
+    expect(html).toContain("+0.10%");
+    expect(html).toContain("시세 누락");
+    expect(html).toContain("-25원");
+    expect(html).toContain("불완전");
+    expect(html).toContain("100.00%");
+    expect(html).not.toContain("+100.00%");
+  });
+
 });

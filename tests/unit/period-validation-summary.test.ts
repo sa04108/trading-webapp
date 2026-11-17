@@ -24,6 +24,7 @@ describe("평가된 선택 전략 OOS 요약", () => {
       trial("OOS", "NOT_EVALUATED", 0, "NO_ELIGIBLE_CANDIDATE"),
       trial("OOS", "RUNNING", 100), trial("OOS", "COMPLETED", Infinity),
       trial("BASELINE", "COMPLETED", 500),
+      { ...trial("OOS", "COMPLETED", 100), metrics: { totalReturnPct: 100, intradayDaily: { isComplete: false } } } as ValidationTrialDto,
     ]);
     expect(result).toMatchObject({ evaluated: 2, notEvaluated: 1, mean: 4, profitable: 1, worst: -2 });
     expect(result.standardDeviation).toBeCloseTo(6);

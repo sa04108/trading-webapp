@@ -1,3 +1,4 @@
+import { IntradayValidationDailyReport } from "./intraday-validation-daily-report";
 import { summarizeValidationOos } from "./period-validation-summary";
 import { isRefreshRequired, useBacktestRefresh } from "./backtest-refresh-dialog";
 import { useMemo, useState } from "react";
@@ -127,11 +128,15 @@ function CandidateSelection({
     INSUFFICIENT_TRADES: "매도 체결 수 미달",
     DRAWDOWN_UNAVAILABLE: "MDD 값 없음",
     DRAWDOWN_LIMIT_EXCEEDED: "MDD 한도 초과",
+    INCOMPLETE_PERIOD: "불완전한 평가 기간",
+    TRADING_DAYS_UNAVAILABLE: "실제 거래일 수 없음",
+    INSUFFICIENT_TRADING_DAYS: "실제 거래일 수 미달",
   };
   return <div className="space-y-1 text-xs">
     <p className="font-medium">{selection.eligible ? "조건 충족" : "조건 탈락"}</p>
     <p>{objective}: {finite(score) ? `${formatNumber(score)}${optimization.objective === "cagrPct" ? "%" : ""}` : "—"} (유효한 값, 최대 선택)</p>
     <p>매도 체결: {finite(trades) ? `${trades}건` : "—"} / {optimization.minTrades}건 이상</p>
+    {optimization.minTradingDays !== undefined ? <p>실제 거래일: {trial.metrics?.intradayDaily?.activeDays ?? "—"}일 / {optimization.minTradingDays}일 이상</p> : null}
     <p>MDD 크기: {drawdownText} / {optimization.maxDrawdownPct}% 이하</p>
     {selection.reasons.map((reason) => <p className="text-destructive" key={reason}>{reasons[reason] ?? reason}</p>)}
   </div>;
@@ -234,7 +239,7 @@ export function ValidationResult({
               ? "Sharpe"
               : "CAGR"}{" "}
             최대 · 매도 체결 {optimization.minTrades}건 이상 ·
-            MDD 크기 {optimization.maxDrawdownPct}% 이하
+            MDD 크기 {optimization.maxDrawdownPct}% 이하{mode === "intraday" && optimization.minTradingDays !== undefined ? ` · 실제 거래일 ${optimization.minTradingDays}일 이상` : ""}
           </p>
         ) : null}
       </CardHeader>
@@ -246,6 +251,7 @@ export function ValidationResult({
             </AlertDescription>
           </Alert>
         ) : null}
+        {mode === "intraday" ? <IntradayValidationDailyReport experiment={experiment} /> : <>
         <div className="space-y-1 text-sm">
           <p>{optimization ? "선택 전략" : "원본 설정"} OOS 평가 {summary.evaluated}/{experiment.plan.folds.length}회{optimization ? ` · 후보가 없어 미평가 ${summary.notEvaluated}회` : ""}</p>
           <p>평균 수익률 {summary.mean === null ? "—" : formatSignedPct(summary.mean)} · 수익률 표준편차 {summary.standardDeviation === null ? "—" : `${formatNumber(summary.standardDeviation)}%p`} <InfoHint label="수익률 표준편차 설명">평가된 회차의 수익률로 모집단 표준편차를 계산합니다. 평가된 회차가 두 개 미만이면 —로 표시합니다.</InfoHint> · 수익 회차 {summary.profitable}/{summary.evaluated}회 · 최악 회차 {summary.worst === null ? "—" : formatSignedPct(summary.worst)}</p>
@@ -340,6 +346,7 @@ export function ValidationResult({
             })}
           </TableBody>
         </Table>
+        </>}
         <details>
           <summary className="cursor-pointer text-sm">
             {optimization ? "후보별 실행과 상세 결과" : "실행 상세 결과"}
@@ -475,6 +482,7 @@ export function PeriodValidationSection({
   const [axes, setAxes] = useState([{ key: "", values: "" }]);
   const [objective, setObjective] = useState("sharpe");
   const [minTrades, setMinTrades] = useState("5");
+  const [minTradingDays, setMinTradingDays] = useState("15");
   const [maxDrawdown, setMaxDrawdown] = useState("30");
   const preview = useMemo(() => {
     try {
@@ -487,6 +495,7 @@ export function PeriodValidationSection({
         }),
         objective,
         minTrades: Number(minTrades),
+        ...(intraday ? { minTradingDays: Number(minTradingDays) } : {}),
         maxDrawdownPct: Number(maxDrawdown),
       };
       const input =
@@ -531,6 +540,7 @@ export function PeriodValidationSection({
     axes,
     objective,
     minTrades,
+    minTradingDays,
     maxDrawdown,
   ]);
   const refresh = async (): Promise<void> => {
@@ -753,6 +763,7 @@ export function PeriodValidationSection({
                   />
                 </div>
               </div>
+              {intraday ? <div className="space-y-2"><Label htmlFor="validation-trading-days">최소 실제 거래일</Label><Input id="validation-trading-days" type="number" min={1} max={365} value={minTradingDays} onChange={(event) => setMinTradingDays(event.target.value)} /></div> : null}
               <p className="text-sm text-muted-foreground">
                 후보 선택은 IS 성과만 사용합니다. {intraday ? "같은 회차의 후보는 동일한 보관 시세로 비교하며, " : "같은 회차의 후보는 동일 난수 시드로 비교하며, "}조건을 만족하는 후보가 없으면 해당 회차의 선택 전략 OOS는 미평가로 남기고 다음 회차를 독립적으로 실행합니다. 고정 전략 OOS는 계속 실행합니다.
               </p>

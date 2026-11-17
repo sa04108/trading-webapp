@@ -3,7 +3,7 @@ import type { ValidationTrialDto } from "../../../shared/schemas/period-validati
 export function summarizeValidationOos(trials: readonly ValidationTrialDto[]) {
   const returns = trials.flatMap((trial) => {
     const value = trial.metrics?.totalReturnPct;
-    return trial.role === "OOS" && trial.status === "COMPLETED" && typeof value === "number" && Number.isFinite(value) ? [value] : [];
+    return trial.role === "OOS" && trial.status === "COMPLETED" && trial.metrics?.intradayDaily?.isComplete !== false && typeof value === "number" && Number.isFinite(value) ? [value] : [];
   });
   const scale = returns.reduce((max, value) => Math.max(max, Math.abs(value)), 0);
   const normalizedMean = returns.length && scale

@@ -2,6 +2,9 @@ import { expect, test } from "@playwright/test";
 import { login } from "./login";
 import { buildPeriodValidationPlan, type PeriodValidationConfig, type PeriodValidationDto } from "../../src/shared/schemas/period-validation";
 import { intradayRequestSchema } from "../../src/shared/schemas/intraday";
+import type { IntradayResult } from "../../src/shared/schemas/intraday";
+import { buildIntradayDailyReport } from "../../src/runtime/modules/intraday/domain/daily-evaluation";
+import { RISK_FREE_RATE_SEED } from "../../src/runtime/modules/backtest/domain/risk-free-rate-seed";
 
 const request = {
   mode: "intraday",
@@ -90,6 +93,65 @@ test.beforeEach(async ({ page }) => {
     const id = new URL(route.request().url()).pathname.split("/").at(-2)!;
     return route.fulfill({ json: { kind: "original", complete: true, roleLabel: "결과", items: [{ label: "백테스트", href: "/backtests" }, { label: "분봉", href: "/backtests/intraday" }, { label: `결과 ${id.slice(-6)}`, href: `/backtests/intraday/${id}` }] } });
   });
+});
+
+// 정적 마크업 검사는 구간 전환 중 이전 성과가 남거나 모든 분봉 본문을 요청하는 회귀를 잡지 못한다.
+test("분봉 일별 검증은 선택한 OOS만 조회하고 조기 종료를 별도로 표시한다", async ({ page }) => {
+  await login(page);
+  const sourceRequest = intradayRequestSchema.parse({ ...request, period: { from: "2026-04-01", to: "2026-08-31" } });
+  function report(dates: string[], early: boolean) {
+    const equity: IntradayResult["equity"] = [];
+    let cash = sourceRequest.initialCash;
+    for (const [i, date] of dates.entries()) {
+      if (early && i === 2) break;
+      const closing = cash * (1 + (early ? [0.2, -0.7][i]! : [1, 0, -0.5][i]!) / 100);
+      for (let minute = 1; minute <= 380; minute++) equity.push({ endMs: Date.parse(`${date}T09:00:00+09:00`) + minute * 60_000, cash, equity: minute === 380 ? closing : cash, quantity: early && i === 1 ? 12 : 0 });
+      cash = closing;
+    }
+    return buildIntradayDailyReport({ request: sourceRequest, equity, fills: [], position: { quantity: early ? 12 : 0, averagePrice: 70000, lastPrice: 70000 } }, dates, 380, RISK_FREE_RATE_SEED);
+  }
+  const reports = [report(["2026-07-01", "2026-07-02", "2026-07-03"], false), report(["2026-08-03", "2026-08-04", "2026-08-05"], true)];
+  const folds = reports.map((r, ordinal) => ({ ordinal, train: { from: "2026-04-01", to: "2026-06-30" }, test: { from: r.days[0]!.date, to: r.days.at(-1)!.date } }));
+  const experiment: PeriodValidationDto = {
+    id: "daily-validation", sourceJobId: "done", status: "COMPLETED", config: { mode: "WALK_FORWARD", trainMonths: 3, testMonths: 1 },
+    plan: { folds, candidates: [sourceRequest.parameters], totalRuns: 4, unusedPeriod: null }, initialCash: sourceRequest.initialCash, createdAtMs: at, error: null,
+    trials: folds.map((fold) => ({ id: `trial-${fold.ordinal}`, fold: fold.ordinal, role: "OOS", candidate: 0, period: fold.test, parameters: sourceRequest.parameters, jobId: `result-${fold.ordinal}`, status: "COMPLETED", progress: null, error: null, skipReason: null, selection: null,
+      metrics: { totalReturnPct: fold.ordinal ? -0.5 : 0.495, cagrPct: null, maxDrawdownPct: -0.7, sharpe: reports[fold.ordinal]!.summary.sharpe, tradeCount: 0, intradayDaily: reports[fold.ordinal]!.summary } })),
+  };
+  await page.route("**/api/v1/intraday/runs/done", (route) => route.fulfill({ json: { ...completed, request: sourceRequest } }));
+  await page.route("**/api/v1/intraday/validations/daily-validation", (route) => route.fulfill({ json: { experiment } }));
+  const reads: string[] = [];
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route("**/api/v1/intraday/validations/daily-validation/trials/*/daily", async (route) => {
+    const id = new URL(route.request().url()).pathname.split("/").at(-2)!;
+    reads.push(id);
+    if (id === "trial-1") await held;
+    await route.fulfill({ json: { report: reports[id === "trial-0" ? 0 : 1] } });
+  });
+  await page.goto("/backtests/intraday/validations/daily-validation");
+  await expect(page.getByText(/정상 평가 3 \/ 3일/)).toBeVisible();
+  expect(reads).toEqual(["trial-0"]);
+  const stats = page.locator('[aria-label="OOS 일별 핵심 지표"]');
+  await expect(stats).toContainText("+0.17%");
+  await page.getByLabel("평가할 OOS 구간").click();
+  await page.getByRole("option", { name: /2회차/ }).click();
+  await expect(page.getByText("일별 성과를 불러오는 중…")).toBeVisible();
+  await expect(stats).toHaveCount(0);
+  release();
+  await expect(page.getByText(/청산 실패로 조기 종료 \(잔여 12주\)/)).toBeVisible();
+  await expect(stats).toContainText("+0.20%");
+  await page.getByText("평가에서 제외된 날짜", { exact: true }).click();
+  await expect(page.getByRole("cell", { name: "미실행", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "청산 실패", exact: true })).toBeVisible();
+  await expect(page.getByRole("cell", { name: /-70,140원/ })).toBeVisible();
+  expect(reads).toEqual(["trial-0", "trial-1"]);
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByLabel("평가할 OOS 구간").click();
+  await page.getByRole("option", { name: /1회차/ }).click();
+  await expect(stats).toContainText("+0.17%");
+  expect(reads).toEqual(["trial-0", "trial-1"]);
 });
 
 // 빈 차트만 검사하면 수집 폴링이 확대·이동한 차트를 다시 만드는 회귀를 잡지 못한다.
@@ -524,6 +586,7 @@ test("분봉 실험 페이지를 재사용하고 검증 하위 결과와 일반 
     return route.fulfill({ json: { experiments: experiment ? [experiment] : [] } });
   });
   await page.route("**/api/v1/intraday/validations/validation", (route) => route.fulfill({ json: { experiment } }));
+  await page.route("**/api/v1/intraday/validations/validation/trials/*/daily", (route) => route.fulfill({ json: { report: null } }));
   await page.route("**/api/v1/intraday/runs/oos/lineage", (route) => route.fulfill({ json: { complete: true, kind: "validation", roleLabel: "OOS 검증", items: [
     { label: "백테스트", href: "/backtests/intraday" }, { label: "결과 done", href: "/backtests/intraday/done" },
     { label: "홀드아웃", href: "/backtests/intraday/validations/validation" }, { label: "1회차 · OOS 검증" },
@@ -558,6 +621,7 @@ test("분봉 실험 페이지를 재사용하고 검증 하위 결과와 일반 
   await form.getByRole("button", { name: "검증 실험 실행" }).click();
   await form.getByRole("link", { name: "상세 보기" }).click();
   await expect(page).toHaveURL(/\/backtests\/intraday\/validations\/validation$/);
+  await expect(page.getByLabel("평가할 OOS 구간")).toHaveCount(0);
   await expect(page.getByText("완료", { exact: true })).toHaveCount(0);
   await page.locator('a[href="/backtests/intraday/oos"]').first().click();
   await expect(page.getByRole("navigation", { name: "백테스트 경로" })).toContainText("1회차 · OOS 검증");

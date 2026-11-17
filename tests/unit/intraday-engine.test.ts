@@ -74,6 +74,8 @@ describe("분봉 정보 시각과 주문 생명주기", () => {
     expect(expected.sharpe).not.toBeNull();
     expect(result.metrics.sharpe).toBeCloseTo(expected.sharpe!, 12);
     expect(result.metrics.sharpeBasis).toEqual(expected.sharpeBasis);
+    expect(result.dailyEvaluation?.summary).toMatchObject({ isComplete: true, expectedDays: 2, evaluatedDays: 2 });
+    expect(result.dailyEvaluation?.summary.sharpe).toBe(result.metrics.sharpe);
   });
 
   it("확정 봉 신호와 지연을 지난 시가 체결을 구별하며 현금과 청산을 보존한다", () => {
@@ -231,6 +233,10 @@ describe("분봉 정보 시각과 주문 생명주기", () => {
     expect(result.metrics.pnl).toBe(0);
     expect(result.equity.at(-1)).toMatchObject({ endMs: at("15:15"), cash: 5060, quantity: 94, equity: 100000 });
     expect(result.warnings.join(" ")).toContain(`${date} 당일 청산에 실패해 94주가 남았습니다`);
+    expect(result.dailyEvaluation?.days.map((day) => day.status)).toEqual(["EXIT_FAILED", "NOT_RUN"]);
+    expect(result.dailyEvaluation?.days[0]).toMatchObject({ closingQuantity: 94, pnl: 0, missingMinutes: 5 });
+    expect(result.dailyEvaluation?.days[1]).toMatchObject({ returnPct: null, observedBars: 0, missingMinutes: 0 });
+    expect(result.dailyEvaluation?.summary).toMatchObject({ isComplete: false, evaluatedDays: 0, exitFailedDays: 1, notRunDays: 1, meanReturnPct: null, sharpe: null, earlyTermination: { date, remainingQuantity: 94 } });
   });
   // 봉 시가에서만 만료를 처리하면 봉 중간에 만료한 주문이 종가의 새 청산 신호를 막는다.
   it("봉 중간에 만료한 주문을 종가 신호 전에 종료해 청산을 다시 시도한다", () => {

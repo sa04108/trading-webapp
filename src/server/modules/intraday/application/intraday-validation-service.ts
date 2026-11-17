@@ -10,7 +10,7 @@ import { intradayRuns } from "../../../shared/db/intraday-schema.js";
 import { intradayValidations, intradayValidationTrials } from "../../../shared/db/intraday-validation-schema.js";
 import { IntradayError, type IntradayService } from "./intraday-service.js";
 
-const metrics = (result: IntradayResult): ValidationMetrics => ({ totalReturnPct: result.metrics.returnPct, cagrPct: null, maxDrawdownPct: result.metrics.maxDrawdownPct, sharpe: result.metrics.sharpe, tradeCount: summarizeIntradayTrades(result).tradeCount });
+const metrics = (result: IntradayResult): ValidationMetrics => ({ totalReturnPct: result.metrics.returnPct, cagrPct: null, maxDrawdownPct: result.metrics.maxDrawdownPct, sharpe: result.metrics.sharpe, tradeCount: summarizeIntradayTrades(result).tradeCount, ...(result.dailyEvaluation ? { intradayDaily: result.dailyEvaluation.summary } : {}) });
 type Row = typeof intradayValidations.$inferSelect;
 export class IntradayValidationService {
   private pumping: Promise<void> | null = null;
@@ -62,6 +62,15 @@ export class IntradayValidationService {
     const row = this.row(owner, id); if (!row) return null;
     if (row.status === "ACTIVE") this.database.db.update(intradayValidations).set({ status: "CANCELLING" }).where(eq(intradayValidations.id, id)).run();
     void this.pump(); return this.get(owner, id);
+  }
+  dailyReport(owner: string, id: string, trialId: string) {
+    if (!this.row(owner, id)) throw new IntradayError("검증 실험을 찾을 수 없습니다.", 404);
+    const trial = this.database.db.select().from(intradayValidationTrials).where(and(eq(intradayValidationTrials.id, trialId), eq(intradayValidationTrials.validationId, id))).get();
+    if (!trial) throw new IntradayError("검증 구간을 찾을 수 없습니다.", 404);
+    // 목록 응답에는 요약만 싣고 선택한 구간의 일별 자료를 요청할 때만 결과를 읽는다.
+    if (!trial.runId) return null;
+    const run = this.runs.getRun(owner, trial.runId);
+    return run.status === "COMPLETED" ? run.result?.dailyEvaluation ?? null : null;
   }
   delete(owner: string, id: string): boolean {
     const row = this.row(owner, id); if (!row) return false;
