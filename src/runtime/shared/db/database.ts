@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
+import { initializeRiskFreeRateHistory } from "../../modules/market-data/infrastructure/sqlite-risk-free-rate-store.js";
 import {
   drizzle,
   type BetterSQLite3Database,
@@ -128,8 +129,10 @@ export function openDatabase(
         "INSERT OR IGNORE INTO operational_database_state (singleton, dataset_id) VALUES (1, ?)",
       )
       .run(datasetId);
+    const db = drizzle(sqlite, { schema });
+    if (!options.dataReadonly) initializeRiskFreeRateHistory(db);
     return {
-      db: drizzle(sqlite, { schema }),
+      db,
       sqlite,
       dataPath,
       close: () => sqlite.close(),

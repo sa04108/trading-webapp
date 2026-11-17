@@ -1,4 +1,6 @@
 import { ForkedSubmissionValidator } from "../modules/backtest/infrastructure/forked-submission-validator.js";
+import { RiskFreeRateService } from "../modules/market-data/application/risk-free-rate-service.js";
+import { EcosRateSource } from "../modules/market-data/infrastructure/ecos/ecos-rate-source.js";
 import type { DartFilingDiscovery } from "../modules/facts/application/dart-filing-discovery.js";
 import { AgentRegistry } from "../modules/agents/application/agent-registry.js";
 import { DatasetSnapshots } from "../modules/agents/application/dataset-snapshots.js";
@@ -155,6 +157,7 @@ export interface Container {
   readonly resultsService: ResultsService;
   readonly seedCloneBatchService: SeedCloneBatchService;
   readonly benchmarkService: BenchmarkService;
+  readonly riskFreeRateService: RiskFreeRateService;
   readonly factRepository: FactRepository;
   readonly financialFactAvailabilityService: FinancialFactAvailabilityService;
   readonly factSyncService: FactSyncService;
@@ -263,6 +266,14 @@ export function createContainer(
       );
     }
   };
+  const riskFreeRateService = new RiskFreeRateService({
+    db: database.db, now: () => clock.now(),
+    source: config.ecosApiKey ? new EcosRateSource({ apiKey: config.ecosApiKey }) : null,
+    onError: (message) => {
+      logger.warn({ module: "risk-free-rate" }, message);
+      safeNotify({ type: "data-sync", severity: "error", title: "ECOS 금리 동기화 실패", body: message, link: null });
+    },
+  });
   const externalApiUsage = new SqliteExternalApiUsage({
     database,
     clock,
@@ -746,6 +757,7 @@ export function createContainer(
     seedCloneBatchService,
     benchmarkService,
     factRepository,
+    riskFreeRateService,
     financialFactAvailabilityService,
     factCoverageStore,
     filingDiscovery: collection.filingDiscovery,
@@ -761,6 +773,7 @@ export function createContainer(
     close: () => {
       if (closing !== null) return closing;
       closing = (async () => {
+        await riskFreeRateService.close();
         await intradayService.close();
         await tradingService.close();
         await tradingDataPreparation.close();

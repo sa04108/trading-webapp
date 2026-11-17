@@ -61,7 +61,7 @@ export interface JobSummary {
   progressEpoch?: string;
   progressRevision?: number;
   progress?: ExecutionProgress | null;
-  metrics?: BacktestMetrics | null;
+  metrics?: Pick<BacktestMetrics, "totalReturnPct" | "cagrPct" | "maxDrawdownPct" | "sharpe" | "winRate" | "tradeCount"> | null;
 }
 
 export type SeedCloneBatchStatus =
@@ -101,6 +101,7 @@ export interface SeedCloneBatchDetail extends SeedCloneBatchSummary {
 }
 
 export interface BacktestMetrics {
+  sharpeBasis?: import("../../../shared/schemas/risk-free-rate.js").SharpeBasis;
   initialCash: number;
   finalEquity: number;
   totalReturnPct: number;

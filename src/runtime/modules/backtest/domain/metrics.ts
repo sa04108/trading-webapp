@@ -1,3 +1,6 @@
+import { computeSharpe, type DatedReturn } from "./sharpe.js";
+import { RISK_FREE_RATE_SEED } from "./risk-free-rate-seed.js";
+import type { RiskFreeRateHistory } from "../../../../shared/schemas/risk-free-rate.js";
 import type {
   BacktestMetrics,
   DrawdownPoint,
@@ -80,17 +83,17 @@ export function computeDrawdownStats(
 function dailyReturns(
   equityPoints: readonly EquityPoint[],
   initialCash: number,
-): number[] {
+): DatedReturn[] {
   const lastByDay = new Map<number, number>();
   for (const point of equityPoints) {
     lastByDay.set(Math.floor(point.tsMs / MS_PER_DAY), point.equity);
   }
   const days = [...lastByDay.keys()].sort((a, b) => a - b);
-  const returns: number[] = [];
+  const returns: DatedReturn[] = [];
   let previous = initialCash;
   for (const day of days) {
     const equity = lastByDay.get(day) as number;
-    if (previous > 0) returns.push(equity / previous - 1);
+    if (previous > 0) returns.push({ date: new Date(day * MS_PER_DAY).toISOString().slice(0, 10), value: equity / previous - 1 });
     previous = equity;
   }
   return returns;
@@ -162,6 +165,7 @@ export function computeMetrics(
    * 세면 긴 데이터 공백일수록 위험지표가 인위적으로 좋아진다.
    */
   dailyReturnEquityPoints: readonly EquityPoint[] = equityPoints,
+  riskFreeRates: RiskFreeRateHistory = RISK_FREE_RATE_SEED,
 ): BacktestMetrics {
   const finalEquity =
     equityPoints[equityPoints.length - 1]?.equity ?? initialCash;
@@ -178,16 +182,14 @@ export function computeMetrics(
   const { maxDrawdownPct, maxDrawdownDurationMs } =
     computeDrawdownStats(equityPoints);
 
-  const daily = dailyReturns(dailyReturnEquityPoints, initialCash);
+  const datedDaily = dailyReturns(dailyReturnEquityPoints, initialCash);
+  const daily = datedDaily.map(({ value }) => value);
   const dailyStd = std(daily);
   const volatilityPct =
     daily.length >= 2
       ? dailyStd * Math.sqrt(TRADING_DAYS_PER_YEAR) * 100
       : null;
-  const sharpe =
-    daily.length >= 2 && dailyStd > 0
-      ? (mean(daily) / dailyStd) * Math.sqrt(TRADING_DAYS_PER_YEAR)
-      : null;
+  const { sharpe, sharpeBasis } = computeSharpe(datedDaily, riskFreeRates);
   // Sortino의 downside deviation은 음수 표본끼리의 표준편차가 아니라,
   // 전체 관측일에서 목표수익률(0)을 밑돈 편차의 제곱평균제곱근이다.
   // 하락일이 한 번뿐이거나 같은 하락률이 반복돼도 위험이 0이 되지 않는다.
@@ -234,6 +236,7 @@ export function computeMetrics(
     maxDrawdownDurationMs,
     volatilityPct,
     sharpe,
+    sharpeBasis,
     sortino,
     calmar,
     winRate: trades.length > 0 ? (wins.length / trades.length) * 100 : null,

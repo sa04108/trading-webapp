@@ -128,7 +128,7 @@ it.each(['operations', 'agent'] as const)('%s DB의 옛 벤치마크 pin을 제�
         INSERT INTO users (id, username, password_hash, created_at_ms, updated_at_ms)
         VALUES ('user', 'user', 'unused-test-hash', 1, 1);
         INSERT INTO backtest_metrics (job_id, total_return_pct, max_drawdown_pct, trade_count, metrics_json)
-        VALUES ('source', 10, -5, 1, '{"totalReturnPct":10}');
+        VALUES ('source', 10, -5, 1, '{"totalReturnPct":10,"cagrPct":null,"maxDrawdownPct":-5,"sharpe":null,"winRate":null,"tradeCount":1}');
         INSERT INTO backtest_equity_points (job_id, ts_ms, equity) VALUES ('source', 1, 110);
         INSERT INTO backtest_clone_batches (id, source_job_id, strategy_id, status, total_count,
           request_json, universe_schedule_json, universe_json, universe_hash, provenance_pin_json,
@@ -139,7 +139,7 @@ it.each(['operations', 'agent'] as const)('%s DB의 옛 벤치마크 pin을 제�
         INSERT INTO backtest_benchmark_selections (user_id, job_id, benchmark_ids_json)
         VALUES ('user', 'source', '["KOSPI","SP500"]');
       `);
-      tables.push('backtest_clone_batches', 'backtest_clone_batch_items', 'backtest_metrics', 'backtest_equity_points', 'backtest_benchmark_selections');
+      tables.push('backtest_clone_batches', 'backtest_clone_batch_items', 'backtest_equity_points', 'backtest_benchmark_selections');
     }
     const discarded = ['benchmark_json', 'benchmark_hash'];
     const snapshots = tables.map((table) => {
@@ -157,6 +157,41 @@ it.each(['operations', 'agent'] as const)('%s DB의 옛 벤치마크 pin을 제�
       for (const { query, rows } of snapshots) expect(sqlite.prepare(query).all()).toEqual(rows);
       expect(sqlite.pragma('foreign_key_check')).toEqual([]);
       expect(sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
+    }
+  } finally { sqlite.close(); }
+});
+
+// 신규 DB 검사는 이전 JSON과 불일치하는 숫자 열의 이행 및 나머지 지표 보존을 잡지 못한다.
+it('기존 JSON의 지표를 숫자 열로 옮기고 나머지를 보존한다', () => {
+  const sqlite = new Database(':memory:');
+  try {
+    sqlite.pragma('foreign_keys = ON');
+    sqlite.exec('CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL, created_at NUMERIC NOT NULL)');
+    for (const migration of readMigrationFiles({ migrationsFolder: 'migrations/operations' }).slice(0, 22)) {
+      for (const statement of migration.sql) sqlite.exec(statement);
+      sqlite.prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)').run(migration.hash, migration.folderMillis);
+    }
+    sqlite.exec(`INSERT INTO backtest_jobs (id, status, request_json, strategy_id, universe_rule_json, universe_schedule_json, created_at_ms)
+      VALUES ('source', 'COMPLETED', '{}', 'strategy', '{}', '[]', 1)`);
+    const original = { totalReturnPct: 12, cagrPct: null, maxDrawdownPct: -5, sharpe: null, winRate: 50, tradeCount: 2, extra: [1, 2] };
+    sqlite.prepare(`INSERT INTO backtest_metrics (job_id, total_return_pct, cagr_pct, max_drawdown_pct, sharpe, win_rate, trade_count, metrics_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run('source', 99, 9, -99, 9, 9, 9, JSON.stringify(original));
+    sqlite.exec(`INSERT INTO backtest_jobs (id, status, request_json, strategy_id, universe_rule_json, universe_schedule_json, created_at_ms)
+      VALUES ('invalid', 'COMPLETED', '{}', 'strategy', '{}', '[]', 1)`);
+    const insertInvalid = sqlite.prepare(`INSERT INTO backtest_metrics (job_id, total_return_pct, max_drawdown_pct, trade_count, metrics_json)
+      VALUES ('invalid', 1, -1, 1, ?)`);
+    for (const invalid of ['{', JSON.stringify({ ...original, sharpe: undefined })]) {
+      insertInvalid.run(invalid);
+      expect(() => migrateDatabaseRole(sqlite, 'operations', 'main')).toThrow();
+      expect(sqlite.prepare('SELECT metrics_json FROM backtest_metrics WHERE job_id = ?').get('source')).toEqual({ metrics_json: JSON.stringify(original) });
+      sqlite.prepare('DELETE FROM backtest_metrics WHERE job_id = ?').run('invalid');
+    }
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      migrateDatabaseRole(sqlite, 'operations', 'main');
+      const row = sqlite.prepare('SELECT * FROM backtest_metrics').get() as Record<string, unknown>;
+      expect(row).toMatchObject({ job_id: 'source', total_return_pct: 12, cagr_pct: null, max_drawdown_pct: -5, sharpe: null, win_rate: 50, trade_count: 2 });
+      expect(JSON.parse(row.metrics_json as string)).toEqual({ extra: [1, 2] });
+      expect(sqlite.pragma('foreign_key_check')).toEqual([]);
     }
   } finally { sqlite.close(); }
 });

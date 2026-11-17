@@ -36,6 +36,13 @@
       "when": 1790224603614,
       "tag": "0004_valid_daily_bar_lookup",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1794882472687,
+      "tag": "0005_risk_free_rates",
+      "breakpoints": true
     }
   ]
 }

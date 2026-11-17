@@ -5,13 +5,14 @@ import { InfoHint } from "@/components/info-hint";
 import { getIntradayStrategy } from "@shared/schemas/intraday-strategies";
 import type { IntradayResult } from "@shared/schemas/intraday";
 import { ReproductionInfoCard, ReproductionInfoRows } from "../backtests/reproduction-info-card";
+import { SharpeBasisInfo } from "../backtests/sharpe-basis-info";
 
 const number = (value: number) => value.toLocaleString("ko-KR", { maximumSignificantDigits: 15 });
 // %로 환산한 값과 저장된 bp 원값을 함께 보여 작은 요율도 0으로 오해하지 않게 한다.
 const rate = (bps: number) => `${number(bps / 100)}% (${bps}bp)`;
 
 export function IntradayReproductionInfo({ result }: {
-  result: Pick<IntradayResult, "request" | "strategyVersion" | "dataRevision" | "executionVersion">;
+  result: Pick<IntradayResult, "request" | "strategyVersion" | "dataRevision" | "executionVersion"> & Partial<Pick<IntradayResult, "metrics">>;
 }) {
   const { request } = result;
   const strategy = getIntradayStrategy(request.strategyId);
@@ -55,11 +56,12 @@ export function IntradayReproductionInfo({ result }: {
         ]} />
       </section>
     </div>
+    <SharpeBasisInfo basis={result.metrics?.sharpeBasis} />
     <Collapsible className="border-t pt-3">
       <CollapsibleTrigger asChild><Button variant="ghost" size="sm" className="data-[state=open]:[&_svg]:rotate-180"><ChevronDown className="transition-transform" />버전 식별자 보기</Button></CollapsibleTrigger>
       <CollapsibleContent className="space-y-3 pt-3">
-        <p className="text-xs text-muted-foreground">시세 파일과 실행 코드가 같은지 비교하는 식별자입니다. 버전명이나 날짜를 뜻하지 않습니다.</p>
-        <ReproductionInfoRows rows={[["시세 식별자", result.dataRevision], ["실행 식별자", result.executionVersion ?? "기록 없음"]]} monospace />
+        <p className="text-xs text-muted-foreground">입력 자료와 실행 코드가 같은지 비교하는 식별자입니다. 새 결과의 입력 자료에는 시세와 금리표가 포함됩니다.</p>
+        <ReproductionInfoRows rows={[["입력 자료 식별자", result.dataRevision], ["실행 식별자", result.executionVersion ?? "기록 없음"]]} monospace />
       </CollapsibleContent>
     </Collapsible>
   </ReproductionInfoCard>;

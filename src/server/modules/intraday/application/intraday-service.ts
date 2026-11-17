@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { readRiskFreeRateHistory } from "../../../../runtime/modules/market-data/infrastructure/sqlite-risk-free-rate-store.js";
 import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
 import {
@@ -682,7 +683,7 @@ export class IntradayService {
     const { fromMs, toMs } = this.bounds(request.period, true);
     const data = await this.options.store.read(request.symbol, fromMs, toMs);
     if (!data.bars.length) throw new IntradayError("저장된 분봉 데이터가 없습니다.");
-    return data.revision;
+    return this.calculationRevision(data.revision);
   }
   getRunRequest(ownerId: string, id: string): { request: IntradayRequest; status: string } {
     const row = this.options.db.select({ requestJson: intradayRuns.requestJson, status: intradayRuns.status }).from(intradayRuns).where(and(eq(intradayRuns.id, id), eq(intradayRuns.ownerId, ownerId))).get();
@@ -692,7 +693,11 @@ export class IntradayService {
   async currentStoredRevision(request: IntradayRequest): Promise<string> {
     this.bounds(request.period, true);
     // 보관 범위 밖인 0 구간은 Parquet 봉을 해독하지 않고 manifest revision만 읽는다.
-    return (await this.options.store.read(request.symbol, 0, 0)).revision;
+    return this.calculationRevision((await this.options.store.read(request.symbol, 0, 0)).revision);
+  }
+  private calculationRevision(barRevision: string, rateVersion = readRiskFreeRateHistory(this.options.db).version): string {
+    // 기간 검증은 봉뿐 아니라 Sharpe에 사용한 금리표도 동일하게 고정한다.
+    return createHash("sha256").update(`${barRevision}:${rateVersion}`).digest("hex");
   }
   getRunState(ownerId: string, id: string): { status: string; error: string | null } {
     const row = this.options.db.select({ status: intradayRuns.status, error: intradayRuns.error }).from(intradayRuns).where(and(eq(intradayRuns.id, id), eq(intradayRuns.ownerId, ownerId))).get();
@@ -771,7 +776,7 @@ export class IntradayService {
       if (linked && (linked.executionVersion !== versions.executionVersion || linked.validationVersion !== versions.validationVersion)) throw new IntradayError("검증 실행 버전이 변경되었습니다.");
       if (linked && linked.status !== "ACTIVE") throw new IntradayError("검증 실험이 종료되었습니다.");
       let data = await this.options.store.read(request.symbol, fromMs, toMs);
-      if (linked && (!data.bars.length || data.revision !== linked.revision)) throw new IntradayError("고정된 분봉 데이터가 변경되었거나 만료되었습니다.");
+      if (linked && (!data.bars.length || this.calculationRevision(data.revision) !== linked.revision)) throw new IntradayError("고정된 시세 또는 금리 데이터가 변경되었거나 만료되었습니다.");
       const recoveredCollection = this.recoveredCollections.get(id);
       if (!linked && (recoveredCollection || intradayGaps(data.bars, tradingDates).length > 0)) {
         const collection = recoveredCollection ? this.getCollection(ownerId, recoveredCollection) : this.collect(
@@ -800,8 +805,9 @@ export class IntradayService {
       }
       signal.throwIfAborted();
       update({ status: "RUNNING" });
+      const riskFreeRates = readRiskFreeRateHistory(this.options.db);
       const result = await this.options.execute(
-        { request, bars: data.bars, dataRevision: data.revision, tradingDates },
+        { request, bars: data.bars, dataRevision: this.calculationRevision(data.revision, riskFreeRates.version), tradingDates, riskFreeRates },
         signal,
       );
       signal.throwIfAborted();

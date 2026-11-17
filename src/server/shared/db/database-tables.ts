@@ -11,6 +11,7 @@ export const DATA_TABLE_NAMES = [
   "krx_non_trading_days",
   "preparation_data_revision",
   "provider_input_issues",
+  "risk_free_rate_history",
   "symbol_facts_state",
   "symbol_master_coverage",
   "symbol_master_market_caps",

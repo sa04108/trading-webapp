@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { z } from "zod";
+import { sharpeBasisSchema } from "../../../../shared/schemas/risk-free-rate.js";
 import {
   summarizeBacktestWarnings,
   MAX_BACKTEST_SUMMARY_WARNINGS,
@@ -87,6 +88,7 @@ export const backtestResultSummarySchema = z.object({
     maxDrawdownDurationMs: nonNegativeInteger,
     volatilityPct: nonNegativeNumber.nullable(),
     sharpe: finiteNumber.nullable(),
+    sharpeBasis: sharpeBasisSchema.optional(),
     sortino: finiteNumber.nullable(),
     calmar: finiteNumber.nullable(),
     winRate: finiteNumber.min(0).max(100).nullable(),

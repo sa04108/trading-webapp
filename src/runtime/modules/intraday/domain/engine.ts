@@ -1,4 +1,7 @@
 import { getIntradayStrategy } from "../../../../shared/schemas/intraday-strategies.js";
+import { computeSharpe, missingRateWarning, type DatedReturn } from "../../backtest/domain/sharpe.js";
+import { RISK_FREE_RATE_SEED } from "../../backtest/domain/risk-free-rate-seed.js";
+import type { RiskFreeRateHistory } from "../../../../shared/schemas/risk-free-rate.js";
 import { createIntradaySignalModel } from "./signal-model.js";
 import {
   MINUTE_MS,
@@ -98,6 +101,7 @@ export function intradayGaps(
 }
 
 export interface IntradayEngineInput {
+  riskFreeRates?: RiskFreeRateHistory;
   request: IntradayRequest;
   bars: IntradayBar[];
   dataRevision: string;
@@ -409,11 +413,11 @@ export function runIntradayBacktest(
   const finalEquity = result.equity.at(-1)?.equity ?? request.initialCash;
   result.metrics.pnl = finalEquity - request.initialCash;
   result.metrics.returnPct = (result.metrics.pnl / request.initialCash) * 100;
-  const returns: number[] = [];
+  const returns: DatedReturn[] = [];
   let prior = request.initialCash,
     dailyPeak = prior;
-  for (const equity of dailyEquities.values()) {
-    returns.push(equity / prior - 1);
+  for (const [date, equity] of dailyEquities) {
+    returns.push({ date, value: equity / prior - 1 });
     prior = equity;
     dailyPeak = Math.max(dailyPeak, equity);
     result.metrics.dailyMaxDrawdownPct = Math.min(
@@ -421,13 +425,9 @@ export function runIntradayBacktest(
       (equity / dailyPeak - 1) * 100,
     );
   }
-  if (returns.length > 1) {
-    const mean = returns.reduce((s, n) => s + n, 0) / returns.length;
-    const variance =
-      returns.reduce((s, n) => s + (n - mean) ** 2, 0) / (returns.length - 1);
-    if (variance > 0)
-      result.metrics.sharpe = (mean / Math.sqrt(variance)) * Math.sqrt(252);
-  }
+  Object.assign(result.metrics, computeSharpe(returns, input.riskFreeRates ?? RISK_FREE_RATE_SEED));
+  const rateWarning = missingRateWarning(result.metrics.sharpeBasis);
+  if (rateWarning) result.warnings.push(rateWarning);
   if (result.metrics.completedTrades) {
     result.metrics.averageTradePnl =
       completedPnl / result.metrics.completedTrades;

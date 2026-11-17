@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { ConfigError, loadConfig } from '../../src/server/bootstrap/config.js';
 
 describe('loadConfig', () => {
+  it('ECOS 키는 선택 사항이며 빈 값은 거부한다', () => {
+    expect(loadConfig({}).ecosApiKey).toBeNull();
+    expect(loadConfig({ ECOS_API_KEY: 'test-ecos-key' }).ecosApiKey).toBe('test-ecos-key');
+    expect(() => loadConfig({ ECOS_API_KEY: '' })).toThrow(/ECOS_API_KEY/);
+  });
   it('applies spec defaults in development', () => {
     const config = loadConfig({});
     expect(config.nodeEnv).toBe('development');

@@ -14,6 +14,7 @@ import { buildPinoOptions } from "../shared/logger.js";
 import { registerSecurity } from "../shared/security.js";
 import "../shared/fastify-augment.js";
 import { registerSystemRoutes } from "../modules/system/presentation/health-routes.js";
+import { registerRiskFreeRateRoutes } from "../modules/market-data/presentation/risk-free-rate-routes.js";
 import {
   createRequireAuth,
   registerAuthRoutes,
@@ -117,6 +118,7 @@ export async function buildServer(
   await app.register(
     async (api) => {
       registerSystemRoutes(api, container, requireAuth);
+      registerRiskFreeRateRoutes(api, container.riskFreeRateService, requireAuth);
       registerAgentManagementRoutes(
         api,
         container.agentCoordinator,
@@ -256,8 +258,12 @@ export async function buildServer(
     3_600_000,
   );
   symbolMasterSchedulerTimer.unref();
+  const rateTimer = setInterval(() => void container.riskFreeRateService.tick(), 3_600_000);
+  rateTimer.unref();
+  app.addHook("onReady", async () => { void container.riskFreeRateService.tick(); });
   app.addHook("onClose", (_instance, done) => {
     clearInterval(symbolMasterSchedulerTimer);
+    clearInterval(rateTimer);
     done();
   });
 
