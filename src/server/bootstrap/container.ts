@@ -1,3 +1,4 @@
+import { ensureMarketIndex } from "../modules/market-data/application/market-index-collector.js";
 import { ForkedSubmissionValidator } from "../modules/backtest/infrastructure/forked-submission-validator.js";
 import { RiskFreeRateService } from "../modules/market-data/application/risk-free-rate-service.js";
 import { EcosRateSource } from "../modules/market-data/infrastructure/ecos/ecos-rate-source.js";
@@ -352,6 +353,7 @@ export function createContainer(
   const tradingArtifacts = new StrategyArtifacts({ dataRoot: config.dataRoot });
   const tradingDataPreparation = new TradingDataPreparation({
     master: symbolMasterService,
+    ensureMarketIndex: (requirement, shouldStop, onProgress) => ensureMarketIndex({ db: database.db, master: symbolMasterService, benchmarks: benchmarkService, requirement, shouldStop, onProgress }),
     symbols: symbolService,
     facts: factSyncService,
     usage: externalApiUsage,
@@ -434,6 +436,7 @@ export function createContainer(
     },
   );
   const backtestPreparationOrchestrator = new BacktestPreparationOrchestrator({
+    ensureMarketIndex: (requirement, shouldStop) => ensureMarketIndex({ db: database.db, master: symbolMasterService, benchmarks: benchmarkService, requirement, shouldStop }),
     references: new PreparationReferenceService(database),
     database,
     agentManaged: !(options.inlinePreparation ?? config.nodeEnv === "test"),

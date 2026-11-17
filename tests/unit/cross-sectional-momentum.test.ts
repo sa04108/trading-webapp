@@ -1,3 +1,4 @@
+import { UNFILTERED_RANK_CONTROLS, DEFAULT_RANK_CONTROLS } from "../helpers/rank-controls.js";
 import { describe, expect, it } from 'vitest';
 import { runBacktest } from '../../src/runtime/modules/backtest/domain/engine.js';
 import { createRng } from '../../src/runtime/modules/backtest/domain/seeded-rng.js';
@@ -76,9 +77,10 @@ describe('crossSectionalMomentumParameters', () => {
   it('기본값만으로 파싱된다', () => {
     const parsed = crossSectionalMomentumParameters.parse({});
     expect(parsed).toEqual({
+      ...DEFAULT_RANK_CONTROLS,
       formationDays: 252,
       skipDays: 21,
-      topN: 10,
+      topN: 30,
       absoluteMomentumFilter: true,
     });
   });
@@ -106,7 +108,7 @@ describe('레지스트리 등록', () => {
     const schema = new StrategyRegistry().getParameterJsonSchema('cross-sectional-momentum');
     const properties = (schema as { properties: Record<string, Record<string, unknown>> }).properties;
     expect(properties.topN?.title).toBe('보유 종목 수');
-    expect(properties.topN?.default).toBe(10);
+    expect(properties.topN?.default).toBe(30);
     expect(typeof properties.formationDays?.description).toBe('string');
   });
 });
@@ -126,6 +128,7 @@ describe('2단계 리밸런스 실행', () => {
   }
 
   const parameters = {
+    ...UNFILTERED_RANK_CONTROLS,
     formationDays: 20,
     skipDays: 0,
     topN: 1,
@@ -364,6 +367,7 @@ describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
   }
 
   const parameters = {
+    ...UNFILTERED_RANK_CONTROLS,
     formationDays: 20,
     skipDays: 0,
     topN: 2,

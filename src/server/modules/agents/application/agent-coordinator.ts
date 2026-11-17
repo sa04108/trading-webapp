@@ -3,6 +3,7 @@ import fs from "node:fs";
 import Database from "better-sqlite3";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
+import { z } from "zod";
 import { AgentClient } from "../../../../agent/client.js";
 import { availableServerResources } from "../../../../agent/resources.js";
 import { backtestMemoryPlan, type BacktestMemoryPlan } from "../../../../runtime/modules/backtest/application/backtest-memory-plan.js";
@@ -18,6 +19,7 @@ import type { BacktestJobRow, JobQueue } from "../../backtest/application/job-qu
 import {
   LOCAL_AGENT_ID,
   AGENT_MAX_ATTEMPTS,
+  AGENT_PROTOCOL_VERSION,
   agentMessageSchema,
   type AgentMessage,
   type AgentLease,
@@ -34,6 +36,14 @@ import { createAuditLogService } from "../../../../runtime/modules/audit/audit-s
 import { systemClock } from "../../../../runtime/shared/clock.js";
 import { recordWorkerDiagnostics } from "./agent-diagnostic-recorder.js";
 import { UniverseComputeBroker } from "./universe-compute-broker.js";
+import type { AgentClientStatus, AgentExecutionState } from "../../../../shared/agent-status.js";
+
+// 이전 규격의 HELLO도 버전만 기록하고 실제 메시지 처리는 현재 규격으로 검증한다.
+const helloVersionSchema = z.object({
+  type: z.literal("HELLO"),
+  protocolVersion: z.number().int().positive(),
+  runnerVersion: z.string().regex(/^[a-f0-9]{64}$/),
+});
 
 interface Connection {
   socket: {
@@ -157,9 +167,14 @@ export class AgentCoordinator {
             socket.close(4003, "unauthorized");
             return;
           }
-          const message = agentMessageSchema.parse(JSON.parse(data.toString()));
+          const payload: unknown = JSON.parse(data.toString());
+          if (payload && typeof payload === "object" && "type" in payload && payload.type === "HELLO") {
+            const hello = helloVersionSchema.parse(payload);
+            this.registry.recordHello(clientId, hello.runnerVersion, hello.protocolVersion);
+          }
+          const message = agentMessageSchema.parse(payload);
           connection.lastMessageAt = Date.now();
-          this.registry.touch(clientId);
+          if (message.type !== "HELLO") this.registry.touch(clientId);
           await this.message(clientId, connection, message);
         })
         .catch((error: unknown) => {
@@ -178,6 +193,58 @@ export class AgentCoordinator {
       if (this.connections.get(clientId) === connection)
         this.connections.delete(clientId);
       this.wake();
+    });
+  }
+
+  listClients(): AgentClientStatus[] {
+    const now = Date.now();
+    const dataset = this.snapshots.latest();
+    return this.registry.list().map((client) => {
+      const connection = this.connections.get(client.id);
+      const connected = connection?.socket.readyState === 1;
+      const activeJobs = this.activeLeaseCount(client.id);
+      let state: AgentExecutionState;
+      let detail: string;
+      if (client.revokedAtMs !== null) {
+        state = "REVOKED";
+        detail = "연결 토큰이 해제되어 작업을 배정하지 않습니다.";
+      } else if (client.protocolVersion !== null && client.protocolVersion !== AGENT_PROTOCOL_VERSION) {
+        state = "PROTOCOL_MISMATCH";
+        detail = "마지막으로 확인한 Agent의 통신 규격이 서버와 다릅니다. 기존 연결 토큰으로 설치 파일을 다시 받아 업데이트하세요.";
+      } else if (client.runnerVersion !== null && client.runnerVersion !== this.runnerVersion) {
+        state = "VERSION_MISMATCH";
+        detail = "마지막으로 확인한 Agent 버전이 서버에서 요구하는 버전과 달라 작업을 배정하지 않습니다. 기존 연결 토큰으로 설치 파일을 다시 받아 업데이트하세요.";
+      } else if (!connected || this.stopped) {
+        state = client.lastSeenAtMs === null ? "NEVER_CONNECTED" : "OFFLINE";
+        detail = state === "NEVER_CONNECTED"
+          ? "아직 Agent의 연결을 확인하지 못했습니다. 설치 파일을 해당 PC에서 실행하세요."
+          : "현재 서버와 연결되어 있지 않습니다. PC의 Docker Desktop과 Agent 컨테이너 실행 상태를 확인하세요.";
+      } else if (now - connection.lastMessageAt > 60_000) {
+        state = "UNRESPONSIVE";
+        detail = "Agent의 상태 보고가 60초 넘게 없어 새 작업을 배정하지 않습니다. PC의 네트워크와 컨테이너 상태를 확인하세요.";
+      } else if (!connection.ready || connection.maxBars === 0) {
+        state = "CONNECTING";
+        detail = "연결 후 실행 준비와 가용 자원 보고를 기다리고 있습니다.";
+      } else if (connection.deviceProgress || !dataset || connection.datasetVersion !== dataset.version) {
+        state = "SYNCING";
+        detail = connection.deviceProgress?.activity === "VERIFYING_DATASET"
+          ? "내려받은 계산 데이터를 검증하고 있습니다. 완료 후 작업을 받을 수 있습니다."
+          : connection.deviceProgress ? "계산 데이터를 내려받고 있습니다. 동기화 완료 후 작업을 받을 수 있습니다."
+          : "새 작업 배정에 필요한 최신 계산 데이터의 동기화를 기다리고 있습니다.";
+      } else if (connection.slots <= activeJobs) {
+        state = activeJobs > 0 ? "BUSY" : "NO_CAPACITY";
+        detail = activeJobs > 0
+          ? "기존 작업이 실행 슬롯을 사용 중입니다. 여유가 생기면 다음 작업을 받습니다."
+          : "Agent가 사용 가능한 실행 슬롯을 0개로 보고했습니다. CPU·메모리 여유와 컨테이너 상태를 확인하세요.";
+      } else {
+        state = "READY";
+        detail = "서버와 버전·데이터가 일치하며 새 작업을 받을 수 있습니다. 배정 여부는 대기 작업의 크기와 필요 자원에 따라 달라집니다.";
+      }
+      return { ...client, execution: {
+        state, detail, connected, canAcceptJobs: state === "READY", activeJobs,
+        availableSlots: state === "READY" ? Math.max(0, connection!.slots - activeJobs) : 0,
+        requiredRunnerVersion: this.runnerVersion, requiredProtocolVersion: AGENT_PROTOCOL_VERSION,
+      } };
     });
   }
 

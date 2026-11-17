@@ -11,6 +11,7 @@ const LABELS: Record<string, string> = {
   DELISTED: "상장폐지",
   REBALANCE_EXIT: "리밸런스 유니버스 이탈",
   REBALANCE_TRIM: "리밸런스 비중 축소",
+  MARKET_RISK_OFF: "시장 하락 비중 축소",
 };
 
 export function exitReasonLabel(reason: string | null): string {

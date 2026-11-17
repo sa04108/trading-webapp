@@ -18,7 +18,7 @@ const metadata = { id: openApiTokens.id, name: openApiTokens.name, prefix: openA
 export class OpenApiTokenService {
   constructor(private readonly database: DatabaseHandle, private readonly clock: Clock, private readonly audit: AuditSink) {}
   list(ownerId: string): OpenApiTokenRecord[] {
-    return this.database.db.select(metadata).from(openApiTokens).where(eq(openApiTokens.ownerId, ownerId)).orderBy(desc(openApiTokens.createdAtMs), desc(openApiTokens.id)).all();
+    return this.database.db.select(metadata).from(openApiTokens).where(and(eq(openApiTokens.ownerId, ownerId), isNull(openApiTokens.revokedAtMs))).orderBy(desc(openApiTokens.createdAtMs), desc(openApiTokens.id)).all();
   }
   issue(user: AuthenticatedUser, raw: unknown): { token: string; record: OpenApiTokenRecord } {
     const body = openApiTokenIssueSchema.parse(raw), now = this.clock.now();
@@ -37,9 +37,8 @@ export class OpenApiTokenService {
     this.database.sqlite.transaction(() => {
       const row = this.database.db.select({ id: openApiTokens.id, revokedAtMs: openApiTokens.revokedAtMs }).from(openApiTokens).where(and(eq(openApiTokens.id, id), eq(openApiTokens.ownerId, user.id))).get();
       if (!row) throw new OpenApiTokenError("토큰을 찾을 수 없습니다.", 404);
-      if (row.revokedAtMs !== null) return;
-      this.database.db.update(openApiTokens).set({ revokedAtMs: this.clock.now() }).where(eq(openApiTokens.id, id)).run();
-      this.audit.record(user.username, "openapi-token.revoked", { tokenId: id });
+      this.database.db.delete(openApiTokens).where(and(eq(openApiTokens.id, id), eq(openApiTokens.ownerId, user.id))).run();
+      if (row.revokedAtMs === null) this.audit.record(user.username, "openapi-token.revoked", { tokenId: id });
     }).immediate();
   }
   authenticate(token: string): { user: AuthenticatedUser; scope: OpenApiTokenRecord["scope"]; tokenId: string } | null {

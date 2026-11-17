@@ -1,5 +1,6 @@
 import type { z } from "zod";
 import type { Candle } from "../../market-data/domain/candle.js";
+import type { MarketIndexPoint } from "../../market-data/domain/market-index.js";
 import type {
   OrderIntent,
   Position,
@@ -32,6 +33,8 @@ export interface StrategyBarContext {
   readonly bars: ReadonlyMap<string, Candle>;
   /** 현재 시점까지 확정된 봉 이력 — 미래 봉은 절대 포함되지 않는다 */
   getHistory(symbol: string): readonly Candle[];
+  /** 현재 판단 시각까지 확정된 KOSPI 이력. 이전 동결 전략의 실행 계약도 유지한다. */
+  getMarketIndexHistory?(): readonly MarketIndexPoint[];
   readonly portfolio: PortfolioView;
   readonly rng: Rng;
   /**
@@ -94,6 +97,8 @@ export interface TradingStrategy<TParameters, TState> {
       parameters: TParameters,
     ) => boolean;
     readonly priceWarmupBars?: (parameters: TParameters) => number;
+    /** KOSPI 시장 필터에 필요한 선행 거래일 수. 0이면 지수를 사용하지 않는다. */
+    readonly marketIndexBars?: (parameters: TParameters) => number;
     readonly requiresCorporateActions?: boolean;
   };
   /** 분할 실행에서 전략에 전달할 종목별 최근 봉 수. 선언하지 않은 전략은 분할 실행하지 않는다. */

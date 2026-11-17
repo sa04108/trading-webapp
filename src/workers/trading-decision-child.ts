@@ -1,3 +1,4 @@
+import { readMarketIndex } from "../runtime/modules/market-data/application/market-index-history.js";
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -51,6 +52,10 @@ export async function calculate(message: { input: Input; date: string; bundlePat
   const anchor = kstDateOf(deployment.activatedAtMs ?? deployment.createdAtMs);
   const period = { from: anchor > message.date ? message.date : anchor, to: message.date };
   const held = Object.keys(portfolio);
+  const indexBars = strategy.dataRequirements?.marketIndexBars?.(parameters) ?? 0;
+  if (!Number.isSafeInteger(indexBars) || indexBars < 0 || indexBars > 3000) throw new Error("시장 지수 준비 봉 수가 올바르지 않습니다");
+  const indexTradeFrom = checkpoint ? new Date(checkpoint.lastBar).toISOString().slice(0, 10) : message.date;
+  const indexRequirement = indexBars ? { from: addCalendarDays(indexTradeFrom, -(indexBars * 3 + 30)), to: message.date, tradeFrom: indexTradeFrom, minimumBars: indexBars } : undefined;
   const warmup = Math.max(1, strategy.dataRequirements?.priceWarmupBars?.(parameters) ?? 1, strategy.historyLookbackBars?.(parameters) ?? 1);
   if (!Number.isSafeInteger(warmup) || warmup > 3000) throw new Error("전략 준비 봉 수가 올바르지 않습니다");
   const warmupFrom = Date.parse(`${addCalendarDays(message.date, -(warmup * 3 + 30))}T00:00:00Z`);
@@ -62,8 +67,10 @@ export async function calculate(message: { input: Input; date: string; bundlePat
   const lookback = Math.max(strategy.dataRequirements?.fundamentalLookbackQuarters ?? 0, deployment.universeRule.stages.some((stage) => stage.criterion === "PER" || stage.criterion === "ROE") ? 4 : 0);
   const financialYears = derivePreparationFactYearRange({ from: fromDate, to: message.date }, lookback);
   const needsFinancial = strategy.requiresFundamentals === true || lookback > 0;
-  let need: TradingDataNeed = { masterDates: computeRebalanceDates(period, deployment.universeRule.rebalanceInterval), priceRange: { from: fromDate, to: message.date }, financial: needsFinancial ? { symbols: [...held], ...financialYears } : null, actions: { symbols: [...held], fromYear: actionFromYear, toYear: actionToYear }, entries: [] };
+  let need: TradingDataNeed = { masterDates: computeRebalanceDates(period, deployment.universeRule.rebalanceInterval), priceRange: { from: fromDate, to: message.date }, financial: needsFinancial ? { symbols: [...held], ...financialYears } : null, actions: { symbols: [...held], fromYear: actionFromYear, toYear: actionToYear }, entries: [], ...(indexRequirement ? { marketIndex: indexRequirement } : {}) };
   const runtime = testRuntime ?? createUniverseRuntime(database, readRuntimeVersions().collectionVersion);
+  const marketIndex = indexRequirement ? readMarketIndex(database.db, indexRequirement) : undefined;
+  if (indexRequirement && (!runtime.symbolMaster.isRangeCovered(indexRequirement.from, indexRequirement.to) || !marketIndex)) throw new DecisionDataRequired("KOSPI 지수 이력이 부족합니다", need);
   let resolution: Awaited<ReturnType<typeof runtime.resolver.resolveOrDescribeNeeds>>;
   try { resolution = await runtime.resolver.resolveOrDescribeNeeds(deployment.universeRule, period); }
   catch (error) {
@@ -184,7 +191,7 @@ export async function calculate(message: { input: Input; date: string; bundlePat
     const marketValue = [...activePositions].reduce((sum, [symbol, pos]) => { const bar = bars.get(symbol); if (!bar) throw new DecisionDataRequired(`보유 종목의 봉이 누락되었습니다: ${symbol}`, need); return sum + pos.quantity * bar.close; }, 0);
     const interrupted = warmupOnly || !checkpoint || !isLast;
     bundle.reconcileState(strategy.id, state, { interrupted, positions: [...activePositions.keys()], symbols });
-    const ctx: StrategyBarContext = { tsMs: ts, isRebalanceBar: isLast && !warmupOnly && (checkpoint?.firstDecision === true || latestSchedule.rebalanceDate !== checkpoint?.rebalanceDate), bars, getHistory: (symbol) => (histories.get(symbol) ?? []).filter((bar) => bar.tsMs <= ts), portfolio: { cash: Math.max(0, deployment.budgetKrw - marketValue), equity: deployment.budgetKrw, positions: activePositions }, rng, fundamentals: (symbol) => factsView.fundamentals(symbol), corporateActions: (symbol) => factsView.corporateActions(symbol, ts), tradableSymbols: targets, activeUniverseSymbols: targets, selectionMetric: (symbol) => metrics.get(symbol) ?? null };
+    const ctx: StrategyBarContext = { getMarketIndexHistory: () => (marketIndex ?? []).filter((point) => point.tsMs <= ts), tsMs: ts, isRebalanceBar: isLast && !warmupOnly && (checkpoint?.firstDecision === true || latestSchedule.rebalanceDate !== checkpoint?.rebalanceDate), bars, getHistory: (symbol) => (histories.get(symbol) ?? []).filter((bar) => bar.tsMs <= ts), portfolio: { cash: Math.max(0, deployment.budgetKrw - marketValue), equity: deployment.budgetKrw, positions: activePositions }, rng, fundamentals: (symbol) => factsView.fundamentals(symbol), corporateActions: (symbol) => factsView.corporateActions(symbol, ts), tradableSymbols: targets, activeUniverseSymbols: targets, selectionMetric: (symbol) => metrics.get(symbol) ?? null };
     const decision = strategy.onBars(ctx, state, parameters);
     if (isLast && !warmupOnly && checkpoint) orders = decision.orders;
     else bundle.reconcileState(strategy.id, state, { interrupted: true, positions: [...activePositions.keys()], symbols });

@@ -8,6 +8,8 @@ export interface SellPhaseInput {
   readonly bars: ReadonlyMap<string, Candle>;
   readonly equity: number;
   readonly topN: number;
+  /** 목표 금액 대비 이 비율 이내의 차이는 거래하지 않는다. */
+  readonly rebalanceBandPercent?: number;
 }
 
 export interface BuyPhaseInput {
@@ -15,6 +17,7 @@ export interface BuyPhaseInput {
   readonly bars: ReadonlyMap<string, Candle>;
   readonly equity: number;
   readonly topN: number;
+  readonly rebalanceBandPercent?: number;
   /**
    * 멤버십 일정(스펙 2026-08-05, §9.5)의 활성 유니버스. 지정하지 않거나 null 이면
    * 제한 없이 모든 후보를 매수한다 — 전략이 일정을 전달하지 않으면 엔진의 리스크
@@ -56,6 +59,7 @@ export function planSellPhase(input: SellPhaseInput): readonly OrderIntent[] {
     const targetQuantity = Math.floor(budgetPerSymbol / bar.close);
     const excessQuantity = Math.floor(position.quantity - targetQuantity);
     if (excessQuantity < 1) continue;
+    if (targetQuantity > 0 && excessQuantity / targetQuantity * 100 <= (input.rebalanceBandPercent ?? 0)) continue;
     orders.push({
       symbol: position.symbol,
       side: "SELL",
@@ -90,6 +94,7 @@ export function planBuyPhase(
     const heldQuantity = input.positions.get(symbol)?.quantity ?? 0;
     const quantity = Math.floor(targetQuantity - heldQuantity);
     if (quantity < 1) continue;
+    if (heldQuantity > 0 && quantity / targetQuantity * 100 <= (input.rebalanceBandPercent ?? 0)) continue;
     orders.push({ symbol, side: "BUY", quantity, reason: "REBALANCE_ENTRY" });
   }
   return orders;

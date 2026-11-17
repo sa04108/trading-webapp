@@ -1,3 +1,4 @@
+import { readMarketIndex } from "../modules/market-data/application/market-index-history.js";
 import { createUniverseRuntime } from "./universe-runtime.js";
 import type { UniverseRuleResolver } from "../modules/backtest/application/universe-rule-resolver.js";
 import { pino } from "pino";
@@ -82,6 +83,9 @@ export function createPreparationWorkerRuntime(
   };
   return new BacktestPreparationOrchestrator({
     database,
+    ensureMarketIndex: async (requirement) => {
+      if (!symbolMaster.isRangeCovered(requirement.from, requirement.to) || !readMarketIndex(database.db, requirement)) throw new AgentDataRequired({ kind: "MARKET_INDEX", ...requirement });
+    },
     snapshotMode: true,
     resolver,
     facts,

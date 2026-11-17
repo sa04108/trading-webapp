@@ -35,7 +35,10 @@ describe('OpenAPI 토큰 인증', () => {
     const agent = ctx.container.agentCoordinator.registry.issue('isolated');
     expect((await ctx.app.inject({ method: 'GET', url: '/api/v1/system/info', headers: { authorization: `Bearer ${agent.token}` } })).statusCode).toBe(401);
     expect((await ctx.app.inject({ method: 'DELETE', url: `/api/v1/openapi-tokens/${record.id}`, cookies })).statusCode).toBe(204);
+    expect(ctx.container.database.sqlite.prepare('SELECT id FROM openapi_tokens WHERE id=?').get(record.id)).toBeUndefined();
+    expect((await ctx.app.inject({ method: 'GET', url: '/api/v1/openapi-tokens', cookies })).json().tokens).toEqual([]);
     expect((await ctx.app.inject({ method: 'GET', url: '/api/v1/system/info', headers })).statusCode).toBe(401);
+    expect((await ctx.app.inject({ method: 'DELETE', url: `/api/v1/openapi-tokens/${record.id}`, cookies })).statusCode).toBe(404);
   });
 
   it('조회 전용 권한과 소유자 격리, 정확한 만료 시점을 지킨다', async ({ ctx, cookie }) => {
@@ -53,6 +56,7 @@ describe('OpenAPI 토큰 인증', () => {
     const otherCookies = { session: login.cookies.find(c => c.name === 'session')!.value };
     expect((await ctx.app.inject({ method: 'GET', url: '/api/v1/openapi-tokens', cookies: otherCookies })).json().tokens).toEqual([]);
     expect((await ctx.app.inject({ method: 'DELETE', url: `/api/v1/openapi-tokens/${record.id}`, cookies: otherCookies })).statusCode).toBe(404);
+    expect(ctx.container.database.sqlite.prepare('SELECT id FROM openapi_tokens WHERE id=?').get(record.id)).toEqual({ id: record.id });
     for (const expiresInDays of [0, 3651, 1.5]) expect((await ctx.app.inject({ method: 'POST', url: '/api/v1/openapi-tokens', cookies, payload: { name: 'invalid', expiresInDays } })).statusCode).toBe(400);
     const clock = vi.spyOn(ctx.container.clock, 'now');
     try {

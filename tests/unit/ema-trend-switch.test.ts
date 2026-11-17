@@ -50,6 +50,9 @@ function pairCandles(bars: number, warmupBars: number): Candle[] {
 }
 
 const FAST_PARAMS = {
+  trendSmaBars: 0, minAverageTradingValueKrw: 0, cooldownBars: 0,
+  entryAtrMultiplier: 0, exitThresholdPercent: 0, maxPositionWeightPercent: 100,
+
   fastEmaBars: 3,
   slowEmaBars: 6,
   entryThresholdPercent: 0.3,
@@ -64,8 +67,8 @@ const FAST_PARAMS = {
 describe('emaTrendSwitchParameters', () => {
   it('기본값만으로 파싱된다 (maxHoldBars 는 선택)', () => {
     const parsed = emaTrendSwitchParameters.parse({});
-    expect(parsed.fastEmaBars).toBe(12);
-    expect(parsed.slowEmaBars).toBe(26);
+    expect(parsed.fastEmaBars).toBe(20);
+    expect(parsed.slowEmaBars).toBe(60);
     expect(parsed.maxHoldBars).toBeUndefined();
   });
 
@@ -83,7 +86,7 @@ describe('레지스트리 등록', () => {
     const properties = (schema as { properties: Record<string, Record<string, unknown>> })
       .properties;
     expect(properties.fastEmaBars?.title).toBe('단기 이동평균 봉 수');
-    expect(properties.fastEmaBars?.default).toBe(12);
+    expect(properties.fastEmaBars?.default).toBe(20);
   });
 });
 

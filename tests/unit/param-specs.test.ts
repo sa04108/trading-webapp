@@ -17,14 +17,19 @@ describe('extractNumberParams', () => {
     expect(lookback?.help).toContain('최고가');
     expect(lookback?.minimum).toBe(2);
     expect(lookback?.maximum).toBe(200);
-    expect(lookback?.defaultValue).toBe(20);
+    expect(lookback?.defaultValue).toBe(55);
     expect(lookback?.isInteger).toBe(true);
   });
 
   it('전고점 돌파 전략 파라미터 전부 한국어 라벨·설명을 갖는다', () => {
     const specs = extractNumberParams(jsonSchema);
     expect(specs.map((s) => s.key)).toEqual([
+      'trendSmaBars',
+      'liquidityLookbackBars',
+      'minAverageTradingValueKrw',
+      'cooldownBars',
       'lookbackBars',
+      'breakoutBufferAtr',
       'atrPeriod',
       'stopAtrMultiplier',
       'trailAtrMultiplier',
@@ -58,7 +63,7 @@ describe('paramMetaLine', () => {
   it('원본 키·범위·기본값을 병기한다', () => {
     const specs = extractNumberParams(jsonSchema);
     const lookback = specs.find((s) => s.key === 'lookbackBars')!;
-    expect(paramMetaLine(lookback)).toBe('lookbackBars · 2~200 · 기본 20');
+    expect(paramMetaLine(lookback)).toBe('lookbackBars · 2~200 · 기본 55');
   });
 
   it('기본값 없는 선택 파라미터는 선택 입력으로 표시한다', () => {

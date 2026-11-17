@@ -1,3 +1,4 @@
+import { UNFILTERED_RANK_CONTROLS } from '../helpers/rank-controls.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -110,7 +111,7 @@ describe('저장소 → 엔진 왕복', () => {
       candles: candles(40),
       initialCash: 10_000_000,
       execution: ZERO_COST,
-      parameters: { topN: 1, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, staleQuarters: 2 },
       randomSeed: 1,
       maxPositions: 1,
       facts,
@@ -195,9 +196,9 @@ describe('SQLite 종목별 재무 뷰의 엔진 결과 동등성', () => {
   }
 
   it.each([
-    ['value-quality-rank', valueQualityRankStrategy, { topN: 2, staleQuarters: 2 }],
-    ['low-per-high-roe-rank', lowPerHighRoeRankStrategy, { topN: 2, staleQuarters: 2 }],
-    ['earnings-acceleration-rank', earningsAccelerationRankStrategy, { topN: 2, priceMomentumDays: 60, staleQuarters: 2 }],
+    ['value-quality-rank', valueQualityRankStrategy, { ...UNFILTERED_RANK_CONTROLS, topN: 2, staleQuarters: 2 }],
+    ['low-per-high-roe-rank', lowPerHighRoeRankStrategy, { ...UNFILTERED_RANK_CONTROLS, topN: 2, staleQuarters: 2 }],
+    ['earnings-acceleration-rank', earningsAccelerationRankStrategy, { ...UNFILTERED_RANK_CONTROLS, topN: 2, priceMomentumDays: 60, priceMomentumSkipDays: 0, staleQuarters: 2 }],
   ] as const)('%s 전체 runBacktest 결과가 eager 재무 입력과 같다', async (_id, strategy, parameters) => {
     const allFacts = symbols.flatMap((symbol, index) => strategyFacts(symbol, index + 1));
     await repository.saveFacts(allFacts);

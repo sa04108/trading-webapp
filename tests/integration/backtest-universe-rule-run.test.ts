@@ -1,3 +1,5 @@
+import { UNFILTERED_BREAKOUT_CONTROLS } from '../helpers/swing-controls.js';
+import { UNFILTERED_RANK_CONTROLS } from '../helpers/rank-controls.js';
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { readBacktestJobs } from '../helpers/backtest-jobs.js';
 import { createHash } from 'node:crypto';
@@ -93,6 +95,8 @@ function buildRequest(topN = 1): BacktestRequest {
   return {
     strategyId: 'range-breakout',
     parameters: {
+      // 유니버스·체결 검증에서 진입 필터의 영향을 분리한다.
+      ...UNFILTERED_BREAKOUT_CONTROLS,
       lookbackBars: 10,
       atrPeriod: 5,
       stopAtrMultiplier: 2,
@@ -407,7 +411,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
       cookies: { session: cookie },
       payload: {
         strategyId: 'value-quality-rank',
-        parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+        parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
         universeRule: universeRule(1),
         timeframe: '1d',
         period: { from: '2025-08-01', to: '2025-10-31' },
@@ -435,7 +439,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     });
     const payload: BacktestRequest = {
       strategyId: 'value-quality-rank',
-      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
       universeRule: universeRule(2),
       timeframe: '1d',
       period: { from: '2025-08-01', to: '2025-10-31' },
@@ -499,6 +503,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     return {
       strategyId: 'cross-sectional-momentum',
       parameters: {
+        ...UNFILTERED_RANK_CONTROLS,
         formationDays: 20,
         skipDays: 0,
         topN,
@@ -551,6 +556,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     const payload: BacktestRequest = {
       strategyId: 'cross-sectional-momentum',
       parameters: {
+        ...UNFILTERED_RANK_CONTROLS,
         formationDays: 20,
         skipDays: 0,
         topN: 1,
@@ -1252,7 +1258,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
       universeRule: THREE_STAGE_RULE,
       period: STEP12_PERIOD,
       strategyId: 'low-per-high-roe-rank',
-      parameters: { topN: 2, staleQuarters: 8 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 2, staleQuarters: 8 },
     };
   }
 
@@ -1496,7 +1502,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
       // 6. 백테스트 제출·worker 실행 후 schedule hash와 provenance를 확인한다
       const submitPayload: BacktestRequest = {
         strategyId: 'low-per-high-roe-rank',
-        parameters: { topN: 2, staleQuarters: 8 },
+        parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 2, staleQuarters: 8 },
         universeRule: THREE_STAGE_RULE,
         timeframe: '1d',
         period: STEP12_PERIOD,

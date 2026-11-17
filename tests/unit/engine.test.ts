@@ -689,6 +689,9 @@ describe('runBacktest 이벤트 순서 (스펙 §9.1, §9.2)', () => {
       bar(i, 100 + 10 * Math.sin(i / 7) + (i % 13)),
     );
     const parameters: RangeBreakoutParameters = {
+      // 엔진 체결과 시간 순서만 검증하므로 별도 진입 필터는 비활성화한다.
+      trendSmaBars: 0, liquidityLookbackBars: 20, minAverageTradingValueKrw: 0,
+      cooldownBars: 0, breakoutBufferAtr: 0,
       lookbackBars: 10,
       atrPeriod: 5,
       stopAtrMultiplier: 2,
@@ -734,6 +737,9 @@ describe('range-breakout 갭 진입 손·익절 기준 (Codex 리뷰)', () => {
     const exitBar = bar(23, 115, { open: 115, high: 116, low: 114, close: 115 });
 
     const parameters: RangeBreakoutParameters = {
+      // 엔진 체결과 시간 순서만 검증하므로 별도 진입 필터는 비활성화한다.
+      trendSmaBars: 0, liquidityLookbackBars: 20, minAverageTradingValueKrw: 0,
+      cooldownBars: 0, breakoutBufferAtr: 0,
       lookbackBars: 10,
       atrPeriod: 5,
       stopAtrMultiplier: 2,
@@ -775,6 +781,9 @@ describe('range-breakout look-ahead fixture (스펙 §33)', () => {
     const after = [bar(41, 152), bar(42, 155)];
 
     const parameters: RangeBreakoutParameters = {
+      // 엔진 체결과 시간 순서만 검증하므로 별도 진입 필터는 비활성화한다.
+      trendSmaBars: 0, liquidityLookbackBars: 20, minAverageTradingValueKrw: 0,
+      cooldownBars: 0, breakoutBufferAtr: 0,
       lookbackBars: 10,
       atrPeriod: 5,
       stopAtrMultiplier: 2,

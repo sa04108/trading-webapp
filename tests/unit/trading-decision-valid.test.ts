@@ -1,3 +1,5 @@
+import { openDatabase } from "../../src/runtime/shared/db/database.js";
+import { benchmarkDailyValues, symbolMasterTradingDays } from "../../src/runtime/shared/db/data-schema.js";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { deserialize } from "node:v8";
@@ -22,6 +24,24 @@ const bundle = { formatVersion: 1, nodeMajor: 24, lifecycleAbi: 1, getStrategy: 
 const deployment = { strategyId: "test", artifactHash: "a".repeat(64), version: "1", parameters: {}, createdAtMs: ts, activatedAtMs: null, budgetKrw: 100000, randomSeed: 1, universeRule: { stages: [], rebalanceInterval: { unit: "NONE", value: 1 } } };
 const run = (checkpoint: string | null, warmupOnly: boolean, currentDate = date) => calculate({ input: { deployment, portfolio: {}, checkpoint, warmupOnly }, date: currentDate, bundlePath: "" } as never, {} as never, bundle as never, runtime as never);
 describe("daily decision", () => {
+  it("replays only index history available on each bar and requests missing index data", async () => {
+    const database = openDatabase(":memory:");
+    try {
+      const dates = ["2026-11-11", "2026-11-12", "2026-11-13"];
+      database.db.insert(symbolMasterTradingDays).values(dates.map((day) => ({ date: day }))).run();
+      database.db.insert(benchmarkDailyValues).values(dates.map((day, index) => ({ benchmarkId: "KOSPI", date: day, close: 100 + index, syncedAtMs: 1 }))).run();
+      const seen: number[][] = [];
+      const indexStrategy = { ...strategy, dataRequirements: { ...strategy.dataRequirements, marketIndexBars: () => 1 }, onBars: (ctx: { getMarketIndexHistory: () => readonly { close: number }[] }) => { seen.push(ctx.getMarketIndexHistory().map((point) => point.close)); return { orders: [] }; } };
+      const indexBundle = { ...bundle, getStrategy: () => indexStrategy };
+      const indexRuntime = { ...runtime, symbolMaster: { isRangeCovered: () => true } };
+      const message = { input: { deployment, portfolio: {}, checkpoint: null, warmupOnly: true }, date, bundlePath: "" };
+      await calculate(message as never, database, indexBundle as never, indexRuntime as never);
+      expect(seen).toEqual([[100, 101], [100, 101, 102]]);
+      database.sqlite.prepare("DELETE FROM benchmark_daily_values WHERE date = ? AND benchmark_id = 'KOSPI'").run(date);
+      await expect(calculate(message as never, database, indexBundle as never, indexRuntime as never)).rejects.toMatchObject({ message: expect.stringContaining("KOSPI"), need: { marketIndex: { minimumBars: 1 } } });
+    } finally { database.close(); }
+  });
+
   it("discards warmup orders, does not repeat the same bar, and emits the next new signal", async () => {
     const warm = await run(null, true);
     expect(warm.orders).toEqual([]);
@@ -42,7 +62,7 @@ describe("daily decision", () => {
     });
   });
   it("clears suppressed exit intents on missed bars for an actual held position", async () => {
-    const actualDeployment = { ...deployment, strategyId: rangeBreakoutStrategy.id, version: rangeBreakoutStrategy.version, budgetKrw: 80, parameters: { lookbackBars: 2, atrPeriod: 2, stopAtrMultiplier: 0.1 } };
+    const actualDeployment = { ...deployment, strategyId: rangeBreakoutStrategy.id, version: rangeBreakoutStrategy.version, budgetKrw: 80, parameters: { lookbackBars: 2, atrPeriod: 2, stopAtrMultiplier: 0.1, trendSmaBars: 0, minAverageTradingValueKrw: 0 } };
     const actualBundle = { ...bundle, getStrategy: () => rangeBreakoutStrategy, reconcileState };
     const actualRun = (checkpoint: string | null, warmupOnly: boolean, day: string, portfolio: unknown) => calculate({ input: { deployment: actualDeployment, portfolio, checkpoint, warmupOnly }, date: day, bundlePath: "" } as never, {} as never, actualBundle as never, runtime as never);
     const warm = await actualRun(null, true, date, { "005930": { quantity: 1, cost: 100, enteredAtMs: ts - 1000 } });

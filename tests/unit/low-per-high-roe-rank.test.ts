@@ -1,3 +1,4 @@
+import { UNFILTERED_RANK_CONTROLS, DEFAULT_RANK_CONTROLS } from "../helpers/rank-controls.js";
 import { describe, expect, it } from 'vitest';
 import { createRng } from '../../src/runtime/modules/backtest/domain/seeded-rng.js';
 import type { Position, SelectionMetricPin } from '../../src/runtime/modules/backtest/domain/types.js';
@@ -131,7 +132,7 @@ describe('rankLowPerHighRoe', () => {
 
 describe('저PER·고ROE 전략', () => {
   it('스키마와 준비 데이터 요구가 정확하다', () => {
-    expect(lowPerHighRoeRankParameters.parse({})).toEqual({ topN: 40, staleQuarters: 2 });
+    expect(lowPerHighRoeRankParameters.parse({})).toEqual({ ...DEFAULT_RANK_CONTROLS, topN: 40, staleQuarters: 2 });
     expect(lowPerHighRoeRankParameters.safeParse({ topN: 200, staleQuarters: 1 }).success).toBe(true);
     expect(lowPerHighRoeRankParameters.safeParse({ staleQuarters: 0 }).success).toBe(false);
     expect(lowPerHighRoeRankParameters.safeParse({ topN: 201 }).success).toBe(false);
@@ -155,7 +156,7 @@ describe('저PER·고ROE 전략', () => {
       initialCash: 10_000,
       rng: createRng(1),
     });
-    const parameters = { topN: 2, staleQuarters: 2 };
+    const parameters = { ...UNFILTERED_RANK_CONTROLS, topN: 2, staleQuarters: 2 };
 
     expect(
       lowPerHighRoeRankStrategy.onBars(
@@ -198,7 +199,7 @@ describe('저PER·고ROE 전략', () => {
       expect(() => lowPerHighRoeRankStrategy.onBars(
         brokenContext,
         state,
-        { topN: 1, staleQuarters: 2 },
+        { ...UNFILTERED_RANK_CONTROLS, topN: 1, staleQuarters: 2 },
       )).toThrow('저PER·고ROE 랭킹에 필요한 유효한 KRX 시가총액이 없습니다: BROKEN');
     }
   });
@@ -222,7 +223,7 @@ describe('저PER·고ROE 전략', () => {
     expect(lowPerHighRoeRankStrategy.onBars(
       schedulelessContext,
       state,
-      { topN: 1, staleQuarters: 2 },
+      { ...UNFILTERED_RANK_CONTROLS, topN: 1, staleQuarters: 2 },
     ).orders).toEqual([]);
     expect(state.pendingTargets).toBeNull();
   });
@@ -248,7 +249,7 @@ describe('저PER·고ROE 전략', () => {
       initialCash: 10_000,
       rng: createRng(1),
     });
-    const parameters = { topN: 1, staleQuarters: 2 };
+    const parameters = { ...UNFILTERED_RANK_CONTROLS, topN: 1, staleQuarters: 2 };
     lowPerHighRoeRankStrategy.onBars(context({ candidates, isRebalanceBar: true }), state, parameters);
     const buy = lowPerHighRoeRankStrategy.onBars(
       context({ candidates, isRebalanceBar: false }),
@@ -281,7 +282,7 @@ describe('저PER·고ROE 전략', () => {
     const decision = lowPerHighRoeRankStrategy.onBars(
       context({ candidates, isRebalanceBar: true, positions }),
       state,
-      { topN: 1, staleQuarters: 2 },
+      { ...UNFILTERED_RANK_CONTROLS, topN: 1, staleQuarters: 2 },
     );
     expect(decision.orders).toEqual([]);
     expect(state.pendingTargets).toBeNull();
@@ -304,7 +305,7 @@ describe('저PER·고ROE 전략', () => {
     const decision = lowPerHighRoeRankStrategy.onBars(
       context({ candidates, isRebalanceBar: true, positions }),
       state,
-      { topN: 1, staleQuarters: 2 },
+      { ...UNFILTERED_RANK_CONTROLS, topN: 1, staleQuarters: 2 },
     );
     expect(decision.orders).toEqual([
       { symbol: 'LOSS', side: 'SELL', quantity: 10, reason: 'REBALANCE_EXIT' },
@@ -324,7 +325,7 @@ describe('저PER·고ROE 전략', () => {
       lowPerHighRoeRankStrategy.onBars(
         context({ candidates, isRebalanceBar: false }),
         state,
-        { topN: 1, staleQuarters: 2 },
+        { ...UNFILTERED_RANK_CONTROLS, topN: 1, staleQuarters: 2 },
       ).orders,
     ).toEqual([]);
   });

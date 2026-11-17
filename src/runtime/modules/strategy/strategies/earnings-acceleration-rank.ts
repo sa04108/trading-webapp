@@ -15,9 +15,9 @@ import {
   scoreEarningsAcceleration,
   type EarningsAccelerationInput,
 } from "./shared/fundamental-rank.js";
-import { planBuyPhase, planSellPhase } from "./shared/two-phase-rebalance.js";
+import { beginRankCycle, finishRankCycle, newRankRiskState, rankLiquidityReady, rankPriceWarmup, rankRiskParameters, type RankRiskState } from "./shared/rank-risk.js";
 
-export const earningsAccelerationRankParameters = z.object({
+export const earningsAccelerationRankParameters = rankRiskParameters.extend({
   topN: z.number().int().min(1).max(200).default(40).meta({
     title: "보유 종목 수",
     description:
@@ -26,6 +26,10 @@ export const earningsAccelerationRankParameters = z.object({
   priceMomentumDays: z.number().int().min(60).max(252).default(126).meta({
     title: "가격 모멘텀 기간 (봉 수)",
     description: "재무 성장 신호를 확인할 분할보정 가격 수익률 기간입니다.",
+  }),
+  priceMomentumSkipDays: z.number().int().min(0).max(63).default(21).meta({
+    title: "최근 가격 제외 기간 (거래일)",
+    description: "가격 확인에서 최근 급등락 구간을 제외합니다. 공시는 실제 공개 시점 이후의 자료만 사용하며 공시 시각을 앞당기지 않습니다.",
   }),
   staleQuarters: z.number().int().min(1).max(8).default(2).meta({
     title: "허용 공시 지연 (분기)",
@@ -38,10 +42,7 @@ export type EarningsAccelerationRankParameters = z.infer<
   typeof earningsAccelerationRankParameters
 >;
 
-export interface EarningsAccelerationRankState {
-  readonly symbols: readonly string[];
-  pendingTargets: readonly string[] | null;
-}
+export type EarningsAccelerationRankState = RankRiskState;
 
 interface ScoredCandidate {
   readonly symbol: string;
@@ -53,8 +54,9 @@ function priceMomentum(
   history: readonly Candle[],
   actions: ReturnType<StrategyBarContext["corporateActions"]>,
   days: number,
+  skipDays: number,
 ): number | null {
-  const endIndex = history.length - 1;
+  const endIndex = history.length - 1 - skipDays;
   const startIndex = endIndex - days;
   if (startIndex < 0) return null;
   const start = splitAdjustedClose(history, actions, startIndex);
@@ -98,15 +100,16 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
   EarningsAccelerationRankState
 > = {
   id: "earnings-acceleration-rank",
-  version: "1.3.0",
+  version: "2.0.0",
   name: "이익 가속·가격 확인 순위",
   requiresFundamentals: true,
   description:
-    "PIT 영업이익 가속과 양의 가격 모멘텀을 함께 순위화하는 동일가중 연구 전략",
+    "공시 시점의 8분기 영업이익으로 성장·가속을 확인하고 최근 급등락을 제외한 가격 모멘텀을 결합합니다. 코스피 추세에 따라 투자 비중을 줄이고 순위 교체를 완충합니다.",
   parameterSchema: earningsAccelerationRankParameters,
-  historyLookbackBars: (parameters) => parameters.priceMomentumDays + 1,
+  historyLookbackBars: (parameters) => Math.max(rankPriceWarmup(parameters), parameters.priceMomentumDays + parameters.priceMomentumSkipDays + 1),
   requiredRebalanceGapBars: 1,
   dataRequirements: {
+    marketIndexBars: (parameters) => parameters.marketTrendBars,
     fundamentalFields: ["OPERATING_INCOME"],
     fundamentalLookbackQuarters: 8,
     fundamentalsReady: (snapshot, tsMs, parameters) => {
@@ -122,14 +125,14 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
         )
       );
     },
-    priceWarmupBars: (parameters) => parameters.priceMomentumDays,
+    priceWarmupBars: (parameters) => Math.max(rankPriceWarmup(parameters), parameters.priceMomentumDays + parameters.priceMomentumSkipDays + 1),
     requiresCorporateActions: true,
   },
 
   initialize(
     context: StrategyInitializeContext,
   ): EarningsAccelerationRankState {
-    return { symbols: [...context.symbols], pendingTargets: null };
+    return newRankRiskState(context.symbols);
   },
 
   onBars(
@@ -137,20 +140,11 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
     state: EarningsAccelerationRankState,
     parameters: EarningsAccelerationRankParameters,
   ): StrategyDecision {
-    if (state.pendingTargets !== null) {
-      const orders = planBuyPhase(state.pendingTargets, {
-        positions: context.portfolio.positions,
-        bars: context.bars,
-        equity: context.portfolio.equity,
-        topN: parameters.topN,
-        tradableSymbols: context.tradableSymbols,
-      });
-      state.pendingTargets = null;
-      return { orders };
-    }
-    if (!context.isRebalanceBar) return { orders: [] };
+    const phase = beginRankCycle(context, state, parameters);
+    if (phase !== null) return phase;
 
     const candidates: ScoredCandidate[] = [];
+    let evaluated = 0;
     for (const symbol of state.symbols) {
       if (
         context.tradableSymbols !== null &&
@@ -173,19 +167,21 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
         context.getHistory(symbol),
         context.corporateActions(symbol),
         parameters.priceMomentumDays,
+        parameters.priceMomentumSkipDays,
       );
       if (momentum === null) continue;
       const input = earningsInput(snapshot, momentum);
       if (input === null) continue;
+      evaluated++;
+      if (!rankLiquidityReady(context, symbol, parameters)) continue;
       const score = scoreEarningsAcceleration(input);
       if (score === null) continue;
       candidates.push({ symbol, ...score });
     }
 
-    // 아무도 점수를 못 냈으면(공시 지연·PIT 8분기 미달·모멘텀 계산 불가 등) 이번
-    // 리밸런스에서는 기존 보유를 유지한다 — value-quality-rank·low-per-high-roe-rank
-    // 의 no-data hold 와 같은 방침이다. 판단 근거가 없으면 보유 유지.
-    if (candidates.length === 0) return { orders: [] };
+    // 입력 자체가 없을 때만 기존 보유를 유지한다. 평가했지만 성장·모멘텀·유동성
+    // 자격을 모두 잃은 경우에는 빈 목표를 적용해 현금으로 전환한다.
+    if (evaluated === 0) return { orders: [] };
 
     const growthRanks = ordinalRank(
       candidates,
@@ -207,17 +203,8 @@ export const earningsAccelerationRankStrategy: TradingStrategy<
       (candidate) => candidate.symbol,
       context.rng,
     )
-      .slice(0, parameters.topN)
       .map((candidate) => candidate.symbol);
 
-    const sells = planSellPhase({
-      targets,
-      positions: context.portfolio.positions,
-      bars: context.bars,
-      equity: context.portfolio.equity,
-      topN: parameters.topN,
-    });
-    state.pendingTargets = targets.length > 0 ? targets : null;
-    return { orders: sells };
+    return finishRankCycle(targets, context, state, parameters);
   },
 };

@@ -1,3 +1,4 @@
+import { UNFILTERED_BREAKOUT_CONTROLS } from '../helpers/swing-controls.js';
 import { describe, expect } from 'vitest';
 import type { Candle } from '../../src/runtime/modules/market-data/domain/candle.js';
 import { CORPORATE_ACTION_FIELD, type Fact } from '../../src/runtime/modules/facts/domain/fact.js';
@@ -181,6 +182,7 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
       strategyId: 'range-breakout',
       // 손절·익절·보유 상한을 사실상 끄고 분할 구간까지 들고 가게 한다
       parameters: {
+        ...UNFILTERED_BREAKOUT_CONTROLS,
         lookbackBars: 2,
         atrPeriod: 2,
         stopAtrMultiplier: 20,

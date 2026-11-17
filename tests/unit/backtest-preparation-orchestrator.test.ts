@@ -725,7 +725,7 @@ describe('BacktestPreparationOrchestrator 종목별 외부 데이터 결손 제�
     const job = orchestrator.start({
       ...INPUT,
       strategyId: 'value-quality-rank',
-      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2, marketTrendBars: 0 },
     });
     await waitFor(() => ['COMPLETED', 'FAILED'].includes(orchestrator.get(job.id)?.status ?? ''));
 
@@ -786,7 +786,7 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
   const valueInput: PreparationInput = {
     ...INPUT,
     strategyId: 'value-quality-rank',
-    parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+    parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2, marketTrendBars: 0 },
   };
 
   const completeActionCoverage = {

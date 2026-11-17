@@ -28,6 +28,11 @@ const symbolSchema = z.string().regex(/^[0-9A-Z]{6}$/);
 const yearSchema = z.number().int().min(1990).max(2200);
 export const agentDataRequestSchema = z.discriminatedUnion("kind", [
   z.object({
+    kind: z.literal("MARKET_INDEX"),
+    from: isoDateSchema, to: isoDateSchema, tradeFrom: isoDateSchema,
+    minimumBars: z.number().int().min(1).max(3000),
+  }).refine((r) => r.from <= r.tradeFrom && r.tradeFrom <= r.to && (Date.parse(r.to) - Date.parse(r.from)) / 86400000 <= 10000),
+  z.object({
     kind: z.literal("MARKET"),
     dates: z.array(isoDateSchema).min(1).max(4000),
   }),

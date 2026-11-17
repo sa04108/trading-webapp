@@ -11,9 +11,9 @@ import {
   safePositiveMarketCap,
   type LowPerHighRoeCandidate,
 } from "./shared/fundamental-rank.js";
-import { planBuyPhase, planSellPhase } from "./shared/two-phase-rebalance.js";
+import { beginRankCycle, finishRankCycle, newRankRiskState, rankLiquidityReady, rankPriceWarmup, rankRiskParameters, type RankRiskState } from "./shared/rank-risk.js";
 
-export const lowPerHighRoeRankParameters = z.object({
+export const lowPerHighRoeRankParameters = rankRiskParameters.extend({
   topN: z.number().int().min(1).max(200).default(40).meta({
     title: "보유 종목 수",
     description:
@@ -29,25 +29,24 @@ export type LowPerHighRoeRankParameters = z.infer<
   typeof lowPerHighRoeRankParameters
 >;
 
-export interface LowPerHighRoeRankState {
-  readonly symbols: readonly string[];
-  pendingTargets: readonly string[] | null;
-}
+export type LowPerHighRoeRankState = RankRiskState;
 
 export const lowPerHighRoeRankStrategy: TradingStrategy<
   LowPerHighRoeRankParameters,
   LowPerHighRoeRankState
 > = {
   id: "low-per-high-roe-rank",
-  version: "1.4.0",
+  version: "2.0.0",
   name: "저PER·고ROE 순위",
   requiresFundamentals: true,
   description:
-    "PIT TTM 순이익 기준 저PER과 고ROE를 결합하는 동일가중 연구 전략",
+    "공시 시점의 TTM 순이익과 자본을 사용해 저PER·고ROE 종목을 분산 보유합니다. 코스피 추세에 따라 현금을 늘리고 순위 여유·비중 허용 오차로 잦은 교체를 줄입니다.",
   parameterSchema: lowPerHighRoeRankParameters,
-  historyLookbackBars: () => 1,
+  historyLookbackBars: rankPriceWarmup,
   requiredRebalanceGapBars: 1,
   dataRequirements: {
+    marketIndexBars: (parameters) => parameters.marketTrendBars,
+    priceWarmupBars: rankPriceWarmup,
     fundamentalFields: ["NET_INCOME", "TOTAL_EQUITY"],
     fundamentalLookbackQuarters: 4,
     fundamentalsReady: (snapshot, tsMs, parameters) =>
@@ -67,7 +66,7 @@ export const lowPerHighRoeRankStrategy: TradingStrategy<
   },
 
   initialize(context: StrategyInitializeContext): LowPerHighRoeRankState {
-    return { symbols: [...context.symbols], pendingTargets: null };
+    return newRankRiskState(context.symbols);
   },
 
   onBars(
@@ -75,18 +74,8 @@ export const lowPerHighRoeRankStrategy: TradingStrategy<
     state: LowPerHighRoeRankState,
     parameters: LowPerHighRoeRankParameters,
   ): StrategyDecision {
-    if (state.pendingTargets !== null) {
-      const orders = planBuyPhase(state.pendingTargets, {
-        positions: context.portfolio.positions,
-        bars: context.bars,
-        equity: context.portfolio.equity,
-        topN: parameters.topN,
-        tradableSymbols: context.tradableSymbols,
-      });
-      state.pendingTargets = null;
-      return { orders };
-    }
-    if (!context.isRebalanceBar) return { orders: [] };
+    const phase = beginRankCycle(context, state, parameters);
+    if (phase !== null) return phase;
 
     // 일정 없는 독립 엔진 호출은 selectionMetric pin 이 전혀 없다(전부 null). 그대로
     // 진행하면 후보 0 → 목표 0 → 전량 청산이 매 리밸런스 반복되므로 보유를 유지한다.
@@ -144,17 +133,9 @@ export const lowPerHighRoeRankStrategy: TradingStrategy<
     // 정할 근거가 없다. 빈 목표로 기존 보유를 전량 매도하지 않고 이번 리밸런스를 건너뛴다.
     if (candidates.length === 0) return { orders: [] };
 
-    const targets = rankLowPerHighRoe(candidates, context.rng)
-      .slice(0, parameters.topN)
+    const targets = rankLowPerHighRoe(candidates.filter((candidate) =>
+      rankLiquidityReady(context, candidate.symbol, parameters)), context.rng)
       .map((candidate) => candidate.symbol);
-    const sells = planSellPhase({
-      targets,
-      positions: context.portfolio.positions,
-      bars: context.bars,
-      equity: context.portfolio.equity,
-      topN: parameters.topN,
-    });
-    state.pendingTargets = targets.length > 0 ? targets : null;
-    return { orders: sells };
+    return finishRankCycle(targets, context, state, parameters);
   },
 };

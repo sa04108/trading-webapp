@@ -1,3 +1,5 @@
+import { BenchmarkService } from "../../market-data/application/benchmark-service.js";
+import { ensureMarketIndex } from "../../market-data/application/market-index-collector.js";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { createOfficialKrxTradingCalendar } from "../../market-data/infrastructure/krx/krx-trading-calendar.js";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -180,6 +182,9 @@ export function createAgentCollectionRuntime(input: {
           currentItem: date,
         });
       }
+    } else if (request.kind === "MARKET_INDEX") {
+      const benchmarks = new BenchmarkService({ db: database.db, krxSource, clock, logger, fredSource: { fetchBenchmarkRange: async () => { throw new Error("FRED 수집을 지원하지 않습니다"); } } });
+      await ensureMarketIndex({ db: database.db, master: symbolMasterService, benchmarks, requirement: request, shouldStop, onProgress: (completed, total, date) => onProgress({ activity: "COLLECTING_MARKET", unit: "DATES", completed, total, currentItem: date }) });
     } else if (request.kind === "SELECTION") {
       for (const [index, date] of request.dates.entries()) {
         await yieldToEventLoop();

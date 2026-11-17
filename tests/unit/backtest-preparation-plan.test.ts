@@ -58,8 +58,8 @@ describe('buildBacktestPreparationPlan', () => {
     {
       strategyId: 'range-breakout',
       financial: { symbols: [], fromYear: 2026, toYear: 2026 },
-      actions: { symbols: ['000660', '005930'], fromYear: 2025, toYear: 2026 },
-      price: { symbols: ['000660', '005930'], from: '2025-11-09', to: '2026-03-31' },
+      actions: { symbols: ['000660', '005930'], fromYear: 2024, toYear: 2026 },
+      price: { symbols: ['000660', '005930'], from: '2024-11-14', to: '2026-03-31' },
     },
     {
       strategyId: 'cross-sectional-momentum',
@@ -71,19 +71,19 @@ describe('buildBacktestPreparationPlan', () => {
       strategyId: 'value-quality-rank',
       financial: { symbols: ['000660', '005930'], fromYear: 2025, toYear: 2026 },
       actions: { symbols: ['000660', '005930'], fromYear: 2025, toYear: 2026 },
-      price: { symbols: ['000660', '005930'], from: '2026-01-02', to: '2026-03-31' },
+      price: { symbols: ['000660', '005930'], from: '2025-11-09', to: '2026-03-31' },
     },
     {
       strategyId: 'ema-trend-switch',
       financial: { symbols: [], fromYear: 2026, toYear: 2026 },
-      actions: { symbols: ['000660', '005930'], fromYear: 2025, toYear: 2026 },
-      price: { symbols: ['000660', '005930'], from: '2025-08-21', to: '2026-03-31' },
+      actions: { symbols: ['000660', '005930'], fromYear: 2024, toYear: 2026 },
+      price: { symbols: ['000660', '005930'], from: '2024-11-14', to: '2026-03-31' },
     },
     {
       strategyId: 'rsi-reversion',
       financial: { symbols: [], fromYear: 2026, toYear: 2026 },
-      actions: { symbols: ['000660', '005930'], fromYear: 2025, toYear: 2026 },
-      price: { symbols: ['000660', '005930'], from: '2025-08-21', to: '2026-03-31' },
+      actions: { symbols: ['000660', '005930'], fromYear: 2024, toYear: 2026 },
+      price: { symbols: ['000660', '005930'], from: '2024-11-14', to: '2026-03-31' },
     },
   ])('$strategyId 실전 기본값의 final-union 데이터 요구를 계획한다', ({
     strategyId,

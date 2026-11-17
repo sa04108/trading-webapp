@@ -14,6 +14,8 @@ export const agentClients = sqliteTable("agent_clients", {
   tokenHash: text("token_hash").notNull().unique(),
   createdAtMs: integer("created_at_ms").notNull(),
   lastSeenAtMs: integer("last_seen_at_ms"),
+  runnerVersion: text("runner_version"),
+  protocolVersion: integer("protocol_version"),
   revokedAtMs: integer("revoked_at_ms"),
 });
 

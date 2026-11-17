@@ -111,16 +111,22 @@ try {
   $imageId = ($imageResult.Output -join '').Trim()
   if ($imageResult.ExitCode -ne 0 -or $imageId -notmatch '^sha256:[a-f0-9]{64}$') { throw '내려받은 이미지 확인에 실패했습니다.' }
 
+  $oldImageId = $null
   $containerResult = Invoke-DockerQuery -Arguments @('container', 'inspect', '--format', '{{.Config.Labels.app}}', $containerName)
   if ($containerResult.ExitCode -eq 0) {
     $existingLabel = ($containerResult.Output -join '').Trim()
     if ($existingLabel -ne 'quant-agent') { throw '같은 이름의 Agent가 아닌 컨테이너가 있어 안전하게 교체하지 않았습니다.' }
+    $oldImageResult = Invoke-DockerQuery -Arguments @('container', 'inspect', '--format', '{{.Image}}', $containerName)
+    $oldImageId = ($oldImageResult.Output -join '').Trim()
+    if ($oldImageResult.ExitCode -ne 0 -or $oldImageId -notmatch '^sha256:[a-f0-9]{64}$') { throw '기존 Agent 이미지 확인에 실패하여 교체하지 않았습니다.' }
+    Write-Host "기존 Agent 컨테이너를 교체합니다: $containerName"
     Invoke-Docker -Arguments @('stop', $containerName)
     Invoke-Docker -Arguments @('rm', $containerName)
   }
 
   $volumeResult = Invoke-DockerQuery -Arguments @('volume', 'inspect', $volumeName)
   if ($volumeResult.ExitCode -ne 0) { Invoke-Docker -Arguments @('volume', 'create', $volumeName) | Out-Null }
+  else { Write-Host "기존 Agent 상태 볼륨을 유지합니다: $volumeName" }
 
   $env:QUANT_AGENT_SERVER_URL = $config.serverUrl
   $env:QUANT_AGENT_TOKEN = $config.token
@@ -142,6 +148,12 @@ try {
     Start-Sleep -Seconds 2
   }
   if (-not $running) { throw 'Agent 컨테이너가 계속 실행되지 않습니다. 아래 로그 명령으로 원인을 확인하세요: docker --context desktop-linux logs ' + $containerName }
+
+  if ($oldImageId -and $oldImageId -ne $imageId) {
+    $removeResult = Invoke-DockerQuery -Arguments @('image', 'rm', $oldImageId)
+    if ($removeResult.ExitCode -ne 0) { Write-Warning "이전 Agent 이미지를 삭제하지 못했습니다 (다른 컨테이너나 태그가 사용 중일 수 있습니다): $oldImageId" }
+    else { Write-Host "이전 Agent 이미지를 삭제했습니다: $oldImageId" }
+  }
 
   Write-Host "Agent가 실행 중입니다: $containerName"
   Write-Host "로그 보기: docker --context $dockerContext logs --follow $containerName"

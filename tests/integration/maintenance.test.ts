@@ -1,6 +1,7 @@
 import { describe, expect } from 'vitest';
 import { pruneExpiredRows } from '../../src/server/shared/db/maintenance.js';
 import { auditLogs, loginAttempts, notifications, sessions, users } from '../../src/server/shared/db/operations-schema.js';
+import { openApiTokens } from '../../src/server/shared/db/openapi-token-schema.js';
 import { test as it } from '../helpers/test-fixtures.js';
 
 const HOUR = 3_600_000;
@@ -26,6 +27,11 @@ describe('DB maintenance (무한 증가 방지)', () => {
         updatedAtMs: now,
       })
       .run();
+    db.insert(openApiTokens).values([
+      { id: 'token_revoked', ownerId: 'usr_prune', name: 'revoked', prefix: 'revoked', tokenHash: 'hash-revoked', scope: 'READ_ONLY', createdAtMs: now - DAY, expiresAtMs: now + DAY, revokedAtMs: now - HOUR },
+      { id: 'token_active', ownerId: 'usr_prune', name: 'active', prefix: 'active', tokenHash: 'hash-active', scope: 'READ_ONLY', createdAtMs: now - DAY, expiresAtMs: now + DAY },
+      { id: 'token_expired', ownerId: 'usr_prune', name: 'expired', prefix: 'expired', tokenHash: 'hash-expired', scope: 'READ_ONLY', createdAtMs: now - DAY, expiresAtMs: now - HOUR },
+    ]).run();
     db.insert(sessions)
       .values([
         // 유휴 만료 / 절대 만료 / 유효
@@ -47,6 +53,9 @@ describe('DB maintenance (무한 증가 방지)', () => {
       ])
       .run();
 
+    pruneExpiredRows(db, now, { ...options, auditLogRetentionMs: 0, notificationRetentionMs: 0 });
+    expect(db.select().from(openApiTokens).all().map((token) => token.id).sort()).toEqual(['token_active', 'token_expired']);
+    expect(db.select().from(auditLogs).all()).toHaveLength(2);
     pruneExpiredRows(db, now, options);
 
     expect(db.select().from(sessions).all().map((s) => s.id)).toEqual(['s_live']);

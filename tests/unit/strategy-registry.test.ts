@@ -49,19 +49,19 @@ describe('재무 순위 전략 metadata', () => {
   it('신규 ID, version, 이름, 설명을 정확히 등록한다', () => {
     expect(registry.describe('earnings-acceleration-rank')).toEqual({
       id: 'earnings-acceleration-rank',
-      version: '1.3.0',
+      version: '2.0.0',
       name: '이익 가속·가격 확인 순위',
       supportsRandomSeed: true,
       requiresFundamentals: true,
-      description: 'PIT 영업이익 가속과 양의 가격 모멘텀을 함께 순위화하는 동일가중 연구 전략',
+      description: '공시 시점의 8분기 영업이익으로 성장·가속을 확인하고 최근 급등락을 제외한 가격 모멘텀을 결합합니다. 코스피 추세에 따라 투자 비중을 줄이고 순위 교체를 완충합니다.',
     });
     expect(registry.describe('low-per-high-roe-rank')).toEqual({
       id: 'low-per-high-roe-rank',
-      version: '1.4.0',
+      version: '2.0.0',
       name: '저PER·고ROE 순위',
       supportsRandomSeed: true,
       requiresFundamentals: true,
-      description: 'PIT TTM 순이익 기준 저PER과 고ROE를 결합하는 동일가중 연구 전략',
+      description: '공시 시점의 TTM 순이익과 자본을 사용해 저PER·고ROE 종목을 분산 보유합니다. 코스피 추세에 따라 현금을 늘리고 순위 여유·비중 허용 오차로 잦은 교체를 줄입니다.',
     });
   });
 

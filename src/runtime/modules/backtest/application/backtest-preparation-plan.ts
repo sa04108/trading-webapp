@@ -1,3 +1,4 @@
+import type { MarketIndexRequirement } from "../../market-data/domain/market-index.js";
 import { createHash } from "node:crypto";
 import type { BacktestRequest } from "../../../../shared/schemas/backtest-request.js";
 import { computeRebalanceDates } from "../../../../shared/schemas/rebalance-interval.js";
@@ -11,9 +12,10 @@ import {
 import type { UniverseDataNeed } from "./universe-rule-resolver.js";
 
 /** 데이터 필요 범위의 의미가 바뀌면 완료된 이전 preparation을 재사용하지 않는다. */
-export const BACKTEST_PREPARATION_PLAN_VERSION = "8.0.0";
+export const BACKTEST_PREPARATION_PLAN_VERSION = "9.0.0";
 
 export interface BacktestPreparationPlan {
+  readonly marketIndex?: MarketIndexRequirement;
   readonly requestHash: string;
   readonly rebalanceDates: readonly string[];
   readonly financial: {
@@ -85,6 +87,9 @@ export function buildBacktestPreparationPlan(input: {
   }
   const priceWarmupBars =
     strategy.dataRequirements?.priceWarmupBars?.(parsedParameters.data) ?? 0;
+  const marketIndexBars = strategy.dataRequirements?.marketIndexBars?.(parsedParameters.data) ?? 0;
+  if (!Number.isSafeInteger(marketIndexBars) || marketIndexBars < 0 || marketIndexBars > 3000) throw new Error("시장 지수 준비 봉 수가 올바르지 않습니다");
+  const marketIndex = marketIndexBars ? { from: addCalendarDays(request.period.from, -(marketIndexBars * 3 + 30)), to: request.period.to, tradeFrom: request.period.from, minimumBars: marketIndexBars } : undefined;
   const declineWarmupBars = request.universeRule.stages.reduce(
     (maximum, stage) =>
       stage.criterion === "DECLINE"
@@ -151,6 +156,7 @@ export function buildBacktestPreparationPlan(input: {
       fromYear: Number(actionFrom.slice(0, 4)),
       toYear: Number(actionTo.slice(0, 4)),
     },
+    ...(marketIndex ? { marketIndex } : {}),
     price: {
       symbols: sortedUnique(priceSymbols),
       from: priceRange?.from ?? request.period.from,

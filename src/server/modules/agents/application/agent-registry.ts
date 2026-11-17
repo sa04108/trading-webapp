@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import { newId } from "../../../../runtime/shared/ids.js";
+import type { AgentRegistration } from "../../../../shared/agent-status.js";
 
 export function agentTokenHash(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -45,6 +46,12 @@ export class AgentRegistry {
       .run(Date.now(), id);
   }
 
+  recordHello(id: string, runnerVersion: string, protocolVersion: number): void {
+    this.database.sqlite.prepare(
+      "UPDATE agent_clients SET runner_version = ?, protocol_version = ?, last_seen_at_ms = ? WHERE id = ?",
+    ).run(runnerVersion, protocolVersion, Date.now(), id);
+  }
+
   revoke(id: string): boolean {
     return (
       this.database.sqlite
@@ -53,11 +60,11 @@ export class AgentRegistry {
     );
   }
 
-  list(): unknown[] {
+  list(): AgentRegistration[] {
     return this.database.sqlite
       .prepare(
-        "SELECT id, name, created_at_ms AS createdAtMs, last_seen_at_ms AS lastSeenAtMs, revoked_at_ms AS revokedAtMs FROM agent_clients ORDER BY created_at_ms DESC",
+        "SELECT id, name, created_at_ms AS createdAtMs, last_seen_at_ms AS lastSeenAtMs, revoked_at_ms AS revokedAtMs, runner_version AS runnerVersion, protocol_version AS protocolVersion FROM agent_clients ORDER BY created_at_ms DESC",
       )
-      .all();
+      .all() as AgentRegistration[];
   }
 }
