@@ -1,3 +1,4 @@
+import { agentDataRequestSchema } from "../../../../shared/agent-protocol.js";
 import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { addCalendarDays, kstDateOf } from "../../../../runtime/modules/market-data/domain/kst-date.js";
@@ -70,7 +71,7 @@ export class DailyTradingEngine implements TradingDecisionEngine {
         if (message.type === "completed") output = message.output;
         else if (message.type === "needs-data") {
           const need = message.need;
-          if (!need || !Array.isArray(need.masterDates) || !Array.isArray(need.entries) || !(need.priceRange === null || (typeof need.priceRange?.from === "string" && typeof need.priceRange?.to === "string")) || !(need.financial === null || (Array.isArray(need.financial?.symbols) && Number.isInteger(need.financial?.fromYear) && Number.isInteger(need.financial?.toYear))) || !(need.actions === null || (Array.isArray(need.actions?.symbols) && Number.isInteger(need.actions?.fromYear) && Number.isInteger(need.actions?.toYear)))) failure = new Error("전략 데이터 준비 요청이 올바르지 않습니다");
+          if (!need || (need.marketIndex !== undefined && !agentDataRequestSchema.safeParse({ kind: "MARKET_INDEX", ...need.marketIndex }).success) || !Array.isArray(need.masterDates) || !Array.isArray(need.entries) || !(need.priceRange === null || (typeof need.priceRange?.from === "string" && typeof need.priceRange?.to === "string")) || !(need.financial === null || (Array.isArray(need.financial?.symbols) && Number.isInteger(need.financial?.fromYear) && Number.isInteger(need.financial?.toYear))) || !(need.actions === null || (Array.isArray(need.actions?.symbols) && Number.isInteger(need.actions?.fromYear) && Number.isInteger(need.actions?.toYear)))) failure = new Error("전략 데이터 준비 요청이 올바르지 않습니다");
           else failure = new DecisionDataRequired(message.error ?? "전략 데이터가 준비되지 않았습니다", need);
         }
         else if (message.type === "failed") failure = new Error(message.error ?? "전략 판단에 실패했습니다");

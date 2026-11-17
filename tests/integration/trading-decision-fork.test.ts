@@ -1,3 +1,4 @@
+import { UNFILTERED_BREAKOUT_CONTROLS } from "../helpers/swing-controls.js";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -34,7 +35,7 @@ describe("daily decision worker integration", () => {
       let now = Date.parse("2026-11-16T00:01:00Z");
       const ensureData = vi.fn(async (_date: string, _input: unknown, _need: unknown) => "데이터 준비 필요");
       engine = new DailyTradingEngine({ databasePath, dataPath: database.dataPath, artifacts, now: () => now, ensureData });
-      const deployment = { strategyId: artifact.strategyId, artifactHash: artifact.artifactHash, version: artifact.version, parameters: { lookbackBars: 2, atrPeriod: 2 }, createdAtMs: Date.parse("2026-11-13T00:00:00Z"), activatedAtMs: null, budgetKrw: 100000, randomSeed: 1, universeRule: { markets: ["KOSPI"], stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 1 }], rebalanceInterval: { unit: "NONE", value: 1 } } };
+      const deployment = { strategyId: artifact.strategyId, artifactHash: artifact.artifactHash, version: artifact.version, parameters: { ...UNFILTERED_BREAKOUT_CONTROLS, lookbackBars: 2, atrPeriod: 2 }, createdAtMs: Date.parse("2026-11-13T00:00:00Z"), activatedAtMs: null, budgetKrw: 100000, randomSeed: 1, universeRule: { markets: ["KOSPI"], stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 1 }], rebalanceInterval: { unit: "NONE", value: 1 } } };
       const warm = await engine.evaluate({ deployment, portfolio: {}, checkpoint: null, warmupOnly: true } as never);
       expect(warm.orders).toEqual([]);
       expect(ensureData).not.toHaveBeenCalled();

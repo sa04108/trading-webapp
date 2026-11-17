@@ -152,7 +152,7 @@ test('full MVP flow', async ({ page }) => {
   await expect(hint).toBeHidden();
   await hintButton.click();
   await expect(hint).toContainText('최고가');
-  await expect(hint).toContainText('lookbackBars · 2~200 · 기본 20');
+  await expect(hint).toContainText('lookbackBars · 2~200 · 기본 55');
   // 다시 클릭하면 닫힌다
   await hintButton.click();
   await expect(hint).toBeHidden();

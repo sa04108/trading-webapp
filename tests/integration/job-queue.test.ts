@@ -1,3 +1,5 @@
+import { UNFILTERED_RANK_CONTROLS } from '../helpers/rank-controls.js';
+import { UNFILTERED_BREAKOUT_CONTROLS } from '../helpers/swing-controls.js';
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { randomUUID } from 'node:crypto';
 import { readBacktestJobs } from '../helpers/backtest-jobs.js';
@@ -126,6 +128,7 @@ function buildRequest(): BacktestRequest {
   return {
     strategyId: STRATEGY_ID,
     parameters: {
+      ...UNFILTERED_BREAKOUT_CONTROLS,
       lookbackBars: 10,
       atrPeriod: 5,
       stopAtrMultiplier: 2,
@@ -641,7 +644,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const payload: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
-      parameters: { topN: 1, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, staleQuarters: 2 },
       period: { from: MAIN_DATE, to: '2026-01-07' },
       universeRule: {
         markets: ['KOSPI'],
@@ -1241,7 +1244,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(),
       strategyId: 'value-quality-rank',
-      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
     });
 
     const cloned = await ctx.app.inject({
@@ -1264,7 +1267,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const valueRequest: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
-      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
       risk: { maxPositions: 1 },
     };
     await seedValueQualityFacts(ctx.container, ['005930']);
@@ -1344,7 +1347,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const valueRequest: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
-      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
       risk: { maxPositions: 1 },
     };
     await seedValueQualityFacts(ctx.container, ['005930']);
@@ -1499,7 +1502,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const request: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
-      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
       risk: { maxPositions: 1 },
     };
     await seedValueQualityFacts(ctx.container, ['005930']);
@@ -1971,7 +1974,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const request: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
-      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
       risk: { maxPositions: 1 },
     };
     await seedValueQualityFacts(ctx.container, ['005930']);
@@ -2135,7 +2138,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const request: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
-      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
       risk: { maxPositions: 1 },
     };
     await seedValueQualityFacts(ctx.container, ['005930']);
@@ -2499,7 +2502,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const request: BacktestRequest = {
       ...buildRequest(),
       strategyId: 'value-quality-rank',
-      parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
     };
     const job = ctx.container.jobQueue.enqueue(request);
 

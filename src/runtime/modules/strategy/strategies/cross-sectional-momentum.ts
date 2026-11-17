@@ -9,7 +9,7 @@ import type {
 } from "../domain/strategy.js";
 import { splitAdjustedClose } from "./shared/adjusted-price.js";
 import { rankDescending, type Scored } from "./shared/rank.js";
-import { planBuyPhase, planSellPhase } from "./shared/two-phase-rebalance.js";
+import { beginRankCycle, finishRankCycle, newRankRiskState, rankLiquidityReady, rankPriceWarmup, rankRiskParameters, type RankRiskState } from "./shared/rank-risk.js";
 
 /**
  * 횡단면 모멘텀 (설계 2026-07-29-quant-strategies-and-fact-store-design.md §1).
@@ -25,7 +25,7 @@ import { planBuyPhase, planSellPhase } from "./shared/two-phase-rebalance.js";
  * 리밸런스는 두 봉에 나눈다 — 매도 봉, 그 다음 매수 봉. 엔진의 동시 포지션 상한이
  * 청산 대기 포지션도 슬롯으로 세기 때문이다 (two-phase-rebalance.ts 주석).
  */
-export const crossSectionalMomentumParameters = z.object({
+export const crossSectionalMomentumParameters = rankRiskParameters.extend({
   formationDays: z.number().int().min(20).max(756).default(252).meta({
     title: "수익률 측정 기간 (봉 수)",
     description:
@@ -39,7 +39,7 @@ export const crossSectionalMomentumParameters = z.object({
   // 상한은 요청의 `risk.maxPositions` 상한(200)과 같아야 한다 — 제출 게이트가
   // topN <= maxPositions 를 요구하므로 여기가 더 크면 그 구간이 어떤 경로로도
   // 제출될 수 없고, 게이트 메시지는 도달할 수 없는 값까지 올리라고 안내한다.
-  topN: z.number().int().min(1).max(200).default(10).meta({
+  topN: z.number().int().min(1).max(200).default(30).meta({
     title: "보유 종목 수",
     description:
       "순위 상위 몇 종목을 동일가중으로 보유할지 정합니다. 종목당 비중은 자본의 1/N 입니다. 요청의 최대 동시 보유 종목 수보다 크게 잡으면 일부 종목이 편입되지 않습니다.",
@@ -55,12 +55,7 @@ export type CrossSectionalMomentumParameters = z.infer<
   typeof crossSectionalMomentumParameters
 >;
 
-export interface CrossSectionalMomentumState {
-  /** 유니버스 — 이번 봉에 거래가 없는 종목도 후보에서 빠지지 않게 초기화 시점에 고정한다 */
-  readonly symbols: readonly string[];
-  /** 다음 봉에서 동일가중까지 채울 목표 종목. null 이면 매수 단계가 아니다 */
-  pendingTargets: readonly string[] | null;
-}
+export type CrossSectionalMomentumState = RankRiskState;
 
 /**
  * 분할 보정 종가 기준 모멘텀. 이력이 창을 채우지 못하면 null.
@@ -89,31 +84,29 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
   CrossSectionalMomentumState
 > = {
   id: "cross-sectional-momentum",
-  version: "2.2.1",
+  version: "3.0.0",
   name: "횡단면 모멘텀",
   description:
     // "보정합니다" 로 단정하면 안 된다 — 분할 이력이 수집되지 않은 데이터셋에서는
     // 자본변동 팩트가 없어 원 종가로 계산된다. 무엇도 그 수집을 강제하지 않으므로
     // (requiresFundamentals 는 이 전략에 걸려 있지도 않다) 엔진 경고·
     // IMPLEMENTATION_STATUS 와 같은 어법으로 조건을 밝힌다.
-    "유니버스 전 종목의 상승률을 견줘 많이 오른 상위 N 을 동일가중 보유하고, 주기마다 순위를 다시 매겨 갈아탑니다. " +
+    "유니버스의 상승률 상위 종목을 분산 보유합니다. 코스피 추세·거래대금 필터와 최소 교체 간격, 순위 여유로 하락장 노출과 회전율을 조절합니다. " +
     "상승률은 직전 한 달을 빼고 그 앞 1년을 봅니다 — 갓 오른 종목은 곧 되돌리는 일이 잦기 때문입니다. " +
     "액면분할은 분할 이력이 수집된 데이터셋에서만 신호 계산에 보정됩니다 — 체결가는 항상 실제 거래 가격입니다.",
   parameterSchema: crossSectionalMomentumParameters,
   historyLookbackBars: (parameters) =>
-    parameters.formationDays + parameters.skipDays + 1,
+    Math.max(rankPriceWarmup(parameters), parameters.formationDays + parameters.skipDays + 1),
   requiredRebalanceGapBars: 1,
   dataRequirements: {
+    marketIndexBars: (parameters) => parameters.marketTrendBars,
     priceWarmupBars: (parameters) =>
-      parameters.formationDays + parameters.skipDays + 1,
+      Math.max(rankPriceWarmup(parameters), parameters.formationDays + parameters.skipDays + 1),
     requiresCorporateActions: true,
   },
 
   initialize(context: StrategyInitializeContext): CrossSectionalMomentumState {
-    return {
-      symbols: [...context.symbols],
-      pendingTargets: null,
-    };
+    return newRankRiskState(context.symbols);
   },
 
   onBars(
@@ -124,19 +117,8 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
     // 2단계 — 이전 봉에서 넘어온 목표 종목을 동일가중까지 채운다. 이번 봉에
     // 초과 비중·탈락 종목 매도가 이미 체결되어 현금이 들어온 상태다
     // (엔진 §9.2 순서: 체결 → 평가 → 전략).
-    if (state.pendingTargets !== null) {
-      const buys = planBuyPhase(state.pendingTargets, {
-        positions: context.portfolio.positions,
-        bars: context.bars,
-        equity: context.portfolio.equity,
-        topN: parameters.topN,
-        tradableSymbols: context.tradableSymbols,
-      });
-      state.pendingTargets = null;
-      return { orders: buys };
-    }
-
-    if (!context.isRebalanceBar) return { orders: [] };
+    const phase = beginRankCycle(context, state, parameters);
+    if (phase !== null) return phase;
 
     // 준비 파이프라인은 거래 시작 전 워밍업 이력을 채운다. 직접 엔진을 호출해 이력이
     // 부족한 경우에는 이 공유 리밸런스 봉에서 아무 주문도 내지 않는다. 이 경우와 후보가
@@ -165,24 +147,15 @@ export const crossSectionalMomentumStrategy: TradingStrategy<
       );
       if (score === null) continue;
       if (parameters.absoluteMomentumFilter && score <= 0) continue;
+      if (!rankLiquidityReady(context, symbol, parameters)) continue;
       scored.push({ symbol, score });
     }
 
     const ranks = rankDescending(scored, context.rng);
     const targets = [...ranks.entries()]
-      .filter(([, rank]) => rank <= parameters.topN)
-      .map(([symbol]) => symbol)
-      .sort();
+      .sort((a, b) => a[1] - b[1])
+      .map(([symbol]) => symbol);
 
-    const sells = planSellPhase({
-      targets,
-      positions: context.portfolio.positions,
-      bars: context.bars,
-      equity: context.portfolio.equity,
-      topN: parameters.topN,
-    });
-    state.pendingTargets = targets.length > 0 ? targets : null;
-
-    return { orders: sells };
+    return finishRankCycle(targets, context, state, parameters);
   },
 };

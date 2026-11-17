@@ -1,3 +1,4 @@
+import { UNFILTERED_RANK_CONTROLS, DEFAULT_RANK_CONTROLS } from "../helpers/rank-controls.js";
 import { describe, expect, it } from 'vitest';
 import { runBacktest } from '../../src/runtime/modules/backtest/domain/engine.js';
 import { createRng } from '../../src/runtime/modules/backtest/domain/seeded-rng.js';
@@ -300,7 +301,8 @@ describe('computeValueQualityMetrics', () => {
 describe('valueQualityRankParameters', () => {
   it('기본값만으로 파싱된다', () => {
     expect(valueQualityRankParameters.parse({})).toEqual({
-      topN: 20,
+      ...DEFAULT_RANK_CONTROLS,
+      topN: 30,
       staleQuarters: 2,
     });
   });
@@ -408,7 +410,7 @@ describe('밸류·퀄리티 랭킹 실행', () => {
     return out;
   }
 
-  const parameters = { topN: 1, staleQuarters: 2 };
+  const parameters = { ...UNFILTERED_RANK_CONTROLS, topN: 1, staleQuarters: 2 };
 
   it('context.isRebalanceBar가 false면 계산 가능한 재무가 있어도 주문을 내지 않는다', () => {
     const bar = candleFor('CHEAP', 5, 1_000);
@@ -562,7 +564,7 @@ describe('밸류·퀄리티 랭킹 실행', () => {
         candles: opposedCandles(40),
         initialCash: 10_000_000,
         execution: ZERO_COST,
-        parameters: { topN: 1, staleQuarters: 2 },
+        parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, staleQuarters: 2 },
         randomSeed: 1,
         maxPositions: 1,
         facts: opposedFacts,
@@ -580,7 +582,7 @@ describe('밸류·퀄리티 랭킹 실행', () => {
         candles: opposedCandles(40),
         initialCash: 10_000_000,
         execution: ZERO_COST,
-        parameters: { topN: 2, staleQuarters: 2 },
+        parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 2, staleQuarters: 2 },
         randomSeed: 1,
         maxPositions: 2,
         facts: opposedFacts,
@@ -658,7 +660,7 @@ describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
       candles: membershipCandles(35),
       initialCash: 10_000_000,
       execution: ZERO_COST,
-      parameters: { topN: 2, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 2, staleQuarters: 2 },
       randomSeed: 1,
       maxPositions: 2,
       facts: membershipFacts,
@@ -706,7 +708,7 @@ describe('멤버십 일정 반영 랭킹 (리뷰 fix — 2026-08-05)', () => {
       candles: membershipCandles(10),
       initialCash: 10_000_000,
       execution: ZERO_COST,
-      parameters: { topN: 1, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, staleQuarters: 2 },
       randomSeed: 1,
       maxPositions: 1,
       facts: membershipFacts,

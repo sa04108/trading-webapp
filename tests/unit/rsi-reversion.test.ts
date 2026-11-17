@@ -33,6 +33,9 @@ function candle(symbol: string, index: number, close: number): Candle {
 }
 
 const FAST_PARAMS = {
+  trendSmaBars: 0, minAverageTradingValueKrw: 0, cooldownBars: 0,
+  maxPositionWeightPercent: 100,
+
   rsiPeriod: 3,
   entryRsi: 30,
   exitRsi: 55,
@@ -50,7 +53,7 @@ function vShapeCandles(): Candle[] {
   for (let index = 0; index < 55; index += 1) {
     if (index < 25) close = 1_000 + (index % 2 === 0 ? 10 : -10);
     else if (index < 35) close -= 20; // 하락 — RSI 0 근처
-    else close += 40; // 가파른 반등 — RSI 가 확실히 청산선 위로 회복
+    else close += 10; // 가파른 반등 — RSI 가 확실히 청산선 위로 회복
     candles.push(candle('AAA', index, close));
   }
   return candles;
@@ -62,7 +65,7 @@ describe('rsiReversionParameters', () => {
     expect(parsed.rsiPeriod).toBe(14);
     expect(parsed.entryRsi).toBe(30);
     expect(parsed.exitRsi).toBe(55);
-    expect(parsed.maxHoldBars).toBeUndefined();
+    expect(parsed.maxHoldBars).toBe(20);
   });
 
   it('entryRsi ≥ exitRsi 를 거부한다', () => {
@@ -105,10 +108,10 @@ describe('실행 동작', () => {
     for (let index = 0; index < 45; index += 1) {
       const aaa = index < 20
         ? 1_000 + (index % 2 === 0 ? 10 : -10)
-        : 1_000 - (index - 19) * 20;
+        : index < 26 ? 1_000 - (index - 19) * 20 : 880 + (index - 25) * 10;
       const bbb = index < 20
         ? 1_000_000 / aaa
-        : 1_000 - (index - 19) * 20;
+        : index < 26 ? 1_000 - (index - 19) * 20 : 880 + (index - 25) * 10;
       candles.push(candle('AAA', index, aaa), candle('BBB', index, bbb));
     }
     const winner = (randomSeed: number) => runBacktest(rsiReversionStrategy, {
@@ -131,7 +134,7 @@ describe('실행 동작', () => {
         : 1_000 + (index - 15 + 1) * 15,
     );
     const aaa = rising.map((close) => 1_000_000 / close);
-    const bbb = [...rising, 1_100, 500, 500];
+    const bbb = [...rising, 1_100, 500, 750, 750];
     const candles = [
       ...aaa.map((close, index) => candle('AAA', index, close)),
       ...bbb.map((close, index) => candle('BBB', index, close)),
@@ -162,7 +165,8 @@ describe('실행 동작', () => {
     let close = 2_000;
     for (let index = 0; index < 50; index += 1) {
       if (index < 25) close = 2_000 + (index % 2 === 0 ? 10 : -10);
-      else close -= 8; // 완만한 하락 지속 (스톱 넉넉해서 안 걸림)
+      else if (index < 31) close -= 8;
+      else if (index === 31) close += 5; // 과매도에서 회복 후 횡보한다
       candles.push(candle('AAA', index, close));
     }
     const result = runBacktest(rsiReversionStrategy, {
@@ -192,8 +196,8 @@ describe('실행 동작', () => {
         aaa = 1_000 + (index % 2 === 0 ? 10 : -10);
         zzz = 1_000_000 / aaa;
       } else {
-        aaa -= 20;
-        zzz -= 20;
+        if (index < 31) { aaa -= 20; zzz -= 20; }
+        else if (index === 31) { aaa += 20; zzz += 20; }
       }
       inactiveFirst.push(candle('AAA', index, aaa));
       activeSecond.push(candle('ZZZ', index, zzz));
@@ -246,7 +250,9 @@ describe('실행 동작', () => {
         aaa -= 20;
         bbb += 20;
       } else {
-        bbb -= 30;
+        if (index === 31) aaa += 20;
+        if (index < 38) bbb -= 30;
+        else if (index === 38) bbb += 30;
       }
       candles.push(candle('AAA', index, aaa));
       candles.push(candle('BBB', index, bbb));
@@ -344,7 +350,8 @@ describe('rsi-reversion 분할 후 RSI 누적 조정', () => {
     const candles = steadyRiseWithSplit();
     let close = (100_000 + 29 * 1_000) / 5;
     for (let index = 30; index < 40; index += 1) {
-      close -= 800;
+      if (index < 37) close -= 800;
+      else if (index === 37) close += 700;
       candles.push(splitCandle(index, close));
     }
     const result = runBacktest(rsiReversionStrategy, {
@@ -362,4 +369,16 @@ describe('rsi-reversion 분할 후 RSI 누적 조정', () => {
     // 분할 봉(25)이 아니라 실제 하락 구간에서 진입해야 한다
     expect(buys[0]!.tsMs).toBeGreaterThan(SPLIT_START + 30 * DAY);
   });
+});
+
+it('하락 중 과매수하지 않고 RSI가 과매도에서 회복할 때만 진입하며 비중을 제한한다', () => {
+  const candles = vShapeCandles();
+  const result = runBacktest(rsiReversionStrategy, {
+    candles, initialCash: 10_000_000, execution: ZERO_COST,
+    parameters: { ...FAST_PARAMS, maxPositionWeightPercent: 10 }, randomSeed: 1, maxPositions: 5,
+  });
+  const buy = result.fills.find((fill) => fill.side === 'BUY');
+  expect(buy).toBeDefined();
+  expect(buy!.tsMs).toBeGreaterThan(START + 35 * DAY);
+  expect(buy!.quantity * candles.find((bar) => bar.tsMs === buy!.tsMs - DAY)!.close).toBeLessThanOrEqual(1_000_000);
 });

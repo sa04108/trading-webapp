@@ -169,6 +169,7 @@ export class AgentDataQueue {
   ): void {
     const request = agentDataRequestSchema.parse(input);
     if ("dates" in request) request.dates = [...new Set(request.dates)].sort();
+    else if (request.kind === "MARKET_INDEX") { /* 스키마가 범위를 검증한다. */ }
     else if (request.kind === "REGISTER")
       request.symbols.sort((a, b) => a.symbol.localeCompare(b.symbol));
     else {

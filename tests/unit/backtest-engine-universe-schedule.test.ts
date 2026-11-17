@@ -72,6 +72,21 @@ function alwaysBuyBothStrategy(): TradingStrategy<unknown, null> {
 }
 
 describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2026-08-05, §9.5)', () => {
+  it('워밍업과 거래 봉에서 미래 지수를 숨긴다', () => {
+    const seen: number[][] = [];
+    const strategy: TradingStrategy<unknown, null> = {
+      ...alwaysBuyBothStrategy(),
+      onBars(context) { seen.push(context.getMarketIndexHistory!().map((point) => point.close)); return { orders: [] }; },
+    };
+    runBacktest(strategy as never, {
+      candles: [bar(0, 100), bar(1, 100), bar(2, 100)],
+      marketIndex: [{ tsMs: START, close: 10 }, { tsMs: START + HOUR, close: 20 }, { tsMs: START + 2 * HOUR, close: 30 }],
+      tradeFromTsMs: START + HOUR,
+      initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 1, maxPositions: 2,
+    });
+    expect(seen).toEqual([[10], [10, 20], [10, 20, 30]]);
+  });
+
   it('2봉 리밸런스 전략은 연속 실제 거래 봉 일정을 실행 전에 거부한다', () => {
     const strategy: TradingStrategy<unknown, null> = {
       ...alwaysBuyBothStrategy(),

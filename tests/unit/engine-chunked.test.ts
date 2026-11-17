@@ -1,3 +1,4 @@
+import { UNFILTERED_RANK_CONTROLS } from '../helpers/rank-controls.js';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { runBacktest, runBacktestCancellable, type BacktestRunInput } from '../../src/runtime/modules/backtest/domain/engine.js';
@@ -79,7 +80,7 @@ describe('날짜 묶음 백테스트', () => {
       symbols.map((symbol) => candle(day, symbol))).flat();
     const input = {
       ...baseInput,
-      parameters: { formationDays: 20, skipDays: 0, topN: 1, absoluteMomentumFilter: true },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, formationDays: 20, skipDays: 0, topN: 1, absoluteMomentumFilter: true },
       tradeFromTsMs: START,
       resultPeriod: { fromTsMs: START, toTsMs: START + 34 * DAY },
       universeSchedule: [0, 23, 30].map((day) => ({

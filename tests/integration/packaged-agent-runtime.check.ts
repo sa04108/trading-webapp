@@ -1,3 +1,4 @@
+import { UNFILTERED_BREAKOUT_CONTROLS } from '../helpers/swing-controls.js';
 import { fork, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -28,7 +29,7 @@ const input: PreparationInput = {
   },
   period: { from: '2026-01-05', to: '2026-01-05' },
   strategyId: 'range-breakout',
-  parameters: {},
+  parameters: UNFILTERED_BREAKOUT_CONTROLS,
 };
 const request: BacktestRequest = {
   ...input,

@@ -1,3 +1,6 @@
+import { ensureMarketIndex } from '../../src/server/modules/market-data/application/market-index-collector.js';
+import { readMarketIndex } from '../../src/runtime/modules/market-data/application/market-index-history.js';
+import { benchmarkDailyValues } from '../../src/runtime/shared/db/data-schema.js';
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { describe, expect, it, vi } from 'vitest';
 import { BenchmarkService } from '../../src/server/modules/market-data/application/benchmark-service.js';
@@ -18,6 +21,36 @@ const logger = {
 } as unknown as Logger;
 
 describe('벤치마크 저장과 결과 비교', () => {
+  it('확인된 거래일의 빈 지수 응답은 다음 준비에서 다시 조회한다', async () => {
+    const database = openDatabase(':memory:');
+    try {
+      database.db.insert(symbolMasterTradingDays).values([{ date: '2026-01-05' }, { date: '2026-01-06' }]).run();
+      let available = false;
+      const fetchBenchmarkClose = vi.fn(async (_id: string, day: string) => day === '2026-01-05' ? 100 : available ? 101 : null);
+      const benchmarks = new BenchmarkService({ db: database.db, krxSource: { fetchBenchmarkClose } as unknown as KrxHistoricalUniverseSource, fredSource: { fetchBenchmarkRange: async () => [] }, clock: { now: () => 123 }, logger });
+      const input = { db: database.db, master: { ingestDate: async () => {} }, benchmarks, requirement: { from: '2026-01-05', tradeFrom: '2026-01-06', to: '2026-01-06', minimumBars: 1 } };
+      await expect(ensureMarketIndex(input)).rejects.toThrow(/KOSPI/);
+      expect(fetchBenchmarkClose).toHaveBeenCalledTimes(2);
+      available = true;
+      await expect(ensureMarketIndex(input)).resolves.toBeUndefined();
+      expect(fetchBenchmarkClose).toHaveBeenCalledTimes(3);
+      expect(benchmarks.list('KOSPI', '2026-01-06', '2026-01-06')).toEqual([{ date: '2026-01-06', close: 101 }]);
+    } finally { database.close(); }
+  });
+
+  it('실제 KOSPI 종가와 선행 이력이 모두 있어야 준비된다', () => {
+    const database = openDatabase(':memory:');
+    try {
+      const requirement = { from: '2026-01-02', tradeFrom: '2026-01-05', to: '2026-01-06', minimumBars: 1 };
+      database.db.insert(symbolMasterTradingDays).values([{ date: '2026-01-02' }, { date: '2026-01-05' }, { date: '2026-01-06' }]).run();
+      database.db.insert(benchmarkDailyValues).values([{ benchmarkId: 'KOSPI', date: '2026-01-02', close: 100, syncedAtMs: 1 }, { benchmarkId: 'KOSPI', date: '2026-01-05', close: 101, syncedAtMs: 1 }]).run();
+      expect(readMarketIndex(database.db, requirement)).toBeNull();
+      database.db.insert(benchmarkDailyValues).values({ benchmarkId: 'KOSPI', date: '2026-01-06', close: 102, syncedAtMs: 1 }).run();
+      expect(readMarketIndex(database.db, requirement)?.map((p) => p.close)).toEqual([100, 101, 102]);
+      expect(readMarketIndex(database.db, { ...requirement, minimumBars: 2 })).toBeNull();
+    } finally { database.close(); }
+  });
+
   it('취소는 마지막 요청이 끝날 때까지 대기하고 이전 ID는 새 작업을 취소하지 않는다', async () => {
     const database = openDatabase(':memory:');
     try {

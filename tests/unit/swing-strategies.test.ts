@@ -17,6 +17,9 @@ const ZERO_COST: ExecutionProfile = {
 };
 
 const FAST_PARAMS = {
+  trendSmaBars: 0, minAverageTradingValueKrw: 0, cooldownBars: 0,
+  entryAtrMultiplier: 0, exitThresholdPercent: 0, maxPositionWeightPercent: 100,
+
   fastEmaBars: 3,
   slowEmaBars: 6,
   entryThresholdPercent: 0.3,
@@ -372,4 +375,21 @@ describe('그룹 배타성', () => {
       'AAA',
     ]);
   });
+});
+
+it('실제 청산 확인 후 대기하고 분할 후에도 추세와 거래대금 창을 유지한다', async () => {
+  const { newEntryFilter, updateEntryFilter, entryAllowed, scaleEntryFilter } = await import('../../src/runtime/modules/strategy/strategies/shared/entry-filters.js');
+  const p = { trendSmaBars: 2, liquidityLookbackBars: 2, minAverageTradingValueKrw: 1000, cooldownBars: 2 };
+  const state = newEntryFilter();
+  updateEntryFilter(state, 100, 20, true, p);
+  updateEntryFilter(state, 110, 20, true, p);
+  scaleEntryFilter(state, 2);
+  updateEntryFilter(state, 60, 40, false, p);
+  expect(entryAllowed(state, 60, p)).toBe(false);
+  updateEntryFilter(state, 61, 40, false, p);
+  expect(entryAllowed(state, 61, p)).toBe(false);
+  updateEntryFilter(state, 62, 40, false, p);
+  expect(entryAllowed(state, 62, p)).toBe(false);
+  updateEntryFilter(state, 63, 40, false, p);
+  expect(entryAllowed(state, 63, p)).toBe(true);
 });

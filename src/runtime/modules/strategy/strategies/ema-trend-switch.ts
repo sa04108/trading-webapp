@@ -1,3 +1,4 @@
+import { entryFilterParameters, newEntryFilter, updateEntryFilter, entryAllowed, scaleEntryFilter, type EntryFilterState } from "./shared/entry-filters.js";
 import { z } from "zod";
 import type { OrderIntent } from "../../backtest/domain/types.js";
 import type {
@@ -25,7 +26,7 @@ import {
   updateCorrelationGrouping,
   type CorrelationGroupingState,
 } from "./shared/pair-groups.js";
-import { riskQuantity } from "./shared/position-sizing.js";
+import { riskQuantity, weightCappedQuantity } from "./shared/position-sizing.js";
 import {
   confirmEntry,
   holdLimitReached,
@@ -49,20 +50,23 @@ import {
  */
 export const emaTrendSwitchParameters = z
   .object({
-    fastEmaBars: z.number().int().min(2).max(100).default(12).meta({
+    ...entryFilterParameters,
+    fastEmaBars: z.number().int().min(2).max(100).default(20).meta({
       title: "단기 이동평균 봉 수",
       description:
         "최근 흐름을 재는 짧은 지수이동평균의 봉 수입니다. 장기 이동평균보다 작아야 합니다.",
     }),
-    slowEmaBars: z.number().int().min(5).max(400).default(26).meta({
+    slowEmaBars: z.number().int().min(5).max(400).default(60).meta({
       title: "장기 이동평균 봉 수",
       description: "기준 추세를 재는 긴 지수이동평균의 봉 수입니다.",
     }),
-    entryThresholdPercent: z.number().min(0.01).max(10).default(0.3).meta({
+    entryThresholdPercent: z.number().min(0.01).max(10).default(1).meta({
       title: "진입 간격 (%)",
       description:
         "단기 이동평균이 장기보다 이 비율(%) 이상 위에 있으면 진입합니다. 크게 잡으면 뚜렷한 추세만 잡습니다.",
     }),
+    entryAtrMultiplier: z.number().min(0).max(20).default(0.5).meta({ title: "진입 간격 (ATR 배수)", description: "이동평균 간격이 변동성의 이 배수 이상이어야 진입합니다." }),
+    exitThresholdPercent: z.number().min(0).max(10).default(0.5).meta({ title: "청산 역전 간격 (%)", description: "단기 평균이 장기 평균보다 이 비율 이상 아래에 있으면 청산합니다." }),
     atrPeriod: z.number().int().min(2).max(100).default(14).meta({
       title: "변동성(ATR) 계산 기간",
       description:
@@ -84,6 +88,7 @@ export const emaTrendSwitchParameters = z
       description:
         "이 봉 수를 넘기면 신호와 무관하게 팝니다. 일봉 기준으로 20이면 약 1달입니다. 비우면 제한이 없습니다.",
     }),
+    maxPositionWeightPercent: z.number().min(1).max(100).default(10).meta({ title: "종목당 비중 상한 (%)", description: "신호봉 종가 기준 종목당 자본 비중 상한입니다." }),
     riskPerTradePercent: z.number().positive().max(5).default(1).meta({
       title: "1회 거래 리스크 (%)",
       description:
@@ -112,6 +117,7 @@ interface SymbolState {
   slow: EmaState;
   atr: AtrState;
   holding: HoldingState;
+  entryFilter: EntryFilterState;
 }
 
 export interface EmaTrendSwitchState extends CorrelationGroupingState {
@@ -129,7 +135,7 @@ function getSymbolState(
       fast: newEma(),
       slow: newEma(),
       atr: newAtr(),
-      holding: newHolding(),
+      holding: newHolding(), entryFilter: newEntryFilter(),
     };
     state.bySymbol.set(symbol, symbolState);
   }
@@ -161,10 +167,10 @@ export const emaTrendSwitchStrategy: TradingStrategy<
   EmaTrendSwitchState
 > = {
   id: "ema-trend-switch",
-  version: "1.1.2",
+  version: "2.0.0",
   name: "EMA 추세 스위치",
   description:
-    "단기·장기 이동평균 간격이 벌어진 종목에 올라타고, 고점에서 변동성 폭만큼 내려오면 팝니다. " +
+    "장기 상승 추세에서 단기·장기 이동평균 간격이 변동성 기준을 넘을 때 진입합니다. 거래대금·종목 비중을 제한하고, 청산 기준에 여유폭과 재진입 대기를 둡니다. " +
     "반대로 움직이는 종목(예: 레버리지·인버스 쌍)을 함께 넣으면 같은 묶음에서 한 종목만 보유해 " +
     "방향 전환이 종목 교체로 표현됩니다.",
   parameterSchema: emaTrendSwitchParameters,
@@ -175,6 +181,8 @@ export const emaTrendSwitchStrategy: TradingStrategy<
         parameters.slowEmaBars,
         parameters.atrPeriod,
         parameters.correlationBars,
+        parameters.trendSmaBars,
+        parameters.minAverageTradingValueKrw > 0 ? parameters.liquidityLookbackBars : 0,
       ),
     requiresCorporateActions: true,
   },
@@ -202,6 +210,7 @@ export const emaTrendSwitchStrategy: TradingStrategy<
     // 1) 지표 갱신 + 상관 워밍업 누적 (봉 시각과 함께 — pair-groups.ts 참고)
     for (const [symbol, bar] of sortedBars) {
       const symbolState = getSymbolState(state, symbol);
+      updateEntryFilter(symbolState.entryFilter, bar.close, bar.volume, (context.portfolio.positions.get(symbol)?.quantity ?? 0) > 0, parameters);
       updateEma(symbolState.fast, bar.close, parameters.fastEmaBars);
       updateEma(symbolState.slow, bar.close, parameters.slowEmaBars);
       updateAtr(symbolState.atr, bar, parameters.atrPeriod);
@@ -268,7 +277,7 @@ export const emaTrendSwitchStrategy: TradingStrategy<
           ? bar.close > position.avgEntryPrice
             ? "TRAIL_STOP"
             : "STOP"
-          : spread !== null && spread <= 0
+          : spread !== null && spread <= -parameters.exitThresholdPercent
             ? "TREND_END"
             : holdLimitReached(symbolState.holding, parameters.maxHoldBars)
               ? "TIME"
@@ -325,6 +334,9 @@ export const emaTrendSwitchStrategy: TradingStrategy<
           continue;
         }
 
+        const bar = context.bars.get(symbol)!;
+        if (!entryAllowed(symbolState.entryFilter, bar.close, parameters)) continue;
+
         const group = groupOf.get(symbol) ?? symbol;
         if (claimed.has(group)) continue;
 
@@ -335,11 +347,12 @@ export const emaTrendSwitchStrategy: TradingStrategy<
           continue;
         }
 
-        const quantity = riskQuantity(
+        if (symbolState.fast.value! - symbolState.slow.value! < parameters.entryAtrMultiplier * symbolState.atr.atr) continue;
+        const quantity = Math.min(riskQuantity(
           context.portfolio.equity,
           parameters.riskPerTradePercent,
           parameters.stopAtrMultiplier * symbolState.atr.atr,
-        );
+        ), weightCappedQuantity(context.portfolio.equity, parameters.maxPositionWeightPercent, bar.close));
         if (quantity < 1) continue;
 
         candidates.push({
@@ -388,6 +401,7 @@ export const emaTrendSwitchStrategy: TradingStrategy<
       scaleEma(symbolState.fast, ratio);
       scaleEma(symbolState.slow, ratio);
       scaleAtr(symbolState.atr, ratio);
+      scaleEntryFilter(symbolState.entryFilter, ratio);
       scaleHoldingPrices(symbolState.holding, ratio);
     }
     // 동적 그룹 재계산용 워밍업에도 분할 전 종가가 쌓여 있을 수 있다

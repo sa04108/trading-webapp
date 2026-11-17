@@ -1,3 +1,4 @@
+import { UNFILTERED_BREAKOUT_CONTROLS } from '../helpers/swing-controls.js';
 import path from 'node:path';
 import { describe, expect, vi } from 'vitest';
 import { AgentClient } from '../../src/agent/client.js';
@@ -13,7 +14,7 @@ const input: PreparationInput = {
     markets: ['KOSPI'], stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 1 }],
     rebalanceInterval: { unit: 'MONTH', value: 1 },
   },
-  period: { from: '2024-01-01', to: '2025-01-01' }, strategyId: 'range-breakout', parameters: {},
+  period: { from: '2024-01-01', to: '2025-01-01' }, strategyId: 'range-breakout', parameters: UNFILTERED_BREAKOUT_CONTROLS,
 };
 
 async function waitUntil(read: () => boolean, timeout = 60_000): Promise<void> {

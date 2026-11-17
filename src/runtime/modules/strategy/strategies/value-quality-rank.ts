@@ -16,7 +16,7 @@ import {
   safePositiveMarketCap,
 } from "./shared/fundamental-rank.js";
 import { rankDescending, type Scored } from "./shared/rank.js";
-import { planBuyPhase, planSellPhase } from "./shared/two-phase-rebalance.js";
+import { beginRankCycle, finishRankCycle, newRankRiskState, rankLiquidityReady, rankPriceWarmup, rankRiskParameters, type RankRiskState } from "./shared/rank-risk.js";
 
 /**
  * 밸류·퀄리티 랭킹 (설계 2026-07-29-quant-strategies-and-fact-store-design.md §2).
@@ -30,11 +30,11 @@ import { planBuyPhase, planSellPhase } from "./shared/two-phase-rebalance.js";
  * 연결(CFS)/별도(OFS) 는 파라미터가 아니라 **수집 시점 선택**이다 — Fact 스키마에
  * 두 기준을 함께 담을 자리가 없다. 데이터셋 하나는 한 기준만 담는다.
  */
-export const valueQualityRankParameters = z.object({
+export const valueQualityRankParameters = rankRiskParameters.extend({
   // 상한은 요청의 `risk.maxPositions` 상한(200)과 같아야 한다 — 제출 게이트가
   // topN <= maxPositions 를 요구하므로 여기가 더 크면 그 구간이 어떤 경로로도
   // 제출될 수 없고, 게이트 메시지는 도달할 수 없는 값까지 올리라고 안내한다.
-  topN: z.number().int().min(1).max(200).default(20).meta({
+  topN: z.number().int().min(1).max(200).default(30).meta({
     title: "보유 종목 수",
     description:
       "두 지표 순위 합이 작은 상위 몇 종목을 동일가중으로 보유할지 정합니다. 종목당 비중은 자본의 1/N 입니다.",
@@ -50,10 +50,7 @@ export type ValueQualityRankParameters = z.infer<
   typeof valueQualityRankParameters
 >;
 
-export interface ValueQualityRankState {
-  readonly symbols: readonly string[];
-  pendingTargets: readonly string[] | null;
-}
+export type ValueQualityRankState = RankRiskState;
 
 export interface ValueQualityMetrics {
   /** TTM EBIT / EV */
@@ -190,15 +187,17 @@ export const valueQualityRankStrategy: TradingStrategy<
   ValueQualityRankState
 > = {
   id: "value-quality-rank",
-  version: "2.4.0",
+  version: "3.0.0",
   name: "밸류·퀄리티 랭킹",
   description:
-    "이익수익률(EBIT/EV)과 자본수익률(EBIT/투입자본) 순위를 합산해 상위 N 을 동일가중 보유합니다. 상장시점 재무제표가 수집된 데이터셋에서만 동작합니다.",
+    "공시 시점의 이익수익률(EBIT/EV)과 자본수익률 순위를 합산해 분산 보유합니다. 코스피 시장 필터·거래대금·순위 여유를 적용하며 재무가 부족하면 새 순위를 추정하지 않습니다.",
   requiresFundamentals: true,
   parameterSchema: valueQualityRankParameters,
-  historyLookbackBars: () => 1,
+  historyLookbackBars: rankPriceWarmup,
   requiredRebalanceGapBars: 1,
   dataRequirements: {
+    marketIndexBars: (parameters) => parameters.marketTrendBars,
+    priceWarmupBars: rankPriceWarmup,
     fundamentalFields: CONSULTED_FIELDS,
     fundamentalLookbackQuarters: 4,
     fundamentalsReady: (snapshot, tsMs, parameters) =>
@@ -223,7 +222,7 @@ export const valueQualityRankStrategy: TradingStrategy<
   },
 
   initialize(context: StrategyInitializeContext): ValueQualityRankState {
-    return { symbols: [...context.symbols], pendingTargets: null };
+    return newRankRiskState(context.symbols);
   },
 
   onBars(
@@ -231,23 +230,13 @@ export const valueQualityRankStrategy: TradingStrategy<
     state: ValueQualityRankState,
     parameters: ValueQualityRankParameters,
   ): StrategyDecision {
-    if (state.pendingTargets !== null) {
-      const buys = planBuyPhase(state.pendingTargets, {
-        positions: context.portfolio.positions,
-        bars: context.bars,
-        equity: context.portfolio.equity,
-        topN: parameters.topN,
-        tradableSymbols: context.tradableSymbols,
-      });
-      state.pendingTargets = null;
-      return { orders: buys };
-    }
-
-    if (!context.isRebalanceBar) return { orders: [] };
+    const phase = beginRankCycle(context, state, parameters);
+    if (phase !== null) return phase;
 
     const currentQuarter = currentQuarterOrdinal(context.tsMs);
     const earningsYield: Scored[] = [];
     const returnOnCapital: Scored[] = [];
+    let evaluated = 0;
 
     for (const symbol of state.symbols) {
       // 유니버스에서 밀려난 종목은 랭킹 후보에서도 뺀다 — cross-sectional-momentum.ts
@@ -275,6 +264,8 @@ export const valueQualityRankStrategy: TradingStrategy<
       const snapshot = context.fundamentals(symbol);
       const close = context.bars.get(symbol)?.close;
       if (!snapshot || close === undefined) continue;
+      if (valueQualityRankStrategy.dataRequirements!.fundamentalsReady!(snapshot, context.tsMs, parameters)) evaluated++;
+      if (!rankLiquidityReady(context, symbol, parameters)) continue;
       const metrics = computeValueQualityMetrics(
         snapshot,
         close,
@@ -287,9 +278,8 @@ export const valueQualityRankStrategy: TradingStrategy<
       returnOnCapital.push({ symbol, score: metrics.returnOnCapital });
     }
 
-    // 재무가 아직 하나도 공시되지 않았으면 이번 공유 리밸런스 봉에서는 기존 보유를
-    // 유지한다. 데이터 없음과 전 종목 자격 미달을 구분할 근거가 없으므로 같은 경로다.
-    if (earningsYield.length === 0) return { orders: [] };
+    // 재무 입력이 없는 경우와 입력은 있으나 자격을 잃은 경우를 구분한다.
+    if (evaluated === 0) return { orders: [] };
 
     const yieldRanks = rankDescending(earningsYield, context.rng);
     const capitalRanks = rankDescending(returnOnCapital, context.rng);
@@ -301,19 +291,9 @@ export const valueQualityRankStrategy: TradingStrategy<
 
     const finalRanks = rankDescending(combined, context.rng);
     const targets = [...finalRanks.entries()]
-      .filter(([, rank]) => rank <= parameters.topN)
-      .map(([symbol]) => symbol)
-      .sort();
+      .sort((a, b) => a[1] - b[1])
+      .map(([symbol]) => symbol);
 
-    const sells = planSellPhase({
-      targets,
-      positions: context.portfolio.positions,
-      bars: context.bars,
-      equity: context.portfolio.equity,
-      topN: parameters.topN,
-    });
-    state.pendingTargets = targets.length > 0 ? targets : null;
-
-    return { orders: sells };
+    return finishRankCycle(targets, context, state, parameters);
   },
 };

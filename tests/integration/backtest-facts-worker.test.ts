@@ -1,3 +1,4 @@
+import { UNFILTERED_RANK_CONTROLS } from '../helpers/rank-controls.js';
 import { afterEach, describe, expect, vi } from 'vitest';
 import * as resources from '../../src/agent/resources.js';
 import { and, eq, gt, inArray } from 'drizzle-orm';
@@ -195,7 +196,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       seedDailyBars(ctx.container.database.db, noFactsCandles);
       const payload: BacktestRequest = {
         strategyId: 'value-quality-rank',
-        parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+        parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
         universeRule: factsUniverseRule(3),
         timeframe: '1d',
         period: { from: '2025-01-02', to: '2025-03-01' },
@@ -276,7 +277,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       const { ctx, cookie } = scenario;
       const payload: BacktestRequest = {
         strategyId: 'value-quality-rank',
-        parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+        parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
         universeRule: factsUniverseRule(2),
         timeframe: '1d',
         period: { from: '2025-01-02', to: '2025-03-01' },
@@ -320,7 +321,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       const { ctx, cookie } = scenario;
       const payload: BacktestRequest = {
         strategyId: 'value-quality-rank',
-        parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+        parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
         universeRule: factsUniverseRule(2),
         timeframe: '1d',
         period: { from: '2025-01-02', to: '2025-03-01' },
@@ -391,7 +392,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       const { ctx } = scenario;
       const payload: BacktestRequest = {
         strategyId: 'value-quality-rank',
-        parameters: { topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
+        parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
         universeRule: factsUniverseRule(1),
         timeframe: '1d',
         period: { from: '2025-01-02', to: '2025-03-01' },
@@ -591,6 +592,7 @@ describe('워커의 자본변동 팩트 배선 — 접수일이 기간 종료 �
       const payload: BacktestRequest = {
         strategyId: 'cross-sectional-momentum',
         parameters: {
+          ...UNFILTERED_RANK_CONTROLS,
           formationDays: 20,
           skipDays: 0,
           topN: 1,
@@ -790,7 +792,7 @@ describe('이익 가속·가격 확인 순위 워커 배선 — PIT 공시 경�
     );
     const payload: BacktestRequest = {
       strategyId: 'earnings-acceleration-rank',
-      parameters: { topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, priceMomentumDays: 60, priceMomentumSkipDays: 0, staleQuarters: 2 },
       universeRule: factsUniverseRule(3),
       timeframe: '1d',
       period: PERIOD,
@@ -909,7 +911,7 @@ describe('저PER·고ROE 순위 워커 배선 — PIT 공시 경계 (Task 12)', 
     ]);
     const payload: BacktestRequest = {
       strategyId: 'low-per-high-roe-rank',
-      parameters: { topN: 1, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, staleQuarters: 2 },
       universeRule: factsUniverseRule(3),
       timeframe: '1d',
       period: PERIOD,

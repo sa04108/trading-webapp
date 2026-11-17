@@ -1,3 +1,4 @@
+import { readMarketIndex } from "../modules/market-data/application/market-index-history.js";
 /**
  * 백테스트 자식 프로세스 (스펙 §5):
  * 에이전트가 만든 계산 프로세스에서 입력 로드 → 엔진 실행 → 결과 파일 생성을 수행한다.
@@ -335,6 +336,11 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     // (krx-daily-candle-repository.ts). 여기서 같은 규칙을 쓰지 않으면 하루 어긋난다(D-024 류).
     const unionSymbolSet = new Set(unionSymbols);
     const nonTradingSymbolsByTsMs = new Map<number, Set<string>>();
+    const marketIndexBars = strategy.dataRequirements?.marketIndexBars?.(parameters) ?? 0;
+    if (!Number.isSafeInteger(marketIndexBars) || marketIndexBars < 0 || marketIndexBars > 3000) throw new Error("시장 지수 준비 봉 수가 올바르지 않습니다");
+    const indexRequirement = marketIndexBars ? { from: addCalendarDays(request.period.from, -(marketIndexBars * 3 + 30)), to: request.period.to, tradeFrom: request.period.from, minimumBars: marketIndexBars } : undefined;
+    const marketIndex = indexRequirement ? readMarketIndex(db, indexRequirement) : undefined;
+    if (indexRequirement && (!symbolMaster.isRangeCovered(indexRequirement.from, indexRequirement.to) || !marketIndex)) throw new Error("KOSPI 지수 이력이 부족합니다. 데이터를 준비한 뒤 다시 실행하세요.");
     const strategyWarmupBars =
       strategy.dataRequirements?.priceWarmupBars?.(parameters) ?? 0;
     const declineWarmupBars = request.universeRule.stages.reduce(
@@ -901,6 +907,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
         ...(streamCandles
           ? { candleBatches: () => repository.getCandlesByDateBatches(candleQuery, targetBarsPerBatch) }
           : { candles }),
+        ...(marketIndex ? { marketIndex } : {}),
         initialCash: request.capital.initialCash,
         riskFreeRates: readRiskFreeRateHistory(db),
         execution: {

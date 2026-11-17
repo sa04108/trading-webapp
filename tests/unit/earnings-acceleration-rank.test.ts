@@ -1,3 +1,4 @@
+import { UNFILTERED_RANK_CONTROLS, DEFAULT_RANK_CONTROLS } from "../helpers/rank-controls.js";
 import { describe, expect, it } from 'vitest';
 import { runBacktest } from '../../src/runtime/modules/backtest/domain/engine.js';
 import { createRng } from '../../src/runtime/modules/backtest/domain/seeded-rng.js';
@@ -209,6 +210,8 @@ describe('ordinal rank 결합', () => {
 describe('이익 가속 전략', () => {
   it('스키마와 준비 데이터 요구가 정확하다', () => {
     expect(earningsAccelerationRankParameters.parse({})).toEqual({
+      ...DEFAULT_RANK_CONTROLS,
+      priceMomentumSkipDays: 21,
       topN: 40,
       priceMomentumDays: 126,
       staleQuarters: 2,
@@ -222,11 +225,12 @@ describe('이익 가속 전략', () => {
     expect(earningsAccelerationRankStrategy.dataRequirements?.fundamentalLookbackQuarters).toBe(8);
     expect(
       earningsAccelerationRankStrategy.dataRequirements?.priceWarmupBars?.({
+        ...UNFILTERED_RANK_CONTROLS, priceMomentumSkipDays: 21,
         topN: 40,
         priceMomentumDays: 60,
         staleQuarters: 2,
       }),
-    ).toBe(60);
+    ).toBe(82);
     expect(earningsAccelerationRankStrategy.dataRequirements?.requiresCorporateActions).toBe(true);
   });
 
@@ -248,7 +252,7 @@ describe('이익 가속 전략', () => {
       initialCash: 10_000,
       rng: createRng(1),
     });
-    const parameters = { topN: 1, priceMomentumDays: 60, staleQuarters: 2 };
+    const parameters = { ...UNFILTERED_RANK_CONTROLS, priceMomentumSkipDays: 0, topN: 1, priceMomentumDays: 60, staleQuarters: 2 };
 
     expect(
       earningsAccelerationRankStrategy.onBars(
@@ -291,7 +295,7 @@ describe('이익 가속 전략', () => {
       initialCash: 10_000,
       rng: createRng(1),
     });
-    const parameters = { topN: 2, priceMomentumDays: 60, staleQuarters: 2 };
+    const parameters = { ...UNFILTERED_RANK_CONTROLS, priceMomentumSkipDays: 0, topN: 2, priceMomentumDays: 60, staleQuarters: 2 };
     earningsAccelerationRankStrategy.onBars(
       strategyContext({ inputs, histories, isRebalanceBar: true }),
       state,
@@ -324,13 +328,13 @@ describe('이익 가속 전략', () => {
       earningsAccelerationRankStrategy.onBars(
         staleContext,
         state,
-        { topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
+        { ...UNFILTERED_RANK_CONTROLS, priceMomentumSkipDays: 0, topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
       ).orders,
     ).toEqual([]);
     expect(state.pendingTargets).toBeNull();
   });
 
-  it('아무도 점수를 못 내면 기존 보유를 청산하지 않고 유지한다 (판단 근거가 없으면 보유 유지)', () => {
+  it('공시가 낡아 평가할 수 없으면 기존 보유를 청산하지 않고 유지한다', () => {
     // 유일한 후보가 staleQuarters 를 넘겨 뒤처져 후보에서 빠지면 candidates 가 비고,
     // 이전 코드는 targets=[] 로 planSellPhase 가 기존 보유를 전량 SELL 했다 —
     // value-quality-rank·low-per-high-roe-rank 의 no-data hold 와 다른 방침이었다.
@@ -353,10 +357,19 @@ describe('이익 가속 전략', () => {
     const decision = earningsAccelerationRankStrategy.onBars(
       staleContext,
       state,
-      { topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
+      { ...UNFILTERED_RANK_CONTROLS, priceMomentumSkipDays: 0, topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
     );
     expect(decision.orders).toEqual([]);
     expect(state.pendingTargets).toBeNull();
+  });
+
+  it('자료를 평가할 수 있지만 가격 모멘텀이 음수면 기존 보유를 현금으로 전환한다', () => {
+    const state = earningsAccelerationRankStrategy.initialize({ symbols: ['A'], initialCash: 10000, rng: createRng(1) });
+    const decision = earningsAccelerationRankStrategy.onBars(strategyContext({
+      inputs: { A: BASE }, histories: new Map([['A', history('A', 130, 100)]]), isRebalanceBar: true,
+      positions: new Map([['A', { symbol: 'A', quantity: 10, avgEntryPrice: 100, entryCosts: 0, entryTsMs: AT }]]),
+    }), state, { ...UNFILTERED_RANK_CONTROLS, priceMomentumSkipDays: 0, topN: 1, priceMomentumDays: 60, staleQuarters: 2 });
+    expect(decision.orders).toEqual([{ symbol: 'A', side: 'SELL', quantity: 10, reason: 'REBALANCE_EXIT' }]);
   });
 
   it('리밸런스 봉이 아니고 대기 매수도 없으면 주문을 내지 않는다', () => {
@@ -370,7 +383,7 @@ describe('이익 가속 전략', () => {
     const decision = earningsAccelerationRankStrategy.onBars(
       strategyContext({ inputs, histories, isRebalanceBar: false }),
       state,
-      { topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
+      { ...UNFILTERED_RANK_CONTROLS, priceMomentumSkipDays: 0, topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
     );
     expect(decision.orders).toEqual([]);
   });
@@ -394,12 +407,12 @@ describe('이익 가속 전략', () => {
     earningsAccelerationRankStrategy.onBars(
       context,
       state,
-      { topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
+      { ...UNFILTERED_RANK_CONTROLS, priceMomentumSkipDays: 0, topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
     );
     const buy = earningsAccelerationRankStrategy.onBars(
       { ...context, isRebalanceBar: false },
       state,
-      { topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
+      { ...UNFILTERED_RANK_CONTROLS, priceMomentumSkipDays: 0, topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
     );
     expect(buy.orders.map((order) => order.symbol)).toEqual(['SPLIT']);
   });
@@ -448,7 +461,7 @@ describe('이익 가속 PIT 공시 경계', () => {
       candles: candles(),
       initialCash: 10_000,
       execution: ZERO_COST,
-      parameters: { topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
+      parameters: { ...UNFILTERED_RANK_CONTROLS, priceMomentumSkipDays: 0, topN: 1, priceMomentumDays: 60, staleQuarters: 2 },
       randomSeed: 1,
       maxPositions: 1,
       facts: facts(asOfTsMs),

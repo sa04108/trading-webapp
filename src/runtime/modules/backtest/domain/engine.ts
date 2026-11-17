@@ -1,3 +1,4 @@
+import type { MarketIndexPoint } from "../../market-data/domain/market-index.js";
 import type { Candle } from "../../market-data/domain/candle.js";
 import type {
   AnyTradingStrategy,
@@ -41,6 +42,7 @@ import type {
 } from "./types.js";
 
 export interface BacktestRunInput {
+  readonly marketIndex?: readonly MarketIndexPoint[];
   readonly riskFreeRates?: RiskFreeRateHistory;
   /** 기간·심볼 필터가 끝난 확정 봉 전체 (임의 순서 허용 — 엔진이 정렬) */
   readonly candles?: readonly Candle[];
@@ -1146,6 +1148,7 @@ function* runBacktestSteps(
       const warmupContext: StrategyBarContext = {
         tsMs,
         isRebalanceBar: false,
+        getMarketIndexHistory: () => (input.marketIndex ?? []).filter((point) => point.tsMs <= tsMs),
         bars: strategyBars,
         getHistory: (symbol) =>
           contextRetiredSymbols.has(symbol)
@@ -1196,6 +1199,7 @@ function* runBacktestSteps(
     const context: StrategyBarContext = {
       tsMs,
       isRebalanceBar,
+      getMarketIndexHistory: () => (input.marketIndex ?? []).filter((point) => point.tsMs <= tsMs),
       bars: strategyBars,
       getHistory: (symbol) =>
         contextRetiredSymbols.has(symbol)

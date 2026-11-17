@@ -1,3 +1,4 @@
+import type { MarketIndexRequirement } from "../../../../runtime/modules/market-data/domain/market-index.js";
 import { createHash } from "node:crypto";
 import type { SymbolMasterService } from "../../../../runtime/modules/market-data/application/symbol-master-service.js";
 import type { SymbolService } from "../../../../runtime/modules/market-data/application/symbol-service.js";
@@ -14,6 +15,7 @@ export class TradingDataPreparation {
   private completedKey: string | null = null;
   private message = "";
   constructor(private readonly deps: {
+    ensureMarketIndex?: (requirement: MarketIndexRequirement, shouldStop: () => boolean, onProgress: (completed: number, total: number, date: string) => void) => Promise<void>;
     master: Pick<SymbolMasterService,"ingestDate"|"ensureTradingDay"|"ensureSelectionMetrics">;
     symbols: Pick<SymbolService,"getRegisteredIdentity"|"getRegisteredIdentityByStandardCode"|"addSymbol">;
     facts: FactSyncPort;
@@ -38,6 +40,13 @@ export class TradingDataPreparation {
   }
 
   private async prepare(id:string,need:TradingDataNeed):Promise<void> {
+    if (need.marketIndex) {
+      if (!this.deps.ensureMarketIndex) throw new Error("KOSPI 지수 준비기가 없습니다");
+      await this.deps.ensureMarketIndex(need.marketIndex, () => this.closed, (completed, total, date) => {
+        this.message = `매매 데이터 준비 중 · KOSPI ${completed}/${total} (${date})`;
+        this.deps.progress(id, this.message);
+      });
+    }
     const dates=new Set(need.masterDates);
     if(need.priceRange){
       let count=0;

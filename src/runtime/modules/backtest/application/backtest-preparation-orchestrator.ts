@@ -1,3 +1,5 @@
+import { readMarketIndex } from "../../market-data/application/market-index-history.js";
+import type { MarketIndexRequirement } from "../../market-data/domain/market-index.js";
 import { AgentDataRequired } from "../../../../shared/agent-protocol.js";
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNotNull } from "drizzle-orm";
@@ -257,6 +259,7 @@ export interface PreparationReferences {
 }
 
 interface PreparationDependencies {
+  readonly ensureMarketIndex?: (requirement: MarketIndexRequirement, shouldStop: () => boolean) => Promise<void>;
   readonly references?: PreparationReferences;
   readonly database: DatabaseHandle;
   /** 중앙 서버에서는 영속 상태만 관리하고 계산 큐는 에이전트에 맡긴다. */
@@ -503,6 +506,7 @@ export class BacktestPreparationOrchestrator {
         this.getFreshPreviewDetails(input, preparationJobId)?.preview ?? null
       );
     const strategy = this.requireStrategy(input);
+    if (!this.marketIndexReady(input, strategy)) return null;
     const hash = backtestPreparationRequestHash(input, strategy);
     const completedId = preparationJobId ?? this.latestCompletedPreviewId(hash);
     if (completedId === null) return null;
@@ -538,6 +542,7 @@ export class BacktestPreparationOrchestrator {
     preparationJobId?: string,
   ): ReadyPreviewDetails | null {
     const strategy = this.requireStrategy(input);
+    if (!this.marketIndexReady(input, strategy)) return null;
     return this.previewCache.get(
       backtestPreparationRequestHash(input, strategy),
       preparationJobId,
@@ -578,6 +583,7 @@ export class BacktestPreparationOrchestrator {
       return this.getFreshPreviewDetails(input)?.preview ?? null;
     }
     const strategy = this.requireStrategy(input);
+    if (!this.marketIndexReady(input, strategy)) return null;
     const hash = backtestPreparationRequestHash(input, strategy);
     const completedId = this.latestCompletedPreviewId(hash);
     if (completedId === null) return null;
@@ -1058,6 +1064,11 @@ export class BacktestPreparationOrchestrator {
             await this.syncMarketData(jobId, [], finalPlan.price, [60, 70]);
             if (this.shouldReturnFromRun(jobId)) return;
           }
+          if (finalPlan.marketIndex) {
+            if (!this.deps.ensureMarketIndex) throw new Error("KOSPI 지수 준비기가 없습니다");
+            await this.deps.ensureMarketIndex(finalPlan.marketIndex, () => this.cancelOrStopRequested(jobId));
+            if (this.shouldReturnFromRun(jobId)) return;
+          }
           if (
             finalPlan.financial.symbols.length > 0 ||
             finalPlan.actions.symbols.length > 0
@@ -1534,6 +1545,11 @@ export class BacktestPreparationOrchestrator {
       if (!this.consumeFactReport(jobId, report)) return false;
     }
     return !this.shouldReturnFromRun(jobId);
+  }
+
+  private marketIndexReady(input: PreparationInput, strategy: AnyTradingStrategy): boolean {
+    const requirement = buildBacktestPreparationPlan({ request: preparationRequest(input), resolutionNeeds: EMPTY_NEEDS, strategy }).marketIndex;
+    return !requirement || (this.deps.symbolMaster.isRangeCovered(requirement.from, requirement.to) && readMarketIndex(this.deps.database.db, requirement) !== null);
   }
 
   /** 완료 preview가 현재 action protocol coverage를 여전히 만족하는지 부작용 없이 확인한다. */

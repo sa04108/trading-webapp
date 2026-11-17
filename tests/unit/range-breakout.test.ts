@@ -99,6 +99,7 @@ function flatWarmup(): Candle[] {
 const SIGNAL_BAR = candle(20, { open: 100, high: 106, low: 100, close: 105 });
 
 const BASE: RangeBreakoutParameters = {
+  trendSmaBars: 0, liquidityLookbackBars: 20, minAverageTradingValueKrw: 0, cooldownBars: 0, breakoutBufferAtr: 0,
   lookbackBars: 10,
   atrPeriod: 5,
   stopAtrMultiplier: 2,
@@ -328,6 +329,7 @@ function splitStopFixture(): Candle[] {
 }
 
 const SPLIT_PARAMS: RangeBreakoutParameters = {
+  trendSmaBars: 0, liquidityLookbackBars: 20, minAverageTradingValueKrw: 0, cooldownBars: 0, breakoutBufferAtr: 0,
   lookbackBars: 5,
   atrPeriod: 5,
   stopAtrMultiplier: 2,
@@ -421,4 +423,10 @@ describe('range-breakout 분할 후 돌파 기준선 조정', () => {
 
     expect(result.fills.filter((fill) => fill.side === 'BUY')).toHaveLength(0);
   });
+});
+
+it('ATR 여유폭보다 작은 돌파는 잡음으로 걸러낸다', () => {
+  const candles = [...flatWarmup(), candle(20, { open: 100, high: 101.5, low: 99, close: 101.2 }), candle(21, { open: 101.2, high: 101.5, low: 100, close: 101.2 })];
+  expect(run(candles, { ...BASE, breakoutBufferAtr: 0 }).fills.some((fill) => fill.side === 'BUY')).toBe(true);
+  expect(run(candles, { ...BASE, breakoutBufferAtr: 0.5 }).fills.some((fill) => fill.side === 'BUY')).toBe(false);
 });

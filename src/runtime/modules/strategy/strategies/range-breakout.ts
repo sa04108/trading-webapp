@@ -1,3 +1,4 @@
+import { entryFilterParameters, newEntryFilter, updateEntryFilter, entryAllowed, scaleEntryFilter, type EntryFilterState } from "./shared/entry-filters.js";
 import { z } from "zod";
 import type { OrderIntent } from "../../backtest/domain/types.js";
 import type {
@@ -58,11 +59,13 @@ import {
 // 원칙으로 `.meta()` 에 둔다. 재현성 해시는 이 두 필드를 제외한다
 // (strategySourceHash — 문구만 고쳐도 "전략 변경" 으로 보이면 안 된다).
 export const rangeBreakoutParameters = z.object({
-  lookbackBars: z.number().int().min(2).max(200).default(20).meta({
+  ...entryFilterParameters,
+  lookbackBars: z.number().int().min(2).max(200).default(55).meta({
     title: "돌파 기준 봉 수",
     description:
       "직전 N개 봉의 최고가를 넘어서면 매수 진입합니다. 크게 잡으면 큰 추세만 잡아 신호가 줄고, 작게 잡으면 신호가 잦아지되 잔신호가 늘어납니다. 일봉 기준으로 20이면 약 1달입니다.",
   }),
+  breakoutBufferAtr: z.number().min(0).max(20).default(0.5).meta({ title: "돌파 여유폭 (ATR 배수)", description: "직전 고가에 변동성 배수만큼 여유폭을 더합니다." }),
   atrPeriod: z.number().int().min(2).max(100).default(14).meta({
     title: "변동성(ATR) 계산 기간",
     description:
@@ -108,6 +111,7 @@ interface SymbolState {
   /** 직전 lookbackBars 개 봉의 고가 — 현재 봉은 판정 **후에** 넣는다 */
   priorHighs: RollingMaxState;
   holding: HoldingState;
+  entryFilter: EntryFilterState;
 }
 
 export interface RangeBreakoutState {
@@ -123,7 +127,7 @@ function getSymbolState(
     symbolState = {
       atr: newAtr(),
       priorHighs: newRollingMax(),
-      holding: newHolding(),
+      holding: newHolding(), entryFilter: newEntryFilter(),
     };
     state.bySymbol.set(symbol, symbolState);
   }
@@ -135,16 +139,16 @@ export const rangeBreakoutStrategy: TradingStrategy<
   RangeBreakoutState
 > = {
   id: "range-breakout",
-  version: "2.0.4",
+  version: "3.0.0",
   name: "전고점 돌파",
   description:
-    "직전 N개 봉의 최고가를 종가가 넘어서면 사고, 고점을 따라 올라가는 손절선에 걸리면 팝니다. " +
-    "모든 창이 봉 수입니다 — 일봉 기준으로 돌파 기준 20봉은 약 1달입니다.",
+    "장기 상승 추세에서 직전 N개 봉의 최고가를 변동성 여유폭 이상 돌파하면 사고, 고점을 따라 올라가는 손절선에 걸리면 팝니다. " +
+    "기본 돌파 기간은 55거래일이며 거래대금 필터와 청산 후 재진입 대기를 적용합니다.",
   parameterSchema: rangeBreakoutParameters,
   historyLookbackBars: () => 1,
   dataRequirements: {
     priceWarmupBars: (parameters) =>
-      Math.max(parameters.lookbackBars, parameters.atrPeriod),
+      Math.max(parameters.lookbackBars, parameters.atrPeriod, parameters.trendSmaBars, parameters.minAverageTradingValueKrw > 0 ? parameters.liquidityLookbackBars : 0),
     requiresCorporateActions: true,
   },
 
@@ -168,6 +172,7 @@ export const rangeBreakoutStrategy: TradingStrategy<
     const channelHighBySymbol = new Map<string, number | null>();
     for (const [symbol, bar] of sortedBars) {
       const symbolState = getSymbolState(state, symbol);
+      updateEntryFilter(symbolState.entryFilter, bar.close, bar.volume, (context.portfolio.positions.get(symbol)?.quantity ?? 0) > 0, parameters);
       channelHighBySymbol.set(
         symbol,
         rollingMaxValue(symbolState.priorHighs, parameters.lookbackBars),
@@ -260,13 +265,14 @@ export const rangeBreakoutStrategy: TradingStrategy<
         symbolState.holding.pendingEntry = false;
       }
 
+      if (!entryAllowed(symbolState.entryFilter, bar.close, parameters)) continue;
       if (symbolState.atr.atr === null) {
         continue;
       }
       const channelHigh = channelHighBySymbol.get(symbol) ?? null;
       // 창이 아직 lookbackBars 개로 차지 않았으면 기준선이 없다 — 진입하지 않는다
       if (channelHigh === null) continue;
-      if (bar.close <= channelHigh) continue;
+      if (bar.close <= channelHigh + parameters.breakoutBufferAtr * symbolState.atr.atr) continue;
 
       // 리스크 기준 수량과 명목 비중 상한의 min — 둘 중 하나만 쓰면 안 되는 이유는
       // position-sizing.ts 의 weightCappedQuantity 주석 참고
@@ -306,6 +312,7 @@ export const rangeBreakoutStrategy: TradingStrategy<
     if (symbolState === undefined) return;
     scaleRollingMax(symbolState.priorHighs, ratio);
     scaleAtr(symbolState.atr, ratio);
+    scaleEntryFilter(symbolState.entryFilter, ratio);
     scaleHoldingPrices(symbolState.holding, ratio);
   },
 };
