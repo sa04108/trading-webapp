@@ -40,6 +40,7 @@ import {
 } from "../../../../runtime/modules/intraday/domain/engine.js";
 import { intradayValidations, intradayValidationTrials } from "../../../shared/db/intraday-validation-schema.js";
 import { aggregateChartBars } from "./chart-bars.js";
+import { BoundedIntradayCache } from "./intraday-cache.js";
 import { BacktestDeletionError, BacktestDeletionService } from "../../backtest/application/backtest-deletion-service.js";
 
 export class IntradayError extends Error {
@@ -131,6 +132,7 @@ const runColumns = {
 
 export class IntradayService {
   private readonly now: () => number;
+  private readonly chartCache = new BoundedIntradayCache<{ bars: IntradayBar[]; gaps: ReturnType<typeof intradayGaps> }>(200_000, 64);
   private readonly controllers = new Map<string, AbortController>();
   private readonly cancelled = new Set<string>();
   private readonly recovering = new Set<string>();
@@ -254,30 +256,31 @@ export class IntradayService {
   private bounds(
     period: IntradayPeriod,
     backtest = false,
+    nowMs = this.now(),
   ): { fromMs: number; toMs: number } {
     if (
-      period.from < intradayRetentionDate(this.now()) ||
-      period.to > intradayDate(this.now())
+      period.from < intradayRetentionDate(nowMs) ||
+      period.to > intradayDate(nowMs)
     )
       throw new IntradayError(
         "분봉은 최근 365일 범위에서 조회할 수 있습니다.",
         400,
       );
-    if (backtest && period.to >= intradayDate(this.now()))
+    if (backtest && period.to >= intradayDate(nowMs))
       throw new IntradayError(
         "백테스트 종료일은 KST 기준 어제까지 지정하세요.",
         400,
       );
-    if (backtest && period.from < intradayFirstBacktestDate(this.now()))
+    if (backtest && period.from < intradayFirstBacktestDate(nowMs))
       throw new IntradayError(
-        `하루 전체가 보관된 ${intradayFirstBacktestDate(this.now())} 이후부터 백테스트할 수 있습니다.`,
+        `하루 전체가 보관된 ${intradayFirstBacktestDate(nowMs)} 이후부터 백테스트할 수 있습니다.`,
         400,
       );
     const range = intradayPeriodMs(period);
     return {
       fromMs: Math.max(
         range.fromMs,
-        this.now() - INTRADAY_RETENTION_DAYS * 86_400_000,
+        nowMs - INTRADAY_RETENTION_DAYS * 86_400_000,
       ),
       toMs: range.toMs,
     };
@@ -377,25 +380,35 @@ export class IntradayService {
     period: IntradayPeriod,
     timeframe: IntradayChartTimeframe,
   ): Promise<IntradayChart> {
-    const { fromMs, toMs } = this.bounds(period);
-    const data = await this.options.store.read(
-      symbol,
-      fromMs,
-      Math.min(toMs, this.now() - 60_000),
-    );
-    const bars = aggregateChartBars(data.bars, timeframe);
+    const nowMs = this.now();
+    const { fromMs, toMs } = this.bounds(period, false, nowMs);
+    const readToMs = Math.min(toMs, nowMs - MINUTE_MS);
+    const data = await this.options.store.read(symbol, fromMs, readToMs);
+    const key = JSON.stringify([
+      symbol, data.revision, period.from, period.to,
+      Math.ceil(fromMs / MINUTE_MS), Math.floor(readToMs / MINUTE_MS), timeframe,
+    ]);
+    let cached = this.chartCache.get(key);
+    if (!cached) {
+      cached = {
+        bars: aggregateChartBars(data.bars, timeframe).map((bar) => ({ ...bar })),
+        gaps: intradayGaps(data.bars, this.tradingDates(period)),
+      };
+      this.chartCache.set(key, cached, cached.bars.length + cached.gaps.length);
+    }
+    const bars = cached.bars.map((bar) => ({ ...bar }));
     // 당일은 아직 도착할 수 없는 미래 봉을 누락으로 세지 않는다.
-    const gaps = intradayGaps(data.bars, this.tradingDates(period))
-      .filter((g) => g.fromMs < this.now() - 120_000)
+    const gaps = cached.gaps
+      .filter((g) => g.fromMs < nowMs - 120_000)
       .map((g) => {
         const end = Math.min(
           g.toMs,
-          Math.floor((this.now() - 60_000) / 60_000) * 60_000,
+          Math.floor((nowMs - MINUTE_MS) / MINUTE_MS) * MINUTE_MS,
         );
         return {
           ...g,
           toMs: end,
-          missingMinutes: Math.max(0, (end - g.fromMs) / 60_000),
+          missingMinutes: Math.max(0, (end - g.fromMs) / MINUTE_MS),
         };
       });
     return {
@@ -832,6 +845,7 @@ export class IntradayService {
   }
   async close(): Promise<void> {
     this.closing = true;
+    this.chartCache.clear();
     clearInterval(this.timer);
     for (const controller of this.controllers.values()) controller.abort();
     await Promise.allSettled([
