@@ -178,6 +178,27 @@ describe('preparation reference lifecycle', () => {
     expect(loaded.statusCode).toBe(200);
     expect(loaded.json().draft.payload.lastPreview.result.preparationJobId).toBe(preparationId);
 
+    // 초안 조회에서도 현재 전략 및 미리보기 검증 버전이 바뀐 결과는 재사용하지 않는다.
+    const db = ctx.container.database.sqlite;
+    const receipt = db.prepare('SELECT * FROM preparation_preview_cache WHERE job_id = ?').get(preparationId) as { job_id: string; data_revision: number; validation_version: string; fundamental_symbols_json: string };
+    const restoreReceipt = () => db.prepare('INSERT INTO preparation_preview_cache VALUES (?, ?, ?, ?)').run(receipt.job_id, receipt.data_revision, receipt.validation_version, receipt.fundamental_symbols_json);
+    const job = db.prepare('SELECT request_hash AS hash FROM backtest_preparation_jobs WHERE id = ?').get(preparationId) as { hash: string };
+    const loadDraft = () => ctx.app.inject({ method: 'GET', url: '/api/v1/backtests/wizard-draft/universe', cookies: { session: cookie } });
+    const assertStale = async () => {
+      const response = await loadDraft();
+      expect(response.statusCode).toBe(200);
+      expect(response.json().draft.payload).toEqual({ universeRule: request.universeRule, lastPreview: null });
+    };
+    db.prepare('UPDATE preparation_preview_cache SET validation_version = ? WHERE job_id = ?').run('old-version', preparationId);
+    await assertStale();
+    db.prepare('UPDATE preparation_preview_cache SET validation_version = ? WHERE job_id = ?').run(receipt.validation_version, preparationId);
+    db.prepare('UPDATE backtest_preparation_jobs SET request_hash = ? WHERE id = ?').run('old-strategy-hash', preparationId);
+    restoreReceipt();
+    await assertStale();
+    db.prepare('UPDATE backtest_preparation_jobs SET request_hash = ? WHERE id = ?').run(job.hash, preparationId);
+    restoreReceipt();
+    expect((await loadDraft()).json().draft.payload.lastPreview.result.preparationJobId).toBe(preparationId);
+
     const otherSaved = await ctx.app.inject({
       method: 'PUT',
       url: '/api/v1/backtests/wizard-draft/universe',
@@ -223,6 +244,25 @@ describe('preparation reference lifecycle', () => {
       },
     });
     expect(sourceStrategyDraft.statusCode).toBe(200);
+
+    // 복제 미리보기 참조를 최초 연결해도 사용자가 저장한 검토 단계는 유지한다.
+    const wizard = ctx.container.backtestWizardService.create(userId, jobId);
+    const wizardDraftUrl = `/api/v1/backtests/wizard-draft`;
+    const strategySaved = await ctx.app.inject({
+      method: 'PUT', url: `${wizardDraftUrl}/strategy?wizardId=${wizard.id}`, cookies: { session: cookie },
+      payload: { strategyId: request.strategyId, parameters: Object.fromEntries(Object.entries(request.parameters).map(([key, value]) => [key, String(value)])), currentStep: 'review' },
+    });
+    expect(strategySaved.statusCode).toBe(200);
+    const universeSaved = await ctx.app.inject({
+      method: 'PUT', url: `${wizardDraftUrl}/universe?wizardId=${wizard.id}`, cookies: { session: cookie },
+      payload: { universeRule: request.universeRule, lastPreview: { preparationJobId: preparationId } },
+    });
+    expect(universeSaved.statusCode).toBe(200);
+    expect(universeSaved.json().draft.payload.lastPreview.result.preparationJobId).toBe(preparationId);
+    expect(ctx.container.backtestWizardService.get(userId, wizard.id)).toMatchObject({
+      currentStep: 'review', link: `/backtests/new/review?wizard=${wizard.id}`,
+    });
+    ctx.container.backtestWizardService.cancel(userId, wizard.id);
 
     const secondClone = await ctx.app.inject({
       method: 'POST',
@@ -285,13 +325,21 @@ describe('preparation reference lifecycle', () => {
     const preparationId = started.json<{ job: { id: string } }>().job.id;
     await waitForPreparation(ctx, preparationId);
 
+    // 완료 작업의 검증 결과를 게시한 뒤 저장 본문만 바꿔 경고 복원을 확인한다.
+    const ready = await ctx.app.inject({ method: 'POST', url: '/api/v1/backtests/universe-preview', cookies: { session: cookie },
+      payload: { universeRule: request.universeRule, period: request.period, strategyId: request.strategyId, parameters: request.parameters } });
+    expect(ready.statusCode).toBe(200);
+
     const preparation = ctx.container.database.sqlite.prepare(
       'SELECT preview_json FROM backtest_preparation_jobs WHERE id = ?',
     ).get(preparationId) as { preview_json: string };
     const preview = JSON.parse(preparation.preview_json) as Record<string, unknown>;
+    const receipt = ctx.container.database.sqlite.prepare('SELECT * FROM preparation_preview_cache WHERE job_id = ?').get(preparationId) as { job_id: string; data_revision: number; validation_version: string; fundamental_symbols_json: string };
     ctx.container.database.sqlite.prepare(
       'UPDATE backtest_preparation_jobs SET preview_json = ? WHERE id = ?',
     ).run(JSON.stringify({ ...preview, warnings }), preparationId);
+    ctx.container.database.sqlite.prepare('INSERT INTO preparation_preview_cache VALUES (?, ?, ?, ?)')
+      .run(receipt.job_id, receipt.data_revision, receipt.validation_version, receipt.fundamental_symbols_json);
 
     // 요청에는 큰 경고 본문 대신 완료된 서버 준비 작업 ID만 보낸다.
     const saved = await ctx.app.inject({

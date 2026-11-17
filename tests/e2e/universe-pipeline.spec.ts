@@ -279,7 +279,7 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
   const startedJob = (await first.json()).job as { id: string; phase: string };
   expect(startedJob.phase).toBe('FILING_DISCOVERY');
   const wizardId = new URL(page.url()).searchParams.get('wizard')!;
-  await page.goto('/jobs');
+  await page.getByRole('link', { name: '작업', exact: true }).click();
   await expect.poll(async () => page.evaluate(async (id) => {
     const response = await fetch(`/api/v1/backtests/wizards/${id}`);
     return (await response.json()).wizard.phase;

@@ -11,6 +11,7 @@ import { backtestWizardDrafts, backtestWizardJobs } from "../../../shared/db/pre
 import type { Clock } from "../../../../runtime/shared/clock.js";
 import { PreparationReferenceService } from "./preparation-reference-service.js";
 import { BacktestWizardError, requireEditableWizard } from "./backtest-wizard-state.js";
+import { PreparationInputError, type BacktestPreparationOrchestrator } from "../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js";
 
 export interface BacktestWizardDraft<
   S extends BacktestWizardDraftStep = BacktestWizardDraftStep,
@@ -27,6 +28,7 @@ export class BacktestWizardDraftService {
   constructor(
     private readonly database: DatabaseHandle,
     private readonly clock: Clock,
+    private readonly preparation: Pick<BacktestPreparationOrchestrator, "getFreshPreviewDetails">,
   ) {
     this.references = new PreparationReferenceService(database);
   }
@@ -52,17 +54,24 @@ export class BacktestWizardDraftService {
     let raw: unknown;
     try {
       raw = JSON.parse(row.payloadJson) as unknown;
-      if (step === "universe" && raw !== null && typeof raw === "object") {
-        raw = {
-          ...raw,
-          lastPreview: this.references.getWizardPreview(userId, context),
-        };
-      }
     } catch (error) {
       throw new Error(
         `저장된 백테스트 위저드 ${step} 초안 JSON이 손상되었습니다.`,
         { cause: error },
       );
+    }
+    if (step === "universe" && raw !== null && typeof raw === "object") {
+      const storedPreview = this.references.getWizardPreview(userId, context);
+      let lastPreview = null;
+      if (storedPreview?.result.preparationJobId) {
+        try {
+          const fresh = this.preparation.getFreshPreviewDetails(storedPreview.params, storedPreview.result.preparationJobId);
+          if (fresh) lastPreview = { params: storedPreview.params, result: { ...fresh.preview, fundamentalSymbols: fresh.fundamentalSymbols } };
+        } catch (error) {
+          if (!(error instanceof PreparationInputError)) throw error;
+        }
+      }
+      raw = { ...raw, lastPreview };
     }
     const parsed = backtestWizardDraftPayloadSchemas[step].safeParse(raw);
     if (!parsed.success)
@@ -131,7 +140,7 @@ export class BacktestWizardDraftService {
         if (wizard) {
           const strategy = step === "strategy" ? payload as BacktestWizardDraftWritePayloadMap["strategy"] : null;
           this.database.db.update(backtestWizardJobs).set({ updatedAtMs,
-            ...(strategy?.currentStep ? { currentStep: strategy.currentStep } : {}),
+            currentStep: strategy?.currentStep ?? wizard.currentStep,
           }).where(eq(backtestWizardJobs.id, context)).run();
         }
         return this.get(userId, contextId, step)!;

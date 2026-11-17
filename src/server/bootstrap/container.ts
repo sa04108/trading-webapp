@@ -460,6 +460,7 @@ export function createContainer(
   const backtestWizardDraftService = new BacktestWizardDraftService(
     database,
     clock,
+    backtestPreparationOrchestrator,
   );
   const backtestWizardService = new BacktestWizardService(database, clock, {
     backtest: (id) => jobOrchestrator.cancel(id),
