@@ -1,4 +1,4 @@
-import { getIntradayStrategy } from "../../../../shared/schemas/intraday-strategies.js";
+import { getIntradayStrategy, resolveIntradayRequest } from "../../../../shared/schemas/intraday-strategies.js";
 import { missingRateWarning } from "../../backtest/domain/sharpe.js";
 import { buildIntradayDailyReport } from "./daily-evaluation.js";
 import { RISK_FREE_RATE_SEED } from "../../backtest/domain/risk-free-rate-seed.js";
@@ -8,7 +8,6 @@ import {
   MINUTE_MS,
   intradayBarSchema,
   intradayDate,
-  intradayRequestSchema,
   type IntradayBar,
   type IntradayGap,
   type IntradayRequest,
@@ -113,7 +112,8 @@ export interface IntradayEngineInput {
 export function runIntradayBacktest(
   input: IntradayEngineInput,
 ): IntradayResult {
-  const request = intradayRequestSchema.parse(input.request);
+  const request = resolveIntradayRequest(input.request);
+  const { maxDailyEntries = 2, cooldownMinutes = 30, maxHoldingMinutes = 120 } = request.parameters;
   const expected = new Set(input.tradingDates);
   if (!expected.size) throw new Error("기간에 확인된 거래일이 없습니다.");
   const bars = input.bars
@@ -142,6 +142,7 @@ export function runIntradayBacktest(
     warnings: [
       "토스 제공 시세의 거래소 구성은 확인되지 않았습니다. 지정 시간 구간을 사용하는 모의 체결입니다.",
       "지표와 시초 범위는 매일 초기화합니다. 손절·익절은 확정된 신호 봉 종가로 판단하며 체결 지연·비용은 입력한 가정입니다.",
+      "하루 진입 한도는 실제 포지션 개설 횟수이며, 완전 청산 이후 재진입 대기를 적용합니다. 최대 보유 시간에는 관측된 1분봉으로 청산을 요청하므로 누락·체결 지연으로 실제 보유 시간이 길어질 수 있습니다.",
       "미체결 매도 주문이 있으면 청산을 계속 시도하며 후속 신호로 주문 지연·만료 시간을 연장하지 않습니다.",
     ],
     processedBars: 0,
@@ -193,7 +194,9 @@ export function runIntradayBacktest(
     peak = cash;
   let holdingMinutes = 0,
     completedPnl = 0,
-    previousVolume = 0;
+    previousVolume = 0,
+    dailyEntries = 0,
+    lastExitAt = -Infinity;
   const dailyEquities = new Map<string, number>();
   const execution = request.execution;
   const event = (
@@ -295,6 +298,8 @@ export function runIntradayBacktest(
       if (quantity > 0) break;
       day = barDay;
       previousVolume = 0;
+      dailyEntries = 0;
+      lastExitAt = -Infinity;
     }
     settlePending(openAt);
     if (pending && openAt >= pending.eligibleAtMs) {
@@ -341,6 +346,8 @@ export function runIntradayBacktest(
         if (side === "BUY") {
           if (!quantity) {
             entryAt = openAt;
+            // 첫 매수 체결만 진입 한도를 사용하며 같은 주문의 부분체결은 중복 계산하지 않는다.
+            dailyEntries++;
             totalEntryCost = 0;
             tradeProceeds = 0;
           }
@@ -354,6 +361,7 @@ export function runIntradayBacktest(
           tradeProceeds += gross - commission - tax;
           if (!quantity) {
             result.metrics.completedTrades++;
+            lastExitAt = openAt;
             completedPnl += tradeProceeds - totalEntryCost;
             holdingMinutes += (openAt - entryAt) / MINUTE_MS;
             averagePrice = 0;
@@ -366,7 +374,13 @@ export function runIntradayBacktest(
     settlePending(bar.endMs);
     const signalBar = aggregated.get(bar.endMs);
     const decision = signalModel.onMinute(bar, signalBar);
-    if (signalBar) {
+    // 시간 제한은 실제 첫 체결부터 센다. 관측된 1분봉에서 청산 신호를 내고 기존 지연·만료 규칙으로 체결한다.
+    const holdingExpired = quantity > 0 && bar.endMs - entryAt >= maxHoldingMinutes * MINUTE_MS;
+    if (holdingExpired) {
+      if (pending?.signal.side === "BUY") event("CANCELLED", bar.endMs, "최대 보유 시간으로 미체결 매수를 취소했습니다.");
+      order("SELL", bar.endMs, "MAX_HOLD", bar.close, bar.volume);
+    }
+    if (signalBar && !holdingExpired) {
       const pnl =
         averagePrice > 0 ? (signalBar.close / averagePrice - 1) * 100 : 0;
       let exitReason: IntradaySignal["reason"] | null = null;
@@ -387,6 +401,8 @@ export function runIntradayBacktest(
         !quantity &&
         !pending &&
         minute < ENTRY_CUTOFF &&
+        dailyEntries < maxDailyEntries &&
+        bar.endMs >= lastExitAt + cooldownMinutes * MINUTE_MS &&
         decision.entry
       ) {
         order("BUY", bar.endMs, decision.entry, bar.close, bar.volume);

@@ -2,7 +2,7 @@ import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { InfoHint } from "@/components/info-hint";
-import { getIntradayStrategy } from "@shared/schemas/intraday-strategies";
+import { getIntradayStrategy, INTRADAY_TRADE_CONTROL_FIELDS } from "@shared/schemas/intraday-strategies";
 import type { IntradayResult } from "@shared/schemas/intraday";
 import { ReproductionInfoCard, ReproductionInfoRows } from "../backtests/reproduction-info-card";
 import { SharpeBasisInfo } from "../backtests/sharpe-basis-info";
@@ -21,10 +21,10 @@ export function IntradayReproductionInfo({ result }: {
     if (key === "allocationPct") return ["매수 비중", `현재 현금의 ${number(value)}%`];
     if (key === "stopLossPct") return ["손절 기준", `평균 매수가 대비 −${number(value)}%`];
     if (key === "takeProfitPct") return ["익절 기준", `평균 매수가 대비 +${number(value)}%`];
-    const field = strategy.fields.find((candidate) => candidate.key === key);
+    const field = [...INTRADAY_TRADE_CONTROL_FIELDS, ...strategy.fields].find((candidate) => candidate.key === key);
     if (key === "breakoutBps") return ["돌파 여유", rate(value)];
-    const label = field?.label.replace(/ \((분|봉|배)\)$/, "") ?? key;
-    const unit = field?.label.match(/\((분|봉|배)\)$/)?.[1]
+    const label = field?.label.replace(/ \((분|봉|배|회)\)$/, "") ?? key;
+    const unit = field?.label.match(/\((분|봉|배|회)\)$/)?.[1]
       ?? (key === "fast" || key === "slow" ? "봉" : key === "bandStdDev" ? "배" : "");
     return [label, `${number(value)}${unit}`];
   });

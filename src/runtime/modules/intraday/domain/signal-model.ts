@@ -35,6 +35,7 @@ export function createIntradaySignalModel(request: IntradayRequest) {
   let gains = 0,
     losses = 0,
     changes = 0;
+  let recoveryRemaining = 0;
   const reset = () => {
     count = 0;
     fast = 0;
@@ -57,6 +58,7 @@ export function createIntradaySignalModel(request: IntradayRequest) {
     gains = 0;
     losses = 0;
     changes = 0;
+    recoveryRemaining = 0;
   };
   return {
     onMinute(bar: IntradayBar, signalBar?: IntradayBar): Decision {
@@ -90,7 +92,9 @@ export function createIntradaySignalModel(request: IntradayRequest) {
       const close = signalBar.close;
       count++;
       if (request.strategyId === "intraday-ema") {
-        const { fast: fastPeriod, slow: slowPeriod } = request.parameters;
+        const { fast: fastPeriod, slow: slowPeriod, volumePeriod = 4, volumeMultiplier = 1.3 } = request.parameters;
+        const previousSlow = slow;
+        const meanVolume = volumes.reduce((sum, value) => sum + value, 0) / volumePeriod;
         fast =
           count === 1 ? close : fast + (2 / (fastPeriod + 1)) * (close - fast);
         slow =
@@ -100,11 +104,17 @@ export function createIntradaySignalModel(request: IntradayRequest) {
           count >= slowPeriod &&
           previousDifference !== null &&
           previousDifference <= 0 &&
-          difference > 0
+          difference > 0 &&
+          slow > previousSlow &&
+          volumes.length === volumePeriod &&
+          signalBar.volume > 0 &&
+          signalBar.volume >= meanVolume * volumeMultiplier
             ? "EMA"
             : null;
         const exit = count >= slowPeriod && difference < 0 ? "EMA" : null;
         previousDifference = difference;
+        volumes.push(signalBar.volume);
+        if (volumes.length > volumePeriod) volumes.shift();
         return { entry, exit };
       }
       if (request.strategyId === "intraday-orb") {
@@ -169,7 +179,7 @@ export function createIntradaySignalModel(request: IntradayRequest) {
         previousVwap = vwap;
         return { entry, exit };
       }
-      const { bandPeriod, bandStdDev, rsiPeriod, oversold } =
+      const { bandPeriod, bandStdDev, rsiPeriod, oversold, recoveryBars = 3 } =
         request.parameters;
       if (previousClose !== null) {
         const change = close - previousClose;
@@ -220,13 +230,17 @@ export function createIntradaySignalModel(request: IntradayRequest) {
         middle !== null &&
         close < middle &&
         rsi !== null &&
-        previousClose <= previousLower &&
-        previousRsi <= oversold &&
+        recoveryRemaining > 0 &&
         close > lower &&
         rsi > previousRsi
           ? "BOLLINGER_RSI"
           : null;
       const exit = middle !== null && close >= middle ? "BOLLINGER_RSI" : null;
+      // 과매도 확인 봉 이후 N개 신호 봉을 허용하며, 조건이 지속되면 매 봉 기한을 갱신한다.
+      if (entry || exit) recoveryRemaining = 0;
+      else if (lower !== null && rsi !== null && close <= lower && rsi <= oversold)
+        recoveryRemaining = recoveryBars;
+      else if (recoveryRemaining > 0) recoveryRemaining--;
       previousClose = close;
       previousLower = lower;
       previousRsi = rsi;

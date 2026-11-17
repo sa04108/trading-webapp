@@ -11,7 +11,7 @@ import { DEFAULT_TRADE_SORT, nextTradeSort, tradeSortSummary, type TradeSort, ty
 
 const REASONS: Record<string, string> = {
   EMA: "이동평균", ORB: "시가 범위 돌파", VWAP: "거래량 가중 평균가",
-  BOLLINGER_RSI: "볼린저 밴드·RSI", STOP_LOSS: "손절", TAKE_PROFIT: "익절", DAY_EXIT: "장 마감 청산",
+  BOLLINGER_RSI: "볼린저 밴드·RSI", MAX_HOLD: "최대 보유 시간", STOP_LOSS: "손절", TAKE_PROFIT: "익절", DAY_EXIT: "장 마감 청산",
 };
 const STATUSES = { EXPIRED: "만료", CANCELLED: "취소", UNFILLED: "미체결" } as const;
 const valueOf = (trade: IntradayTrade, key: TradeSortKey): number => ({

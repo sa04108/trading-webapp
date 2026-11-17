@@ -27,11 +27,16 @@ const request: IntradayRequest = {
   strategyId: "intraday-ema",
   symbol: "005930",
   period: { from: date, to: date },
-  timeframe: "1m",
+  timeframe: "15m",
   initialCash: 100_000,
   parameters: {
     fast: 2,
     slow: 3,
+    volumePeriod: 2,
+    volumeMultiplier: 1,
+    maxDailyEntries: 2,
+    cooldownMinutes: 30,
+    maxHoldingMinutes: 120,
     allocationPct: 95,
     stopLossPct: 3,
     takeProfitPct: 6,
@@ -48,10 +53,10 @@ const request: IntradayRequest = {
 };
 const bars: IntradayBar[] = Array.from({ length: 380 }, (_, i) => ({
   endMs: Date.parse(`${date}T09:00:00+09:00`) + (i + 1) * 60_000,
-  open: i < 5 ? 1000 : 1010,
-  high: i < 5 ? 1000 : 1010,
-  low: i < 5 ? 1000 : 1010,
-  close: i < 5 ? 1000 : 1010,
+  open: i < 45 ? 1000 : 1010,
+  high: i < 45 ? 1000 : 1010,
+  low: i < 45 ? 1000 : 1010,
+  close: i < 45 ? 1000 : 1010,
   volume: 1000,
 }));
 const cleanups: (() => Promise<void>)[] = [];
@@ -150,6 +155,41 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
       const stored = database.db.select().from(intradayRuns).all().find((run) => run.id === record.id);
       expect(stored?.resultJson).toBe(record.resultJson);
     }
+  });
+
+  // 과거 결과 조회와 신규 실행의 주기 제한은 서로 다른 호환성 경계다.
+  it("과거 1분봉 결과를 보존하고 새 1분봉 EMA 실행은 수집 전에 거부한다", async () => {
+    const fetch = vi.fn<IntradaySource["fetch"]>(async () => bars);
+    const { app, service, database } = await fixture(fetch);
+    const legacyRequest = {
+      ...request, timeframe: "1m",
+      parameters: { fast: 2, slow: 3, allocationPct: 95, stopLossPct: 3, takeProfitPct: 6 },
+    };
+    const legacyId = randomUUID();
+    const resultJson = JSON.stringify({ request: legacyRequest, strategyVersion: "1.0.0", metrics: { returnPct: 0, maxDrawdownPct: 0, dailyMaxDrawdownPct: 0 } });
+    database.db.insert(intradayRuns).values({ id: legacyId, ownerId: "owner", status: "COMPLETED", requestJson: JSON.stringify(legacyRequest), resultJson, createdAtMs: now, updatedAtMs: now }).run();
+    const detail = await app.inject({ method: "GET", url: `/intraday/runs/${legacyId}`, headers });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().result).toEqual(JSON.parse(resultJson));
+    expect(database.db.select().from(intradayRuns).all().find((run) => run.id === legacyId)?.resultJson).toBe(resultJson);
+    const response = await app.inject({ method: "POST", url: "/intraday/runs", headers, payload: legacyRequest });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain("15분봉");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(database.db.select().from(intradayCollections).all()).toHaveLength(0);
+    const requestJson = JSON.stringify({ ...legacyRequest, timeframe: "15m" });
+    database.db.insert(intradayRuns).values({ id: "legacy-queued", ownerId: "owner", status: "QUEUED", requestJson, createdAtMs: now, updatedAtMs: now }).run();
+    await service.recover();
+    const recovered = service.getRun("owner", "legacy-queued");
+    expect(recovered.status).toBe("FAILED");
+    expect(recovered.error).toContain("2.0.0");
+    expect(recovered.error).toContain("재설정");
+    expect(recovered.result).toBeUndefined();
+    const stored = database.db.select().from(intradayRuns).all();
+    expect(stored.find((run) => run.id === "legacy-queued")?.requestJson).toBe(requestJson);
+    expect(stored.find((run) => run.id === legacyId)?.resultJson).toBe(resultJson);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(database.db.select().from(intradayCollections).all()).toHaveLength(0);
   });
 
   // 과거 2,000봉 제한으로 1년 보관 자료를 앞부분부터 탐색할 수 없던 회귀를 보호한다.

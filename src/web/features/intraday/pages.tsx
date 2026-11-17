@@ -42,6 +42,8 @@ import {
 } from "@/components/ui/select";
 import {
   INTRADAY_STRATEGIES,
+  INTRADAY_TRADE_CONTROL_FIELDS,
+  intradayRunRequestSchema,
   getIntradayStrategy,
   type IntradayStrategyId,
 } from "../../../shared/schemas/intraday-strategies";
@@ -60,7 +62,6 @@ import { api, postJson } from "@/lib/api-client";
 import {
   intradayDate,
   intradayFirstBacktestDate,
-  intradayRequestSchema,
   intradayRetentionDate,
   type IntradayRequest,
   type IntradayRun,
@@ -97,7 +98,7 @@ const defaults = (
     strategyId,
     symbol: "",
     period: { from: intradayFirstBacktestDate(), to: yesterday() },
-    timeframe: "5m",
+    timeframe: getIntradayStrategy(strategyId).defaultTimeframe,
     initialCash: 10_000_000,
     parameters: { ...getIntradayStrategy(strategyId).defaults },
     execution: {
@@ -192,6 +193,7 @@ function RangeFields({
   setTimeframe,
   max,
   min = intradayRetentionDate(),
+  permittedTimeframes = ["1m", "5m", "15m"],
 }: {
   from: string;
   to: string;
@@ -201,6 +203,7 @@ function RangeFields({
   setTimeframe: (v: IntradayTimeframe) => void;
   max: string;
   min?: string;
+  permittedTimeframes?: readonly IntradayTimeframe[];
 }) {
   return (
     <div className="grid gap-3 sm:grid-cols-3">
@@ -234,9 +237,12 @@ function RangeFields({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="1m">1분</SelectItem>
-            <SelectItem value="5m">5분</SelectItem>
-            <SelectItem value="15m">15분</SelectItem>
+            {!permittedTimeframes.includes(timeframe) && (
+              <SelectItem value={timeframe}>{Number.parseInt(timeframe, 10)}분 (기존 설정 · 변경 필요)</SelectItem>
+            )}
+            {permittedTimeframes.map((value) => (
+              <SelectItem key={value} value={value}>{Number.parseInt(value, 10)}분</SelectItem>
+            ))}
           </SelectContent>
         </Select>
       </Field>
@@ -677,31 +683,14 @@ export function IntradayNewPage() {
         from={request.period.from}
         to={request.period.to}
         timeframe={request.timeframe}
+        permittedTimeframes={strategy.timeframes}
         setFrom={(from) =>
           setRequest((r) => ({ ...r, period: { ...r.period, from } }))
         }
         setTo={(to) =>
           setRequest((r) => ({ ...r, period: { ...r.period, to } }))
         }
-        setTimeframe={(timeframe) =>
-          setRequest(
-            (r) =>
-              ({
-                ...r,
-                timeframe,
-                parameters:
-                  timeframe === "15m" &&
-                  r.strategyId === "intraday-ema" &&
-                  r.parameters.slow > 24
-                    ? {
-                        ...r.parameters,
-                        slow: 12,
-                        fast: Math.min(r.parameters.fast, 11),
-                      }
-                    : r.parameters,
-              }) as IntradayRequest,
-          )
-        }
+        setTimeframe={(timeframe) => setRequest((r) => ({ ...r, timeframe }))}
         max={yesterday()}
       />
       <Card>
@@ -717,6 +706,7 @@ export function IntradayNewPage() {
                     ({
                       ...r,
                       strategyId: next.id,
+                      timeframe: next.timeframes.includes(r.timeframe) ? r.timeframe : next.defaultTimeframe,
                       parameters: { ...next.defaults },
                     }) as IntradayRequest,
                 );
@@ -747,13 +737,18 @@ export function IntradayNewPage() {
             지표는 매일 초기화합니다. 09:00~15:20, 진입 마감 15:10, 청산 신호
             15:15. 청산 미체결 시 보유 상태로 해당 일에 시뮬레이션을 중단합니다.
           </p>
+          <p className="text-sm text-muted-foreground">
+            하루 진입 횟수는 실제 포지션을 연 횟수이며 부분 체결은 한 번으로 셉니다.
+            재진입 대기는 전량 청산 후 시작합니다. 최대 보유 시간은 확정된 1분봉에서 확인한 뒤
+            설정된 지연을 적용해 청산하므로 정확한 보유 시간을 보장하지 않습니다.
+          </p>
           <div className="grid gap-3 sm:grid-cols-3">
-            {strategy.fields.map((field) => (
+            {[...INTRADAY_TRADE_CONTROL_FIELDS, ...strategy.fields].map((field) => (
               <div key={field.key}>
                 {numberField(
                   field.label,
                   (request.parameters as Record<string, number>)[field.key] ??
-                    0,
+                    (strategy.defaults as Record<string, number>)[field.key] ?? 0,
                   (n) => params(field.key, n),
                   String(field.step ?? 1),
                   field,
@@ -828,7 +823,7 @@ export function IntradayNewPage() {
       <Button
         disabled={submit.isPending || (!!search.get("clone") && !loadedClone)}
         onClick={() => {
-          const parsed = intradayRequestSchema.safeParse(request);
+          const parsed = intradayRunRequestSchema.safeParse(request);
           if (!parsed.success) {
             setValidation(
               parsed.error.issues.map((i) => i.message).join(" · "),

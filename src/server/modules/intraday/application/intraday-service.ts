@@ -1,3 +1,4 @@
+import { intradayRunRequestSchema } from "../../../../shared/schemas/intraday-strategies.js";
 import { createHash, randomUUID } from "node:crypto";
 import { readRiskFreeRateHistory } from "../../../../runtime/modules/market-data/infrastructure/sqlite-risk-free-rate-store.js";
 import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
@@ -215,6 +216,9 @@ export class IntradayService {
     for (const row of runs) {
       try {
         const request = intradayRequestSchema.parse(JSON.parse(row.requestJson));
+        // 이전 실행에 새 기본값을 조용히 적용하지 않는다. v2 제출 시에는 제어값을 모두 저장한다.
+        if (request.parameters.maxDailyEntries === undefined || request.parameters.cooldownMinutes === undefined || request.parameters.maxHoldingMinutes === undefined)
+          throw new IntradayError("분봉 전략 실행 규칙이 2.0.0으로 변경되어 이전 미완료 작업을 재개할 수 없습니다. 재설정 및 복제로 새 실행을 시작해 주세요.");
         this.bounds(request.period, true);
         this.options.db.update(intradayRuns).set({ status: "QUEUED", error: null, updatedAtMs: this.now() })
           .where(eq(intradayRuns.id, row.id)).run();
@@ -665,7 +669,7 @@ export class IntradayService {
   }
   submit(ownerId: string, raw: unknown): IntradayRun {
     this.checkCapacity();
-    const request = intradayRequestSchema.parse(raw);
+    const request = intradayRunRequestSchema.parse(raw);
     this.bounds(request.period, true);
     const id = randomUUID(),
       now = this.now();
@@ -709,6 +713,7 @@ export class IntradayService {
     return row;
   }
   createInternalRun(ownerId: string, request: IntradayRequest, id: string): void {
+    request = intradayRunRequestSchema.parse(request);
     this.checkCapacity();
     this.bounds(request.period, true);
     const now = this.now();
@@ -765,6 +770,7 @@ export class IntradayService {
         .run();
     try {
       signal.throwIfAborted();
+      request = intradayRunRequestSchema.parse(request);
       const { fromMs, toMs } = this.bounds(request.period, true);
       const tradingDates = this.tradingDates(request.period);
       if (!tradingDates.length)

@@ -6,7 +6,7 @@ import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.
 import type { IntradayRequest } from '../../src/shared/schemas/intraday.js';
 
 const daily: BacktestRequest = { strategyId: 'range-breakout', parameters: {}, universeRule: { markets: ['KOSPI'], stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 20 }], rebalanceInterval: { unit: 'NONE', value: 1 } }, period: { from: '2025-01-01', to: '2025-03-01' }, capital: { initialCash: 10000000, currency: 'KRW' }, execution: { fillTiming: 'NEXT_BAR_OPEN', commissionProfileId: 'kr-equity-default', slippageProfileId: 'fixed-5bps' }, risk: { maxPositions: 20 }, randomSeed: 42 };
-const intraday: IntradayRequest = { mode: 'intraday', strategyId: 'intraday-ema', symbol: '005930', period: { from: '2025-01-01', to: '2025-01-02' }, timeframe: '1m', initialCash: 100000, parameters: { fast: 2, slow: 5, allocationPct: 95, stopLossPct: 3, takeProfitPct: 6 }, execution: { holdingPolicy: 'DAY_ONLY', commissionBps: 1, taxBps: 1, slippageBps: 1, latencyMs: 1000, orderExpiryMinutes: 3, maxParticipationPct: 10 } };
+const intraday: IntradayRequest = { mode: 'intraday', strategyId: 'intraday-ema', symbol: '005930', period: { from: '2025-01-01', to: '2025-01-02' }, timeframe: '15m', initialCash: 100000, parameters: { fast: 2, slow: 5, volumePeriod: 4, volumeMultiplier: 1.3, maxDailyEntries: 2, cooldownMinutes: 30, maxHoldingMinutes: 120, allocationPct: 95, stopLossPct: 3, takeProfitPct: 6 }, execution: { holdingPolicy: 'DAY_ONLY', commissionBps: 1, taxBps: 1, slippageBps: 1, latencyMs: 1000, orderExpiryMinutes: 3, maxParticipationPct: 10 } };
 
 describe('configuration search HTTP', () => {
   it('인증과 카탈로그, 영속 미리보기의 멱등성과 입력 검증을 보장한다', async ({ ctx, cookie, admin }) => {

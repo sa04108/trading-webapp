@@ -87,7 +87,7 @@ describe('IS 후보 선택', () => {
 // 일봉 계획만 검사하면 분봉 요청이 일봉 스키마로 검증되거나 교차 필드 조건을 건너뛰는 회귀를 놓친다.
 describe('분봉 검증 계획의 요청 경계', () => {
   const intraday = intradayRequestSchema.parse({ mode: 'intraday', strategyId: 'intraday-ema', symbol: '005930',
-    period: { from: '2026-01-05', to: '2026-10-30' }, timeframe: '5m', initialCash: 10_000_000,
+    period: { from: '2026-01-05', to: '2026-10-30' }, timeframe: '15m', initialCash: 10_000_000,
     parameters: { fast: 3, slow: 5, allocationPct: 95, stopLossPct: 1.5, takeProfitPct: 3 },
     execution: { holdingPolicy: 'DAY_ONLY', commissionBps: 1.5, taxBps: 20, slippageBps: 5, latencyMs: 1000, orderExpiryMinutes: 3, maxParticipationPct: 1 } });
   it('분봉 원본을 검증하고 후보마다 EMA 관계와 일중 준비 시간을 적용한다', () => {

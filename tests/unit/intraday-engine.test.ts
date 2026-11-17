@@ -1,4 +1,4 @@
-import { INTRADAY_STRATEGIES } from "../../src/shared/schemas/intraday-strategies.js";
+import { INTRADAY_STRATEGIES, intradayRunRequestSchema } from "../../src/shared/schemas/intraday-strategies.js";
 import { describe, expect, it } from "vitest";
 import {
   aggregateIntradayBars,
@@ -14,7 +14,7 @@ import { computeMetrics } from "../../src/runtime/modules/backtest/domain/metric
 
 const date = "2026-11-12";
 const at = (time: string, day = date) => Date.parse(`${day}T${time}:00+09:00`);
-function request(): IntradayRequest {
+function request(): Extract<IntradayRequest, { strategyId: "intraday-ema" }> {
   return {
     mode: "intraday",
     strategyId: "intraday-ema",
@@ -25,6 +25,11 @@ function request(): IntradayRequest {
     parameters: {
       fast: 2,
       slow: 3,
+      volumePeriod: 2,
+      volumeMultiplier: 1,
+      maxDailyEntries: 10,
+      cooldownMinutes: 0,
+      maxHoldingMinutes: 380,
       allocationPct: 95,
       stopLossPct: 50,
       takeProfitPct: 100,
@@ -50,7 +55,7 @@ function bars(day = date): IntradayBar[] {
     volume: 1000,
   }));
 }
-const run = (data = bars(), req = request(), tradingDates = [date]) =>
+const run = (data = bars(), req: IntradayRequest = request(), tradingDates = [date]) =>
   runIntradayBacktest({
     request: req,
     bars: data,
@@ -119,7 +124,7 @@ describe("분봉 정보 시각과 주문 생명주기", () => {
   });
   it("미래 거래량으로 주문 수량을 늘리지 않고 부분체결 잔량을 만료시킨다", () => {
     const data = bars();
-    data[5]!.volume = 100;
+    for (const i of [3, 4, 5]) data[i]!.volume = 100;
     for (let i = 7; i < data.length; i++) data[i]!.volume = i <= 9 ? 20 : 0;
     const result = run(
       [...data, ...bars("2026-11-13")],
@@ -136,7 +141,7 @@ describe("분봉 정보 시각과 주문 생명주기", () => {
     expect(result.processedBars).toBe(380);
     expect(result.warnings.join(" ")).toContain("당일 청산에 실패");
     const generous = bars();
-    generous[5]!.volume = 100;
+    for (const i of [3, 4, 5]) generous[i]!.volume = 100;
     generous[7]!.volume = 1_000_000;
     expect(run(generous).fills[0]!.qty).toBe(10);
   });
@@ -324,7 +329,7 @@ describe("분봉 정보 시각과 주문 생명주기", () => {
     });
     const result = run(data, req);
     expect(result.request.strategyId).toBe(fixture.strategyId);
-    expect(result.strategyVersion).toBe("1.0.0");
+    expect(result.strategyVersion).toBe("2.0.0");
     expect(result.signals[0]).toMatchObject({
       reason: fixture.reason,
       atMs: at(fixture.at),
@@ -340,9 +345,9 @@ describe("분봉 정보 시각과 주문 생명주기", () => {
   });
   it("새 전략 기본값과 기존 EMA 요청을 보존하고 잘못 섞인 파라미터와 불가능한 준비 시간을 거부한다", () => {
     for (const definition of INTRADAY_STRATEGIES) {
-      const parsed = intradayRequestSchema.parse({
+      const parsed = intradayRunRequestSchema.parse({
         ...request(),
-        timeframe: "5m",
+        timeframe: definition.defaultTimeframe,
         strategyId: definition.id,
         parameters: definition.defaults,
       });
@@ -372,4 +377,55 @@ describe("분봉 정보 시각과 주문 생명주기", () => {
       }).success,
     ).toBe(true);
   });
+  // 기존 단일 진입 사례는 부분체결 중복 집계, 한도 초기화와 청산 후 재진입 대기를 구별하지 못한다.
+  it("실제 포지션 개설만 하루 한도에 반영하고 다음 거래일에 초기화한다", () => {
+    const oscillating = (day: string) => bars(day).map((bar, i) => {
+      const close = i < 3 ? 1000 : i < 18 && Math.floor((i - 3) / 3) % 2 === 0 ? 1010 : 990;
+      return { ...bar, open: close, high: close, low: close, close, volume: i === 5 || i === 6 ? 20 : 1000 };
+    });
+    const nextDay = "2026-11-13";
+    const data = [...oscillating(date), ...oscillating(nextDay)];
+    const limited = run(data, { ...request(), period: { from: date, to: nextDay }, parameters: { ...request().parameters, maxDailyEntries: 2 } }, [date, nextDay]);
+    for (const day of [date, nextDay]) {
+      const buys = limited.fills.filter((fill) => fill.side === "BUY" && fill.atMs < at("15:20", day) && fill.atMs >= at("09:00", day));
+      expect(buys.length).toBeGreaterThan(2);
+      expect(new Set(buys.map((fill) => fill.orderId)).size).toBe(2);
+      expect(limited.signals.filter((signal) => signal.side === "BUY" && signal.atMs >= at("09:00", day) && signal.atMs < at("15:20", day)).map((signal) => signal.atMs)).toEqual([at("09:04", day), at("09:10", day)]);
+    }
+    const unfilled = oscillating(date).map((bar, i) => i >= 5 && i <= 7 ? { ...bar, volume: 0 } : bar);
+    const retried = run(unfilled, { ...request(), parameters: { ...request().parameters, maxDailyEntries: 1 } });
+    expect(retried.fills.filter((fill) => fill.side === "BUY").map((fill) => fill.signalAtMs)).toEqual([at("09:10")]);
+    const cooling = run(oscillating(date), { ...request(), parameters: { ...request().parameters, cooldownMinutes: 10 } });
+    expect(cooling.signals.filter((signal) => signal.side === "BUY").map((signal) => signal.atMs)).toEqual([at("09:04")]);
+    expect(cooling.position.quantity).toBe(0);
+  });
+  // 신호 봉 사이에도 최대 보유 시간이 지나지만 누락 구간에 가격·체결을 만들면 안 된다.
+  it("최대 보유 시간에 관측된 1분봉으로 청산하고 누락·미체결 시 잔량을 보존한다", () => {
+    const req = { ...request(), timeframe: "5m" as const, parameters: { ...request().parameters, maxHoldingMinutes: 5 } };
+    const data = bars().map((bar, i) => {
+      const close = i < 15 ? 1000 : 1010;
+      return { ...bar, open: close, high: close, low: close, close };
+    });
+    const result = run(data, req);
+    expect(result.fills[0]).toMatchObject({ side: "BUY", atMs: at("09:21") });
+    expect(result.signals.find((signal) => signal.reason === "MAX_HOLD")).toMatchObject({ side: "SELL", atMs: at("09:26") });
+    expect(result.fills.at(-1)).toMatchObject({ side: "SELL", atMs: at("09:27"), reason: "MAX_HOLD" });
+    expect(result.position.quantity).toBe(0);
+    const missing = run(data.filter((bar) => bar.endMs < at("09:26") || bar.endMs > at("09:29")), req);
+    expect(missing.signals.find((signal) => signal.reason === "MAX_HOLD")?.atMs).toBe(at("09:30"));
+    expect(missing.fills.at(-1)?.atMs).toBe(at("09:31"));
+    const illiquid = run(data.map((bar) => bar.endMs >= at("09:26") ? { ...bar, volume: 0 } : bar), req);
+    expect(illiquid.fills.every((fill) => fill.side === "BUY")).toBe(true);
+    expect(illiquid.position.quantity).toBeGreaterThan(0);
+    expect(illiquid.warnings.join(" ")).toContain("당일 청산에 실패");
+  });
+  it("기존 요청을 읽되 새 실행의 봉 주기와 불가능한 밴드 조합을 검증한다", () => {
+    const old = request();
+    expect(intradayRequestSchema.parse(old)).toEqual(old);
+    expect(intradayRunRequestSchema.safeParse(old).success).toBe(false);
+    const boll = { ...old, strategyId: "intraday-bollinger-rsi", parameters: { bandPeriod: 3, bandStdDev: 2, rsiPeriod: 2, oversold: 30, allocationPct: 50, stopLossPct: 1, takeProfitPct: 2 } };
+    expect(intradayRequestSchema.safeParse(boll).success).toBe(true);
+    expect(intradayRunRequestSchema.safeParse(boll).success).toBe(false);
+  });
+
 });

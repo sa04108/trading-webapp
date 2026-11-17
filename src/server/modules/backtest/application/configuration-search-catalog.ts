@@ -1,7 +1,7 @@
 import { randomInt } from "node:crypto";
 import { backtestRequestSchema, MAX_RANDOM_SEED, type BacktestRequest } from "../../../../shared/schemas/backtest-request.js";
-import { intradayRequestSchema, type IntradayRequest } from "../../../../shared/schemas/intraday.js";
-import { getIntradayStrategy } from "../../../../shared/schemas/intraday-strategies.js";
+import type { IntradayRequest } from "../../../../shared/schemas/intraday.js";
+import { getIntradayStrategy, INTRADAY_TRADE_CONTROL_FIELDS, intradayRunRequestSchema } from "../../../../shared/schemas/intraday-strategies.js";
 import type { ConfigurationSearchCatalog, ConfigurationSearchConfig, ConfigurationSearchField, ConfigurationSearchRequest, SearchValue } from "../../../../shared/schemas/configuration-search.js";
 import type { StrategyRegistry } from "../../../../runtime/modules/strategy/application/strategy-registry.js";
 import { listCostProfiles, listSlippageProfiles } from "../../../../runtime/modules/backtest/domain/cost-profiles.js";
@@ -13,9 +13,10 @@ const recommendedParameters: Record<string, [number, number]> = {
   topN: [10, 40], fastEmaBars: [5, 20], slowEmaBars: [20, 60], entryThresholdPercent: [0.1, 1],
   correlationBars: [40, 120], correlationThreshold: [0.3, 0.7], rsiPeriod: [7, 21], entryRsi: [20, 35], exitRsi: [50, 70],
   formationDays: [126, 252], skipDays: [5, 21], staleQuarters: [1, 4], priceMomentumDays: [60, 180],
-  fast: [5, 20], slow: [20, 60], openingMinutes: [5, 30], entryWindowMinutes: [30, 120], breakoutBps: [5, 30],
-  volumeMultiplier: [1, 2], trendPeriod: [10, 40], volumePeriod: [5, 20], bandPeriod: [10, 30],
-  bandStdDev: [1.5, 2.5], oversold: [20, 35], allocationPct: [50, 95], stopLossPct: [0.5, 3], takeProfitPct: [1, 6],
+  fast: [2, 6], slow: [7, 16], openingMinutes: [5, 30], entryWindowMinutes: [90, 180], breakoutBps: [0, 15],
+  volumeMultiplier: [1, 2], trendPeriod: [4, 12], volumePeriod: [2, 8], bandPeriod: [10, 30],
+  recoveryBars: [1, 4], maxDailyEntries: [1, 3], cooldownMinutes: [15, 60], maxHoldingMinutes: [30, 120],
+  bandStdDev: [1.5, 2.5], oversold: [25, 40], allocationPct: [25, 60], stopLossPct: [0.5, 3], takeProfitPct: [1, 6],
 };
 const round = (value: number) => Number(value.toFixed(8));
 function numeric(key: string, label: string, group: NumberField["group"], current: SearchValue, min: number, max: number, step: number, recommended?: [number, number], allowUnset = false, description?: string): NumberField {
@@ -70,8 +71,8 @@ export function dailySearchCatalog(sourceJobId: string, request: BacktestRequest
 
 export function intradaySearchCatalog(sourceJobId: string, request: IntradayRequest): ConfigurationSearchCatalog {
   const strategy = getIntradayStrategy(request.strategyId), fields: ConfigurationSearchField[] = [];
-  const parameters = [...strategy.fields, { key: "allocationPct", label: "투자 비율 (%)", min: 1, max: 100, step: 0.1 }, { key: "stopLossPct", label: "손절 (%)", min: 0.1, max: 50, step: 0.1 }, { key: "takeProfitPct", label: "익절 (%)", min: 0.1, max: 100, step: 0.1 }];
-  for (const field of parameters) fields.push(numeric(`parameters.${field.key}`, field.label, "strategy", (request.parameters as unknown as Record<string, number>)[field.key]!, field.min, field.max, field.step ?? 1, recommendedParameters[field.key]));
+  const parameters = [...strategy.fields, ...INTRADAY_TRADE_CONTROL_FIELDS, { key: "allocationPct", label: "투자 비율 (%)", min: 1, max: 100, step: 0.1 }, { key: "stopLossPct", label: "손절 (%)", min: 0.1, max: 50, step: 0.1 }, { key: "takeProfitPct", label: "익절 (%)", min: 0.1, max: 100, step: 0.1 }];
+  for (const field of parameters) fields.push(numeric(`parameters.${field.key}`, field.label, "strategy", (request.parameters as unknown as Record<string, number>)[field.key] ?? (strategy.defaults as Record<string, number>)[field.key]!, field.min, field.max, field.step ?? 1, recommendedParameters[field.key]));
   const executionFields: [keyof IntradayRequest["execution"], string, number, number, number, [number, number]][] = [
     ["commissionBps", "수수료 (bps)", 0, 100, 0.01, [0, 5]], ["taxBps", "매도세 (bps)", 0, 100, 0.01, [15, 30]], ["slippageBps", "슬리피지 (bps)", 0, 100, 0.01, [0, 10]],
     ["latencyMs", "주문 지연 (ms)", 1, 60000, 1, [100, 2000]], ["orderExpiryMinutes", "주문 유효 기간 (분)", 1, 10, 1, [1, 5]], ["maxParticipationPct", "거래량 참여 상한 (%)", 0.1, 10, 0.1, [0.1, 2]],
@@ -93,7 +94,7 @@ function getValue(request: ConfigurationSearchRequest, key: string): SearchValue
   return value === undefined ? null : value as SearchValue;
 }
 function normalize(request: ConfigurationSearchRequest, strategies: StrategyRegistry): ConfigurationSearchRequest {
-  if (request.mode === "intraday") return intradayRequestSchema.parse(request);
+  if (request.mode === "intraday") return intradayRunRequestSchema.parse(request);
   for (const stage of request.universeRule.stages) {
     const record = stage as unknown as Record<string, unknown>;
     if (stage.criterion !== "DECLINE") delete record.lookbackTradingDays;

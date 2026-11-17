@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
-import { getIntradayStrategy } from "../../../../shared/schemas/intraday-strategies.js";
+import { getIntradayStrategy, intradayRunRequestSchema } from "../../../../shared/schemas/intraday-strategies.js";
 import { intradayRequestSchema, type IntradayRequest, type IntradayResult } from "../../../../shared/schemas/intraday.js";
 import { buildPeriodValidationPlan, getValidationOptimization, periodValidationConfigSchema, selectValidationCandidate, evaluateValidationCandidate, type PeriodValidationDto, type PeriodValidationPlan, type ValidationMetrics, type ValidationStatus, type ValidationRole, type ValidationSkipReason } from "../../../../shared/schemas/period-validation.js";
 import { summarizeIntradayTrades } from "../../../../shared/intraday-trades.js";
@@ -22,8 +22,9 @@ export class IntradayValidationService {
     const source = this.runs.getRunRequest(owner, sourceId);
     if (source.status !== "COMPLETED") throw new IntradayError("완료된 백테스트에서 검증을 시작할 수 있습니다.");
     const config = periodValidationConfigSchema.parse(raw);
-    const plan = buildPeriodValidationPlan(source.request, config);
-    return { source: source.request, config, plan };
+    const request = intradayRunRequestSchema.parse(source.request);
+    const plan = buildPeriodValidationPlan(request, config);
+    return { source: request, config, plan };
   }
   async create(owner: string, sourceId: string, raw: unknown): Promise<PeriodValidationDto> {
     const { source, config, plan } = this.preview(owner, sourceId, raw);
