@@ -2,7 +2,7 @@ import { expect, it, vi } from "vitest";
 import { pino } from "pino";
 import { openDatabase } from "../../src/runtime/shared/db/database.js";
 import { AgentDataQueue } from "../../src/server/modules/agents/application/agent-data-queue.js";
-import { ProviderRequestBlockedError } from "../../src/server/shared/provider-request-policy.js";
+import { ProviderRequestBlockedError, SqliteProviderRequestPolicy } from "../../src/server/shared/provider-request-policy.js";
 
 it.each(["PENDING_PUBLICATION", "RETRY_BACKOFF"])("%s 대기는 기존 진행률로 전달하고 예약 시각에 자동으로 작업을 재개한다", async (reason) => {
   const database = openDatabase(":memory:");
@@ -154,5 +154,52 @@ it('이전 목록 미관측 차단은 재조회로 복구하고 실제 해석 �
     queue.tick();
     await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(2));
     expect(collect).toHaveBeenCalledTimes(2);
+  } finally { await queue.stop(); database.close(); }
+});
+
+it('공식 달력이 보강된 KRX 미확보 요청만 원 요청 범위로 다시 평가한다', async () => {
+  const database = openDatabase(':memory:');
+  const collect = vi.fn().mockResolvedValue(undefined);
+  const queue = new AgentDataQueue(database, { ensureLatest: async () => ({ version: 2 }) } as never,
+    collect, vi.fn(), pino({ enabled: false }));
+  const future = Date.now() + 86_400_000;
+  const key = (date: string) => JSON.stringify({ provider: 'KRX', namespace: 'krx', endpoint: '/market', parameters: { basDd: date.replaceAll('-', '') } });
+  const evidence = (date: string, state = 'UNKNOWN') => JSON.stringify({ calendar: { state, evidence: `공식 달력 미확보:${date};https://example.test` }, fetchedAtMs: 123 });
+  const error = (date: string, reason = 'PENDING_PUBLICATION', marker = 'KRX_EMPTY_PENDING', state = 'UNKNOWN') =>
+    `${reason}: ${key(date)} (${marker}:${evidence(date, state)})`;
+  const policy = new SqliteProviderRequestPolicy(database.sqlite);
+  const permit = policy.authorize({ provider: 'KRX', namespace: 'krx', endpoint: '/market', parameters: { basDd: '20141129' } },
+    { kind: 'REQUIREMENT', evidence: `KRX_EMPTY_PENDING:${evidence('2014-11-29')}` });
+  const fingerprintError = (fingerprint: string, date: string) =>
+    new ProviderRequestBlockedError('PENDING_PUBLICATION', fingerprint, `KRX_EMPTY_PENDING:${evidence(date)}`).message;
+  const cases = [
+    { job: 'old', input: { kind: 'MARKET' as const, dates: ['2014-11-29'] }, error: fingerprintError(permit.fingerprint, '2014-11-29'), resume: true, status: 'QUEUED' },
+    { job: 'missing-plan', input: { kind: 'MARKET' as const, dates: ['2014-11-29', '2014-12-03'] }, error: fingerprintError('f'.repeat(64), '2014-11-29'), resume: false, status: 'QUEUED' },
+    { job: 'wrong-plan-date', input: { kind: 'MARKET' as const, dates: ['2014-11-28', '2014-12-03'] }, error: fingerprintError(permit.fingerprint, '2014-11-28'), resume: false, status: 'QUEUED' },
+    { job: 'new', input: { kind: 'SELECTION' as const, dates: ['2014-11-29'] }, error: error('2014-11-29', 'BLOCKED_SOURCE_REQUIREMENT', 'KRX_CALENDAR_UNAVAILABLE'), resume: true, status: 'BLOCKED' },
+    { job: 'index', input: { kind: 'MARKET_INDEX' as const, from: '2014-11-28', to: '2014-11-30', tradeFrom: '2014-11-28', minimumBars: 1 }, error: error('2014-11-29'), resume: true, status: 'QUEUED' },
+    { job: 'outside', input: { kind: 'MARKET' as const, dates: ['2014-11-28'] }, error: error('2014-11-29'), resume: false, status: 'QUEUED' },
+    { job: 'unknown', input: { kind: 'MARKET' as const, dates: ['2013-11-29'] }, error: error('2013-11-29'), resume: false, status: 'QUEUED' },
+    { job: 'open', input: { kind: 'MARKET' as const, dates: ['2014-11-29', '2014-12-01'] }, error: error('2014-11-29', 'PENDING_PUBLICATION', 'KRX_EMPTY_PENDING', 'OPEN'), resume: false, status: 'QUEUED' },
+    { job: 'backoff', input: { kind: 'SELECTION' as const, dates: ['2014-11-29', '2014-12-01'] }, error: error('2014-11-29', 'RETRY_BACKOFF'), resume: false, status: 'QUEUED' },
+    { job: 'malformed', input: { kind: 'MARKET' as const, dates: ['2014-11-29', '2014-12-02'] }, error: `PENDING_PUBLICATION: ${key('2014-11-29')} (KRX_EMPTY_PENDING:{)`, resume: false, status: 'QUEUED' },
+  ];
+  try {
+    for (const entry of cases) {
+      queue.request('PREPARATION', entry.job, 1, entry.input);
+      database.sqlite.prepare(`UPDATE agent_data_requests SET status = ?, next_attempt_at_ms = ?, error = ?
+        WHERE id = (SELECT request_id FROM agent_data_waits WHERE job_id = ?)`).run(entry.status, future, entry.error, entry.job);
+    }
+    queue.recover();
+    queue.recover();
+    for (const entry of cases) {
+      const row = database.sqlite.prepare(`SELECT status, next_attempt_at_ms, error, request_json FROM agent_data_requests
+        WHERE id = (SELECT request_id FROM agent_data_waits WHERE job_id = ?)`).get(entry.job) as { request_json: string };
+      expect(row).toEqual({ status: entry.resume ? 'QUEUED' : entry.status,
+        next_attempt_at_ms: entry.resume ? 0 : future, error: entry.resume ? null : entry.error,
+        request_json: JSON.stringify(entry.input) });
+    }
+    queue.tick();
+    await vi.waitFor(() => expect(collect).toHaveBeenCalledWith(cases[0]!.input, expect.any(Function), expect.any(Function)));
   } finally { await queue.stop(); database.close(); }
 });

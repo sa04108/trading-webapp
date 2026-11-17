@@ -13,7 +13,7 @@ export interface KrxTradingCalendar {
 
 /** 공식 연별 휴장일 원문이 있는 연도만 판정한다. 목록 밖 연도를 평일만 보고 개장으로 추측하지 않는다. */
 export function createOfficialKrxTradingCalendar(): KrxTradingCalendar {
-  const years = new Map<string, { closed: Set<string>; hash: string }>();
+  const years = new Map<string, { closed: Set<string>; hash: string; retrievedAt: string }>();
   for (const [year, saved] of Object.entries(seed.years)) {
     if (createHash("sha256").update(saved.responseJson).digest("hex") !== saved.responseSha256)
       throw new Error(`KRX 공식 달력 원문 해시 검증 실패: ${year}`);
@@ -26,7 +26,8 @@ export function createOfficialKrxTradingCalendar(): KrxTradingCalendar {
         throw new Error(`KRX 공식 달력 날짜 오류: ${year}`);
       closed.add(row.calnd_dd);
     }
-    years.set(year, { closed, hash: saved.responseSha256 });
+    years.set(year, { closed, hash: saved.responseSha256,
+      retrievedAt: "retrievedAt" in saved ? saved.retrievedAt : seed.retrievedAt });
   }
   return {
     classify(isoDate) {
@@ -36,7 +37,7 @@ export function createOfficialKrxTradingCalendar(): KrxTradingCalendar {
       const closed = day === 0 || day === 6 || year.closed.has(isoDate);
       return {
         state: closed ? "CLOSED" : "OPEN",
-        evidence: `${seed.sourceUrl};year=${isoDate.slice(0, 4)};sha256=${year.hash};retrieved=${seed.retrievedAt};rules=${seed.rulesUrl}`,
+        evidence: `${seed.sourceUrl};year=${isoDate.slice(0, 4)};sha256=${year.hash};retrieved=${year.retrievedAt};rules=${seed.rulesUrl}`,
       };
     },
   };

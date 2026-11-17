@@ -172,11 +172,15 @@ export function createKrxHistoricalUniverseSource(
     const isoDate = `${basDd.slice(0, 4)}-${basDd.slice(4, 6)}-${basDd.slice(6, 8)}`;
     const calendar = options.tradingCalendar.classify(isoDate, market);
     if (calendar.state === "CLOSED") return null;
-    return { kind: "REQUIREMENT", evidence: `KRX_EMPTY_PENDING:${JSON.stringify({ calendar, fetchedAtMs })}` };
+    const reason = calendar.state === "UNKNOWN" ? "KRX_CALENDAR_UNAVAILABLE" : "KRX_EMPTY_PENDING";
+    return { kind: "REQUIREMENT", evidence: `${reason}:${JSON.stringify({ calendar, fetchedAtMs })}` };
   }
 
   function authorizeSource(path: string, basDd: string, state: ProviderSourceState) {
     const key = { provider: "KRX" as const, namespace, endpoint: path, parameters: { basDd } };
+    // 공식 달력 결손은 같은 시세 원문을 다시 받아도 해소되지 않으므로 게시 재시도를 만들지 않는다.
+    if (state.evidence.startsWith("KRX_CALENDAR_UNAVAILABLE:"))
+      throw new ProviderRequestBlockedError("BLOCKED_SOURCE_REQUIREMENT", JSON.stringify(key), state.evidence);
     const pending = state.evidence.startsWith("KRX_EMPTY_PENDING:");
     if (state.kind !== "MISSING" && !options.requestPolicy)
       throw new ProviderRequestBlockedError(pending ? "PENDING_PUBLICATION" : "BLOCKED_SOURCE_REQUIREMENT", JSON.stringify(key), state.evidence);

@@ -4,6 +4,7 @@ import { openDatabase } from "../../src/runtime/shared/db/database.js";
 import { AgentDataQueue } from "../../src/server/modules/agents/application/agent-data-queue.js";
 import { createKrxHistoricalUniverseSource } from "../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js";
 import { SqliteKrxRawSnapshotStore } from "../../src/server/modules/market-data/infrastructure/krx/sqlite-krx-raw-snapshot-store.js";
+import { createOfficialKrxTradingCalendar } from "../../src/server/modules/market-data/infrastructure/krx/krx-trading-calendar.js";
 import { SqliteProviderRequestPolicy, PROVIDER_RETRY_DELAY_MS } from "../../src/server/shared/provider-request-policy.js";
 import { dailyFixture, krxEnvelope, krxJsonResponse } from "../helpers/krx-fixtures.js";
 
@@ -106,5 +107,49 @@ it("KRX 게시 대기 원문의 네트워크 재시도 시각은 다시 조회�
         .rejects.toMatchObject({ reason: "RETRY_BACKOFF", retryAfterMs: now + 10_000 });
     }
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  } finally { database.close(); }
+});
+
+it("2014~2015년 공식 휴장일의 빈 원문은 재수집 없이 재사용한다", async () => {
+  const database = openDatabase(":memory:");
+  const store = new SqliteKrxRawSnapshotStore(database.db);
+  const fetchImpl = vi.fn(async () => krxJsonResponse(krxEnvelope([])));
+  const source = createKrxHistoricalUniverseSource(config, clock, logger, {
+    fetchImpl, sleep: async () => {}, rawSnapshotStore: store,
+    tradingCalendar: createOfficialKrxTradingCalendar(),
+    requestPolicy: new SqliteProviderRequestPolicy(database.sqlite),
+  });
+  try {
+    for (const date of ["2014-06-21", "2014-11-29", "2014-06-04", "2015-08-14"]) {
+      store.put({ namespace: config.baseUrl, endpoint: "/svc/apis/sto/stk_bydd_trd", basDd: date.replaceAll("-", "") }, krxEnvelope([]), 1);
+      await expect(source.fetchDailyTrades("KOSPI", date)).resolves.toEqual([]);
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(database.sqlite.prepare("SELECT COUNT(*) AS n FROM provider_request_plans").get()).toEqual({ n: 0 });
+  } finally { database.close(); }
+});
+
+it.each([true, false])("달력 미확보의 빈 응답은 게시 대기나 반복 수집으로 바꾸지 않는다 (저장 원문: %s)", async (cached) => {
+  const database = openDatabase(":memory:");
+  const store = new SqliteKrxRawSnapshotStore(database.db);
+  const key = { namespace: config.baseUrl, endpoint: "/svc/apis/sto/stk_bydd_trd", basDd: "20130603" };
+  if (cached) store.put(key, krxEnvelope([]), 1);
+  const fetchImpl = vi.fn(async () => krxJsonResponse(krxEnvelope([])));
+  const source = createKrxHistoricalUniverseSource(config, clock, logger, {
+    fetchImpl, sleep: async () => {}, rawSnapshotStore: store,
+    tradingCalendar: createOfficialKrxTradingCalendar(),
+    requestPolicy: new SqliteProviderRequestPolicy(database.sqlite),
+  });
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(source.fetchDailyTrades("KOSPI", "2013-06-03")).rejects.toMatchObject({
+        reason: "BLOCKED_SOURCE_REQUIREMENT",
+        evidence: expect.stringContaining("KRX_CALENDAR_UNAVAILABLE:"),
+      });
+    }
+    expect(fetchImpl).toHaveBeenCalledTimes(cached ? 0 : 1);
+    expect(store.get(key)?.payload).toEqual(krxEnvelope([]));
+    expect(database.sqlite.prepare("SELECT status FROM provider_request_plans").all())
+      .toEqual(cached ? [] : [{ status: "COMPLETED" }]);
   } finally { database.close(); }
 });

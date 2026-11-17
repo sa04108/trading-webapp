@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createOfficialKrxTradingCalendar } from "../../market-data/infrastructure/krx/krx-trading-calendar.js";
 import { ProviderRequestBlockedError } from "../../../shared/provider-request-policy.js";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import type { Logger } from "../../../shared/logger.js";
@@ -64,6 +65,43 @@ function isLegacyDartFilingWait(row: Pick<DataRequestRow, "request_json" | "erro
         .get(match[7], match[2], year, match[5]) !== undefined;
     }
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 저장된 KRX 미확보 근거와 원 요청 날짜가 일치하고 공식 달력이 보강된 경우만 재평가한다. */
+function isResolvedKrxCalendarWait(row: Pick<DataRequestRow, "request_json" | "error">, calendar: ReturnType<typeof createOfficialKrxTradingCalendar>, database: DatabaseHandle): boolean {
+  if (row.error === null) return false;
+  const match = /^(PENDING_PUBLICATION|BLOCKED_SOURCE_REQUIREMENT): (.+) \((KRX_EMPTY_PENDING|KRX_CALENDAR_UNAVAILABLE):(.+)\)$/.exec(row.error);
+  if (!match || !((match[1] === "PENDING_PUBLICATION" && match[3] === "KRX_EMPTY_PENDING") ||
+      (match[1] === "BLOCKED_SOURCE_REQUIREMENT" && match[3] === "KRX_CALENDAR_UNAVAILABLE"))) return false;
+  try {
+    const requestKey = match[2]!;
+    const plan = /^[a-f0-9]{64}$/.test(requestKey)
+      ? database.sqlite.prepare("SELECT request_json FROM provider_request_plans WHERE fingerprint = ?").get(requestKey) as { request_json: string } | undefined
+      : undefined;
+    if (/^[a-f0-9]{64}$/.test(requestKey) && !plan) return false;
+    const key: unknown = JSON.parse(plan?.request_json ?? requestKey);
+    const evidence: unknown = JSON.parse(match[4]!);
+    if (typeof key !== "object" || key === null || !("provider" in key) || key.provider !== "KRX" ||
+        !("namespace" in key) || typeof key.namespace !== "string" || !("endpoint" in key) || typeof key.endpoint !== "string" ||
+        !("parameters" in key) || typeof key.parameters !== "object" || key.parameters === null ||
+        !("basDd" in key.parameters) || typeof key.parameters.basDd !== "string" || !/^\d{8}$/.test(key.parameters.basDd)) return false;
+    if (typeof evidence !== "object" || evidence === null || !("calendar" in evidence) ||
+        typeof evidence.calendar !== "object" || evidence.calendar === null ||
+        !("state" in evidence.calendar) || evidence.calendar.state !== "UNKNOWN" ||
+        !("evidence" in evidence.calendar) || typeof evidence.calendar.evidence !== "string" ||
+        !("fetchedAtMs" in evidence) || typeof evidence.fetchedAtMs !== "number" || !Number.isFinite(evidence.fetchedAtMs)) return false;
+    const basDd = key.parameters.basDd;
+    const date = `${basDd.slice(0, 4)}-${basDd.slice(4, 6)}-${basDd.slice(6, 8)}`;
+    if (!evidence.calendar.evidence.startsWith(`공식 달력 미확보:${date};`) ||
+        evidence.calendar.evidence.length === `공식 달력 미확보:${date};`.length) return false;
+    const request = agentDataRequestSchema.parse(JSON.parse(row.request_json));
+    const inRange = request.kind === "MARKET" || request.kind === "SELECTION"
+      ? request.dates.includes(date)
+      : request.kind === "MARKET_INDEX" && request.from <= date && date <= request.to;
+    return inRange && calendar.classify(date, "KOSPI").state !== "UNKNOWN";
   } catch {
     return false;
   }
@@ -146,7 +184,7 @@ export class AgentDataQueue {
       .run();
     const rows = this.database.sqlite
       .prepare(
-        "SELECT id, request_json, error FROM agent_data_requests WHERE status IN ('QUEUED', 'BLOCKED') AND (error LIKE 'PENDING_PUBLICATION:%' OR error LIKE 'UNRESOLVED_FILING:%')",
+        "SELECT id, request_json, error FROM agent_data_requests WHERE status IN ('QUEUED', 'BLOCKED') AND (error LIKE 'PENDING_PUBLICATION:%' OR error LIKE 'UNRESOLVED_FILING:%' OR error LIKE 'BLOCKED_SOURCE_REQUIREMENT:%')",
       )
       .all() as Array<Pick<DataRequestRow, "id" | "request_json" | "error">>;
     const now = Date.now();
@@ -155,8 +193,9 @@ export class AgentDataQueue {
        error = NULL, activity = NULL, activity_started_at_ms = NULL,
        last_progress_at_ms = NULL, current_item = NULL, updated_at_ms = ? WHERE id = ?`,
     );
+    const calendar = createOfficialKrxTradingCalendar();
     for (const row of rows) {
-      if (isLegacyDartFilingWait(row, this.database)) repair.run(now, row.id);
+      if (isLegacyDartFilingWait(row, this.database) || isResolvedKrxCalendarWait(row, calendar, this.database)) repair.run(now, row.id);
     }
   }
 
