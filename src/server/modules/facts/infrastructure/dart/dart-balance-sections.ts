@@ -1,5 +1,5 @@
 import type { FundamentalField } from "../../../../../runtime/modules/facts/domain/fact.js";
-import { normalizeDartAccountId } from "./dart-account-map.js";
+import { normalizeDartAccountId, resolveAccount } from "./dart-account-map.js";
 import type { DartFinancialRow } from "./dart-report-parser.js";
 
 type Section = "CURRENT_ASSETS" | "NONCURRENT_ASSETS" | "FINANCIAL_ASSETS"
@@ -138,10 +138,18 @@ export function analyzeBalanceSections(
       if (field !== "SHORT_TERM_BORROWINGS" || candidates.length !== 2 ||
           candidates.some(row => section(row, field) !== "CURRENT_LIABILITIES")) return false;
       const names = candidates.map(row => row.account_nm.replace(/\s/g, ""));
-      if (!names.includes("단기차입금") || !names.includes("유동차입금") ||
-          !candidates.some(row => row.account_nm.replace(/\s/g, "") === "유동차입금" &&
+      const currentName = names.includes("유동차입금") ? "유동차입금" : "유동차입금(사채포함)";
+      if (!names.includes("단기차입금") || !names.includes(currentName) ||
+          !candidates.some(row => row.account_nm.replace(/\s/g, "") === currentName &&
             normalizeDartAccountId(row.account_id) === "ifrs-full_ShorttermBorrowings")) return false;
-      const values = (children.get("CURRENT_LIABILITIES") ?? []).map(amount);
+      const currentChildren = children.get("CURRENT_LIABILITIES") ?? [];
+      // 사채 포함 행은 별도 유동 차입금·사채와 범위가 겹칠 수 있다.
+      if (currentName === "유동차입금(사채포함)" && currentChildren.some(row => {
+        if (candidates.includes(row) || typeof row.account_id !== "string" || typeof row.account_nm !== "string") return false;
+        const mapped = resolveAccount(row.account_id, row.account_nm);
+        return mapped !== null && ["BONDS", "CURRENT_LONG_TERM_DEBT", "LONG_TERM_BORROWINGS"].includes(mapped.field) && amount(row) !== 0;
+      })) return false;
+      const values = currentChildren.map(amount);
       const sum = values.reduce<number>((acc, value) => acc + (value ?? 0), 0);
       return values.length > 0 && values.every(value => value !== null) && Number.isSafeInteger(sum) &&
         sum === amount(headers.get("CURRENT_LIABILITIES")?.[0]);

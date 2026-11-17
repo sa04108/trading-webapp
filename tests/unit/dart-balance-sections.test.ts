@@ -239,3 +239,38 @@ describe('별도 처분·분배예정 집단과 차입금 태그 재사용', () 
       .toContainEqual(expect.objectContaining({ field: 'LONG_TERM_BORROWINGS', kind: 'CONFLICT' }));
   });
 });
+
+it('326030 2024년 3분기 사채 포함 유동 차입금은 소계가 검증되고 별도 유동 차입금·사채가 없을 때만 합산한다', () => {
+  const input = rows([
+    [41, 'ifrs-full_CurrentLiabilities', '유동부채', 338481204362],
+    [42, 'dart_CurrentDerivativeLiabilities', '유동파생상품부채', 0],
+    [43, 'dart_ShortTermAccruedExpenses', '단기미지급비용', 63241823503],
+    [44, 'dart_ShortTermAdvancesCustomers', '단기선수금', 21789953378],
+    [45, 'dart_ShortTermTradePayables', '단기매입채무', 3783217822],
+    [46, 'dart_ShortTermWithholdings', '단기예수금', 681860219],
+    [47, '', '유동성예수보증금', 7764527],
+    [48, '', '단기차입금', 50000000000],
+    [49, 'ifrs-full_CurrentLeaseLiabilities', '유동 리스부채', 6405693421],
+    [50, 'ifrs-full_CurrentProvisions', '유동충당부채', 96590144209],
+    [51, 'ifrs-full_CurrentTaxLiabilities', '당기법인세부채', 351144575],
+    [52, 'ifrs-full_OtherCurrentLiabilities', '기타 유동부채', 103402708],
+    [53, 'ifrs-full_ShorttermBorrowings', '유동 차입금(사채 포함)', 95526200000],
+    [54, 'ifrs-full_Liabilities', '부채총계', 408762078311],
+    [55, 'ifrs-full_NoncurrentLiabilities', '비유동부채', 70280873949],
+    [56, 'dart_LongTermBorrowingsGross', '장기차입금(사채 포함), 총액', 0],
+  ], '20241114000937').map(row => ({ ...row, reprt_code: '11014', bsns_year: '2024' }));
+  const result = parseFinancialRows('326030', new Map([['11014', input]]));
+  expect(result.facts).toContainEqual(expect.objectContaining({
+    field: 'SHORT_TERM_BORROWINGS', periodKey: '2024Q3', value: 145526200000,
+    asOfTsMs: receiptDateToAsOfTsMs('20241114000937'),
+  }));
+  expect(result.gaps.some(gap => gap.field === 'SHORT_TERM_BORROWINGS' && gap.kind === 'CONFLICT')).toBe(false);
+  for (const account_id of ['dart_CurrentPortionOfBonds', 'dart_CurrentPortionOfLongTermBorrowings', 'dart_LongTermBorrowings']) {
+    const ambiguous = input.map(row => row.ord === '43' ? { ...row, account_id, account_nm: '별도 부채' } : row);
+    expect(parseFinancialRows('326030', new Map([['11014', ambiguous]])).gaps)
+      .toContainEqual(expect.objectContaining({ field: 'SHORT_TERM_BORROWINGS', kind: 'CONFLICT' }));
+  }
+  const incomplete = input.filter(row => row.ord !== '43');
+  expect(parseFinancialRows('326030', new Map([['11014', incomplete]])).gaps)
+    .toContainEqual(expect.objectContaining({ field: 'SHORT_TERM_BORROWINGS', kind: 'CONFLICT' }));
+});
