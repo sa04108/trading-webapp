@@ -2,6 +2,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import {
   buildPeriodValidationPlan,
   evaluateValidationCandidate,
+  getValidationOptimization,
   periodValidationConfigSchema,
   selectValidationCandidate,
   type PeriodValidationConfig,
@@ -93,13 +94,14 @@ export class PeriodValidationService {
     } else if (!sourceJob.preparationJobId || !this.cache.isFresh(sourceJob.preparationJobId)) {
       refreshReason = "원본 데이터 준비 결과가 없거나 오래됐습니다. 최신 기준으로 다시 준비해야 합니다.";
     }
-    if (config.mode !== "HOLDOUT") {
+    const optimization = getValidationOptimization(config);
+    if (optimization) {
       const schema = this.deps.strategies.getParameterJsonSchema(
         source.strategyId,
       );
       const properties = schema?.properties as
         Record<string, { type?: string }> | undefined;
-      for (const axis of config.optimization.axes) {
+      for (const axis of optimization.axes) {
         if (
           !["number", "integer"].includes(properties?.[axis.key]?.type ?? "")
         ) {
@@ -193,7 +195,7 @@ export class PeriodValidationService {
               role: "OOS",
             })
             .run();
-          if (config.mode !== "HOLDOUT") {
+          if (getValidationOptimization(config)) {
             this.deps.database.db
               .insert(backtestValidationTrials)
               .values({
@@ -227,6 +229,7 @@ export class PeriodValidationService {
     const plan = JSON.parse(experiment.planJson) as PeriodValidationPlan;
     const source = JSON.parse(experiment.requestJson) as BacktestRequest;
     const config = JSON.parse(experiment.configJson) as PeriodValidationConfig;
+    const optimization = getValidationOptimization(config);
     return {
       id,
       sourceJobId: experiment.sourceJobId,
@@ -268,8 +271,8 @@ export class PeriodValidationService {
           error: job?.error ?? prep?.error ?? null,
           metrics,
           skipReason: trial.skipReason,
-          selection: trial.role === "TRAIN" && metrics && config.mode !== "HOLDOUT"
-            ? evaluateValidationCandidate(metrics, config.optimization) : null,
+          selection: trial.role === "TRAIN" && metrics && optimization
+            ? evaluateValidationCandidate(metrics, optimization) : null,
         };
       }),
     };
@@ -682,15 +685,16 @@ export class PeriodValidationService {
     const config = JSON.parse(experiment.configJson) as PeriodValidationConfig;
     const plan = JSON.parse(experiment.planJson) as PeriodValidationPlan;
     if (training) {
+      const optimization = getValidationOptimization(config);
       const candidate =
-        config.mode === "HOLDOUT"
+        !optimization
           ? 0
           : selectValidationCandidate(
               group.map((trial) => ({
                 candidate: trial.candidate!,
                 metrics: this.metrics(trial.jobId!)!,
               })),
-              config.optimization,
+              optimization,
             );
       const source = JSON.parse(experiment.requestJson) as BacktestRequest;
       this.deps.database.sqlite

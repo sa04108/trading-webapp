@@ -36,6 +36,7 @@ import {
   registerAgentManagementRoutes,
 } from "../modules/agents/presentation/agent-routes.js";
 import { AGENT_MAX_MESSAGE_BYTES } from "../../shared/agent-protocol.js";
+import { getValidationOptimization } from "../../shared/schemas/period-validation.js";
 import { PreparationReferenceError } from "../modules/backtest/application/preparation-reference-service.js";
 
 function resolvePublicDir(): string | null {
@@ -179,6 +180,7 @@ export async function buildServer(
             try {
               const evaluated = experiment.trials.filter((trial) => trial.role === "OOS" && trial.status === "COMPLETED").length;
               const notEvaluated = experiment.trials.filter((trial) => trial.role === "OOS" && trial.skipReason !== null).length;
+              const optimized = !!getValidationOptimization(experiment.config);
               container.notificationService.create({
                 type: "backtest",
                 severity: experiment.status === "FAILED" ? "error" : "info",
@@ -190,7 +192,7 @@ export async function buildServer(
                       : "기간 검증이 취소되었습니다",
                 body:
                   experiment.error ??
-                  `선택 전략 OOS ${evaluated}/${experiment.plan.folds.length}회 평가 · 후보 없음으로 ${notEvaluated}회 미평가`,
+                  `${optimized ? "선택 전략" : "원본 설정"} OOS ${evaluated}/${experiment.plan.folds.length}회 평가${optimized ? ` · 후보 없음으로 ${notEvaluated}회 미평가` : ""}`,
                 link: `/backtests/${experiment.sourceJobId}#period-validation`,
               });
             } catch (error) {

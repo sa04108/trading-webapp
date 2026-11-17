@@ -4,7 +4,7 @@ import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
 import { getIntradayStrategy } from "../../../../shared/schemas/intraday-strategies.js";
 import { intradayRequestSchema, type IntradayRequest, type IntradayResult } from "../../../../shared/schemas/intraday.js";
-import { buildPeriodValidationPlan, periodValidationConfigSchema, selectValidationCandidate, evaluateValidationCandidate, type PeriodValidationDto, type PeriodValidationPlan, type PeriodValidationConfig, type ValidationMetrics, type ValidationStatus, type ValidationRole, type ValidationSkipReason } from "../../../../shared/schemas/period-validation.js";
+import { buildPeriodValidationPlan, getValidationOptimization, periodValidationConfigSchema, selectValidationCandidate, evaluateValidationCandidate, type PeriodValidationDto, type PeriodValidationPlan, type PeriodValidationConfig, type ValidationMetrics, type ValidationStatus, type ValidationRole, type ValidationSkipReason } from "../../../../shared/schemas/period-validation.js";
 import { summarizeIntradayTrades } from "../../../../shared/intraday-trades.js";
 import { intradayRuns } from "../../../shared/db/intraday-schema.js";
 import { intradayValidations, intradayValidationTrials } from "../../../shared/db/intraday-validation-schema.js";
@@ -37,7 +37,7 @@ export class IntradayValidationService {
       for (const fold of plan.folds) {
         for (const [candidate, parameters] of plan.candidates.entries()) this.database.db.insert(intradayValidationTrials).values({ id: randomUUID(), validationId: id, fold: fold.ordinal, role: "TRAIN", candidate, requestJson: JSON.stringify({ ...source, parameters, period: fold.train }) }).run();
         this.database.db.insert(intradayValidationTrials).values({ id: randomUUID(), validationId: id, fold: fold.ordinal, role: "OOS" }).run();
-        if (config.mode !== "HOLDOUT") this.database.db.insert(intradayValidationTrials).values({ id: randomUUID(), validationId: id, fold: fold.ordinal, role: "BASELINE", requestJson: JSON.stringify({ ...source, period: fold.test }) }).run();
+        if (getValidationOptimization(config)) this.database.db.insert(intradayValidationTrials).values({ id: randomUUID(), validationId: id, fold: fold.ordinal, role: "BASELINE", requestJson: JSON.stringify({ ...source, period: fold.test }) }).run();
       }
     }).immediate();
     void this.pump();
@@ -50,11 +50,12 @@ export class IntradayValidationService {
   get(owner: string, id: string): PeriodValidationDto | null {
     const row = this.row(owner, id); if (!row) return null;
     const source = JSON.parse(row.requestJson) as IntradayRequest, config = JSON.parse(row.configJson) as PeriodValidationConfig, plan = JSON.parse(row.planJson) as PeriodValidationPlan;
+    const optimization = getValidationOptimization(config);
     return { id, sourceJobId: row.sourceJobId, status: row.status as ValidationStatus, config, plan, initialCash: source.initialCash, createdAtMs: row.createdAtMs, error: row.error, trials: this.trials(id).map((trial) => {
       const request = trial.requestJson ? JSON.parse(trial.requestJson) as IntradayRequest : null;
       const run = trial.runId ? this.runs.getRunState(owner, trial.runId) : null;
       const m = trial.metricsJson ? JSON.parse(trial.metricsJson) as ValidationMetrics : null;
-      return { id: trial.id, fold: trial.fold, role: trial.role as ValidationRole, candidate: trial.candidate, period: request?.period ?? plan.folds[trial.fold]!.test, parameters: request?.parameters ?? null, jobId: trial.runId, status: trial.skipReason ? "NOT_EVALUATED" : run?.status ?? (row.status === "ACTIVE" ? "PENDING" : "SKIPPED"), progress: null, error: run?.error ?? null, metrics: m, skipReason: trial.skipReason as ValidationSkipReason | null, selection: trial.role === "TRAIN" && m && config.mode !== "HOLDOUT" ? evaluateValidationCandidate(m, config.optimization) : null };
+      return { id: trial.id, fold: trial.fold, role: trial.role as ValidationRole, candidate: trial.candidate, period: request?.period ?? plan.folds[trial.fold]!.test, parameters: request?.parameters ?? null, jobId: trial.runId, status: trial.skipReason ? "NOT_EVALUATED" : run?.status ?? (row.status === "ACTIVE" ? "PENDING" : "SKIPPED"), progress: null, error: run?.error ?? null, metrics: m, skipReason: trial.skipReason as ValidationSkipReason | null, selection: trial.role === "TRAIN" && m && optimization ? evaluateValidationCandidate(m, optimization) : null };
     }) };
   }
   cancel(owner: string, id: string): PeriodValidationDto | null {
@@ -129,7 +130,8 @@ export class IntradayValidationService {
       const ready = (t: typeof oos) => t.runId && t.metricsJson && this.runs.getRunState(row.ownerId, t.runId).status === "COMPLETED";
       if (!train.every(ready)) { this.launch(row, train.find(t => !t.runId)); return; }
       if (!oos.requestJson && !oos.skipReason) {
-        const selected = config.mode === "HOLDOUT" ? 0 : selectValidationCandidate(train.map(t => ({ candidate: t.candidate!, metrics: JSON.parse(t.metricsJson!) as ValidationMetrics })), config.optimization);
+        const optimization = getValidationOptimization(config);
+        const selected = !optimization ? 0 : selectValidationCandidate(train.map(t => ({ candidate: t.candidate!, metrics: JSON.parse(t.metricsJson!) as ValidationMetrics })), optimization);
         this.database.db.update(intradayValidationTrials).set({ candidate: selected, skipReason: selected === null ? "NO_ELIGIBLE_CANDIDATE" : null, requestJson: selected === null ? null : JSON.stringify({ ...source, parameters: plan.candidates[selected], period: fold.test }) }).where(eq(intradayValidationTrials.id, oos.id)).run();
         return;
       }

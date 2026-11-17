@@ -71,6 +71,7 @@ import {
 import { resolveJobTimeframe } from "./job-timeframe";
 import { StatusBadge } from "./status-badge";
 import { ResultActions } from "./result-actions";
+import { ReproductionInfoCard } from "./reproduction-info-card";
 import {
   DEFAULT_TRADE_SORT,
   nextTradeSort,
@@ -435,26 +436,7 @@ function RunMetadataCard({
           </div>
         </CardContent>
       </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">재현 정보</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-1 text-sm">
-          {rows.map(([label, value]) => (
-            <div key={label} className="flex justify-between gap-4">
-              <span className="shrink-0 text-muted-foreground">{label}</span>
-              {/* 잘라내지 않고 접는다 — 재현 정보는 값의 끝까지가 근거다. 해시가 「a1b2…」
-                  로 잘리면 다른 실행과 같은지 눈으로 비교할 수 없고, 비용 모델 요율은
-                  잘리는 자리가 하필 숫자다. wrap-anywhere 를 쓰는 이유: 해시·id·
-                  `id@version` 은 공백이 없어 break-words 로는 한 줄을 넘겨도 쪼개지지
-                  않는다 (min-content 가 문자열 전체다). */}
-              <span className="text-right font-mono text-xs leading-5 wrap-anywhere">
-                {value}
-              </span>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
+      <ReproductionInfoCard rows={rows} />
       {warnings.length > 0 ? (
         <ResultWarnings warnings={warnings} jobId={job.id} />
       ) : null}

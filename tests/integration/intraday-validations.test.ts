@@ -16,9 +16,11 @@ import type { IntradayRequest } from "../../src/shared/schemas/intraday.js";
 const request: IntradayRequest = { mode: "intraday", strategyId: "intraday-ema", symbol: "005930", period: { from: "2026-10-01", to: "2026-10-10" }, timeframe: "1m", initialCash: 100_000, parameters: { fast: 2, slow: 5, allocationPct: 95, stopLossPct: 3, takeProfitPct: 6 }, execution: { holdingPolicy: "DAY_ONLY", commissionBps: 1, taxBps: 1, slippageBps: 1, latencyMs: 1000, orderExpiryMinutes: 3, maxParticipationPct: 10 } };
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0)) await close(); });
-function fixture(synthetic = false, block?: Promise<void>) {
+function fixture(synthetic = false, block?: Promise<void>, source = request) {
   const database = openDatabase(":memory:"); let revision = "rev1";
-  const bars = Array.from({ length: 10 }, (_, i) => ({ endMs: Date.parse(`2026-10-${String(i + 1).padStart(2, "0")}T09:01:00+09:00`), open: 1000, high: 1000, low: 1000, close: 1000, volume: 100 }));
+  const firstBarMs = Date.parse(`${source.period.from}T09:01:00+09:00`);
+  const days = (Date.parse(source.period.to) - Date.parse(source.period.from)) / 86_400_000 + 1;
+  const bars = Array.from({ length: days }, (_, i) => ({ endMs: firstBarMs + i * 86_400_000, open: 1000, high: 1000, low: 1000, close: 1000, volume: 100 }));
   const captured: IntradayRequest[] = [];
   const reads: { from: number; to: number }[] = [];
   const runs = new IntradayService({ db: database.db, now: () => Date.parse("2026-11-01T00:00:00Z"), store: { list: async () => [], read: async (_symbol, from, to) => { reads.push({ from, to }); return { revision, bars: bars.filter(b => b.endMs >= from && b.endMs <= to) }; }, merge: async () => { throw Error("unexpected collection"); }, prune: async () => {} }, source: null, calendar: { classify: () => ({ state: "OPEN" }) }, search: async () => [], execute: async (input) => { captured.push(input.request); if (block) await block; const result = runIntradayBacktest(input); result.executionVersion = readRuntimeVersions().executionVersion; if (synthetic) {
@@ -28,7 +30,7 @@ function fixture(synthetic = false, block?: Promise<void>) {
       const common = { orderId: "order", signalAtMs: 1, eligibleAtMs: 2, atMs: 3, price: 1000, commission: 0, tax: 0, reason: "EMA" as const };
       result.fills = [{ ...common, side: "BUY", qty: 2 }, { ...common, side: "SELL", qty: 1 }, { ...common, side: "SELL", qty: 1 }];
     } return result; } });
-  database.db.insert(intradayRuns).values({ id: "source", ownerId: "owner", status: "COMPLETED", requestJson: JSON.stringify(request), createdAtMs: 1, updatedAtMs: 1 }).run();
+  database.db.insert(intradayRuns).values({ id: "source", ownerId: "owner", status: "COMPLETED", requestJson: JSON.stringify(source), createdAtMs: 1, updatedAtMs: 1 }).run();
   const validations = new IntradayValidationService(database, runs);
   cleanups.push(async () => { await validations.stop(); await runs.close(); database.close(); });
   return { database, runs, validations, captured, reads, setRevision: (value: string) => { revision = value; } };
@@ -60,6 +62,35 @@ describe("분봉 기간 검증", () => {
     expect(result.trials.find(t => t.role === "OOS")?.candidate).toBe(1);
     expect(result.trials.filter(t => t.role === "TRAIN").map(t => t.metrics?.tradeCount)).toEqual([2, 2]);
     expect(result.trials.find(t => t.role === "BASELINE")?.parameters).toEqual(request.parameters);
+  });
+  it.each([false, true])("워크포워드에서 최적화가 켜진 경우에만 후보 조건으로 OOS를 미평가한다: %s", async (optimize) => {
+    const source = { ...request, period: { from: "2026-08-01", to: "2026-10-31" } };
+    const f = fixture(false, undefined, source);
+    const config = { mode: "WALK_FORWARD", trainMonths: 1, testMonths: 1,
+      ...(optimize ? { optimization: { axes: [{ key: "fast", values: [2, 3] }], objective: "sharpe", minTrades: 2, maxDrawdownPct: 30 } } : {}),
+    };
+    const created = await f.validations.create("owner", "source", config);
+    const result = await settle(f, created.id);
+    expect(result.status).toBe("COMPLETED");
+    expect(result.config).toEqual(config);
+    expect(result.plan.folds).toHaveLength(2);
+    expect(result.trials.filter(t => t.role === "TRAIN").every(t => t.metrics?.tradeCount === 0)).toBe(true);
+    const oos = result.trials.filter(t => t.role === "OOS");
+    expect(oos).toHaveLength(2);
+    if (optimize) {
+      expect(oos.every(t => t.status === "NOT_EVALUATED" && t.skipReason === "NO_ELIGIBLE_CANDIDATE" && t.metrics === null && t.jobId === null)).toBe(true);
+      expect(result.trials.filter(t => t.role === "BASELINE" && t.status === "COMPLETED")).toHaveLength(2);
+    } else {
+      expect(result.plan.totalRuns).toBe(4);
+      expect(result.trials).toHaveLength(4);
+      expect(result.trials.every(t => t.status === "COMPLETED" && t.skipReason === null && t.selection === null)).toBe(true);
+      expect(f.captured).toEqual([
+        { ...source, period: { from: "2026-08-01", to: "2026-08-31" } },
+        { ...source, period: { from: "2026-09-01", to: "2026-09-30" } },
+        { ...source, period: { from: "2026-09-01", to: "2026-09-30" } },
+        { ...source, period: { from: "2026-10-01", to: "2026-10-31" } },
+      ]);
+    }
   });
   it("하위 계산이 정리될 때까지 취소와 삭제를 보류한다", async () => {
     let release!: () => void;

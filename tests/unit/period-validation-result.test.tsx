@@ -14,8 +14,8 @@ const experiment = (trials: ValidationTrialDto[]): PeriodValidationDto => ({
   plan: { folds: [{ ordinal: 0, train: period, test: period }], candidates: [{ x: 10 }, { x: 20 }], totalRuns: 4, unusedPeriod: null },
   initialCash: 1000, createdAtMs: 1, error: null, trials,
 });
-const render = (trials: ValidationTrialDto[]) => renderToStaticMarkup(
-  <QueryClientProvider client={new QueryClient()}><MemoryRouter><TooltipProvider><ValidationResult experiment={experiment(trials)} specs={[]} refresh={async () => {}} /></TooltipProvider></MemoryRouter></QueryClientProvider>,
+const render = (trials: ValidationTrialDto[], validation = experiment(trials)) => renderToStaticMarkup(
+  <QueryClientProvider client={new QueryClient()}><MemoryRouter><TooltipProvider><ValidationResult experiment={validation} specs={[]} refresh={async () => {}} /></TooltipProvider></MemoryRouter></QueryClientProvider>,
 );
 
 describe("기간 검증 결과 표시", () => {
@@ -34,6 +34,15 @@ describe("기간 검증 결과 표시", () => {
     expect(html).toContain("MDD 한도 초과");
     expect(html).toMatch(/4건.*5건 이상/);
     expect(html).toMatch(/31\.00%.*30% 이하/);
+  });
+  it("최적화 없는 워크포워드는 원본 설정 OOS를 표시하고 선택 조건을 숨긴다", () => {
+    const validation: PeriodValidationDto = { ...experiment([{ ...base, id: "train", role: "TRAIN", status: "COMPLETED", metrics: null }]), config: { mode: "WALK_FORWARD", trainMonths: 3, testMonths: 1 } };
+    const html = render([{ ...base, id: "train", role: "TRAIN", status: "COMPLETED", metrics: null }], validation);
+    expect(html).toContain("원본 설정 OOS 평가");
+    expect(html).toContain("원본 설정 IS");
+    expect(html).not.toContain("후보 선택 조건");
+    expect(html).not.toContain("고정 전략 OOS");
+    expect(html).not.toContain("후보가 없어 미평가");
   });
   it("MDD가 한도를 근소하게 넘으면 반올림으로 차이를 숨기지 않는다", () => {
     const metrics = { totalReturnPct: 1, cagrPct: 1, sharpe: 1, tradeCount: 5, maxDrawdownPct: -30.00001 };
