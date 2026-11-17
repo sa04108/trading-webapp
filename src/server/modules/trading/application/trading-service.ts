@@ -224,6 +224,7 @@ export class TradingService {
       const row=this.current();
       if(row){for(const [symbol,p] of Object.entries(this.portfolio(row))){if((holdings.find(h=>h.symbol===symbol)?.quantity??0)!==p.quantity)throw new TradingError(`보유 수량 불일치: ${symbol}. 외부 주문·자본변동과 미확인 체결을 확인하세요.`);}}
     }catch(error){
+      if(this.stopping)throw error;
       const message=error instanceof Error?error.message:"토스 계좌 동기화 실패";
       this.db.update(tradingControl).set({error:message}).where(eq(tradingControl.singleton,1)).run();
       const row=this.current();if(row?.status==="ACTIVE")this.fail(message);
@@ -374,6 +375,7 @@ export class TradingService {
     // 한 주문이 미확인이어도 나머지 접수된 주문의 취소는 계속한다.
     try{await this.reconcileOrders(account);}catch(error){failures.push(error instanceof Error?error.message:"체결 내역 확인 실패");}
     for(const order of this.pending(row.id)){
+      if(this.stopping)return;
       if(order.status==="CREATED"){this.saveOrder(order,{status:"CANCELLED"});continue;}
       if(!order.brokerOrderId){failures.push("접수 여부가 불명확한 주문이 있어 중지 완료를 확인할 수 없습니다.");continue;}
       if(order.status==="OPEN"||order.status==="PARTIAL"||order.status==="CANCEL_REQUESTED"){
@@ -385,7 +387,9 @@ export class TradingService {
         try{await this.deps.broker.cancel(account,order.brokerOrderId);}catch(error){if(!(error instanceof BrokerRequestError&&error.statusCode===409))failures.push(error instanceof Error?error.message:"미체결 취소 실패");}
       }
     }
+    if(this.stopping)return;
     try{await this.refresh();}catch(error){failures.push(error instanceof Error?error.message:"최종 잔고 확인 실패");}
+    if(this.stopping)return;
     const pending=this.pending(row.id);
     for(const id of this.cancelRetry.keys())if(!pending.some(order=>order.id===id))this.cancelRetry.delete(id);
     if(pending.length||failures.length){
@@ -476,7 +480,7 @@ export class TradingService {
           if(liveDay&&currentSnapshot.performance){const baseline=JSON.parse(liveDay) as {date:string;pnl:number};if(baseline.date===kstDateOf(this.now())&&(currentSnapshot.performance.totalPnl-baseline.pnl)/deployment.budgetKrw*100<=-deployment.dailyLossLimitPercent){this.deactivate(control.revision,"risk-limit");throw new TradingError("일일 손실 한도에 도달했습니다.","ORDER_GATE_CLOSED");}}
         };
         guard();this.saveOrder(stored,{status:"SENDING"});
-        const result=await this.deps.broker.place(control.accountId!,{clientOrderId:order.id,symbol:order.symbol,side:order.side,quantity:order.quantity,price:order.price},()=>{guard();requestStarted=true;});
+        const result=await this.deps.broker.place(control.accountId!,{clientOrderId:order.id,symbol:order.symbol,side:order.side,quantity:order.quantity,price:order.price},()=>{requestStarted=false;guard();requestStarted=true;});
         this.saveOrder(stored,{brokerOrderId:result.orderId,status:"OPEN"});this.event(`${order.symbol} ${order.side==="BUY"?"매수":"매도"} ${order.quantity}주 주문 접수`);
       }catch(error){
         const uncertain=requestStarted&&(error instanceof BrokerRequestError?error.uncertain:!(error instanceof TradingError&&error.code==="ORDER_GATE_CLOSED"));
@@ -501,7 +505,7 @@ export class TradingService {
       if(row?.status==="STOPPING"||(row?.status==="ERROR"&&this.pending(row.id).length))await this.finishStop(row);
       else if(row?.status==="ACTIVE")await this.trade(row);
       else if(this.control().accountId&&this.now()-(this.control().syncedAtMs??0)>30_000)await this.refresh();
-    }catch(error){if(error instanceof TradingError&&error.code==="ORDER_GATE_CLOSED")return;const message=error instanceof Error?error.message:"매매 처리 실패";this.fail(message);}
+    }catch(error){if(this.stopping||(error instanceof TradingError&&error.code==="ORDER_GATE_CLOSED"))return;const message=error instanceof Error?error.message:"매매 처리 실패";this.fail(message);}
   }
   async close() {
     this.stopping=true;if(this.timer)clearInterval(this.timer);await this.running;await this.refreshing?.catch(()=>{});await this.deps.engine.close();

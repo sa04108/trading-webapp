@@ -43,18 +43,23 @@ it('이전 버전 manifest는 재사용하지만 실제 fact 변경과 삭제는
   } finally {database.close();}
 });
 
-it('legacy 연도는 원문 없이 재사용하고 다른 연도를 수집해도 완료 근거를 보존한다', () => {
+it('정상 legacy 연도는 재사용하고 gap 연도는 다른 연도 수집 후에도 재검증을 기다린다', () => {
   const database = openDatabase(':memory:');
   try {
     database.db.insert(symbols).values({code:'005930',market:'KR',createdAtMs:1}).run();
     database.db.insert(facts).values({scope:'SYMBOL',key:'005930',field:'NET_INCOME',periodKey:'2024Q1',asOfTsMs:1,value:10,unit:'KRW'}).run();
-    database.db.insert(symbolFactsState).values({code:'005930',coveredYearsJson:'[2024]',actionCoveredYearsJson:'[2024]',actionGapYearsJson:'[2024]'}).run();
+    database.db.insert(symbolFactsState).values({code:'005930',coveredYearsJson:'[2024]',actionCoveredYearsJson:'[2023,2024]',actionGapYearsJson:'[2024]'}).run();
     const current=new SqliteFactCoverageStore(database.db,{collectionVersion:'b'.repeat(64)});
     const actions=new SqliteCorporateActionCoverageStore(database.db);
     expect(current.getCoveredYears(['005930']).get('005930')).toEqual([2024]);
-    expect(actions.getCoveredYears(['005930']).get('005930')).toEqual([2024]);
+    expect(actions.getCoveredYears(['005930']).get('005930')).toEqual([2023]);
+    expect(actions.getCollectedYears(['005930']).get('005930')).toEqual([2023,2024]);
     expect(actions.getGapYears(['005930']).get('005930')).toEqual([2024]);
     current.addCoveredYears('005930',[2025],2);
+    actions.addCoveredYears('005930',[2025],2);
+    expect(actions.getCoveredYears(['005930']).get('005930')).toEqual([2023,2025]);
+    expect(actions.getCollectedYears(['005930']).get('005930')).toEqual([2023,2024,2025]);
+    expect(actions.getGapYears(['005930']).get('005930')).toEqual([2024]);
     expect(current.getCoveredYears(['005930']).get('005930')).toEqual([2024,2025]);
     database.sqlite.prepare("UPDATE symbol_facts_state SET financial_coverage_protocol_json='broken',action_coverage_protocol_json='broken'").run();
     expect(current.getCoveredYears(['005930']).get('005930')).toEqual([]);

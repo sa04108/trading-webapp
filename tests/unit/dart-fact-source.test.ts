@@ -1424,6 +1424,51 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     stlm_dt: '2020-03-31',
   }];
 
+  it.each([
+    ['후속 분기', '2015-03-31', '34,332,265', false, false, false],
+    ['같은 날 기준', '2015-03-27', '34,332,265', false, false, true],
+    ['기준 없음', '', '', false, false, true],
+    ['미분류 중간 행', '2015-03-31', '34,332,265', true, false, true],
+    ['음수 직전 주식수', '2015-03-31', '2,998,826', false, false, true],
+    ['불일치 후속 기준', '2015-03-31', '34,332,265', false, true, true],
+    ['같은 응답 내 다른 주식수', '2015-03-31', '34,332,265', false, false, true],
+    ['같은 응답 내 주식수 누락', '2015-03-31', '34,332,265', false, false, true],
+  ])('%s 역산의 근거를 확인한다', async (_label, date, shares, unknown, conflict, blocked) => {
+    const fetchImpl = (async (url: string) => {
+      const target = String(url);
+      if (date && target.includes('stockTotqySttus') && target.includes('reprt_code=11013')) {
+        return jsonResponse({ status: '000', list: [
+          { rcept_no: '20150515001307', se: '보통주', istc_totqy: shares, stlm_dt: date },
+          ...(_label.startsWith('같은 응답 내') ? [{ rcept_no: '20150515001307', se: '보통주', istc_totqy: _label.includes('누락') ? '-' : '35,332,265', stlm_dt: date }] : []),
+        ] });
+      }
+      if (conflict && target.includes('stockTotqySttus') && target.includes('reprt_code=11012')) {
+        return jsonResponse({ status: '000', list: [{ rcept_no: '20150813000820', se: '보통주', istc_totqy: '34,332,266', stlm_dt: date }] });
+      }
+      if (target.includes('irdsSttus') && target.includes('reprt_code=11011')) {
+        return jsonResponse({ status: '000', list: [
+          { rcept_no: '20150401000001', isu_dcrs_de: '2015-03-27', isu_dcrs_stle: '주식배당', isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '2,998,826' },
+          ...(unknown ? [{ rcept_no: '20150402000001', isu_dcrs_de: '2015-03-28', isu_dcrs_stle: '-', isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '1' }] : []),
+        ] });
+      }
+      return jsonResponse({ status: '013', message: 'no data' });
+    }) as unknown as typeof fetch;
+    const source = createDartFactSource({ baseUrl: 'https://opendart.fss.or.kr', apiKey: 'K' }, LOGGER,
+      { fetchImpl, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER });
+    const result = await source.fetchCorporateActions({ symbols: ['006730'], years: [2015], shareYears: [2014, 2015], consolidated: true });
+    if (blocked) {
+      expect(result.facts).toEqual([]);
+      expect(result.gaps).toContainEqual(expect.objectContaining({ periodKey: '2015-03-27', severity: 'BLOCKING' }));
+    } else {
+      expect(result.gaps).toEqual([]);
+      expect(result.facts).toEqual([expect.objectContaining({
+        field: 'SPLIT_RATIO', periodKey: '2015-03-27', value: 34332265 / 31333439,
+        corporateActionBeforeShares: 31333439, corporateActionAfterShares: 34332265,
+        asOfTsMs: receiptDateToAsOfTsMs('20150515001307'),
+      })]);
+    }
+  });
+
   it('033290의 API 수량·형태만으로 비율을 확정할 수 없으면 blocking gap을 남긴다', async () => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);
@@ -1544,7 +1589,7 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
     });
   });
 
-  it('같은 날짜의 유상증자를 뒤이은 무상증자의 직전 주식수에 먼저 반영한다', async () => {
+  it.each(['유상증자(주주우선공모)', '현물출자', '출자전환'])('같은 날짜의 %s를 무상증자의 직전 주식수에 먼저 반영한다', async (style) => {
     const fetchImpl = (async (url: string) => {
       const target = String(url);
       if (target.includes('stockTotqySttus') && target.includes('reprt_code=11013')) {
@@ -1564,7 +1609,7 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
           status: '000', message: '정상',
           list: [
             {
-              isu_dcrs_de: '2016-06-17', isu_dcrs_stle: '유상증자(주주우선공모)',
+              isu_dcrs_de: '2016-06-17', isu_dcrs_stle: style,
               isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '6,600,000', rcept_no: '20160816000131',
             },
             {
@@ -1585,7 +1630,9 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
       symbols: ['064260'], years: [2016], shareYears: [2016], consolidated: true,
     });
 
-    const action = result.facts.find((fact) => fact.field === 'SPLIT_RATIO');
+    const actions = result.facts.filter((fact) => fact.field === 'SPLIT_RATIO');
+    expect(actions).toHaveLength(1);
+    const action = actions[0];
     expect(action?.value).toBeCloseTo(1.5);
     expect(action).toMatchObject({
       corporateActionBeforeShares: 28_278_954,

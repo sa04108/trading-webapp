@@ -1,6 +1,12 @@
 import path from "node:path";
 import fs from "node:fs";
 import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import * as dataSchema from "../../../../runtime/shared/db/schema.js";
+import { backtestRequestSchema } from "../../../../shared/schemas/backtest-request.js";
+import { StrategyRegistry } from "../../../../runtime/modules/strategy/application/strategy-registry.js";
+import { assertPinnedScheduleExecutionDates } from "../../../../runtime/modules/backtest/application/backtest-symbol-identity.js";
+import { countBacktestInputBars } from "../../../../runtime/modules/backtest/application/backtest-input-bars.js";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -46,6 +52,7 @@ const helloVersionSchema = z.object({
 });
 
 interface Connection {
+  id: string;
   socket: {
     readonly readyState: number;
     send(data: string): void;
@@ -89,6 +96,8 @@ export class AgentCoordinator {
   private lastQueueDiagnosticAt = Number.NEGATIVE_INFINITY;
   private readonly preparationPhases = new Map<string, { phase: string; pass: number; started: number }>();
   private readonly localMemoryPlans = new Map<string, { plan: BacktestMemoryPlan; complete: boolean }>();
+  private readonly inputBarCounts = new Map<string, NonNullable<AgentLease["inputBars"]>>();
+  private readonly strategies = new StrategyRegistry();
   private memorySampling: { jobId: string; progress: ExecutionProgress } | null = null;
   private lastSamplingNotificationAt = 0;
   private readonly startingPreparations = new Map<string, number>();
@@ -149,6 +158,7 @@ export class AgentCoordinator {
     }
     this.connections.get(clientId)?.socket.close(4001, "connection replaced");
     const connection: Connection = {
+      id: randomUUID(),
       socket,
       ready: false,
       slots: 0,
@@ -196,6 +206,15 @@ export class AgentCoordinator {
     });
   }
 
+  installationStatus(clientId: string): { ready: boolean; connectionId: string | null } {
+    const connection = this.connections.get(clientId);
+    return {
+      ready: !this.stopped && connection?.socket.readyState === 1 && connection.ready &&
+        Date.now() - connection.lastMessageAt <= 60_000,
+      connectionId: connection?.id ?? null,
+    };
+  }
+
   listClients(): AgentClientStatus[] {
     const now = Date.now();
     const dataset = this.snapshots.latest();
@@ -210,10 +229,10 @@ export class AgentCoordinator {
         detail = "연결 토큰이 해제되어 작업을 배정하지 않습니다.";
       } else if (client.protocolVersion !== null && client.protocolVersion !== AGENT_PROTOCOL_VERSION) {
         state = "PROTOCOL_MISMATCH";
-        detail = "마지막으로 확인한 Agent의 통신 규격이 서버와 다릅니다. 기존 연결 토큰으로 설치 파일을 다시 받아 업데이트하세요.";
+        detail = "마지막으로 확인한 Agent의 통신 규격이 서버와 다릅니다. 설정에서 해당 장치의 CMD를 받아 실행하면 기존 연결과 저장 데이터를 유지하며 업데이트합니다.";
       } else if (client.runnerVersion !== null && client.runnerVersion !== this.runnerVersion) {
         state = "VERSION_MISMATCH";
-        detail = "마지막으로 확인한 Agent 버전이 서버에서 요구하는 버전과 달라 작업을 배정하지 않습니다. 기존 연결 토큰으로 설치 파일을 다시 받아 업데이트하세요.";
+        detail = "마지막으로 확인한 Agent 버전이 서버에서 요구하는 버전과 달라 작업을 배정하지 않습니다. 설정에서 해당 장치의 CMD를 받아 실행하면 기존 연결과 저장 데이터를 유지하며 업데이트합니다.";
       } else if (!connected || this.stopped) {
         state = client.lastSeenAtMs === null ? "NEVER_CONNECTED" : "OFFLINE";
         detail = state === "NEVER_CONNECTED"
@@ -371,11 +390,11 @@ export class AgentCoordinator {
     }
     let accepted = false;
     if (message.type === "DEFER") {
-      // 새 메시지는 내부 실행기의 시작 전 반환에만 허용한다. 기존 원격 완료 계약은 그대로다.
-      if (clientId === LOCAL_AGENT_ID && this.ownsBacktest(clientId, message.jobId)) {
+      // 시작 전 자원 부족은 실행 위치와 무관하게 소유한 유효 리스만 반환한다.
+      if (this.ownsBacktest(clientId, message.jobId)) {
         accepted = this.backtests.defer({
           ...identity,
-          reason: `로컬 메모리 여유 대기 (필요 ${message.requiredBytes}, 가용 ${message.availableBytes} bytes)`,
+          reason: `${clientId === LOCAL_AGENT_ID ? "서버" : "실행 장치"} 메모리 여유 대기 (필요 ${message.requiredBytes}, 가용 ${message.availableBytes} bytes)`,
         }) === "ACCEPTED";
       }
     } else if (message.type === "NEEDS_DATA") {
@@ -611,7 +630,8 @@ export class AgentCoordinator {
     const memory = this.localMemoryPlans.get(`${this.localConnection?.datasetVersion}:${jobId}`);
     const budget = this.localClient?.localMemoryBudget() ?? 0;
     const capable = connected.filter(([id, connection]) => estimatedBars === undefined ||
-      (connection.maxBars >= estimatedBars &&
+      (connection.maxBars >= (id === LOCAL_AGENT_ID ? estimatedBars
+        : this.inputBarCounts.get(`${connection.datasetVersion}:${jobId}`)?.loadBars ?? estimatedBars) &&
         (id !== LOCAL_AGENT_ID || !memory || memory.plan.requiredBytes <= budget)));
     const free = capable.filter(([id, connection]) => this.available(id, connection));
     const syncing = capable
@@ -792,7 +812,8 @@ export class AgentCoordinator {
     for (const job of jobs) {
       const requiredBytes = this.localMemoryPlans.get(`${this.localConnection?.datasetVersion}:${job.id}`)?.plan.requiredBytes ?? null;
       const localBudgetBytes = this.localClient?.localMemoryBudget() ?? 0;
-      const capable = connected.filter(([id, connection]) => connection.maxBars >= job.estimatedBars &&
+      const capable = connected.filter(([id, connection]) => connection.maxBars >=
+        (id === LOCAL_AGENT_ID ? job.estimatedBars : this.inputBarCounts.get(`${connection.datasetVersion}:${job.id}`)?.loadBars ?? job.estimatedBars) &&
         (id !== LOCAL_AGENT_ID || requiredBytes === null || requiredBytes <= localBudgetBytes));
       const reason = connected.length === 0 ? "NO_CONNECTED_EXECUTOR"
         : capable.length === 0 ? (requiredBytes !== null && requiredBytes > localBudgetBytes
@@ -834,14 +855,16 @@ export class AgentCoordinator {
       const local = clientId === LOCAL_AGENT_ID;
       if (local) this.refreshLocalCapacity();
       if (!this.available(clientId, connection)) return;
-      const candidate = local ? await this.localBacktestCandidate(connection.maxBars, dataset) : null;
+      const candidate = local ? await this.localBacktestCandidate(connection.maxBars, dataset)
+        : await this.remoteBacktestCandidate(connection.maxBars, dataset);
       // 집계 중 새 원격 슬롯이 생겼으면 로컬 claim 전에 우선 배정한다.
       if (local)
         for (const [id, remote] of this.connections) await this.assign(id, remote, dataset);
       // 팩트 집계 사이에 취소·종료·다른 배정이 진행될 수 있다.
       if (this.stopped || !this.available(clientId, connection)) return;
-      if (candidate && candidate.plan.requiredBytes > (this.localClient?.localMemoryBudget() ?? 0)) return;
-      const claim = local && !candidate ? { status: "EMPTY" as const } : this.backtests.claim(
+      if (local && candidate?.plan && candidate.plan.requiredBytes > (this.localClient?.localMemoryBudget() ?? 0)) return;
+      if (candidate?.inputBars && (local ? candidate.inputBars.tradeBars : candidate.inputBars.loadBars) > connection.maxBars) return;
+      const claim = !candidate ? { status: "EMPTY" as const } : this.backtests.claim(
         clientId,
         this.executionVersion,
         connection.maxBars,
@@ -868,21 +891,23 @@ export class AgentCoordinator {
           leaseToken: claim.lease.leaseToken,
           leaseExpiresAtMs: claim.lease.leaseExpiresAtMs,
           dataset,
-          ...(candidate ? { memoryPlan: candidate.plan } : {}),
+          ...(candidate?.plan ? { memoryPlan: candidate.plan } : {}),
+          ...(candidate?.inputBars ? { inputBars: candidate.inputBars } : {}),
           payload: { ...job, preparationJobId: null },
         };
       } else lease = this.preparations.claim(clientId, dataset);
       if (!lease) {
         const waiting = this.database.sqlite
           .prepare(
-            "SELECT estimated_bars AS bars FROM backtest_jobs WHERE status = 'QUEUED' ORDER BY created_at_ms LIMIT 1",
+            "SELECT id, estimated_bars AS bars FROM backtest_jobs WHERE status = 'QUEUED' ORDER BY created_at_ms LIMIT 1",
           )
-          .get() as { bars: number } | undefined;
+          .get() as { id: string; bars: number } | undefined;
+        const requiredBars = waiting ? this.inputBarCounts.get(`${dataset.version}:${waiting.id}`)?.loadBars ?? waiting.bars : 0;
         // 로컬은 봉 수 대신 개별 작업의 메모리 계획과 남은 전체 예산으로 판단한다.
-        if (clientId !== LOCAL_AGENT_ID && waiting && waiting.bars > connection.maxBars)
+        if (clientId !== LOCAL_AGENT_ID && waiting && requiredBars > connection.maxBars)
           this.send(connection, {
             type: "DEMAND",
-            estimatedBars: waiting.bars,
+            estimatedBars: requiredBars,
           });
         break;
       }
@@ -895,23 +920,86 @@ export class AgentCoordinator {
     }
   }
 
+  /** 게시 파일의 확정 입력만 집계한다. 스냅샷이 바뀌면 이전 집계는 재사용하지 않는다. */
+  private async backtestInputBars(job: BacktestJobRow, dataset: DatasetManifest): Promise<AgentLease["inputBars"]> {
+    const key = `${dataset.version}:${job.id}`;
+    const cached = this.inputBarCounts.get(key);
+    if (cached) return cached;
+    // 손상된 요청은 기존 워커의 입력 진단으로 보낸다. 작은 입력으로 재해석하지 않는다.
+    let raw: unknown;
+    let schedule: unknown;
+    try { raw = JSON.parse(job.requestJson); schedule = JSON.parse(job.universeScheduleJson); }
+    catch { return undefined; }
+    const parsed = backtestRequestSchema.safeParse(raw);
+    if (!parsed.success || !Array.isArray(schedule) || schedule.length === 0 || schedule.some((entry) =>
+      !entry || !Array.isArray(entry.symbols) || entry.symbols.some((symbol: unknown) => typeof symbol !== "string"))) return undefined;
+    try { assertPinnedScheduleExecutionDates(schedule); }
+    catch { return undefined; }
+    const request = parsed.data;
+    const strategy = this.strategies.get(request.strategyId);
+    const parameters = this.strategies.validateParameters(request.strategyId, request.parameters);
+    if (!strategy || !parameters.ok) return undefined;
+    const symbols = [...new Set<string>(schedule.flatMap((entry) => entry.symbols))];
+    const snapshot = new Database(this.snapshots.file(dataset), { readonly: true, fileMustExist: true });
+    try {
+      const { tradeBars, loadBars } = await countBacktestInputBars(drizzle(snapshot, { schema: dataSchema }), request,
+        symbols, strategy, parameters.value);
+      const counts = { tradeBars, loadBars };
+      if (!this.inputBarCounts.has(key) && this.inputBarCounts.size >= 256)
+        this.inputBarCounts.delete(this.inputBarCounts.keys().next().value!);
+      this.inputBarCounts.set(key, counts);
+      // 이전 버전의 추정치도 배정 스냅샷의 실제 거래 봉 수로 바로잡는다.
+      this.database.sqlite.prepare("UPDATE backtest_jobs SET estimated_bars = ? WHERE id = ? AND status = 'QUEUED'")
+        .run(counts.tradeBars, job.id);
+      return counts;
+    } finally { snapshot.close(); }
+  }
+
+  private async remoteBacktestCandidate(maxBars: number, dataset: DatasetManifest): Promise<{
+    jobId: string; inputBars?: AgentLease["inputBars"]; plan?: BacktestMemoryPlan; inputError?: string;
+  } | null> {
+    const candidates = this.database.sqlite.prepare(`SELECT id FROM backtest_jobs
+      WHERE status = 'QUEUED' AND lease_failures < ? ORDER BY created_at_ms, id`)
+      .all(AGENT_MAX_ATTEMPTS) as Array<{ id: string }>;
+    for (const candidate of candidates) {
+      const job = this.queue.getJob(candidate.id);
+      if (!job) continue;
+      let inputBars: AgentLease["inputBars"];
+      try { inputBars = await this.backtestInputBars(job, dataset); }
+      catch (error) {
+        return { jobId: job.id, inputError: `게시 스냅샷을 확인할 수 없습니다: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      if (this.stopped) return null;
+      if ((inputBars?.loadBars ?? job.estimatedBars) <= maxBars) return { jobId: job.id, inputBars };
+    }
+    return null;
+  }
+
   /** 큰 작업이 기다리는 동안 실행 가능한 작은 작업과 준비 작업까지 막지 않는다. */
   private async localBacktestCandidate(maxBars: number, dataset: DatasetManifest): Promise<{
-    jobId: string; plan: BacktestMemoryPlan; inputError?: string;
+    jobId: string; plan: BacktestMemoryPlan; inputBars?: AgentLease["inputBars"]; inputError?: string;
   } | null> {
     const budgetBytes = this.localClient?.localMemoryBudget() ?? 0;
     const candidates = this.database.sqlite.prepare(`SELECT id FROM backtest_jobs
-      WHERE status = 'QUEUED' AND lease_failures < ? AND estimated_bars <= ?
-      ORDER BY created_at_ms, id`).all(AGENT_MAX_ATTEMPTS, maxBars) as Array<{ id: string }>;
+      WHERE status = 'QUEUED' AND lease_failures < ?
+      ORDER BY created_at_ms, id`).all(AGENT_MAX_ATTEMPTS) as Array<{ id: string }>;
     let snapshot: Database.Database | undefined;
     try {
       for (const candidate of candidates) {
+        const job = this.queue.getJob(candidate.id);
+        if (!job) continue;
+        let inputBars: AgentLease["inputBars"];
+        try { inputBars = await this.backtestInputBars(job, dataset); }
+        catch (error) {
+          return { jobId: job.id, plan: backtestMemoryPlan(job),
+            inputError: `게시 스냅샷을 확인할 수 없습니다: ${error instanceof Error ? error.message : String(error)}` };
+        }
+        if (this.stopped) return null;
+        if ((inputBars?.tradeBars ?? job.estimatedBars) > maxBars) continue;
         const key = `${dataset.version}:${candidate.id}`;
         const cached = this.localMemoryPlans.get(key);
         let plan = cached?.complete ? cached.plan : undefined;
         if (!plan) {
-          const job = this.queue.getJob(candidate.id);
-          if (!job) continue;
           this.reportMemorySampling(candidate.id, null, null, budgetBytes);
           let factQuery: { symbols: readonly string[]; throughTsMs: number; includeFinancialFacts: boolean } | undefined;
           plan = backtestMemoryPlan(job, (symbols, throughTsMs, includeFinancialFacts) => {
@@ -963,7 +1051,7 @@ export class AgentCoordinator {
           this.rememberMemoryPlan(key, plan, true);
         }
         this.memorySampling = null;
-        if (plan.requiredBytes <= budgetBytes) return { jobId: candidate.id, plan };
+        if (plan.requiredBytes <= budgetBytes) return { jobId: candidate.id, plan, inputBars };
         await yieldImmediate();
         if (this.stopped) return null;
       }
@@ -985,6 +1073,7 @@ export class AgentCoordinator {
     let open = true;
     let tail = Promise.resolve();
     const connection: Connection = {
+      id: randomUUID(),
       socket: {
         get readyState() {
           return open ? 1 : 3;

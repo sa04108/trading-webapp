@@ -73,6 +73,10 @@
 
 KRX는 일봉 가격·과거 종목 구성, DART는 재무·자본변동, FRED는 추가 벤치마크를 공급한다. 토스증권 REST는 종목 정보, 분봉, 실매매 계좌·주문·체결·취소에 사용한다. 절대 시각은 UTC로 보존하고 거래일·호출 한도 등의 KST 기준은 명시한다. 정정 공시와 종목 식별 이력을 보존한다.
 
+토스 REST 호출은 서버의 공유 클라이언트에서 HTTP 메서드·경로에 따라 공식 Rate Limits 그룹을 결정한다. [공식 API 소개](https://openapi.tossinvest.com/openapi-docs/overview.md)의 2026-11-17 표를 `toss-rate-limits.ts`에 고정한다. 현재 사용하는 한도는 AUTH 5, ACCOUNT 1, ASSET 5, STOCK 5, MARKET_DATA 15, MARKET_DATA_CHART 20, ORDER 10, ORDER_HISTORY 5, ORDER_INFO 6회/초이며 ORDER_INFO는 09:00 이상 09:10 미만 KST에 3회/초다. 같은 그룹은 종목·계좌·쿼리와 무관하게 간격을 두고 순서대로 전송하며 다른 그룹은 독립적으로 진행한다. 신규 API는 호출 경로의 그룹을 명시적으로 등록해야 한다. 이 한도 공유 범위는 서버 프로세스의 클라이언트이며 외부 프로그램의 동일 자격 증명 사용까지 조율하지 않는다.
+
+HTTP 429는 작업 실패·영구 차단으로 기록하지 않고 같은 요청을 재시도한다. `Retry-After`(초 또는 HTTP 날짜)와 `X-RateLimit-Reset`(토큰 충전까지 초)의 대기시간을 그룹 전체에 적용한다. 유효한 헤더가 없으면 1초부터 최대 30초까지 대기를 늘리며 횟수 제한으로 실패시키지 않는다. 사용자 취소·서버 종료 시 대기를 중단한다. 토큰 발급도 같은 규칙을 사용하고 공유 인증의 마지막 대기자가 취소되면 전송 전 대기를 중단한다. 이미 전송한 발급은 응답까지 공유하여 중복 발급으로 기존 토큰을 무효화하지 않는다. 주문은 매 전송 직전에 기존 안전 검사를 다시 실행하며 HTTP 429 이외의 통신 실패·타임아웃·서버 오류를 자동으로 재전송하지 않는다.
+
 분봉은 지정 종목·별도 실행 경로를 사용하며 원본을 최근 365일 Parquet로 보관한다. 일봉의 기존 시각 계약을 유지하고 분봉에는 종료 시각을 사용한다. 초기 실행 범위와 보관 정책은 [분봉 백테스트](INTRADAY_BACKTEST.md)에 따른다.
 
 ### 실매매 계약
@@ -167,7 +171,7 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 | 상태 확인 | `/api/v1/health/live`·`/api/v1/health/ready`는 공개 상태만 반환한다. `/api/v1/system/info`는 인증 후 조회한다. |
 | 브라우저 진행 상태 | 기존 작업·알림의 SSE는 유지하며 작업 센터는 상태 전용 REST 조회를 사용한다. 목록은 활성 작업이 있으면 5초, 없으면 30초, 상세는 활성 상태에서 2초 간격이며 종료·화면 이탈 시 상세 폴링을 멈춘다. 숨겨진 탭에서는 주기 조회하지 않는다. 브라우저 연결의 수명과 영속 작업의 수명을 분리한다. |
 | 에이전트 제어 | `/api/agents/connect`의 WSS. 장치 Bearer 토큰으로 인증하고 임대·진행률·데이터 요구·취소를 교환한다. |
-| 에이전트 파일 전송 | `/api/agents/datasets/:version`, `/api/agents/jobs/:jobId/result`. 장치 인증을 요구하며 결과 수신은 파일·실행 버전·현재 임대를 검증한다. Windows 설치 파일은 연결 토큰 발급 후 웹에서 내려받는다. |
+| 에이전트 파일 전송 | `/api/agents/datasets/:version`, `/api/agents/jobs/:jobId/result`. 장치 인증을 요구하며 결과 수신은 파일·실행 버전·현재 임대를 검증한다. Windows CMD는 로그인한 웹에서 토큰 입력 없이 내려받고, `/api/agents/install/resolve`에서 서명된 설치 권한으로 기존 토큰 재사용 또는 새 연결 등록을 확인한다. |
 
 상세 필드·제한은 [공유 스키마](../src/shared/schemas/)·[에이전트 프로토콜](../src/shared/agent-protocol.ts)·각 `presentation`에서 관리한다. 라우트 등록과 인증 경계는 [server.ts](../src/server/bootstrap/server.ts)를 따른다.
 

@@ -63,8 +63,8 @@ export class TossIntradaySource {
       });
       const response = object(
         await this.client.request(
-          "MARKET_DATA_CHART",
           `/api/v1/candles?${query}`,
+          { signal: options.signal },
         ),
       );
       options.signal?.throwIfAborted();

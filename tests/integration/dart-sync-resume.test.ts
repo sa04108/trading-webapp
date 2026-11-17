@@ -72,7 +72,7 @@ function setup(database: DatabaseHandle, now: number, corrected = false, options
   });
   const facts = new SqliteFactRepository(database.db);
   const coverage = new SqliteFactCoverageStore(database.db, options?.collectionVersion ? { collectionVersion: options.collectionVersion } : undefined);
-  const actions = new SqliteCorporateActionCoverageStore(database.db);
+  const actions = new SqliteCorporateActionCoverageStore(database.db, options?.collectionVersion ? { collectionVersion: options.collectionVersion } : undefined);
   return {
     calls, facts, coverage, actions, pending, policy, discovery,
     service: new FactSyncService(source, facts, LOGGER, { bumpVersion() {} }, clock, coverage, actions),
@@ -141,6 +141,30 @@ describe('DART 수집 중단 후 SQLite 재개', () => {
       expect(again.savedFacts).toBe(0);
       expect(current.calls).toEqual([]);
       expect(current.coverage.getCoverageState(['005930']).get('005930')).toEqual(state);
+    } finally { database.close(); }
+  });
+
+  it('새 수집 버전은 gap 연도만 원문에서 한 번 재검증하고 나머지 gap은 보류한다', async () => {
+    const database = openDatabase(':memory:');
+    try {
+      seed(database);
+      const request = { ...REQUEST, fromYear: 2018, toYear: 2020 };
+      const old = setup(database, START, false, { collectionVersion: 'old' });
+      expect((await old.service.syncCorporateActions(request)).stopReason).toBeNull();
+      old.actions.addCoverageResult('005930', [2019, 2020], [2019, 2020], START);
+      const current = setup(database, START + 1, false, { collectionVersion: 'new' });
+      expect(current.actions.getCoveredYears(['005930']).get('005930')).toEqual([2018]);
+      expect((await current.service.syncCorporateActions({ ...request, toYear: 2019 })).stopReason).toBeNull();
+      expect(current.calls).toEqual([]);
+      expect(current.actions.getCoveredYears(['005930']).get('005930')).toEqual([2018, 2019]);
+      expect(current.actions.getGapYears(['005930']).get('005930')).toEqual([2020]);
+      expect((await current.service.syncCorporateActions(request)).stopReason).toBeNull();
+      expect(current.calls).toEqual([]);
+      expect(current.actions.getCoveredYears(['005930']).get('005930')).toEqual([2018, 2019, 2020]);
+      expect(current.actions.getGapYears(['005930']).get('005930')).toEqual([]);
+      const again = await current.service.syncCorporateActions(request);
+      expect(again.savedFacts).toBe(0);
+      expect(current.calls).toEqual([]);
     } finally { database.close(); }
   });
 

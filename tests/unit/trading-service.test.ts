@@ -158,14 +158,15 @@ describe("실매매 전략 생명주기", () => {
     expect(f.service.snapshot().account?.cashBuyingPower).toBe(0);
     expect(f.broker.place).not.toHaveBeenCalled();
   });
-  it("전송 직전 잔고·시세가 30초 넘게 지연되면 네트워크에 보내지 않고 미확인으로 남기지 않는다", async () => {
+  it.each([false, true])("전송 직전 잔고·시세가 지연되면 미확인으로 남기지 않는다 (429 이후: %s)", async (rateLimited) => {
     const f = fixture(); await active(f);
     let sent = 0;
     f.broker.place.mockImplementationOnce(async (_account, _order, beforeSend) => {
+      if (rateLimited) { beforeSend?.(); sent++; }
       f.advance(30_001); beforeSend?.(); sent++; return { orderId: "unexpected" };
     });
     await f.service.tick();
-    expect(sent).toBe(0);
+    expect(sent).toBe(Number(rateLimited));
     expect(f.service.snapshot().orders[0]?.status).toBe("REJECTED");
     expect(f.service.snapshot().orders[0]?.error).toMatch(/최신 상태/);
   });
@@ -211,6 +212,29 @@ describe("실매매 전략 생명주기", () => {
     expect(f.service.snapshot().deployment?.status).toBe("INACTIVE");
     expect(f.service.snapshot().orders[0]?.status).toBe("CANCELLED");
     expect(f.broker.place).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["잔고 조회", "미체결 취소"])("서버 종료가 %s 대기를 끊어도 오류 알림을 남기지 않는다", async (phase) => {
+    const f = fixture(); await active(f);
+    let entered!: () => void, abort!: (error: Error) => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const blocked = new Promise<never>((_resolve, reject) => { abort = reject; });
+    if (phase === "미체결 취소") {
+      await f.service.tick();
+      f.broker.cancel.mockImplementationOnce(async () => { entered(); return blocked; });
+      f.service.deactivate(f.service.snapshot().revision, "user");
+    } else {
+      f.advance(30_001);
+      f.broker.accounts.mockImplementationOnce(async () => { entered(); return blocked; });
+    }
+    const tick = f.service.tick(); await waiting;
+    const events = f.service.snapshot().events;
+    const closing = f.service.close();
+    abort(new BrokerRequestError("토스 요청 대기가 취소되었습니다", false));
+    await Promise.all([tick, closing]);
+    expect(f.service.snapshot().broker.error).toBeNull();
+    expect(f.service.snapshot().events).toEqual(events);
+    expect(f.service.snapshot().deployment).toMatchObject({ status: phase === "미체결 취소" ? "STOPPING" : "ACTIVE", lastError: null });
   });
   it("한 주문의 일시 취소 오류가 다른 주문의 취소를 막지 않으며 다음 재시도에 완료한다", async () => {
     const f = fixture(); await active(f);

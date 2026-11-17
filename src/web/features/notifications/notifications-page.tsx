@@ -125,9 +125,9 @@ export function NotificationsPage() {
   const allSelected =
     notifications.length > 0 && selectedIds.length === notifications.length;
 
-  const toggleAll = () =>
+  const toggleAll = (checked: boolean | "indeterminate") =>
     setSelected(
-      allSelected ? new Set() : new Set(notifications.map((n) => n.id)),
+      checked === true ? new Set(notifications.map((n) => n.id)) : new Set(),
     );
 
   const toggleOne = (id: string) =>
@@ -187,7 +187,7 @@ export function NotificationsPage() {
               <>
                 <label className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Checkbox
-                    checked={allSelected}
+                    checked={allSelected ? true : selectedIds.length > 0 ? "indeterminate" : false}
                     onCheckedChange={toggleAll}
                     aria-label="전체 선택"
                   />

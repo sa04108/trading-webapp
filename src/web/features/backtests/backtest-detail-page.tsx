@@ -34,7 +34,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, ApiError } from "@/lib/api-client";
+import { api, ApiError, isUnavailableApiError } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { SymbolLabel } from "@/components/symbol-label";
 import { useStockNames } from "@/lib/use-stock-names";
@@ -525,7 +525,7 @@ export function BacktestDetailPage() {
 
   // 조회가 실패하면 결과가 없다고 말한다 — 알림에서 넘어오면 그 사이 삭제된 잡일 수
   // 있는데, 스켈레톤만 두면 영영 로딩 중으로 보인다
-  if (isError) {
+  if (isError && (!job || isUnavailableApiError(error))) {
     const notFound = error instanceof ApiError && error.status === 404;
     return (
       <div className="space-y-4">
@@ -572,6 +572,7 @@ export function BacktestDetailPage() {
 
   return (
     <div className="space-y-4">
+      {isError ? <Alert variant="destructive"><AlertDescription>결과를 새로 불러오지 못했습니다. <Button variant="outline" onClick={() => void queryClient.invalidateQueries({ queryKey: ["backtests", id] })}>다시 시도</Button></AlertDescription></Alert> : null}
       <BacktestBreadcrumbs jobId={id} />
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-lg font-semibold">

@@ -33,7 +33,7 @@ import {
   pnlClass,
   sharpeClass,
 } from "@/lib/format";
-import { api } from "@/lib/api-client";
+import { api, isUnavailableApiError } from "@/lib/api-client";
 import { useSeedCloneBatch, useStrategies } from "./api";
 import { summarizeSeedCloneMetrics } from "./seed-clone-statistics";
 import type { SeedCloneItemStatus } from "./types";
@@ -89,7 +89,7 @@ export function SeedCloneBatchPage() {
     },
     onError: (error) => toast.error(error.message),
   });
-  if (query.isError) {
+  if (query.isError && (!query.data || isUnavailableApiError(query.error))) {
     return (
       <Alert variant="destructive">
         <AlertTitle>난수 시드 실험을 불러올 수 없습니다</AlertTitle>
@@ -115,6 +115,7 @@ export function SeedCloneBatchPage() {
 
   return (
     <div className="space-y-4">
+      {query.isError ? <Alert variant="destructive"><AlertDescription>실험을 새로 불러오지 못했습니다. <Button variant="outline" onClick={() => void query.refetch()}>다시 시도</Button></AlertDescription></Alert> : null}
       <BacktestBreadcrumbs jobId={batch.sourceJobId} trail={[
         { label: "난수 시드 실험", href: `/backtests/${batch.sourceJobId}/seeds` },
         { label: `실험 ${batch.id.slice(-6)}` },

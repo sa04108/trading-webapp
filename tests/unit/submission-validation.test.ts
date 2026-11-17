@@ -5,6 +5,9 @@ import type { BacktestUniversePreview } from '../../src/runtime/modules/backtest
 import type { TestApp } from '../helpers/test-app.js';
 import { test as base } from '../helpers/test-fixtures.js';
 import { registerSymbols, seedDailyBars } from '../helpers/seed.js';
+import { countBacktestInputBars } from '../../src/runtime/modules/backtest/application/backtest-input-bars.js';
+import { KrxDailyCandleRepository } from '../../src/runtime/modules/market-data/infrastructure/krx-daily-candle-repository.js';
+import { krxDailyBars } from '../../src/runtime/shared/db/schema.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 
 const ts = (date: string): number => Date.parse(`${date}T00:00:00Z`);
@@ -56,7 +59,7 @@ function preview(rebalanceDates: readonly string[]): BacktestUniversePreview {
   };
 }
 
-function validator(container: TestApp['container']) {
+function validator(container: TestApp['container'], maxBars?: number) {
   return createSubmissionValidator({
     database: container.database,
     strategies: container.strategyRegistry,
@@ -67,6 +70,7 @@ function validator(container: TestApp['container']) {
     financialFacts: container.financialFactAvailabilityService,
     facts: container.factRepository,
     clock: container.clock,
+    ...(maxBars === undefined ? {} : { maxBacktestBars: () => maxBars }),
   });
 }
 
@@ -99,6 +103,37 @@ describe('createSubmissionValidator', () => {
     expect(getCoverage).toHaveBeenCalledTimes(1);
     expect(getCoverageBetween).toHaveBeenCalledTimes(1);
     expect(getTimeline).not.toHaveBeenCalled();
+  });
+
+  it('기간에 집중된 실제 봉이 상한을 넘으면 선형 추정과 무관하게 거부한다', async ({ prepared }) => {
+    seedDailyBars(prepared.database.db, [{
+      symbol: '005930', market: 'KR', timeframe: '1d', tsMs: ts('2010-01-04'),
+      open: 100, high: 110, low: 90, close: 105, volume: 1_000,
+    }]);
+    const result = await validator(prepared, 1).validate(request(), preview(['2026-01-05']));
+    expect(result).toMatchObject({ ok: false, status: 400 });
+    if (result.ok) throw new Error('실제 봉 상한을 초과해야 합니다');
+    expect(result.errors[0]).toContain('2봉 > 1봉');
+  });
+
+  it('준비 봉과 거래 봉을 구분하고 중복 종목과 무효 봉은 세지 않는다', async ({ prepared }) => {
+    prepared.database.db.insert(krxDailyBars).values({
+      shortCode: '000660', date: '2026-01-06', market: 'KOSPI',
+      open: 100, high: 90, low: 80, close: 105, volume: 100,
+    }).run();
+    const body = { ...request(), period: { from: '2026-01-06', to: '2026-01-06' } };
+    const strategy = prepared.strategyRegistry.get(body.strategyId)!;
+    const parameters = strategy.parameterSchema.parse(body.parameters);
+    const symbols = ['005930', '005930', '000660'];
+    const counts = await countBacktestInputBars(prepared.database.db, body, symbols, strategy, parameters);
+    const repository = new KrxDailyCandleRepository(prepared.database.db);
+    const actual = [...repository.getCandlesByDateBatches({
+      market: 'KR', timeframe: '1d', symbols: [...new Set(symbols)],
+      fromTsMs: ts(counts.warmupFromDate), toTsMs: ts(body.period.to),
+    }, 32)].flat();
+    expect(counts).toEqual({ warmupFromDate: '2026-01-05', tradeBars: 1, loadBars: 2 });
+    expect(actual).toHaveLength(counts.loadBars);
+    expect(actual.filter((candle) => candle.tsMs >= ts(body.period.from))).toHaveLength(counts.tradeBars);
   });
 
   it('검증 호출과 dataset revision 사이에는 coverage 캐시를 재사용하지 않는다', async ({ prepared }) => {

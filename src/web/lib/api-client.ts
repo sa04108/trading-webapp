@@ -14,6 +14,11 @@ export class ApiError extends Error {
   }
 }
 
+/** 접근 권한이나 대상의 부재가 확인되면 이전 조회 결과로 화면을 계속 열지 않는다. */
+export function isUnavailableApiError(error: unknown): boolean {
+  return error instanceof ApiError && [401, 403, 404, 410].includes(error.status);
+}
+
 /** 오류 코드는 분기에 쓰고, 화면에는 서버가 보낸 설명을 우선 표시한다. */
 export function apiErrorMessage(error: unknown, fallback: string): string {
   if (!(error instanceof ApiError)) return fallback;

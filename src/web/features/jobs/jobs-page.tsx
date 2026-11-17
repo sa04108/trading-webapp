@@ -53,7 +53,7 @@ export function JobsPage() {
           <div className="flex flex-wrap items-center gap-2">
             {editing && <>
               <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Checkbox disabled={query.isPlaceholderData} checked={allSelected} onCheckedChange={() => setSelected(allSelected ? new Set() : new Set(finished.map((job) => job.id)))} aria-label="종료된 작업 전체 선택" /> 전체 선택
+                <Checkbox disabled={query.isPlaceholderData} checked={allSelected ? true : selectedIds.length > 0 ? "indeterminate" : false} onCheckedChange={(checked) => setSelected(checked === true ? new Set(finished.map((job) => job.id)) : new Set())} aria-label="종료된 작업 전체 선택" /> 전체 선택
               </label>
               <Button variant="destructive" size="sm" disabled={!selectedIds.length || remove.isPending || query.isPlaceholderData} onClick={() => remove.mutate(selectedIds)}>삭제 ({selectedIds.length})</Button>
             </>}

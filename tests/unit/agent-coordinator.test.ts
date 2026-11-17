@@ -9,7 +9,10 @@ import { test as base } from '../helpers/test-fixtures.js';
 import type { TestApp } from '../helpers/test-app.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import type { AgentLease, ServerAgentMessage } from '../../src/shared/agent-protocol.js';
+import { AgentInstallationService } from '../../src/server/modules/agents/application/agent-installation.js';
 import Fastify from 'fastify';
+import { seedDailyBars } from '../helpers/seed.js';
+import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 import { registerAgentManagementRoutes } from '../../src/server/modules/agents/presentation/agent-routes.js';
 import { agentContainerImage, buildWindowsAgentInstaller } from '../../src/server/modules/agents/infrastructure/agent-windows-installer.js';
 
@@ -314,7 +317,7 @@ describe('연결과 리스 수명 분리', () => {
     }
 
     const app = Fastify();
-    registerAgentManagementRoutes(app, ctx.container.agentCoordinator, async () => undefined);
+    registerAgentManagementRoutes(app, ctx.container.agentCoordinator, async () => undefined, new AgentInstallationService(ctx.container.agentCoordinator.registry, 's'.repeat(48)));
     await app.ready();
     try {
       const response = await app.inject({ method: 'GET', url: '/agents' });
@@ -399,7 +402,7 @@ describe('연결과 리스 수명 분리', () => {
     expect(unauthenticated.statusCode).toBe(401);
 
     const app = Fastify();
-    registerAgentManagementRoutes(app, ctx.container.agentCoordinator, async () => undefined);
+    registerAgentManagementRoutes(app, ctx.container.agentCoordinator, async () => undefined, new AgentInstallationService(ctx.container.agentCoordinator.registry, 's'.repeat(48)));
     await app.ready();
     try {
       const route = '/agents/install/windows';
@@ -430,6 +433,99 @@ describe('연결과 리스 수명 분리', () => {
     } finally {
       await app.close();
     }
+  });
+
+  it('토큰 없는 CMD 다운로드는 실행 전 장치를 만들지 않고 기존 인증 또는 새 연결을 재사용한다', async ({ scenario }) => {
+    const { ctx, id, token } = scenario;
+    const registry = ctx.container.agentCoordinator.registry;
+    const app = Fastify();
+    registerAgentManagementRoutes(app, ctx.container.agentCoordinator, async () => undefined,
+      new AgentInstallationService(registry, 's'.repeat(48)));
+    try {
+      const download = await app.inject({ method: 'POST', url: '/agents/install/windows',
+        payload: { clientId: id, serverUrl: 'https://example.com' } });
+      expect(download.statusCode).toBe(200);
+      const encoded = download.body.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/)?.[1];
+      const config = JSON.parse(Buffer.from(encoded!, 'base64').toString('utf8'));
+      expect(config).toMatchObject({ targetClientId: id, targetTokenHash: createHash('sha256').update(token).digest('hex') });
+      expect(config).not.toHaveProperty('token');
+      expect(registry.list()).toHaveLength(1);
+      const resolve = (previousToken?: string) => ctx.app.inject({ method: 'POST', url: '/api/agents/install/resolve',
+        headers: { host: 'example.com' },
+        payload: { installation: config.installation, previousToken } });
+      const reused = await resolve(token);
+      expect(reused.statusCode).toBe(200);
+      expect(reused.headers['cache-control']).toBe('no-store');
+      expect(reused.json()).toEqual({ id, token });
+      expect(registry.list()).toHaveLength(1);
+
+      const replacement = await resolve('invalid-existing-token');
+      expect(replacement.statusCode).toBe(200);
+      expect(replacement.json().id).not.toBe(id);
+      expect(registry.authenticate(replacement.json().token)).toBe(replacement.json().id);
+      expect((await resolve()).json()).toEqual(replacement.json());
+      expect((await resolve(replacement.json().token)).json()).toEqual(replacement.json());
+      expect(registry.list()).toHaveLength(2);
+      registry.revoke(replacement.json().id);
+      expect((await resolve()).statusCode).toBe(401);
+      expect(registry.list()).toHaveLength(2);
+    } finally { await app.close(); }
+  });
+
+  it('설치 완료 확인은 인증된 장치의 새 연결과 버전 승인 상태를 구분한다', async ({ scenario }) => {
+    const { ctx, token, connect } = scenario;
+    const status = () => ctx.app.inject({ method: 'GET', url: '/api/agents/install/status',
+      headers: { authorization: `Bearer ${token}` } });
+    expect((await ctx.app.inject({ method: 'GET', url: '/api/agents/install/status' })).statusCode).toBe(401);
+    expect((await status()).json()).toEqual({ ready: false, connectionId: null });
+    const old = await connect('a'.repeat(64));
+    const rejected = (await status()).json();
+    expect(rejected.ready).toBe(false);
+    const fresh = await connect();
+    const accepted = await status();
+    expect(accepted.json().ready).toBe(true);
+    expect(accepted.json().connectionId).not.toBe(rejected.connectionId);
+    expect(accepted.headers['cache-control']).toBe('no-store');
+    old.close();
+    expect((await status()).json()).toEqual(accepted.json());
+    fresh.close();
+    expect((await status()).json()).toEqual({ ready: false, connectionId: null });
+  });
+
+  it('설치 권한은 웹 로그인·서명·만료·장치 선택·연결 해제를 검증한다', async ({ scenario }) => {
+    const { ctx, id, token } = scenario;
+    const registry = ctx.container.agentCoordinator.registry;
+    const service = new AgentInstallationService(registry, 's'.repeat(48));
+    const resolve = (installation: string, previousToken?: string) => ctx.app.inject({
+      method: 'POST', url: '/api/agents/install/resolve', headers: { host: 'example.com' }, payload: { installation, previousToken },
+    });
+    for (const selection of [{ name: 'PC' }, { clientId: id }]) {
+      const denied = await ctx.app.inject({ method: 'POST', url: '/api/v1/agents/install/windows',
+        payload: { ...selection, serverUrl: 'https://example.com' } });
+      expect(denied.statusCode).toBe(401);
+    }
+    expect(() => service.create({ serverUrl: 'https://example.com', clientId: 'missing' })).toThrow('장치가 없습니다');
+    const grant = service.create({ serverUrl: 'https://example.com', clientId: id });
+    expect((await ctx.app.inject({ method: 'POST', url: '/api/agents/install/resolve',
+      headers: { host: 'other.example.com' }, payload: { installation: grant.installation, previousToken: token } })).statusCode).toBe(401);
+    const [payload, signature] = grant.installation.split('.');
+    const tampered = Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(payload!, 'base64url').toString()), name: 'tampered' })).toString('base64url');
+    expect((await resolve(`${tampered}.${signature}`)).statusCode).toBe(401);
+    const foreign = new AgentInstallationService(registry, 'different-server-secret').create({ serverUrl: 'https://example.com', name: 'PC' });
+    expect((await resolve(foreign.installation)).statusCode).toBe(401);
+    expect(registry.list()).toHaveLength(1);
+    const other = registry.issue('other');
+    expect((await resolve(grant.installation, other.token)).statusCode).toBe(409);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 8 * 24 * 60 * 60 * 1000);
+    expect((await resolve(grant.installation, token)).statusCode).toBe(401);
+    clock.mockRestore();
+    registry.revoke(id);
+    expect((await resolve(grant.installation, token)).statusCode).toBe(401);
+    const fresh = service.create({ serverUrl: 'https://example.com', clientId: id });
+    const replacement = await resolve(fresh.installation, token);
+    expect(replacement.statusCode).toBe(200);
+    expect(registry.authenticate(token)).toBeNull();
+    expect(registry.authenticate(replacement.json().token)).toBe(replacement.json().id);
   });
 
   it('배포 SHA가 바뀌어도 동일 내용 버전 클라이언트는 환영하고 실행 버전으로 배정한다', async ({ scenario }) => {
@@ -494,4 +590,56 @@ describe('이벤트로 대기 큐 재배정', () => {
     await vi.waitFor(() => expect(peer.received.filter((message) => message.type === 'JOB').map((message) => message.lease.jobId)).toContain(next.id));
     expect(ctx.container.jobQueue.getJob(next.id)?.attempt).toBe(1);
   });
+});
+
+
+it('게시 스냅샷의 준비 봉까지 수용하는 원격 장치만 배정하고 소유 리스만 자원 대기로 반환한다', async ({ scenario }) => {
+  const { ctx, connect } = scenario;
+  const coordinator = ctx.container.agentCoordinator;
+  const dates = ['2026-01-01', '2026-01-02', '2026-01-05', '2026-01-06'];
+  seedSymbolMasterUniverse(ctx.container, dates, [{ standardCode: 'KR7005930003', shortCode: '005930',
+    name: '삼성전자', market: 'KOSPI', marketCapKrw: '1000000000' }]);
+  seedDailyBars(ctx.container.database.db, dates.map(date => ({ symbol: '005930', market: 'KR' as const,
+    timeframe: '1d' as const, tsMs: Date.parse(`${date}T00:00:00Z`), open: 100, high: 110, low: 90, close: 100, volume: 1000 })));
+  vi.spyOn(coordinator.snapshots, 'file').mockReturnValue(ctx.container.database.dataPath);
+  const peer = await connect();
+  peer.submit({ type: 'CAPACITY', slots: 1, datasetVersion: 1, maxBars: 3 });
+  const body = { ...request, period: { from: '2026-01-05', to: '2026-01-06' } };
+  const job = ctx.container.jobQueue.enqueue(body, [{ rebalanceDate: body.period.from, effectiveTradingDate: body.period.from,
+    symbols: ['005930'], excludedNonTradingCount: 0 }], undefined, undefined, [], { estimatedBars: 1 });
+  // DEMAND는 정확한 집계를 끝내고 용량 부족을 판정한 관찰 가능한 경계다.
+  await vi.waitFor(() => expect(peer.received).toContainEqual({ type: 'DEMAND', estimatedBars: 4 }));
+  expect(peer.job()).toBeUndefined();
+  expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({ status: 'QUEUED', attempt: 0, estimatedBars: 2 });
+  peer.submit({ type: 'CAPACITY', slots: 1, datasetVersion: 1, maxBars: 4 });
+  await vi.waitFor(() => expect(peer.job()?.jobId).toBe(job.id));
+  const lease = peer.job()!;
+  expect(lease.inputBars).toEqual({ tradeBars: 2, loadBars: 4 });
+  const foreign = new Peer();
+  const credential = coordinator.registry.issue('other-device');
+  coordinator.connect(credential.id, foreign as unknown as WebSocket);
+  foreign.submit({ type: 'HELLO', protocolVersion: 4, runnerVersion: coordinator.runnerVersion });
+  await vi.waitFor(() => expect(foreign.received.some(message => message.type === 'WELCOME')).toBe(true));
+  const defer = { type: 'DEFER', kind: 'BACKTEST', jobId: lease.jobId, attempt: lease.attempt,
+    leaseToken: lease.leaseToken, reason: 'RESOURCE_UNAVAILABLE', requiredBytes: 5120, availableBytes: 3840 };
+  foreign.submit(defer);
+  await vi.waitFor(() => expect(foreign.received).toContainEqual(expect.objectContaining({ type: 'ACK', accepted: false })));
+  expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('STARTING');
+  peer.submit({ type: 'CAPACITY', slots: 0, datasetVersion: 1, maxBars: 3 });
+  peer.submit(defer);
+  await vi.waitFor(() => expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('QUEUED'));
+  expect(ctx.container.jobQueue.getJob(job.id)?.leaseFailures).toBe(0);
+});
+
+
+it('잘못된 일정 날짜는 봉 집계 없이 기존 워커의 입력 진단으로 보낸다', async ({ scenario }) => {
+  const { ctx, connect } = scenario;
+  const snapshotFile = vi.spyOn(ctx.container.agentCoordinator.snapshots, 'file');
+  const peer = await connect();
+  const job = ctx.container.jobQueue.enqueue(request, [{ rebalanceDate: 'bad-date', effectiveTradingDate: 'bad-date', symbols: ['005930'],
+    excludedNonTradingCount: 0 }], undefined, undefined, [], { estimatedBars: 1 });
+  capacity(peer);
+  await vi.waitFor(() => expect(peer.job()?.jobId).toBe(job.id));
+  expect(peer.job()?.inputBars).toBeUndefined();
+  expect(snapshotFile).not.toHaveBeenCalled();
 });

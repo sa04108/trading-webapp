@@ -40,6 +40,7 @@ import { registerNotificationRoutes } from "../modules/notification/presentation
 import { registerJobCenterRoutes } from "../modules/jobs/presentation/job-center-routes.js";
 import { registerSymbolMasterRoutes } from "../modules/market-data/presentation/symbol-master-routes.js";
 import fastifyWebsocket from "@fastify/websocket";
+import { AgentInstallationService } from "../modules/agents/application/agent-installation.js";
 import {
   registerAgentControlRoutes,
   registerAgentManagementRoutes,
@@ -127,6 +128,7 @@ export async function buildServer(
   };
   const requireAuth = createRequireAuth(authDeps);
   const requireSession = createRequireAuth(authDeps, { sessionOnly: true });
+  const agentInstallations = new AgentInstallationService(container.agentCoordinator.registry, config.sessionSecret);
 
   await app.register(
     async (api) => {
@@ -138,6 +140,7 @@ export async function buildServer(
         api,
         container.agentCoordinator,
         requireSession,
+        agentInstallations,
       );
       registerAuthRoutes(api, authDeps);
       registerSymbolRoutes(api, container.symbolInfoService, requireAuth);
@@ -270,6 +273,7 @@ export async function buildServer(
         api,
         container.agentCoordinator,
         container.remoteResultUploadManager,
+        agentInstallations,
       );
     },
     { prefix: "/api/agents" },

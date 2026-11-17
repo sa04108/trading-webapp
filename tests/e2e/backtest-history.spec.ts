@@ -405,3 +405,83 @@ for (const view of ["table", "cards"] as const) {
     }
   });
 }
+
+test("실험 정보 재조회 실패에도 선택을 표시하고 삭제를 막는다", async ({ page }) => {
+  await login(page);
+  await historyFixture(page);
+  await page.clock.install();
+  let fail = false;
+  await page.route(/\/api\/v1\/backtests\/history-extras(?:\?|$)/, (route) => {
+    if (fail) return route.fulfill({ status: 503, json: { error: "unavailable" } });
+    const ids = new URL(route.request().url()).searchParams.get("jobIds")?.split(",") ?? [];
+    return route.fulfill({ json: { summaries: ids.map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null } }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) } });
+  });
+  await page.goto("/backtests?view=table&collapsed=strategy-b");
+  await page.getByRole("button", { name: "편집", exact: true }).click();
+  const checkbox = page.getByRole("checkbox", { name: /백테스트 선택$/ }).first();
+  await checkbox.check();
+  await expect(page.getByRole("checkbox", { name: "현재 페이지 선택" })).toHaveAttribute("data-state", "indeterminate");
+  fail = true;
+  await page.clock.runFor(10_000);
+  await expect(page.getByRole("alert")).toContainText("실험 정보");
+  await expect(checkbox).toBeChecked();
+  await expect(checkbox).toBeEnabled();
+  await expect(page.getByRole("button", { name: "현재 페이지 선택 삭제 (1)" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "현재 페이지 전체 삭제" })).toBeDisabled();
+});
+
+test("다른 전략의 페이지 자동 보정은 기존 선택을 유지한다", async ({ page }) => {
+  await login(page);
+  const { deleted } = await historyFixture(page);
+  await page.clock.install();
+  await page.goto("/backtests?view=table&page.strategy-a=2");
+  const group = page.locator("section").filter({ has: page.getByRole("heading", { name: "전략 B", exact: true }) });
+  await page.getByRole("button", { name: "편집", exact: true }).click();
+  const checkbox = group.getByRole("checkbox");
+  await checkbox.check();
+  deleted.push("history-10", "history-11");
+  await page.clock.runFor(5_100);
+  await expect(page).not.toHaveURL(/page\.strategy-a=2/);
+  await expect(checkbox).toBeChecked();
+});
+
+test("새 목록의 실험 정보를 기다리거나 실패해도 기존 선택을 표시한다", async ({ page }) => {
+  await login(page);
+  const { deleted } = await historyFixture(page);
+  await page.clock.install();
+  let hold = false;
+  let entered!: () => void;
+  let release!: () => void;
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  await page.route(/\/api\/v1\/backtests\/history-extras(?:\?|$)/, async (route) => {
+    if (hold) {
+      entered();
+      await pending;
+      return route.fulfill({ status: 503, json: { error: "unavailable" } });
+    }
+    const ids = new URL(route.request().url()).searchParams.get("jobIds")?.split(",") ?? [];
+    return route.fulfill({ json: { summaries: ids.map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null } }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) } });
+  });
+  await page.goto("/backtests?view=table&collapsed=strategy-b");
+  await page.getByRole("button", { name: "편집", exact: true }).click();
+  const checkbox = page.getByRole("checkbox", { name: /백테스트 선택$/ }).first();
+  await checkbox.check();
+  hold = true;
+  deleted.push("history-9");
+  try {
+    await page.clock.runFor(5_100);
+    await started;
+    await expect(checkbox).toBeChecked();
+    await expect(page.getByRole("button", { name: "현재 페이지 선택 삭제 (1)" })).toBeDisabled();
+    release();
+    await page.clock.runFor(5_000);
+    await expect(page.getByRole("alert")).toContainText("실험 정보");
+    await expect(checkbox).toBeChecked();
+    // 선택 해제 뒤에는 권한을 확인할 때까지 체크박스 자체가 사라진다.
+    await checkbox.click();
+    await expect(page.getByRole("button", { name: "현재 페이지 선택 삭제 (0)" })).toBeDisabled();
+  } finally {
+    release();
+  }
+});

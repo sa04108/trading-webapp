@@ -29,16 +29,27 @@ export function validateAgentServerOrigin(value: string): string {
 
 export function buildWindowsAgentInstaller(input: {
   serverUrl: string;
-  token: string;
   image?: string;
-}): string {
+} & ({ token: string } | {
+  installation: string;
+  installationId: string;
+  containerName: string;
+  targetClientId?: string;
+  targetTokenHash?: string;
+})): string {
   const template = fs.readFileSync(path.resolve("scripts/install-agent-windows.ps1"), "utf8");
   const image = input.image ?? agentContainerImage();
   if (!GHCR_AGENT_IMAGE.test(image))
     throw Object.assign(new Error("컨테이너 이미지 설정이 올바르지 않습니다"), { statusCode: 500 });
   const config = Buffer.from(JSON.stringify({
     serverUrl: validateAgentServerOrigin(input.serverUrl),
-    token: input.token,
+    ...("token" in input ? { token: input.token } : {
+      installation: input.installation,
+      installationId: input.installationId,
+      containerName: input.containerName,
+      targetClientId: input.targetClientId,
+      targetTokenHash: input.targetTokenHash,
+    }),
     image,
   }), "utf8").toString("base64");
   const marker = "#__AGENT_POWERSHELL_PAYLOAD__";
