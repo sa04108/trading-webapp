@@ -494,7 +494,8 @@ test('backtest run completes using only KRX daily bars for a delisted stock', as
   // 알림 항목 설명은 전략 이름과 수익률을 첫 줄에 함께 진다 (D-044)
   await page.goto('/notifications');
   const completed = page
-    .getByRole('button', { name: /백테스트가 완료되었습니다/ })
+    .getByRole('listitem')
+    .filter({ hasText: '백테스트가 완료되었습니다' })
     .first();
   await expect(completed).toContainText('전고점 돌파');
   await expect(completed).toContainText('수익률');

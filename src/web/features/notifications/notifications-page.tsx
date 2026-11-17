@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, Info, Minus, Plus } from "lucide-react";
+import { CircleAlert, ExternalLink, Info, Minus, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
@@ -18,15 +18,19 @@ import {
 } from "./missing-targets";
 import type { NotificationItem } from "./types";
 
-/** 아이콘·제목·본문·상대 시각 — 편집 모드 라벨과 비편집 모드 버튼이 내용을 공유한다 */
+/** 본문은 선택 가능한 텍스트로 두고, 화면 이동은 제목 옆 버튼으로 분리한다. */
 function NotificationRowBody({
   item,
   expanded,
   missing,
+  checking,
+  onOpen,
 }: {
   item: NotificationItem;
   expanded: boolean;
   missing: boolean;
+  checking: boolean;
+  onOpen?: () => void;
 }) {
   return (
     <>
@@ -36,7 +40,22 @@ function NotificationRowBody({
         <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       )}
       <span className="min-w-0 flex-1">
-        <span className="block text-sm font-medium">{item.title}</span>
+        <span className="flex items-center gap-1 text-sm font-medium">
+          <span className="min-w-0 wrap-anywhere">{item.title}</span>
+          {onOpen && (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              disabled={checking}
+              aria-busy={checking}
+              aria-label={`${item.title} 관련 화면으로 이동`}
+              title="관련 화면으로 이동"
+              onClick={onOpen}
+            >
+              <ExternalLink />
+            </Button>
+          )}
+        </span>
         {item.body && (
           <span
             className={cn(
@@ -233,61 +252,34 @@ export function NotificationsPage() {
         ) : (
           <ul className="divide-y">
             {notifications.map((item) => {
-              // 행 컨테이너는 button 이 아니라 div 다 — 편집 모드에서 그 안에 Checkbox(button
-              // role) 를 넣으면 button 안에 button 이 중첩돼 HTML 상 무효하고 스크린리더·키보드
-              // 포커스가 꼬인다. 편집 모드는 label+htmlFor 로, 비편집 모드는 그 자리에만
-              // button 을 둬서 인터랙티브 요소가 겹치지 않게 한다. 펼치기 버튼도 같은 이유로
-              // 행 본문 바깥의 형제로 둔다.
-              const checkboxId = `notification-${item.id}`;
               const isExpanded = expanded.has(item.id);
               const isMissing =
                 item.link !== null && missingTargets.has(item.link);
-              const body = (
-                <NotificationRowBody
-                  item={item}
-                  expanded={isExpanded}
-                  missing={isMissing}
-                />
-              );
               return (
                 <li key={item.id}>
                   <div
                     className={cn(
-                      "flex items-start gap-3 px-6 py-3 transition-colors hover:bg-muted/50",
+                      "flex items-start gap-3 px-6 py-3 select-text",
                       !item.read && "bg-accent/40",
                     )}
                   >
-                    {editing ? (
-                      <>
-                        <Checkbox
-                          id={checkboxId}
-                          checked={selected.has(item.id)}
-                          onCheckedChange={() => toggleOne(item.id)}
-                          aria-label={`${item.title} 선택`}
-                          className="mt-0.5"
-                        />
-                        <label
-                          htmlFor={checkboxId}
-                          className="flex min-w-0 flex-1 items-start gap-3"
-                        >
-                          {body}
-                        </label>
-                      </>
-                    ) : item.link ? (
-                      <button
-                        type="button"
-                        className="flex min-w-0 flex-1 items-start gap-3 text-left"
-                        disabled={checking === item.id}
-                        aria-busy={checking === item.id}
-                        onClick={() => void open(item)}
-                      >
-                        {body}
-                      </button>
-                    ) : (
-                      <div className="flex min-w-0 flex-1 items-start gap-3">
-                        {body}
-                      </div>
+                    {editing && (
+                      <Checkbox
+                        checked={selected.has(item.id)}
+                        onCheckedChange={() => toggleOne(item.id)}
+                        aria-label={`${item.title} 선택`}
+                        className="mt-0.5"
+                      />
                     )}
+                    <div className="flex min-w-0 flex-1 items-start gap-3">
+                      <NotificationRowBody
+                        item={item}
+                        expanded={isExpanded}
+                        missing={isMissing}
+                        checking={checking === item.id}
+                        onOpen={!editing && item.link ? () => void open(item) : undefined}
+                      />
+                    </div>
                     {item.body ? (
                       <Button
                         variant="ghost"
