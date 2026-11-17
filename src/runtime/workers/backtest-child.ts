@@ -15,6 +15,7 @@ import { readGitCommitSha } from "../shared/build-info.js";
 import { readRuntimeVersions } from "../shared/runtime-versions.js";
 import { systemClock } from "../shared/clock.js";
 import { openDatabase } from "../shared/db/database.js";
+import { readRiskFreeRateHistory } from "../modules/market-data/infrastructure/sqlite-risk-free-rate-store.js";
 import {
   backtestJobs,
   symbolMasterTradingDays,
@@ -901,6 +902,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
           ? { candleBatches: () => repository.getCandlesByDateBatches(candleQuery, targetBarsPerBatch) }
           : { candles }),
         initialCash: request.capital.initialCash,
+        riskFreeRates: readRiskFreeRateHistory(db),
         execution: {
           cost: costProfile,
           slippage: slippageProfile,

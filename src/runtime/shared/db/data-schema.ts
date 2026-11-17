@@ -13,6 +13,12 @@ import {
 
 // ── 데이터 (스펙 §12) ──────────────────────────────────────────────
 
+/** 금리가 실제로 변경된 날짜만 저장하고 계산 에이전트의 고정 스냅샷에 포함한다. */
+export const riskFreeRateHistory = sqliteTable("risk_free_rate_history", {
+  singleton: integer("singleton").primaryKey(),
+  historyJson: text("history_json").notNull(),
+}, (table) => [check("chk_risk_free_rate_singleton", sql`${table.singleton} = 1`)]);
+
 /**
  * 종목의 거래 시장과 표시명을 저장한다.
  *

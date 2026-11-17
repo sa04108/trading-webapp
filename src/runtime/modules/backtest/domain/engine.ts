@@ -18,6 +18,8 @@ import {
   computeMonthlyReturns,
 } from "./metrics.js";
 import { createRng } from "./seeded-rng.js";
+import { missingRateWarning } from "./sharpe.js";
+import type { RiskFreeRateHistory } from "../../../../shared/schemas/risk-free-rate.js";
 import { RecentCandleHistory } from "./recent-candle-history.js";
 import {
   findRebalanceSpacingViolation,
@@ -39,6 +41,7 @@ import type {
 } from "./types.js";
 
 export interface BacktestRunInput {
+  readonly riskFreeRates?: RiskFreeRateHistory;
   /** 기간·심볼 필터가 끝난 확정 봉 전체 (임의 순서 허용 — 엔진이 정렬) */
   readonly candles?: readonly Candle[];
   /** 날짜·종목 오름차순으로 다시 읽을 수 있는 봉 묶음. 같은 날짜를 묶음 사이에서 나누지 않는다. */
@@ -174,8 +177,9 @@ export interface BacktestRunResult {
  * 2.10.0: legacy 주말 경계를 거래일에서 제외해 리밸런스·warm-up 시계를 바로잡는다.
  * 2.11.0: 단주 현금정산 뒤 남은 포지션에 매수수수료 원가를 비례 배분한다.
  * 2.12.0: 실행 경고에서 개별 종목 코드를 빼고 사유별 주문·종목 수로 요약한다.
+ * 2.13.0: 날짜별 단기금리로 일 수익률을 차감하여 Sharpe를 계산한다.
  */
-export const ENGINE_VERSION = "2.12.0";
+export const ENGINE_VERSION = "2.13.0";
 
 const PROGRESS_INTERVAL_BARS = 500;
 const MS_PER_DAY = 86_400_000;
@@ -296,7 +300,7 @@ function* runBacktestSteps(
   const batches = input.candleBatches ?? (() => [allSorted ?? []]);
   function cancelledBeforeExecution(): BacktestRunResult {
     return {
-      metrics: computeMetrics([], [], [], input.initialCash, 0),
+      metrics: computeMetrics([], [], [], input.initialCash, 0, [], input.riskFreeRates),
       openPositions: [], equityPoints: [], drawdownPoints: [], trades: [], fills: [],
       monthlyReturns: [], warnings: [], cancelled: true, processedBars: 0,
       delistingLiquidations: [],
@@ -1490,7 +1494,10 @@ function* runBacktestSteps(
     input.initialCash,
     maxConcurrentPositions,
     dailyReturnEquityPoints,
+    input.riskFreeRates,
   );
+  const rateWarning = missingRateWarning(metrics.sharpeBasis);
+  if (rateWarning) warnings.push(rateWarning);
 
   // 미청산 포지션 스냅샷 — 수익률·자산 곡선에는 평가금액으로 반영되지만 거래내역에는
   // 없는 돈이 어디 있는지를 명시적으로 보여준다. 이미 낸 매수 수수료는 평가손익에

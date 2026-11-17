@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { expect, it } from 'vitest';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
-import { DATABASE_SCHEMA_VERSION } from '../../src/runtime/shared/db/database-layout.js';
+import { DATABASE_SCHEMA_VERSION, datasetIdentity } from '../../src/runtime/shared/db/database-layout.js';
 import { DatasetSnapshots } from '../../src/server/modules/agents/application/dataset-snapshots.js';
 import { AgentDatasetCache } from '../../src/agent/dataset-cache.js';
 
@@ -105,10 +105,11 @@ it("게시 실패 후 source revision이 바뀌면 대기 시간 없이 다시 �
     database.sqlite.exec("CREATE TABLE data.forbidden_operation_state (id INTEGER)");
     await expect(snapshots.ensureLatest()).rejects.toThrow("운영 테이블");
     database.sqlite.exec("DROP TABLE data.forbidden_operation_state");
+    const revision = datasetIdentity(database.sqlite).revision;
     database.sqlite
       .prepare("UPDATE data.dataset_state SET revision = revision + 1 WHERE singleton = 1")
       .run();
-    await expect(snapshots.ensureLatest()).resolves.toMatchObject({ sourceRevision: 1 });
+    await expect(snapshots.ensureLatest()).resolves.toMatchObject({ sourceRevision: revision + 1 });
   } finally {
     await snapshots.stop();
     database.close();

@@ -433,7 +433,7 @@ export function registerBacktestRoutes(
 
   const serializeJobSummary = (job: BacktestJobRow) => ({
     ...serializeJob(job, deps.database, deps.executionProgress?.(job)),
-    metrics: job.status === "COMPLETED" ? results.getMetrics(job.id) : null,
+    metrics: job.status === "COMPLETED" ? results.getMetricsSummary(job.id) : null,
   });
 
   const serializeBatch = (

@@ -10,6 +10,7 @@ import {
   type IntradayRequest,
 } from "../../src/shared/schemas/intraday.js";
 import { backtestRequestSchema } from "../../src/shared/schemas/backtest-request.js";
+import { computeMetrics } from "../../src/runtime/modules/backtest/domain/metrics.js";
 
 const date = "2026-11-12";
 const at = (time: string, day = date) => Date.parse(`${day}T${time}:00+09:00`);
@@ -58,6 +59,23 @@ const run = (data = bars(), req = request(), tradingDates = [date]) =>
   });
 
 describe("분봉 정보 시각과 주문 생명주기", () => {
+  // 기존 단일 거래일 체결 검사는 분봉 수익률 대신 거래일말 수익률로 Sharpe를 계산하는지 확인하지 못한다.
+  it("분봉도 일봉과 같은 거래일말 수익률과 날짜별 무위험수익률로 Sharpe를 계산한다", () => {
+    const data = bars();
+    for (const bar of data.slice(10)) Object.assign(bar, { open: 900, high: 900, low: 900, close: 900 });
+    const result = run([...data, ...bars("2026-11-13")], {
+      ...request(), period: { from: date, to: "2026-11-13" },
+    }, [date, "2026-11-13"]);
+    const daily = [date, "2026-11-13"].map((day) => {
+      const last = result.equity.filter((point) => point.endMs <= at("15:20", day)).at(-1)!;
+      return { tsMs: last.endMs, equity: last.equity };
+    });
+    const expected = computeMetrics(daily, [], [], request().initialCash, 0);
+    expect(expected.sharpe).not.toBeNull();
+    expect(result.metrics.sharpe).toBeCloseTo(expected.sharpe!, 12);
+    expect(result.metrics.sharpeBasis).toEqual(expected.sharpeBasis);
+  });
+
   it("확정 봉 신호와 지연을 지난 시가 체결을 구별하며 현금과 청산을 보존한다", () => {
     const result = run();
     expect(result.signals[0]).toMatchObject({ atMs: at("09:06"), side: "BUY" });

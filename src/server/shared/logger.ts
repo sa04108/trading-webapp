@@ -26,6 +26,8 @@ const REDACT_PATHS = [
   "api_key",
   "fredApiKey",
   "FRED_API_KEY",
+  "ecosApiKey",
+  "ECOS_API_KEY",
   "req.headers.authorization",
   'req.headers["x-lease-token"]',
   "req.headers.cookie",
@@ -50,6 +52,8 @@ const REDACT_PATHS = [
   "*.api_key",
   "*.fredApiKey",
   "*.FRED_API_KEY",
+  "*.ecosApiKey",
+  "*.ECOS_API_KEY",
 ];
 
 /** Fastify 내장 로거와 애플리케이션 로거가 공유하는 pino 옵션 */

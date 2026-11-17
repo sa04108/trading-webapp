@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RISK_FREE_RATE_SEED } from '../../src/runtime/modules/backtest/domain/risk-free-rate-seed.js';
 import {
   computeDrawdownStats,
   computeMetrics,
@@ -124,6 +125,50 @@ describe('computeMonthlyReturns', () => {
 });
 
 describe('computeMetrics', () => {
+  // 기존 테스트는 날짜별 금리 정렬, 미래 변경점의 역적용, 표본 표준편차를 구별하지 못했다.
+  it('각 관측일의 금리를 차감하고 투자수익률의 표본 표준편차로 연율화한다', () => {
+    const points = equitySeries([110, 104.5, 104.5]);
+    const history = {
+      ...RISK_FREE_RATE_SEED, coveredFrom: '2026-01-01', coveredTo: '2026-01-31',
+      changes: [
+        { date: '2026-01-01', annualRatePct: 2.52 },
+        { date: '2026-01-02', annualRatePct: 5.04 },
+        { date: '2026-01-05', annualRatePct: 20 },
+      ],
+    };
+    const metrics = computeMetrics(points, [], [], 100, 0, points, history);
+    // 10%, -5%, 0% 수익률과 0.01%, 0.02%, 0.02% 일 금리의 독립 계산값.
+    expect(metrics.sharpe).toBeCloseTo(3.4294605989863776, 10);
+    expect(metrics.sharpeBasis).toMatchObject({
+      method: 'DATED_RATE_CHANGES', observationCount: 3, missingRateDays: 0,
+      averageAnnualRatePct: 4.2, minAnnualRatePct: 2.52, maxAnnualRatePct: 5.04,
+    });
+  });
+
+  it('첨부 변경일과 변경 사이 날짜에 금리를 적용하고 수록 범위 밖은 추정하지 않는다', () => {
+    const points = equitySeries([110, 104.5, 104.5], Date.UTC(2010, 0, 4));
+    const metrics = computeMetrics(points, [], [], 100, 0);
+    expect(metrics.sharpeBasis).toMatchObject({
+      series: 'KRW_MSB_91D', minAnnualRatePct: 2.4, maxAnnualRatePct: 2.44,
+      missingRateDays: 0, observationCount: 3,
+    });
+    const outside = computeMetrics(equitySeries([110, 104.5, 104.5], Date.UTC(2026, 10, 17)), [], [], 100, 0);
+    expect(outside.sharpe).toBeNull();
+    expect(outside.sharpeBasis?.missingRateDays).toBe(2);
+    const before = computeMetrics(equitySeries([110, 104.5], Date.UTC(2009, 11, 30)), [], [], 100, 0);
+    expect(before.sharpe).toBeNull();
+    expect(before.sharpeBasis?.missingRateDays).toBe(2);
+  });
+
+  it('투자수익률이 양수여도 무위험수익률보다 낮으면 Sharpe는 음수다', () => {
+    const metrics = computeMetrics(equitySeries([100, 100.01]), [], [], 100, 0);
+    expect(metrics.sharpe).toBeLessThan(0);
+  });
+
+  it.each([{ values: [] }, { values: [100] }, { values: [100, 100] }])('표본 부족 또는 변동성 0이면 Sharpe를 계산하지 않는다: $values', ({ values }) => {
+    expect(computeMetrics(equitySeries(values), [], [], 100, 0).sharpe).toBeNull();
+  });
+
   it('computes trade statistics', () => {
     const trades = [trade(10), trade(20), trade(-5), trade(-5), trade(-5), trade(30)];
     const metrics = computeMetrics(equitySeries([100, 145]), trades, [], 100, 2);

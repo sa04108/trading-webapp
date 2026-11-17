@@ -263,6 +263,7 @@ export interface IntradayResult {
     /** 거래일말 자산을 기준으로 계산한 최대 낙폭이며 0 이하의 백분율이다. */
     dailyMaxDrawdownPct: number;
     sharpe: number | null;
+    sharpeBasis?: import("./risk-free-rate.js").SharpeBasis;
     completedTrades: number;
     averageTradePnl: number | null;
     averageHoldingMinutes: number | null;

@@ -61,6 +61,8 @@ const envSchema = z.object({
   /** DART OpenAPI (전자공시). 미설정이면 재무 수집이 비활성 — 봉 데이터는 영향 없다 */
   DART_BASE_URL: z.string().url().default("https://opendart.fss.or.kr"),
   DART_API_KEY: z.string().min(1).optional(),
+  /** 한국은행 ECOS 금리 이력 자동 갱신. 키가 없으면 기존 금리표만 사용한다. */
+  ECOS_API_KEY: z.string().min(1).optional(),
   /** FRED API. 미설정이면 미국 벤치마크 수집만 비활성 */
   FRED_BASE_URL: z.string().url().default("https://api.stlouisfed.org"),
   FRED_API_KEY: z.string().min(1).optional(),
@@ -106,6 +108,7 @@ export interface AppConfig {
   readonly tossClientSecret: string | null;
   readonly dartBaseUrl: string;
   readonly dartApiKey: string | null;
+  readonly ecosApiKey?: string | null;
   readonly fredBaseUrl: string;
   readonly fredApiKey: string | null;
   readonly krxBaseUrl: string;
@@ -175,6 +178,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     tossClientSecret: raw.TOSS_CLIENT_SECRET ?? null,
     dartBaseUrl: raw.DART_BASE_URL,
     dartApiKey: raw.DART_API_KEY ?? null,
+    ecosApiKey: raw.ECOS_API_KEY ?? null,
     fredBaseUrl: raw.FRED_BASE_URL,
     fredApiKey: raw.FRED_API_KEY ?? null,
     krxBaseUrl: raw.KRX_BASE_URL,

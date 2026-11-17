@@ -79,9 +79,20 @@ export class ResultsService {
       .from(backtestMetrics)
       .where(eq(backtestMetrics.jobId, jobId))
       .get();
-    return row
-      ? (JSON.parse(row.metricsJson) as Record<string, unknown>)
-      : null;
+    if (!row) return null;
+    const { totalReturnPct, cagrPct, maxDrawdownPct, sharpe, winRate, tradeCount } = row;
+    return { ...JSON.parse(row.metricsJson) as Record<string, unknown>, totalReturnPct, cagrPct, maxDrawdownPct, sharpe, winRate, tradeCount };
+  }
+
+  getMetricsSummary(jobId: string) {
+    return this.db.select({
+      totalReturnPct: backtestMetrics.totalReturnPct,
+      cagrPct: backtestMetrics.cagrPct,
+      maxDrawdownPct: backtestMetrics.maxDrawdownPct,
+      sharpe: backtestMetrics.sharpe,
+      winRate: backtestMetrics.winRate,
+      tradeCount: backtestMetrics.tradeCount,
+    }).from(backtestMetrics).where(eq(backtestMetrics.jobId, jobId)).get() ?? null;
   }
 
   /**

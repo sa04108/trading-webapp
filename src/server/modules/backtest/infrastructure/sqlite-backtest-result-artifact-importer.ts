@@ -380,6 +380,7 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
         const row = warningRowSchema.parse(raw);
         insertWarning.run(context.jobId, row.sequence, row.warning);
       }
+      const { totalReturnPct, cagrPct, maxDrawdownPct, sharpe, winRate, tradeCount, ...remainingMetrics } = summary.metrics;
       target
         .prepare(
           `INSERT INTO backtest_metrics (
@@ -389,13 +390,13 @@ export class SqliteBacktestResultArtifactImporter implements BacktestResultArtif
         )
         .run(
           context.jobId,
-          summary.metrics.totalReturnPct,
-          summary.metrics.cagrPct,
-          summary.metrics.maxDrawdownPct,
-          summary.metrics.sharpe,
-          summary.metrics.winRate,
-          summary.metrics.tradeCount,
-          JSON.stringify(summary.metrics),
+          totalReturnPct,
+          cagrPct,
+          maxDrawdownPct,
+          sharpe,
+          winRate,
+          tradeCount,
+          JSON.stringify(remainingMetrics),
         );
 
       const insertEquity = target.prepare(

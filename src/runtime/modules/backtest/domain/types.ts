@@ -161,6 +161,7 @@ export interface MonthlyReturn {
 
 /** 스펙 §9.6 필수 지표 */
 export interface BacktestMetrics {
+  readonly sharpeBasis?: import("../../../../shared/schemas/risk-free-rate.js").SharpeBasis;
   readonly initialCash: number;
   readonly finalEquity: number;
   readonly totalReturnPct: number;

@@ -107,6 +107,16 @@ describe('결과 artifact 실행 버전 계약', () => {
     expect(new ResultsService(database.db).getRun(context.jobId)).toMatchObject({
       executionVersion: context.executionVersion, gitCommitSha: 'different-deployment-sha',
     });
+    const results = new ResultsService(database.db);
+    expect(results.getMetrics(context.jobId)).toEqual(artifact.metrics);
+    expect(results.getFullExport(context.jobId).metrics).toEqual(artifact.metrics);
+    const { totalReturnPct, cagrPct, maxDrawdownPct, sharpe, winRate, tradeCount, ...remainingMetrics } = artifact.metrics;
+    expect(results.getMetricsSummary(context.jobId)).toEqual({ totalReturnPct, cagrPct, maxDrawdownPct, sharpe, winRate, tradeCount });
+    const row = database.sqlite.prepare('SELECT metrics_json FROM backtest_metrics WHERE job_id = ?').get(context.jobId) as { metrics_json: string };
+    expect(JSON.parse(row.metrics_json)).toEqual(remainingMetrics);
+    // 목록은 나머지 JSON의 크기·파싱 가능 여부와 무관하게 여섯 숫자 열만 읽는다.
+    database.sqlite.prepare('UPDATE backtest_metrics SET metrics_json = ? WHERE job_id = ?').run('{', context.jobId);
+    expect(results.getMetricsSummary(context.jobId)).toEqual({ totalReturnPct, cagrPct, maxDrawdownPct, sharpe, winRate, tradeCount });
     expect(artifact.schemaVersion).toBe(1);
     expect(BACKTEST_RESULT_ARTIFACT_SCHEMA_VERSION).toBe(3);
   });

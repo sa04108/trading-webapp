@@ -72,6 +72,7 @@ import { resolveJobTimeframe } from "./job-timeframe";
 import { StatusBadge } from "./status-badge";
 import { ResultActions } from "./result-actions";
 import { ReproductionInfoCard } from "./reproduction-info-card";
+import { SharpeBasisInfo } from "./sharpe-basis-info";
 import {
   DEFAULT_TRADE_SORT,
   nextTradeSort,
@@ -316,6 +317,7 @@ function RunMetadataCard({
   timeframe,
   provenancePin,
   universeRebalancing,
+  metrics,
 }: {
   run: RunMetadata;
   job: JobSummary;
@@ -324,6 +326,7 @@ function RunMetadataCard({
   timeframe: string | null;
   provenancePin: ProvenancePin | null;
   universeRebalancing: readonly UniverseRebalancingEntryDto[];
+  metrics: BacktestMetrics | null;
 }) {
   const warnings = run.warningsJson
     ? (JSON.parse(run.warningsJson) as string[])
@@ -436,7 +439,9 @@ function RunMetadataCard({
           </div>
         </CardContent>
       </Card>
-      <ReproductionInfoCard rows={rows} />
+      <ReproductionInfoCard rows={rows}>
+        {metrics ? <SharpeBasisInfo basis={metrics.sharpeBasis} /> : null}
+      </ReproductionInfoCard>
       {warnings.length > 0 ? (
         <ResultWarnings warnings={warnings} jobId={job.id} />
       ) : null}
@@ -709,6 +714,7 @@ export function BacktestDetailPage() {
             timeframe={resolvedTimeframe}
             provenancePin={provenancePin}
             universeRebalancing={universeRebalancing}
+            metrics={metrics}
           />
         </>
       ) : null}
