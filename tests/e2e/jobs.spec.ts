@@ -17,6 +17,36 @@ function list(jobs: JobItem[]) {
   return { jobs, total: jobs.length, activeCount: jobs.filter((job) => job.status === "RUNNING" || job.status === "CANCELLING").length, retentionDays: 7, limit: 50, offset: 0 };
 }
 
+// 고정 목록의 삭제 검증과 달리 완료 상태 전환은 선택 가능한 항목 수 자체를 바꾼다.
+test("갱신으로 종료 작업이 늘면 기존 선택을 유지하고 일부 선택으로 표시한다", async ({ page }) => {
+  await login(page);
+  await page.clock.install();
+  let jobs = [active, finished];
+  let reads = 0;
+  await page.route(/\/api\/v1\/jobs(?:\?.*)?$/, (route) => {
+    reads++;
+    return route.fulfill({ json: list(jobs) });
+  });
+  await page.goto("/jobs");
+  await page.getByRole("button", { name: "편집", exact: true }).click();
+  const all = page.getByRole("checkbox", { name: "종료된 작업 전체 선택", exact: true });
+  await all.check();
+  const before = reads;
+  await page.clock.runFor(5_100);
+  await expect.poll(() => reads).toBeGreaterThan(before);
+  await expect(all).toBeChecked();
+  jobs = [{ ...active, status: "COMPLETED", finishedAtMs: createdAtMs, cancellable: false }, finished];
+  await page.clock.runFor(5_100);
+  await expect(all).toHaveAttribute("aria-checked", "mixed");
+  await expect(page.getByRole("checkbox", { name: "종료 작업 선택", exact: true })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "진행 작업 선택", exact: true })).not.toBeChecked();
+  await expect(page.getByRole("button", { name: "삭제 (1)", exact: true })).toBeEnabled();
+  await all.focus();
+  await page.keyboard.press("Space");
+  await expect(all).toBeChecked();
+  await expect(page.getByRole("button", { name: "삭제 (2)", exact: true })).toBeEnabled();
+});
+
 test("작업 목록에서 종료된 기록만 삭제하고 상세를 연다", async ({ page }) => {
   await login(page);
   let jobs = [active, finished];

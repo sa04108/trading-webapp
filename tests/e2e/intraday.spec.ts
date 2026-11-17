@@ -664,3 +664,57 @@ test("분봉 실험 페이지를 재사용하고 검증 하위 결과와 일반 
   await expect(page.getByRole("navigation", { name: "백테스트 경로" })).not.toContainText("OOS 검증");
   expect(wrongApi).toEqual([]);
 });
+
+test("지연된 복제 설정이 도착하기 전에는 편집할 수 없다", async ({ page }) => {
+  await login(page);
+  let release!: () => void;
+  let entered!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const started = new Promise<void>((resolve) => { entered = resolve; });
+  await page.route("**/api/v1/intraday/runs/done", async (route) => {
+    entered();
+    await pending;
+    await route.fulfill({ json: completed });
+  });
+  try {
+    await page.goto("/backtests/intraday/new?clone=done");
+    await started;
+    await expect(page.getByLabel("장기 EMA", { exact: true })).toHaveCount(0);
+    release();
+    const field = page.getByLabel("장기 EMA", { exact: true });
+    await expect(field).toHaveValue("26");
+    await field.fill("30");
+    await expect(field).toHaveValue("30");
+  } finally {
+    release();
+  }
+});
+
+test("분봉의 다른 전략 페이지 자동 보정은 기존 선택을 유지한다", async ({ page }) => {
+  await login(page);
+  await page.clock.install();
+  const runs = Array.from({ length: 13 }, (_, i) => ({
+    ...completed, result: undefined, id: `history-${i}`,
+    request: { ...request, strategyId: i === 12 ? "intraday-orb" : "intraday-ema" },
+    status: "COMPLETED", createdAtMs: at + i * 60000,
+  }));
+  let shrink = false;
+  await page.route("**/api/v1/intraday/runs/groups", (route) => route.fulfill({ json: {
+    groups: [{ strategyId: "intraday-ema", total: shrink ? 10 : 12 }, { strategyId: "intraday-orb", total: 1 }],
+  } }));
+  await page.route("**/api/v1/intraday/runs?**", (route) => {
+    const q = new URL(route.request().url()).searchParams;
+    const rows = runs.filter((run) => run.request.strategyId === q.get("strategyId") && (!shrink || !["history-10", "history-11"].includes(run.id)));
+    const offset = Number(q.get("offset")), limit = Number(q.get("limit"));
+    return route.fulfill({ json: { runs: rows.slice(offset, offset + limit), total: rows.length } });
+  });
+  await page.goto("/backtests/intraday?view=table&page.intraday-ema=2");
+  const group = page.locator("section").filter({ has: page.getByRole("heading", { name: "시초가 범위 돌파", exact: true }) });
+  await page.getByRole("button", { name: "편집", exact: true }).click();
+  const checkbox = group.getByRole("checkbox");
+  await checkbox.check();
+  shrink = true;
+  await page.clock.runFor(5_100);
+  await expect(page).not.toHaveURL(/page\.intraday-ema=2/);
+  await expect(checkbox).toBeChecked();
+});

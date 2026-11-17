@@ -401,7 +401,7 @@ export function HistorySelectionActions({
     <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1">
       <label className="flex shrink-0 items-center gap-2 text-sm">
         <Checkbox
-          checked={total > 0 && selected === total}
+          checked={selected > 0 && selected < total ? "indeterminate" : total > 0 && selected === total}
           disabled={pending || total === 0}
           onCheckedChange={onToggleAll}
           aria-label="현재 페이지 선택"

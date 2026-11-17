@@ -58,7 +58,7 @@ import { TableCell, TableRow } from "@/components/ui/table";
 import { HistoryLayout, HistoryMetricCells, HistoryTable } from "../backtests/history-table";
 import { useHistoryTablePreferences } from "../backtests/history-table-preferences";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, postJson } from "@/lib/api-client";
+import { isUnavailableApiError, api, postJson } from "@/lib/api-client";
 import {
   intradayDate,
   intradayFirstBacktestDate,
@@ -339,7 +339,6 @@ export function IntradayListPage() {
     }>;
     if (!pending.length) return;
     correctPages(pending);
-    setSelected((previous) => previous.size ? new Set() : previous);
   }, [correctionKey, correctPages]);
   return (
     <div className="space-y-4">
@@ -589,9 +588,16 @@ export function IntradayListPage() {
 }
 export function IntradayNewPage() {
   const [search] = useSearchParams();
-  const navigate = useNavigate();
-  const client = useQueryClient();
-  const [request, setRequest] = useState<IntradayRequest>(() => {
+  const cloneId = search.get("clone");
+  const clone = useQuery({
+    queryKey: ["intraday-run", cloneId],
+    queryFn: () => api<IntradayRun>(`/intraday/runs/${encodeURIComponent(cloneId ?? "")}`),
+    enabled: !!cloneId,
+  });
+  if (cloneId && (!clone.data || isUnavailableApiError(clone.error))) {
+    return <div className="space-y-4"><BacktestHeader mode="intraday" title="새 백테스트" />{clone.error ? <ErrorAlert error={clone.error} /> : <p>복제 설정을 불러오는 중입니다.</p>}</div>;
+  }
+  const initialRequest = (() => {
     const selected = INTRADAY_STRATEGIES.find(
       (s) => s.id === search.get("strategy"),
     );
@@ -604,20 +610,14 @@ export function IntradayNewPage() {
         to: search.get("to") ?? d.period.to,
       },
     };
-  });
-  const clone = useQuery({
-    queryKey: ["intraday-run", search.get("clone")],
-    queryFn: () =>
-      api<IntradayRun>(
-        `/intraday/runs/${encodeURIComponent(search.get("clone") ?? "")}`,
-      ),
-    enabled: !!search.get("clone"),
-  });
-  const [loadedClone, setLoadedClone] = useState(false);
-  if (clone.data && !loadedClone) {
-    setRequest(clone.data.request);
-    setLoadedClone(true);
-  }
+  })();
+  return <IntradayNewEditor key={cloneId ?? `new:${search.toString()}`} initialRequest={clone.data?.request ?? initialRequest} cloneError={clone.error} />;
+}
+
+function IntradayNewEditor({ initialRequest, cloneError }: { initialRequest: IntradayRequest; cloneError: unknown }) {
+  const navigate = useNavigate();
+  const client = useQueryClient();
+  const [request, setRequest] = useState(initialRequest);
   const strategy = getIntradayStrategy(request.strategyId);
   const [validation, setValidation] = useState("");
   const submit = useMutation({
@@ -668,13 +668,12 @@ export function IntradayNewPage() {
       </p>
       <ErrorAlert
         error={
-          clone.error ||
+          cloneError ||
           submit.error ||
           (validation ? new Error(validation) : null)
         }
       />
       <SymbolSearch
-        key={loadedClone ? "clone" : "new"}
         value={request.symbol}
         onChange={(symbol) => setRequest((r) => ({ ...r, symbol }))}
       />
@@ -821,7 +820,7 @@ export function IntradayNewPage() {
         </CardContent>
       </Card>
       <Button
-        disabled={submit.isPending || (!!search.get("clone") && !loadedClone)}
+        disabled={submit.isPending}
         onClick={() => {
           const parsed = intradayRunRequestSchema.safeParse(request);
           if (!parsed.success) {

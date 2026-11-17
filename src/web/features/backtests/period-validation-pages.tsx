@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router";
-import { api } from "@/lib/api-client";
+import { api, isUnavailableApiError } from "@/lib/api-client";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,11 +13,13 @@ import { active, PeriodValidationSection, ValidationResult } from "./period-vali
 
 export function PeriodValidationPage({ mode = "daily" }: { mode?: ExperimentMode }) {
   const { id = "" } = useParams();
+  const client = useQueryClient();
   const query = useExperimentSource(id, mode);
   const source = query.source;
-  if (query.isError) return <Alert variant="destructive"><AlertDescription>{query.error?.message}</AlertDescription></Alert>;
+  if (query.isError && (!source || isUnavailableApiError(query.error))) return <Alert variant="destructive"><AlertDescription>{query.error?.message}</AlertDescription></Alert>;
   if (!source) return <Skeleton className="h-64 w-full" />;
   return <div className="space-y-4 min-w-0">
+    {query.isError ? <Alert variant="destructive"><AlertDescription>원본을 새로 불러오지 못했습니다. <Button variant="outline" onClick={() => void client.invalidateQueries({ queryKey: [mode === "intraday" ? "intraday-run" : "backtests", id] })}>다시 시도</Button></AlertDescription></Alert> : null}
     <BacktestBreadcrumbs jobId={id} mode={mode} trail={[{ label: "기간 검증" }]} />
     <div><h2 className="text-lg font-semibold">기간 검증</h2><p className="text-sm text-muted-foreground">{source.name} · {source.request.period.from} ~ {source.request.period.to}</p></div>
     <PeriodValidationSection key={`${mode}:${id}`} jobId={id} request={source.request} mode={mode} />
@@ -35,9 +37,9 @@ export function PeriodValidationDetailPage({ mode = "daily" }: { mode?: Experime
     refetchIntervalInBackground: false,
   });
   const experiment = query.data?.experiment;
-  if (query.isError) return <Alert variant="destructive"><AlertDescription>{query.error.message}</AlertDescription></Alert>;
+  if (query.isError && (!experiment || isUnavailableApiError(query.error))) return <Alert variant="destructive"><AlertDescription>{query.error.message}</AlertDescription></Alert>;
   if (!experiment) return <Skeleton className="h-64 w-full" />;
-  return <PeriodValidationDetail experiment={experiment} mode={mode} />;
+  return <><div>{query.isError ? <Alert variant="destructive"><AlertDescription>검증 결과를 새로 불러오지 못했습니다. <Button variant="outline" onClick={() => void query.refetch()}>다시 시도</Button></AlertDescription></Alert> : null}</div><PeriodValidationDetail experiment={experiment} mode={mode} /></>;
 }
 
 function PeriodValidationDetail({ experiment, mode }: { experiment: PeriodValidationDto; mode: ExperimentMode }) {
@@ -47,6 +49,7 @@ function PeriodValidationDetail({ experiment, mode }: { experiment: PeriodValida
   const source = useExperimentSource(experiment.sourceJobId, mode);
   const parameters = useExperimentParameters(source.source?.request.strategyId, mode);
   if (source.isLoading || parameters.isLoading) return <Skeleton className="h-64 w-full" />;
+  if (source.isError && isUnavailableApiError(source.error)) return <Alert variant="destructive"><AlertDescription>{source.error?.message}</AlertDescription></Alert>;
   const refresh = async (deleted = false) => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: [paths.validationKey, experiment.id], refetchType: deleted ? "none" : "active" }),

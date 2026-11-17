@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, ApiError, apiErrorMessage, postJson } from "@/lib/api-client";
+import { api, ApiError, apiErrorMessage, isUnavailableApiError, postJson } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 import { formatKrw, timeframeLabel } from "@/lib/format";
 import { wizardTimeframes } from "@/features/datasets/dataset-slices";
@@ -167,10 +167,10 @@ export function NewBacktestWizard() {
   if (!wizardId) return <Navigate to={{ pathname: "/backtests/new", search }} replace />;
   // 재진입 때 캐시에 남은 작업으로 먼저 마운트하면 이전 단계·준비 작업을 복원한다.
   if (query.isPending || !query.isFetchedAfterMount) return <Skeleton className="mx-auto h-64 w-full max-w-2xl" />;
-  if (query.isError) return <Alert variant="destructive" role="alert"><AlertDescription>위저드를 불러오지 못했습니다. <Button variant="outline" onClick={() => void query.refetch()}>다시 시도</Button></AlertDescription></Alert>;
+  if (query.isError && (!query.data || isUnavailableApiError(query.error))) return <Alert variant="destructive" role="alert"><AlertDescription>위저드를 불러오지 못했습니다. <Button variant="outline" onClick={() => void query.refetch()}>다시 시도</Button></AlertDescription></Alert>;
   if (query.data.wizard.link.startsWith("/backtests/") && !query.data.wizard.link.startsWith("/backtests/new/")) return <Navigate to={query.data.wizard.link} replace />;
   if (["COMPLETED", "CANCELLED", "INTERRUPTED"].includes(query.data.wizard.status)) return <Alert role="status"><AlertDescription>종료된 위저드입니다. <Button variant="outline" asChild><Link to="/jobs">작업 목록</Link></Button></AlertDescription></Alert>;
-  return <WizardSessionView key={wizardId} wizard={query.data.wizard} />;
+  return <><div>{query.isError ? <Alert variant="destructive" role="alert"><AlertDescription>위저드를 새로 불러오지 못했습니다. <Button variant="outline" onClick={() => void query.refetch()}>다시 시도</Button></AlertDescription></Alert> : null}</div><WizardSessionView key={wizardId} wizard={query.data.wizard} /></>;
 }
 
 function WizardSessionView({ wizard }: { wizard: BacktestWizardJob }) {

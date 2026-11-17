@@ -136,3 +136,34 @@ test('워크포워드의 후보·고정 전략 실행량과 제외 구간을 표
   await expect(page.getByRole('columnheader', { name: '고정 전략 OOS' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
 });
+
+test('원본 재연결 오류와 복구 중 편집을 유지하고 삭제된 원본은 차단한다', async ({ page }) => {
+  await setup(page);
+  const input = page.getByLabel('OOS 시작일');
+  await input.fill('2023-01-01');
+  await input.focus();
+  let status = 500;
+  let reads = 0;
+  await page.route(`**/api/v1/backtests/${id}`, async (route) => {
+    reads++;
+    if (status === 200) return route.fallback();
+    return route.fulfill({ status, json: { error: status === 404 ? 'NOT_FOUND' : '임시 오류' } });
+  });
+  const staleAt = Date.now() + 5_100;
+  await expect.poll(() => Date.now(), { timeout: 8_000 }).toBeGreaterThan(staleAt);
+  await page.evaluate(() => { window.dispatchEvent(new Event('offline')); window.dispatchEvent(new Event('online')); });
+  await expect.poll(() => reads).toBeGreaterThanOrEqual(2);
+  await expect(page.getByText('원본을 새로 불러오지 못했습니다.')).toBeVisible();
+  await expect(input).toHaveValue('2023-01-01');
+  await expect(input).toBeFocused();
+  status = 200;
+  await page.getByRole('alert').filter({ hasText: '원본을 새로 불러오지 못했습니다.' }).getByRole('button', { name: '다시 시도', exact: true }).click();
+  await expect(page.getByText('원본을 새로 불러오지 못했습니다.')).toHaveCount(0);
+  await expect(input).toHaveValue('2023-01-01');
+  status = 404;
+  const staleAgainAt = Date.now() + 5_100;
+  await expect.poll(() => Date.now(), { timeout: 8_000 }).toBeGreaterThan(staleAgainAt);
+  await page.evaluate(() => { window.dispatchEvent(new Event('offline')); window.dispatchEvent(new Event('online')); });
+  await expect(input).toHaveCount(0);
+  await expect(page.getByText('NOT_FOUND')).toBeVisible();
+});

@@ -67,6 +67,7 @@ export function BacktestJobCard({
   editing,
   selected,
   deletable,
+  selectionDisabled,
   onToggle,
 }: {
   job: JobSummary;
@@ -75,6 +76,7 @@ export function BacktestJobCard({
   editing: boolean;
   selected: boolean;
   deletable?: boolean;
+  selectionDisabled?: boolean;
   onToggle: () => void;
 }) {
   const running = !isTerminal(job.status);
@@ -177,6 +179,7 @@ export function BacktestJobCard({
       <Checkbox
         id={checkboxId}
         checked={selected}
+        disabled={selectionDisabled}
         onCheckedChange={onToggle}
         aria-label={`${formatDateTime(job.createdAtMs)} 백테스트 선택`}
         className="mt-5"
@@ -230,18 +233,23 @@ export function BacktestsPage() {
       ? []
       : (query.data?.jobs ?? []),
   );
+  const displayedJobs = pages.flatMap((query, index) =>
+    controls.collapsed(groups.data?.groups[index]?.strategyId ?? "") ? [] : (query.data?.jobs ?? []),
+  );
   const sourceIds = visibleJobs.map((job) => job.id).sort();
   const extrasQuery = useBacktestHistoryExtras(sourceIds);
   const extrasBySource = new Map(extrasQuery.data?.summaries.map((item) => [item.jobId, item]) ?? []);
   // 재조회 중에는 직전 성공 결과를 유지해 체크박스와 선택 상태가 흔들리지 않게 한다.
-  const extrasReady = sourceIds.length === 0 || (extrasQuery.isSuccess && !extrasQuery.isError);
-  const deletableIds = extrasReady
+  const deletableIds = extrasQuery.data
     ? deletableBacktestIds(visibleJobs).filter((id) => {
         const extras = extrasBySource.get(id);
         return extras !== undefined && extras.seed.activeCount === 0 && extras.validation.experimentCount === 0;
       })
     : [];
-  const selectedIds = deletableIds.filter((id) => selected.has(id));
+  const selectedIds = displayedJobs.filter((job) => selected.has(job.id)).map((job) => job.id);
+  const selectionTotal = new Set([...deletableIds, ...selectedIds]).size;
+  const selectionDisabled = extrasQuery.isError || (sourceIds.length > 0 && !extrasQuery.data) ||
+    pages.some((query) => query.isPlaceholderData) || selectedIds.some((id) => !deletableIds.includes(id));
   const corrections = (groups.data?.groups ?? []).flatMap((group, index) => {
     const query = pages[index];
     if (
@@ -264,7 +272,6 @@ export function BacktestsPage() {
     }>;
     if (!pending.length) return;
     correctPages(pending);
-    setSelected((previous) => (previous.size ? new Set() : previous));
   }, [correctionKey, correctPages]);
   const invalidate = () => {
     void client.invalidateQueries({ queryKey: ["backtests"] });
@@ -307,9 +314,9 @@ export function BacktestsPage() {
       />
       {editing ? (
         <HistorySelectionActions
-          total={deletableIds.length}
+          total={selectionTotal}
           selected={selectedIds.length}
-          pending={remove.isPending}
+          pending={remove.isPending || selectionDisabled}
           onToggleAll={() => setSelected(toggleAllBacktests(selected, deletableIds))}
           onRemoveSelected={() => remove.mutate(selectedIds)}
           onRemoveAll={() => remove.mutate(deletableIds)}
@@ -367,7 +374,8 @@ export function BacktestsPage() {
                         timeframe={resolveJobTimeframe(job)}
                         editing={editing}
                         selected={selected.has(job.id)}
-                        deletable={deletableIds.includes(job.id)}
+                        deletable={deletableIds.includes(job.id) || selected.has(job.id)}
+                        selectionDisabled={!selected.has(job.id) && selectionDisabled}
                         onToggle={() => toggleOne(job.id)}
                       />
                     </div>
@@ -379,9 +387,10 @@ export function BacktestsPage() {
                       <TableRow key={job.id}>
                           <TableCell className="sticky left-0 z-10 bg-background py-3 align-top whitespace-normal">
                             <div className="flex items-center gap-1 whitespace-nowrap">
-                              {editing && deletableIds.includes(job.id) ? (
+                              {editing && (deletableIds.includes(job.id) || selected.has(job.id)) ? (
                                 <Checkbox
                                   checked={selected.has(job.id)}
+                                  disabled={!selected.has(job.id) && selectionDisabled}
                                   onCheckedChange={() => toggleOne(job.id)}
                                   aria-label={`${formatDateTime(job.createdAtMs)} 백테스트 선택`}
                                 />
