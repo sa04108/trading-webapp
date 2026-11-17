@@ -66,7 +66,7 @@ describe('컨테이너 Agent 설정과 업데이트', () => {
     const onUpdate = mocks.construct.mock.calls[0]?.[2] as (version: string) => Promise<void>;
     await onUpdate('a'.repeat(64));
     expect(fetch).not.toHaveBeenCalled();
-    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('저장한 토큰으로 현재 서버에서 새 Windows 설치 파일'));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('설정 → Agent에서 CMD를 받아 실행'));
   });
 
   it.each(['install', 'setup', 'update'])('컨테이너의 %s 명령은 거부한다', async (command) => {

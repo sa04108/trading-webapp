@@ -171,7 +171,7 @@ tests/ · docs/       검증 코드·설계 및 운영 문서
 | 상태 확인 | `/api/v1/health/live`·`/api/v1/health/ready`는 공개 상태만 반환한다. `/api/v1/system/info`는 인증 후 조회한다. |
 | 브라우저 진행 상태 | 기존 작업·알림의 SSE는 유지하며 작업 센터는 상태 전용 REST 조회를 사용한다. 목록은 활성 작업이 있으면 5초, 없으면 30초, 상세는 활성 상태에서 2초 간격이며 종료·화면 이탈 시 상세 폴링을 멈춘다. 숨겨진 탭에서는 주기 조회하지 않는다. 브라우저 연결의 수명과 영속 작업의 수명을 분리한다. |
 | 에이전트 제어 | `/api/agents/connect`의 WSS. 장치 Bearer 토큰으로 인증하고 임대·진행률·데이터 요구·취소를 교환한다. |
-| 에이전트 파일 전송 | `/api/agents/datasets/:version`, `/api/agents/jobs/:jobId/result`. 장치 인증을 요구하며 결과 수신은 파일·실행 버전·현재 임대를 검증한다. Windows 설치 파일은 연결 토큰 발급 후 웹에서 내려받는다. |
+| 에이전트 파일 전송 | `/api/agents/datasets/:version`, `/api/agents/jobs/:jobId/result`. 장치 인증을 요구하며 결과 수신은 파일·실행 버전·현재 임대를 검증한다. Windows CMD는 로그인한 웹에서 토큰 입력 없이 내려받고, `/api/agents/install/resolve`에서 서명된 설치 권한으로 기존 토큰 재사용 또는 새 연결 등록을 확인한다. |
 
 상세 필드·제한은 [공유 스키마](../src/shared/schemas/)·[에이전트 프로토콜](../src/shared/agent-protocol.ts)·각 `presentation`에서 관리한다. 라우트 등록과 인증 경계는 [server.ts](../src/server/bootstrap/server.ts)를 따른다.
 

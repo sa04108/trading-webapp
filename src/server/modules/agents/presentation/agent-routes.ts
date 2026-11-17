@@ -9,6 +9,7 @@ import {
 } from "../../backtest/infrastructure/sqlite-backtest-result-artifact-importer.js";
 import { backtestExecutionTelemetrySchema } from "../../../../runtime/modules/backtest/application/backtest-execution-telemetry.js";
 import type { AgentCoordinator } from "../application/agent-coordinator.js";
+import type { AgentInstallationService } from "../application/agent-installation.js";
 import type { RemoteResultUploadManager } from "../../backtest/infrastructure/remote-result-upload-manager.js";
 import { agentContainerImage, buildWindowsAgentInstaller, validateAgentServerOrigin } from "../infrastructure/agent-windows-installer.js";
 
@@ -39,7 +40,16 @@ export function registerAgentControlRoutes(
   app: FastifyInstance,
   coordinator: AgentCoordinator,
   uploads: RemoteResultUploadManager,
+  installations: AgentInstallationService,
 ): void {
+  app.post("/install/resolve", async (request, reply) => {
+    const { installation, previousToken } = parseRequest(z.object({
+      installation: z.string().min(1).max(4096),
+      previousToken: z.string().max(256).optional(),
+    }), request.body);
+    reply.header("cache-control", "no-store");
+    return installations.resolve(installation, request.host, previousToken);
+  });
   const clients = new WeakMap<FastifyRequest, string>();
   const authenticate: PreHandler = async (request, reply) => {
     const header = request.headers.authorization ?? "";
@@ -52,6 +62,10 @@ export function registerAgentControlRoutes(
     }
     clients.set(request, id);
   };
+  app.get("/install/status", { preHandler: authenticate }, async (request, reply) => {
+    reply.header("cache-control", "no-store");
+    return coordinator.installationStatus(clients.get(request)!);
+  });
   app.get(
     "/connect",
     { websocket: true, preValidation: authenticate },
@@ -204,6 +218,7 @@ export function registerAgentManagementRoutes(
   app: FastifyInstance,
   coordinator: AgentCoordinator,
   requireAuth: PreHandler,
+  installations: AgentInstallationService,
 ): void {
   app.get("/agents", { preHandler: requireAuth }, async () => ({
     clients: coordinator.listClients(),
@@ -217,14 +232,26 @@ export function registerAgentManagementRoutes(
     return coordinator.registry.issue(name);
   });
   app.post("/agents/install/windows", { preHandler: requireAuth }, async (request, reply) => {
-    const { token, serverUrl } = parseRequest(
-      z.object({ token: z.string().min(32).max(256), serverUrl: z.string().max(2048) }),
+    const input = parseRequest(
+      z.union([
+        z.object({ token: z.string().min(32).max(256), serverUrl: z.string().max(2048) }),
+        z.object({ clientId: z.string().min(1).max(80), serverUrl: z.string().max(2048) }),
+        z.object({ name: z.string().trim().min(1).max(80), serverUrl: z.string().max(2048) }),
+      ]),
       request.body,
     );
-    if (!coordinator.registry.authenticate(token))
-      return reply.code(401).send({ error: "유효한 Agent 토큰이 필요합니다" });
-    const origin = validateAgentServerOrigin(serverUrl);
-    const installer = buildWindowsAgentInstaller({ token, serverUrl: origin, image: agentContainerImage() });
+    const origin = validateAgentServerOrigin(input.serverUrl);
+    const image = agentContainerImage();
+    let installer: string;
+    if ("token" in input) {
+      if (!coordinator.registry.authenticate(input.token))
+        return reply.code(401).send({ error: "유효한 Agent 토큰이 필요합니다" });
+      installer = buildWindowsAgentInstaller({ token: input.token, serverUrl: origin, image });
+    } else {
+      installer = buildWindowsAgentInstaller({
+        ...installations.create({ ...input, serverUrl: origin }), serverUrl: origin, image,
+      });
+    }
     return reply
       .type("application/octet-stream")
       .header("cache-control", "no-store")

@@ -11,7 +11,7 @@ it("설정은 화면·API·Agent·서버 설정을 제공하고 별도 수집 �
     const html = renderToStaticMarkup(<MemoryRouter><QueryClientProvider client={client}><SettingsPage /></QueryClientProvider></MemoryRouter>);
     for (const label of ["설정", "화면", "API 명세", "OpenAPI 토큰", "Agent", "서버 상태"]) expect(html).toContain(label);
     expect(html).toContain('href="/settings/api-reference"');
-    expect(html).toContain("연결 토큰을 발급하면 Windows Docker Desktop 설치 파일을 다운로드할 수 있습니다.");
+    expect(html).toContain("Windows CMD 받기");
     expect(html).not.toContain("Linux x64 다운로드");
     for (const label of ["외부 데이터", "수집 승인", "수집 현황", "미확인 공시"]) expect(html).not.toContain(label);
     expect(client.getQueryCache().getAll().map((query) => query.queryKey)).toEqual([["system", "info"], ["openapi-tokens"], ["agents"]]);
@@ -36,7 +36,9 @@ it("Agent 실행 상태와 사유를 표시하고 해제된 연결은 숨긴다"
   try {
     const html = renderToStaticMarkup(<MemoryRouter><QueryClientProvider client={client}><SettingsPage /></QueryClientProvider></MemoryRouter>);
     for (const label of ["실행 가능", "작업 중", "연결 끊김", "업데이트 필요", "서버와 Agent 버전이 다릅니다.", "최근 통신", "사용 가능한 슬롯 2개"]) expect(html).toContain(label);
-    expect(html).toContain('href="#saved-agent-installer"');
+    expect(html).toContain("이전 버전 PC 설치·업데이트 CMD 받기");
+    expect(html).not.toContain("저장한 기존 연결 토큰");
+    expect(html).not.toContain("토큰 복사");
     expect(html).not.toContain("숨겨진 PC");
   } finally { client.clear(); }
 });

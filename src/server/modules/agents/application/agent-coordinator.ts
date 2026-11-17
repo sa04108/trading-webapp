@@ -46,6 +46,7 @@ const helloVersionSchema = z.object({
 });
 
 interface Connection {
+  id: string;
   socket: {
     readonly readyState: number;
     send(data: string): void;
@@ -149,6 +150,7 @@ export class AgentCoordinator {
     }
     this.connections.get(clientId)?.socket.close(4001, "connection replaced");
     const connection: Connection = {
+      id: randomUUID(),
       socket,
       ready: false,
       slots: 0,
@@ -196,6 +198,15 @@ export class AgentCoordinator {
     });
   }
 
+  installationStatus(clientId: string): { ready: boolean; connectionId: string | null } {
+    const connection = this.connections.get(clientId);
+    return {
+      ready: !this.stopped && connection?.socket.readyState === 1 && connection.ready &&
+        Date.now() - connection.lastMessageAt <= 60_000,
+      connectionId: connection?.id ?? null,
+    };
+  }
+
   listClients(): AgentClientStatus[] {
     const now = Date.now();
     const dataset = this.snapshots.latest();
@@ -210,10 +221,10 @@ export class AgentCoordinator {
         detail = "연결 토큰이 해제되어 작업을 배정하지 않습니다.";
       } else if (client.protocolVersion !== null && client.protocolVersion !== AGENT_PROTOCOL_VERSION) {
         state = "PROTOCOL_MISMATCH";
-        detail = "마지막으로 확인한 Agent의 통신 규격이 서버와 다릅니다. 기존 연결 토큰으로 설치 파일을 다시 받아 업데이트하세요.";
+        detail = "마지막으로 확인한 Agent의 통신 규격이 서버와 다릅니다. 설정에서 해당 장치의 CMD를 받아 실행하면 기존 연결과 저장 데이터를 유지하며 업데이트합니다.";
       } else if (client.runnerVersion !== null && client.runnerVersion !== this.runnerVersion) {
         state = "VERSION_MISMATCH";
-        detail = "마지막으로 확인한 Agent 버전이 서버에서 요구하는 버전과 달라 작업을 배정하지 않습니다. 기존 연결 토큰으로 설치 파일을 다시 받아 업데이트하세요.";
+        detail = "마지막으로 확인한 Agent 버전이 서버에서 요구하는 버전과 달라 작업을 배정하지 않습니다. 설정에서 해당 장치의 CMD를 받아 실행하면 기존 연결과 저장 데이터를 유지하며 업데이트합니다.";
       } else if (!connected || this.stopped) {
         state = client.lastSeenAtMs === null ? "NEVER_CONNECTED" : "OFFLINE";
         detail = state === "NEVER_CONNECTED"
@@ -985,6 +996,7 @@ export class AgentCoordinator {
     let open = true;
     let tail = Promise.resolve();
     const connection: Connection = {
+      id: randomUUID(),
       socket: {
         get readyState() {
           return open ? 1 : 3;

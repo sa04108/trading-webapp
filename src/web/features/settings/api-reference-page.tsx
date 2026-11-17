@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api-client";
 
 import type { ApiEndpoint as Endpoint, ApiReference as Reference } from "@shared/schemas/api-reference";
-const authLabels = { PUBLIC: "인증 불필요", SESSION: "브라우저 세션", SESSION_OR_TOKEN: "브라우저 세션 또는 OpenAPI 토큰", AGENT_TOKEN: "에이전트 전용 토큰" } as const;
+const authLabels = { PUBLIC: "인증 불필요", SESSION: "브라우저 세션", SESSION_OR_TOKEN: "브라우저 세션 또는 OpenAPI 토큰", AGENT_TOKEN: "에이전트 전용 토큰", INSTALLATION_GRANT: "CMD 설치 권한" } as const;
 const json = (value: unknown) => typeof value === "string" ? value : JSON.stringify(value, null, 2);
 function Example({ label, value }: { label: string; value: unknown }) { return <div className="space-y-1"><p className="text-sm font-medium">{label}</p><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 text-xs">{json(value)}</pre></div>; }
 function EndpointDetail({ endpoint }: { endpoint: Endpoint }) {

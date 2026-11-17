@@ -34,6 +34,11 @@ function docker {
     $env:QUANT_AGENT_SERVER_URL -eq 'https://agent.example' -and
     $env:QUANT_AGENT_TOKEN -eq $script:Token
   )
+  if ($parts -contains 'run') {
+    $script:RunToken = $env:QUANT_AGENT_TOKEN
+    $markerLabel = @($parts | Where-Object { $_ -clike 'quant.agent.installation=*' })
+    if ($markerLabel.Count -eq 1) { $script:ReplacementMarker = $markerLabel[0].Substring(25) }
+  }
   $script:LASTEXITCODE = 0
   $actionIndex = [Array]::IndexOf($parts, 'context')
   if ($actionIndex -lt 0) { $actionIndex = 2 }
@@ -41,6 +46,7 @@ function docker {
   $subAction = if ($parts.Length -gt ($actionIndex + 1)) { $parts[$actionIndex + 1] } else { '' }
   if ($action -eq 'stop') { return 'stopped' }
   if ($action -eq 'rm') { return 'removed' }
+  if ($action -eq 'rename' -or $action -eq 'start') { return 'ok' }
   switch ("$action $subAction") {
     'context inspect' {
       if ($script:ContextFailures -gt 0) { $script:ContextFailures--; $script:LASTEXITCODE = 1; return }
@@ -60,8 +66,14 @@ function docker {
       if ($script:FailImageRemoval) { $script:LASTEXITCODE = 1 }
       return
     }
+    'ps --all' { return $script:CandidateIds }
     'container inspect' {
+      if ($script:CandidateDetails -and $parts.Length -eq 5) {
+        if ($parts[-1] -eq 'quant-agent-old' -and ($script:FailRun -or $script:FailAfterStart)) { return ConvertTo-Json -Compress -Depth 5 -InputObject @(@{ Id = ('c' * 64); Config = @{ Labels = @{ 'quant.agent.installation' = $script:ReplacementMarker } } }) }
+        return $script:CandidateDetails[$parts[-1]]
+      }
       if ($script:ExistingContainer) {
+        if ($parts -contains '{{.State.Running}}') { return 'true' }
         if ($parts -contains '{{.Image}}') { return $script:OldImageId }
         return $script:ExistingLabel
       }
@@ -79,9 +91,49 @@ function docker {
       if ($script:FailRun) { $script:LASTEXITCODE = 1 }
       return 'container-id'
     }
-    'inspect --format' { return 'true' }
+    'inspect --format' {
+      if ($parts -contains '{{.State.Running}} {{.RestartCount}}') {
+        $script:StateChecks++
+        if ($script:FailAfterStart -and $script:StateChecks -gt 1) { return 'false 0' }
+        return 'true 0'
+      }
+      return 'true'
+    }
     default { throw "Unexpected Docker invocation: $($parts -join ' ')" }
   }
+}
+
+function Invoke-RestMethod {
+  param($Method, $Uri, $ContentType, $Body, $Headers, $MaximumRedirection, $TimeoutSec)
+  if ($MaximumRedirection -ne 0 -or $TimeoutSec -le 0) { throw 'Unexpected request settings.' }
+  if ($Method -eq 'Post') {
+    if ($Uri -cne 'https://agent.example/api/agents/install/resolve') { throw 'Unexpected credential request.' }
+    $script:Requests += ,($Body | ConvertFrom-Json)
+    $script:StatusChecks = 0
+    $script:StateChecks = 0
+    if ($script:FailResolve) { throw 'network failure' }
+    return @{ id = 'device-1'; token = $script:ResolvedToken }
+  }
+  if ($Uri -cne 'https://agent.example/api/agents/install/status' -or $Headers.Authorization -cne ('Bearer ' + $script:ResolvedToken) -or $Headers.'Cache-Control' -cne 'no-store') { throw 'Unexpected status request.' }
+  $script:StatusChecks++
+  if ($script:FailStatus -and $script:StatusChecks -eq 1) { throw 'network failure' }
+  if ($script:StatusChecks -eq 1) { return @{ ready = $true; connectionId = 'old-connection' } }
+  if ($script:StatusChecks -eq 2) { return @{ ready = $false; connectionId = 'old-connection' } }
+  return @{ ready = $true; connectionId = 'new-connection' }
+}
+
+function Set-InstallerConfig($Config) {
+  $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -Compress $Config)))
+  $payload = "$marker`r`n`$ConfigJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$encoded'))`r`n" + $template.Substring($template.IndexOf("`n") + 1)
+  [IO.File]::WriteAllText($installerPath, (@('@echo off', 'exit /b 0', $payload) -join "`r`n"))
+}
+
+function New-Candidate([string] $Name, [string] $Server, [string] $Token, [string] $Device, [string] $MountType = 'volume') {
+  return ConvertTo-Json -Depth 8 -Compress -InputObject @(@{
+    Name = '/' + $Name
+    Config = @{ Env = @(('QUANT_AGENT_SERVER_URL=' + $Server), ('QUANT_AGENT_TOKEN=' + $Token)); Labels = @{ app = 'quant-agent'; 'quant.agent.id' = $Device } }
+    Mounts = @(@{ Destination = '/var/lib/quant-agent'; Type = $MountType; Name = 'retained-state' })
+  })
 }
 
 function Get-Process {
@@ -240,6 +292,104 @@ try {
     if ($message -notmatch 'x64') { throw "Unsupported $scenario architecture should produce an x64 error." }
     if ($script:Calls | Where-Object { $_ -match ' (pull|stop|rm|run) ' }) { throw "Unsupported $scenario architecture must preserve the existing container and avoid pulling." }
   }
+
+  $env:PROCESSOR_ARCHITECTURE = 'AMD64'
+  $script:EngineArchitecture = 'x86_64'
+  $script:ExistingContainer = $true
+  $script:ExistingVolume = $true
+  $script:ResolvedToken = $script:Token
+  $script:FailResolve = $false
+  $script:CandidateIds = @('one')
+  $script:CandidateDetails = @{ one = (New-Candidate 'quant-agent-old' 'https://agent.example' $script:Token 'device-1') }
+  $newConfig = @{ serverUrl = 'https://agent.example'; image = 'ghcr.io/sa04108/quant-agent:latest'; installation = 'grant'; installationId = 'fallback'; containerName = 'quant-agent-123456789abc'; targetClientId = 'device-1' }
+  Set-InstallerConfig $newConfig
+  foreach ($replacementToken in @($script:Token, 'new-fallback-token')) {
+    $script:Calls = @(); $script:Requests = @(); $script:ResolvedToken = $replacementToken
+    Invoke-InstallerFromHybrid $installerPath
+    Assert-Equal $script:Token $script:Requests[0].previousToken 'The selected token must be resolved'
+    Assert-Equal $replacementToken $script:RunToken 'The resolved token must reach the replacement'
+    if ($script:StatusChecks -ne 3) { throw 'A new ready connection is required before accepting the container.' }
+    if (-not ($script:Calls | Where-Object { $_ -match ' --name quant-agent-old .*source=retained-state,target=/var/lib/quant-agent' })) { throw 'Replacement must retain the selected name and volume.' }
+    if (-not ($script:Calls | Where-Object { $_ -match 'quant.agent.id=device-1' })) { throw 'Resolved identity must be labeled.' }
+  }
+  $hashAlgorithm = [Security.Cryptography.SHA256]::Create()
+  try { $legacyHash = ([BitConverter]::ToString($hashAlgorithm.ComputeHash([Text.Encoding]::UTF8.GetBytes($script:Token)))).Replace('-', '').ToLowerInvariant() }
+  finally { $hashAlgorithm.Dispose() }
+  $legacyConfig = @{ serverUrl = 'https://agent.example'; image = 'ghcr.io/sa04108/quant-agent:latest'; installation = 'grant'; installationId = 'fallback'; containerName = 'quant-agent-123456789abc'; targetClientId = 'device-1'; targetTokenHash = $legacyHash }
+  $legacyCandidate = (New-Candidate 'quant-agent-old' 'https://agent.example' $script:Token 'unused' | ConvertFrom-Json)
+  $legacyCandidate.Config.Labels.PSObject.Properties.Remove('quant.agent.id')
+  $script:CandidateDetails.one = ConvertTo-Json -Depth 8 -Compress -InputObject @($legacyCandidate)
+  Set-InstallerConfig $legacyConfig
+  $script:Calls = @(); $script:Requests = @()
+  Invoke-InstallerFromHybrid $installerPath
+  Assert-Equal $script:Token $script:Requests[0].previousToken 'Legacy token hash must select the existing token'
+  if (-not ($script:Calls | Where-Object { $_ -match ' --name quant-agent-old .*source=retained-state,target=/var/lib/quant-agent' })) { throw 'Legacy token hash selection must retain the old name and volume.' }
+
+  $genericConfig = @{ serverUrl = 'https://agent.example'; image = 'ghcr.io/sa04108/quant-agent:latest'; installation = 'grant'; installationId = 'fallback'; containerName = 'quant-agent-123456789abc' }
+  Set-InstallerConfig $genericConfig
+  $script:CandidateIds = @(); $script:ExistingContainer = $false; $script:ExistingVolume = $false
+  $script:Calls = @(); $script:Requests = @()
+  Invoke-InstallerFromHybrid $installerPath
+  if ($script:Requests[0].PSObject.Properties.Name -contains 'previousToken') { throw 'A new installation must not send a previous token.' }
+  if (-not ($script:Calls | Where-Object { $_ -match ' volume create quant-agent-123456789abc-state$' }) -or
+      -not ($script:Calls | Where-Object { $_ -match ' --name quant-agent-123456789abc .*source=quant-agent-123456789abc-state,target=/var/lib/quant-agent' }) -or
+      $script:StatusChecks -ne 3) { throw 'A new installation must create its configured volume and confirm a new ready connection.' }
+  Set-InstallerConfig $newConfig
+  $script:CandidateIds = @('one'); $script:ExistingContainer = $true; $script:ExistingVolume = $true
+  $script:CandidateDetails.one = New-Candidate 'quant-agent-old' 'https://agent.example' $script:Token 'device-1'
+
+  $script:Calls = @(); $script:Requests = @(); $script:FailRun = $true
+  $failedAsExpected = $false
+  try { Invoke-InstallerFromHybrid $installerPath } catch { $failedAsExpected = $true }
+  if (-not $failedAsExpected -or -not ($script:Calls | Where-Object { $_ -match ' rm --force c{64}$' }) -or
+      -not ($script:Calls | Where-Object { $_ -match ' rename one quant-agent-old$' }) -or
+      ($script:Calls | Where-Object { $_ -match ' start one$' })) { throw 'Failed replacement must restore the old container without starting it.' }
+  $script:FailRun = $false
+  $script:Calls = @(); $script:Requests = @(); $script:FailAfterStart = $true
+  $failedAsExpected = $false
+  try { Invoke-InstallerFromHybrid $installerPath } catch { $failedAsExpected = $true }
+  if (-not $failedAsExpected -or $script:StatusChecks -ne 2 -or -not ($script:Calls | Where-Object { $_ -match ' rename one quant-agent-old$' }) -or
+      ($script:Calls | Where-Object { $_ -match ' start one$' })) { throw 'A running container without a new ready connection must roll back if it stops.' }
+  $script:FailAfterStart = $false
+  $script:Calls = @(); $script:Requests = @(); $script:FailStatus = $true
+  $failedAsExpected = $false
+  try { Invoke-InstallerFromHybrid $installerPath } catch { $failedAsExpected = $true }
+  if (-not $failedAsExpected -or ($script:Calls | Where-Object { $_ -match ' (stop|rm|run) ' })) { throw 'Status failure must preserve the existing container.' }
+  $script:FailStatus = $false
+  $script:Calls = @(); $script:Requests = @()
+  Invoke-InstallerFromHybrid $installerPath
+  if (-not ($script:Calls | Where-Object { $_ -match 'source=retained-state,target=/var/lib/quant-agent' })) { throw 'Retry must retain the original volume.' }
+
+  $script:CandidateDetails.one = New-Candidate 'quant-agent-old' 'https://agent.example' '' 'device-1'
+  $script:Calls = @(); $script:Requests = @()
+  Invoke-InstallerFromHybrid $installerPath
+  if ($script:Requests[0].PSObject.Properties.Name -contains 'previousToken') { throw 'Missing token must use the installation fallback.' }
+  $script:CandidateDetails.one = New-Candidate 'quant-agent-old' 'https://agent.example' $script:Token 'device-1'
+
+  $script:Calls = @(); $script:Requests = @(); $script:FailResolve = $true
+  $failedAsExpected = $false
+  try { Invoke-InstallerFromHybrid $installerPath } catch { $failedAsExpected = $true }
+  if (-not $failedAsExpected -or ($script:Calls | Where-Object { $_ -match ' (stop|rm|run) ' })) { throw 'Credential failure must preserve the existing container.' }
+  $script:FailResolve = $false
+
+  $script:Calls = @(); $script:Requests = @()
+  $script:CandidateIds = @('one', 'two')
+  $script:CandidateDetails.two = New-Candidate 'quant-agent-other' 'https://other.example' 'other-secret' 'device-1'
+  Invoke-InstallerFromHybrid $installerPath
+  Assert-Equal 1 $script:Requests.Count 'Only one credential request should be sent'
+  Assert-Equal $script:Token $script:Requests[0].previousToken 'A different server token must not be sent'
+
+  $script:Calls = @(); $script:Requests = @()
+  $script:CandidateDetails.two = New-Candidate 'quant-agent-other' 'https://agent.example' 'other-secret' 'device-1'
+  $failedAsExpected = $false
+  try { Invoke-InstallerFromHybrid $installerPath } catch { $failedAsExpected = $true }
+  if (-not $failedAsExpected -or $script:Requests.Count -ne 0 -or ($script:Calls | Where-Object { $_ -match ' (stop|rm|run) ' })) { throw 'Ambiguous candidates must stop before authentication or replacement.' }
+
+  $script:Calls = @(); $script:Requests = @(); $script:CandidateIds = @('one')
+  $script:CandidateDetails.one = New-Candidate 'quant-agent-old' 'https://agent.example' $script:Token 'device-1' 'bind'
+  $failedAsExpected = $false
+  try { Invoke-InstallerFromHybrid $installerPath } catch { $failedAsExpected = $true }
+  if (-not $failedAsExpected -or $script:Requests.Count -ne 0) { throw 'A bind mount must not be reused.' }
 
   Write-Output 'Windows Agent installer mock scenarios passed.'
 } finally {
