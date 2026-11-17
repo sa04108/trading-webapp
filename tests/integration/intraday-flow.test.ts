@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import Fastify from "fastify";
+import pino from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDatabase } from "../../src/runtime/shared/db/database.js";
 import {
@@ -12,6 +13,8 @@ import {
 } from "../../src/server/modules/intraday/application/intraday-service.js";
 import { executeIntraday } from "../../src/server/modules/intraday/application/forked-intraday-engine.js";
 import { ParquetIntradayStore } from "../../src/server/modules/intraday/infrastructure/parquet-intraday-store.js";
+import { TossIntradaySource } from "../../src/server/modules/intraday/infrastructure/toss-intraday-source.js";
+import { createTossClient } from "../../src/server/modules/broker/infrastructure/toss/toss-client.js";
 import { registerIntradayRoutes } from "../../src/server/modules/intraday/presentation/intraday-routes.js";
 import { intradayCollections, intradayRuns } from "../../src/server/shared/db/intraday-schema.js";
 import type {
@@ -113,6 +116,30 @@ async function fixture(
   return { app, service, database, store, makeService, terminalEvents };
 }
 const headers = { authorization: "owner" };
+
+function rateLimitedSource() {
+  let clock = now;
+  let release!: () => void;
+  let waiting!: () => void;
+  const entered = new Promise<void>((resolve) => { waiting = resolve; });
+  const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+    if (String(input).endsWith("/oauth2/token")) return Response.json({ access_token: "token", expires_in: 3600 });
+    if (fetchImpl.mock.calls.filter(([url]) => String(url).includes("/candles?")).length === 1) {
+      return Response.json({ error: { code: "rate-limit-exceeded" } }, { status: 429, headers: { "Retry-After": "1" } });
+    }
+    return Response.json({ result: { candles: [], nextBefore: null } });
+  });
+  const client = createTossClient({ baseUrl: "https://toss.test", clientId: "client", clientSecret: "secret" }, pino({ enabled: false }), {
+    fetchImpl,
+    now: () => clock,
+    sleep: (ms) => new Promise<void>((resolve) => {
+      release = () => { clock += ms; resolve(); };
+      waiting();
+    }),
+  });
+  const source = new TossIntradaySource(client, () => now);
+  return { fetch: source.fetch.bind(source), fetchImpl, entered, release: () => release(), client };
+}
 describe("분봉 준비부터 격리 계산과 저장까지", () => {
   // 기존 이력 검사는 양수로 저장된 과거 낙폭의 목록·상세 조회 호환성을 다루지 않는다.
   it("과거 양수와 현재 음수·0의 낙폭을 같은 음수 기준으로 조회한다", async () => {
@@ -386,6 +413,41 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
   });
 
   // 재시작은 중단한 수집의 식별자와 날짜별 영속화를 함께 보호한다.
+  it("토스 429 대기 중 수집을 유지하고 재시도 성공 후 완료 알림을 보낸다", async () => {
+    const source = rateLimitedSource();
+    const { service, terminalEvents } = await fixture(source.fetch);
+    const collection = service.collect("owner", { symbol: "005930", period: { from: date, to: date } });
+    await source.entered;
+    expect(service.getCollection("owner", collection.id)).toMatchObject({ status: "RUNNING", error: null });
+    expect(terminalEvents).toEqual([]);
+    source.release();
+    await vi.waitFor(() => expect(service.getCollection("owner", collection.id).status).toBe("COMPLETED"));
+    expect(terminalEvents).toEqual([expect.objectContaining({ kind: "collection", id: collection.id, status: "COMPLETED" })]);
+    expect(source.fetchImpl).toHaveBeenCalledTimes(3);
+    source.client.close();
+  });
+
+  it("토스 429 대기 중 서버가 종료되면 수집을 대기열로 돌리고 재시작 후 복구한다", async () => {
+    const source = rateLimitedSource();
+    const { service, makeService, terminalEvents } = await fixture(source.fetch);
+    const collection = service.collect("owner", { symbol: "005930", period: { from: date, to: date } });
+    await source.entered;
+    expect(service.getCollection("owner", collection.id)).toMatchObject({ status: "RUNNING", error: null });
+    expect(terminalEvents).toEqual([]);
+    await service.close();
+    expect(service.getCollection("owner", collection.id)).toMatchObject({ status: "QUEUED", error: null });
+    expect(terminalEvents).toEqual([]);
+    source.client.close();
+    const resumed = rateLimitedSource();
+    const restarted = makeService(resumed.fetch);
+    await restarted.recover();
+    await resumed.entered;
+    resumed.release();
+    await vi.waitFor(() => expect(restarted.getCollection("owner", collection.id).status).toBe("COMPLETED"));
+    expect(terminalEvents).toEqual([expect.objectContaining({ kind: "collection", id: collection.id, status: "COMPLETED" })]);
+    resumed.client.close();
+  });
+
   it("종료 후 수집을 같은 ID로 복구하고 이미 저장한 날짜를 재요청하지 않는다", async () => {
     const firstDay = bars.map((bar) => ({ ...bar, endMs: bar.endMs - 2 * 86_400_000 }));
     const initial = vi.fn<IntradaySource["fetch"]>(async (_symbol, from, _to, options) => {

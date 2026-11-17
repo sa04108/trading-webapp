@@ -9,12 +9,14 @@ const config = { baseUrl: "https://toss.test", clientId: "client", clientSecret:
 const logger = createLogger(loadConfig({ NODE_ENV: "test", LOG_LEVEL: "error" }));
 const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status });
 const token = { access_token: "token", expires_in: 86400 };
-const noop = async () => {};
+let time = Date.now();
+const now = () => time;
+const noop = async (ms: number) => { time += ms; };
 
 describe("Toss trading adapter", () => {
   it("shares one token across concurrent stock and account requests", async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request) => String(url).endsWith("/oauth2/token") ? json(token) : String(url).includes("/stocks?") ? json({ result: [] }) : json({ result: [] }));
-    const client = createTossClient(config, logger, { fetchImpl: fetchImpl as typeof fetch, sleep: noop });
+    const client = createTossClient(config, logger, { fetchImpl: fetchImpl as typeof fetch, sleep: noop, now });
     const stock = createTossStockInfoSource(config, logger, { client });
     const trading = createTossTradingBroker(config, logger, { client });
     await Promise.all([stock.getStockInfo(["005930"]), trading.accounts()]);
@@ -22,7 +24,7 @@ describe("Toss trading adapter", () => {
   });
   it("never retries an ambiguous submission and respects the last-moment guard", async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(json(token)).mockRejectedValueOnce(new Error("network"));
-    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop });
+    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop, now });
     const req = { clientOrderId: "a", symbol: "005930", side: "BUY" as const, quantity: 1, price: 100 };
     await expect(broker.place("1", req)).rejects.toMatchObject({ uncertain: true });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
@@ -30,16 +32,16 @@ describe("Toss trading adapter", () => {
     await expect(broker.place("1", req, () => { throw guard; })).rejects.toBe(guard);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
-  it("treats HTTP 408 after order submission as uncertain and never retries", async () => {
-    const fetchImpl = vi.fn().mockResolvedValueOnce(json(token)).mockResolvedValueOnce(json({ error: "timeout" }, 408));
-    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop });
-    await expect(broker.place("1", { clientOrderId: "request-1", symbol: "005930", side: "BUY", quantity: 1, price: 100 })).rejects.toMatchObject({ uncertain: true, statusCode: 408 });
+  it.each([408, 500, 503])("treats HTTP %s after order submission as uncertain and never retries", async (status) => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(json(token)).mockResolvedValueOnce(json({ error: "timeout" }, status));
+    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop, now });
+    await expect(broker.place("1", { clientOrderId: "request-1", symbol: "005930", side: "BUY", quantity: 1, price: 100 })).rejects.toMatchObject({ uncertain: true, statusCode: status });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
   it("rejects a filled order whose commission or tax is not yet known", async () => {
     const filled = { orderId: "order1", symbol: "005930", side: "BUY", currency: "KRW", status: "FILLED", quantity: "1", execution: { filledQuantity: "1", averageFilledPrice: "100", commission: null, tax: "0" } };
     const fetchImpl = vi.fn().mockResolvedValueOnce(json(token)).mockResolvedValueOnce(json({ result: filled })).mockResolvedValueOnce(json({ result: { ...filled, execution: { ...filled.execution, commission: "0", tax: null } } }));
-    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop });
+    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop, now });
     await expect(broker.order("1", "order1")).rejects.toThrow(/수수료·세금/);
     await expect(broker.order("1", "order1")).rejects.toThrow(/수수료·세금/);
   });
@@ -50,7 +52,7 @@ describe("Toss trading adapter", () => {
       .mockResolvedValueOnce(json({ result: { sellableQuantity: "4" } }))
       .mockResolvedValueOnce(json({ result: { sellableQuantity: "-1" } }))
       .mockResolvedValueOnce(json({ result: { sellableQuantity: "1.5" } }));
-    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop });
+    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop, now });
     const holdings = await broker.holdings("1");
     expect(holdings).toHaveLength(40);
     expect(holdings.every(h => h.availableQuantity === null)).toBe(true);
@@ -64,7 +66,7 @@ describe("Toss trading adapter", () => {
   });
   it("rejects malformed pagination and foreign holdings", async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(json(token)).mockResolvedValueOnce(json({ result: { items: [{ symbol: "AAPL", marketCountry: "US", currency: "USD" }] } })).mockResolvedValueOnce(json({ result: { orders: [], hasNext: true, nextCursor: null } }));
-    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop });
+    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop, now });
     await expect(broker.holdings("1")).rejects.toThrow();
     await expect(broker.orders("1", "2026-01-01", "2026-01-02")).rejects.toThrow();
   });
@@ -74,7 +76,7 @@ describe("Toss trading adapter", () => {
       .mockResolvedValueOnce(json({ result: { orders: [partial], hasNext: false, nextCursor: null } }))
       .mockResolvedValueOnce(json({ result: { orders: [], hasNext: false, nextCursor: null } }))
       .mockResolvedValueOnce(json({ result: {} }));
-    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop });
+    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop, now });
     await expect(broker.orders("1", "2026-01-01", "2026-01-02")).resolves.toMatchObject([{ status: "PARTIAL", filledQuantity: 4, commission: 2, tax: 1 }]);
     await expect(broker.cancel("1", "order1")).rejects.toMatchObject({ uncertain: true });
   });
@@ -84,7 +86,7 @@ describe("Toss trading adapter", () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(json(token))
       .mockResolvedValueOnce(json({ result: { orders: [{ ...base, orderId: "open" }], hasNext: false, nextCursor: null } }))
       .mockResolvedValueOnce(json({ result: { orders: [{ ...base, orderId: "closed" }], hasNext: false, nextCursor: null } }));
-    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop });
+    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop, now });
     await expect(broker.orders("1", "2026-01-01", "2026-01-02")).resolves.toMatchObject([
       { id: "open", status: "PARTIAL", filledQuantity: 4 },
       { id: "closed", status: "CANCELLED", filledQuantity: 4 },
@@ -96,7 +98,7 @@ describe("Toss trading adapter", () => {
       .mockResolvedValueOnce(json({ result: { orders: [{ ...base, orderId: "open", status: "CANCEL_REJECTED" }], hasNext: false, nextCursor: null } }))
       .mockResolvedValueOnce(json({ result: { orders: [], hasNext: false, nextCursor: null } }))
       .mockResolvedValueOnce(json({ result: { ...base, orderId: "old", status: "REPLACED" } }));
-    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop });
+    const broker = createTossTradingBroker(config, logger, { fetchImpl, sleep: noop, now });
     await expect(broker.orders("1", "2026-01-01", "2026-01-02")).resolves.toMatchObject([{ status: "OPEN" }]);
     await expect(broker.order("1", "old")).rejects.toThrow();
   });

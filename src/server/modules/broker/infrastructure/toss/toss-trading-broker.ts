@@ -70,7 +70,7 @@ export function createTossTradingBroker(config: TossConfig | null, logger: Logge
   const client = config ? options.client ?? createTossClient(config, logger, options) : null;
   function requireClient(): TossClient { if (!client) throw new BrokerRequestError("토스 연결이 설정되지 않았습니다", false); return client; }
   async function get(path: string, accountId?: string): Promise<unknown> {
-    return result(await requireClient().request("trading", path, { ...(accountId ? { headers: accountHeaders(accountId) } : {}) }));
+    return result(await requireClient().request(path, { ...(accountId ? { headers: accountHeaders(accountId) } : {}) }));
   }
   return {
     configured: client !== null,
@@ -111,13 +111,13 @@ export function createTossTradingBroker(config: TossConfig | null, logger: Logge
     async order(accountId, orderId) { return parseOrder(await get(`/api/v1/orders/${encodeURIComponent(string(orderId))}`, accountId)); },
     async place(accountId, request, beforeSend) {
       krSymbol(request.symbol); if (!/^[A-Za-z0-9_-]{1,36}$/.test(request.clientOrderId) || !Number.isSafeInteger(request.quantity) || request.quantity <= 0 || !Number.isSafeInteger(request.price) || request.price <= 0 || !["BUY", "SELL"].includes(request.side)) throw new BrokerRequestError("주문 입력이 올바르지 않습니다", false);
-      const raw = await requireClient().request("order", "/api/v1/orders", { method: "POST", headers: accountHeaders(accountId), beforeSend, body: { clientOrderId: request.clientOrderId, symbol: request.symbol, side: request.side, orderType: "LIMIT", timeInForce: "DAY", quantity: String(request.quantity), price: String(request.price) } });
+      const raw = await requireClient().request("/api/v1/orders", { method: "POST", headers: accountHeaders(accountId), beforeSend, body: { clientOrderId: request.clientOrderId, symbol: request.symbol, side: request.side, orderType: "LIMIT", timeInForce: "DAY", quantity: String(request.quantity), price: String(request.price) } });
       let response: Record<string, unknown>;
       try { response = object(result(raw)); } catch { throw new BrokerRequestError("주문 접수 응답을 확인할 수 없습니다", true); }
       if (typeof response.orderId !== "string" || !response.orderId || response.clientOrderId !== request.clientOrderId) throw new BrokerRequestError("주문 접수 응답을 확인할 수 없습니다", true);
       return { orderId: response.orderId };
     },
-    async cancel(accountId, orderId) { const raw = await requireClient().request("order", `/api/v1/orders/${encodeURIComponent(string(orderId))}/cancel`, { method: "POST", headers: accountHeaders(accountId) }); try { string(object(result(raw)).orderId); } catch { throw new BrokerRequestError("주문 취소 응답을 확인할 수 없습니다", true); } },
+    async cancel(accountId, orderId) { const raw = await requireClient().request(`/api/v1/orders/${encodeURIComponent(string(orderId))}/cancel`, { method: "POST", headers: accountHeaders(accountId) }); try { string(object(result(raw)).orderId); } catch { throw new BrokerRequestError("주문 취소 응답을 확인할 수 없습니다", true); } },
     async quotes(symbols) {
       if (symbols.length > 200 || new Set(symbols).size !== symbols.length) throw new Error("시세 조회 종목이 올바르지 않습니다"); symbols.forEach(krSymbol); if (!symbols.length) return [];
       const data = await get(`/api/v1/prices?${new URLSearchParams({ symbols: symbols.join(",") })}`); if (!Array.isArray(data)) throw new Error("시세 응답이 올바르지 않습니다");

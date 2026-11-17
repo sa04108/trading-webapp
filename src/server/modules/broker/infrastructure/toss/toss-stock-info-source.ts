@@ -5,7 +5,7 @@ import {
   type StockInfoBatchResult,
   type StockInfoSource,
 } from "../../../../../runtime/modules/market-data/application/ports.js";
-import { createTossClient, type TossClient } from "./toss-client.js";
+import { createTossClient, type TossClient, type TossClientOptions } from "./toss-client.js";
 
 export interface TossConfig {
   readonly baseUrl: string; // https://openapi.tossinvest.com — 실전 환경만 제공 (모의 없음)
@@ -26,9 +26,7 @@ function optionalDecimal(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-export interface TossSourceOptions {
-  readonly fetchImpl?: typeof fetch;
-  readonly sleep?: (ms: number) => Promise<void>;
+export interface TossSourceOptions extends TossClientOptions {
   readonly client?: TossClient;
 }
 
@@ -37,8 +35,7 @@ export interface TossSourceOptions {
  *
  * - 인증: POST /oauth2/token — OAuth2 client_credentials, form-urlencoded (키움과 달리 JSON 아님).
  *   재발급 시 이전 토큰이 즉시 무효화되므로 프로세스당 클라이언트 1개로 캐싱을 공유한다.
- * - 종목 정보: GET /api/v1/stocks — 백테스트 위저드의 종목 이름 조회가 유일한 소비자다
- *   (캔들·현재가·랭킹 조회는 가격 데이터 기능 제거로 함께 사라졌다).
+ * - 종목 정보: GET /api/v1/stocks — 종목 이름 검색과 표시 정보를 제공한다.
  * - Rate limit: STOCK 그룹 초당 5회.
  */
 export function createTossStockInfoSource(
@@ -69,7 +66,7 @@ export function createTossStockInfoSource(
           const query = new URLSearchParams({ symbols: chunk.join(",") });
           const page = await client.request<{
             result?: readonly Record<string, unknown>[];
-          }>("stock", `/api/v1/stocks?${query}`);
+          }>(`/api/v1/stocks?${query}`);
           if (!Array.isArray(page.result)) {
             throw new Error("toss stocks 응답에 result 배열이 없습니다");
           }

@@ -34,9 +34,11 @@ function buildFetch(responses: Response[]) {
 }
 
 function buildSource(fetchImpl: ReturnType<typeof vi.fn>) {
+  let time = Date.now();
   return createTossStockInfoSource(CONFIG, logger, {
     fetchImpl: fetchImpl as unknown as typeof fetch,
-    sleep: async () => {},
+    sleep: async (ms) => { time += ms; },
+    now: () => time,
   });
 }
 

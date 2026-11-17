@@ -101,6 +101,7 @@ interface Options {
   ) => Promise<IntradayResult>;
   validateSymbol?: (
     symbol: string,
+    signal?: AbortSignal,
   ) => Promise<{ listDate: string; isinCode: string }>;
   search: (query: string) => Promise<{ symbol: string; name: string }[]>;
   onRecoveryFailure?: (terminalNotificationExpected: boolean) => void;
@@ -502,7 +503,7 @@ export class IntradayService {
       const stored = await this.options.store.list();
       if (stored.length >= 100 && !stored.some((s) => s.symbol === symbol))
         throw new IntradayError("초기 분봉 보관은 최대 100종목입니다.");
-      const instrument = await this.options.validateSymbol?.(symbol);
+      const instrument = await this.options.validateSymbol?.(symbol, signal);
       const range = this.bounds(period);
       if (instrument)
         range.fromMs = Math.max(
@@ -776,7 +777,7 @@ export class IntradayService {
       if (!tradingDates.length)
         throw new IntradayError("기간에 거래일이 없습니다.");
       update({ status: "PREPARING" });
-      const instrument = await this.options.validateSymbol?.(request.symbol);
+      const instrument = await this.options.validateSymbol?.(request.symbol, signal);
       if (instrument && request.period.from < instrument.listDate)
         throw new IntradayError(
           `현재 종목의 상장일(${instrument.listDate}) 이후 기간을 선택하세요.`,

@@ -34,7 +34,7 @@ describe("토스 분봉", () => {
     expect(bars.map((bar) => bar.endMs)).toEqual(
       [2, 3, 4].map((n) => Date.parse(stamp(n))),
     );
-    const query = new URL(request.mock.calls[0]![1], "https://example.test")
+    const query = new URL(request.mock.calls[0]![0], "https://example.test")
       .searchParams;
     expect(Object.fromEntries(query)).toEqual({
       symbol: "005930",

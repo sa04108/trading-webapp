@@ -783,8 +783,10 @@ export function createContainer(
       if (closing !== null) return closing;
       closing = (async () => {
         await riskFreeRateService.close();
-        await intradayService.close();
-        await tradingService.close();
+        const intradayClosing = intradayService.close();
+        const tradingClosing = tradingService.close();
+        tossClient?.close();
+        await Promise.all([intradayClosing, tradingClosing]);
         await tradingDataPreparation.close();
         clearInterval(pruneTimer);
         await collection.filingDiscovery.stop();

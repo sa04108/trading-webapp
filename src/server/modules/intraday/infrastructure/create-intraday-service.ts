@@ -43,14 +43,14 @@ export function createIntradayService(options: {
     execute: executeIntraday,
     onRecoveryFailure: options.onRecoveryFailure,
     onTerminal: options.onTerminal,
-    validateSymbol: async (symbol) => {
+    validateSymbol: async (symbol, signal) => {
       const cached = instrumentCache.get(symbol);
       if (cached && cached.expires > Date.now()) return cached.value;
       if (!options.client)
         throw new IntradayError("서버의 토스증권 API 연결 설정을 확인하세요.");
       const data = await options.client.request<{ result?: unknown[] }>(
-        "stock",
         `/api/v1/stocks?${new URLSearchParams({ symbols: symbol })}`,
+        { signal },
       );
       const parsed = instrumentSchema.safeParse(
         data.result?.find(
