@@ -113,8 +113,14 @@ describe('createDartFactSource — 영속 원문 snapshot 재처리', () => {
                   account_id: 'ifrs-full_CurrentAssets',
                   account_nm: '유동자산',
                   thstrm_amount: '500000',
+                  ord: '1', account_detail: '-', currency: 'KRW',
                   future_field: '파서가 아직 쓰지 않는 원문',
                 },
+                { rcept_no: '20250515000001', reprt_code: '11013', bsns_year: '2025', sj_div: 'BS', account_id: 'ifrs-full_CurrentLiabilities', account_nm: '유동부채', thstrm_amount: '1000', ord: '3', account_detail: '-', currency: 'KRW' },
+                { rcept_no: '20250515000001', reprt_code: '11013', bsns_year: '2025', sj_div: 'BS', account_id: '-표준계정코드 미사용-', account_nm: '사채', thstrm_amount: '20', ord: '4', account_detail: '-', currency: 'KRW' },
+                { rcept_no: '20250515000001', reprt_code: '11013', bsns_year: '2025', sj_div: 'BS', account_id: 'ifrs-full_NoncurrentLiabilities', account_nm: '비유동부채', thstrm_amount: '2000', ord: '5', account_detail: '-', currency: 'KRW' },
+                { rcept_no: '20250515000001', reprt_code: '11013', bsns_year: '2025', sj_div: 'BS', account_id: 'dart_BondsIssued', account_nm: '사채', thstrm_amount: '30', ord: '6', account_detail: '-', currency: 'KRW' },
+                { rcept_no: '20250515000001', reprt_code: '11013', bsns_year: '2025', sj_div: 'BS', account_id: 'ifrs-full_Liabilities', account_nm: '부채총계', thstrm_amount: '3000', ord: '7', account_detail: '-', currency: 'KRW' },
                 {
                   rcept_no: '20250515000001',
                   reprt_code: '11013',
@@ -163,7 +169,12 @@ describe('createDartFactSource — 영속 원문 snapshot 재처리', () => {
       .find(([key]) => key.includes('FINANCIAL_STATEMENT') && key.includes('11013'))?.[1];
     expect(financialSnapshot?.payload).toMatchObject({
       list: [
-        { future_field: '파서가 아직 쓰지 않는 원문' },
+        { future_field: '파서가 아직 쓰지 않는 원문', ord: '1', account_detail: '-', currency: 'KRW' },
+        { account_nm: '유동부채', ord: '3', account_detail: '-', currency: 'KRW' },
+        { account_nm: '사채', ord: '4', account_detail: '-', currency: 'KRW' },
+        { account_nm: '비유동부채', ord: '5', account_detail: '-', currency: 'KRW' },
+        { account_nm: '사채', ord: '6', account_detail: '-', currency: 'KRW' },
+        { account_nm: '부채총계', ord: '7', account_detail: '-', currency: 'KRW' },
         { account_nm: '현재 미사용 계정' },
       ],
     });
@@ -182,7 +193,10 @@ describe('createDartFactSource — 영속 원문 snapshot 재처리', () => {
       ...liveRequest,
       rawSnapshotPolicy: 'PREFER_CACHE',
     };
-    expect(await replaySource.fetchFinancials(replayRequest)).toEqual(liveFinancials);
+    const replayFinancials = await replaySource.fetchFinancials(replayRequest);
+    expect(replayFinancials).toEqual(liveFinancials);
+    expect(replayFinancials.facts).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'BONDS', periodKey: '2025Q1', value: 50 })]));
+    expect(replayFinancials.gaps.filter(gap => gap.field === 'BONDS' && gap.kind === 'CONFLICT')).toEqual([]);
     expect(await replaySource.fetchCorporateActions(replayRequest)).toEqual(liveActions);
     expect(corpCodeResolutions).toBe(0);
   });
