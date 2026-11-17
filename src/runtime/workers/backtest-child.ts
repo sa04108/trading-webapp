@@ -4,8 +4,9 @@ import { readMarketIndex } from "../modules/market-data/application/market-index
  * 에이전트가 만든 계산 프로세스에서 입력 로드 → 엔진 실행 → 결과 파일 생성을 수행한다.
  * 실행 인자는 에이전트가 전달하며, 종료 상태는 작업 전용 DB에 기록한다.
  */
-import { and, asc, desc, eq, gte, inArray, lt, lte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { pino } from "pino";
+import { getBacktestCandleWindow } from "../modules/backtest/application/backtest-input-bars.js";
 import { backtestBatchBars } from "../modules/backtest/application/backtest-memory-plan.js";
 import { BacktestFundamentalView } from "../modules/backtest/application/backtest-fundamental-view.js";
 import {
@@ -341,37 +342,8 @@ async function main(input: { lease: AgentLease }): Promise<void> {
     const indexRequirement = marketIndexBars ? { from: addCalendarDays(request.period.from, -(marketIndexBars * 3 + 30)), to: request.period.to, tradeFrom: request.period.from, minimumBars: marketIndexBars } : undefined;
     const marketIndex = indexRequirement ? readMarketIndex(db, indexRequirement) : undefined;
     if (indexRequirement && (!symbolMaster.isRangeCovered(indexRequirement.from, indexRequirement.to) || !marketIndex)) throw new Error("KOSPI 지수 이력이 부족합니다. 데이터를 준비한 뒤 다시 실행하세요.");
-    const strategyWarmupBars =
-      strategy.dataRequirements?.priceWarmupBars?.(parameters) ?? 0;
-    const declineWarmupBars = request.universeRule.stages.reduce(
-      (maximum, stage) =>
-        stage.criterion === "DECLINE"
-          ? Math.max(maximum, stage.lookbackTradingDays)
-          : maximum,
-      0,
-    );
-    const warmupBars = Math.ceil(
-      Math.max(0, strategyWarmupBars, declineWarmupBars),
-    );
-    const priorTradingDays =
-      warmupBars === 0
-        ? []
-        : db
-            .select({ date: symbolMasterTradingDays.date })
-            .from(symbolMasterTradingDays)
-            .where(
-              and(
-                lt(symbolMasterTradingDays.date, request.period.from),
-                // 0005 legacy 이행의 주말 경계를 warm-up N일로 세지 않는다.
-                sql`strftime('%w', ${symbolMasterTradingDays.date}) NOT IN ('0', '6')`,
-              ),
-            )
-            .orderBy(desc(symbolMasterTradingDays.date))
-            .limit(warmupBars)
-            .all();
-    const warmupFromDate =
-      priorTradingDays[priorTradingDays.length - 1]?.date ??
-      request.period.from;
+    const { warmupBars, priorTradingDays, warmupFromDate } =
+      getBacktestCandleWindow(db, request, strategy, parameters);
     const marketTradingTsMs = db
       .select({ date: symbolMasterTradingDays.date })
       .from(symbolMasterTradingDays)

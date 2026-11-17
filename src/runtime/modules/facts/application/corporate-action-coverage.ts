@@ -41,6 +41,28 @@ function parseProtocolYears(raw: string | null): number[] | null {
   }
 }
 
+function protocolCollectionVersion(raw: string | null): string | null {
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<ActionCoverageProtocol> | null;
+    return typeof parsed?.collectionVersion === "string" ? parsed.collectionVersion : null;
+  } catch {
+    return null;
+  }
+}
+
+function reusableVerifiedYears(
+  protocol: string | null,
+  collected: string | null,
+  gapYears: string | null,
+  collectionVersion: string,
+): readonly number[] {
+  const years = parseProtocolYears(protocol) ?? parseYears(collected);
+  if (protocolCollectionVersion(protocol) === collectionVersion) return years;
+  const gaps = new Set(parseYears(gapYears));
+  return years.filter((year) => !gaps.has(year));
+}
+
 function parseGapDetails(raw: string | null): CorporateActionGapDetail[] {
   if (raw === null) return [];
   try {
@@ -193,6 +215,7 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
           code: symbolFactsState.code,
           protocol: symbolFactsState.actionCoverageProtocolJson,
           collected: symbolFactsState.actionCoveredYearsJson,
+          gaps: symbolFactsState.actionGapYearsJson,
         })
         .from(symbolFactsState);
       return batch === undefined
@@ -201,8 +224,7 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     });
     const issues = this.readIssuesForCodes(codes);
     for (const row of rows) {
-      const protocolYears = parseProtocolYears(row.protocol);
-      const covered = protocolYears === null ? parseYears(row.collected) : protocolYears;
+      const covered = reusableVerifiedYears(row.protocol, row.collected, row.gaps, this.collectionVersion);
       const pendingYears = new Set(issues.filter((issue) => issue.symbol === row.code && issue.reason === "PENDING_FILING" && issue.businessYear !== null).map((issue) => issue.businessYear!));
       result.set(row.code, covered.filter((year) => !pendingYears.has(year)));
     }
@@ -365,7 +387,7 @@ export class SqliteCorporateActionCoverageStore implements CorporateActionCovera
     const verifiedYears = [
       ...new Set([
         ...(existing
-          ? parseProtocolYears(existing.actionCoverageProtocolJson) ?? parseYears(existing.actionCoveredYearsJson)
+          ? reusableVerifiedYears(existing.actionCoverageProtocolJson, existing.actionCoveredYearsJson, existing.actionGapYearsJson, this.collectionVersion)
           : []),
         ...coveredYears,
       ]),

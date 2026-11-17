@@ -548,9 +548,12 @@ export interface IssuanceParsingOptions {
   ) => PriceActionDirection | undefined;
 }
 
+// 기존 주주의 보유 수량은 바꾸지 않지만 이후 사건의 발행주식수 분모에는 반영한다.
 const NON_HOLDER_INCREASE = [
   "유상증자",
   "전환권행사",
+  "현물출자",
+  "출자전환",
   "신주인수권행사",
   "주식매수선택권행사",
   "합병",

@@ -113,6 +113,8 @@ function issuanceKey(row: DartIssuanceRow): string {
 interface SharesAtPeriod {
   readonly dateKey: string;
   readonly shares: number;
+  readonly asOfTsMs?: number | null;
+  readonly backwardAmbiguous?: boolean;
 }
 
 interface OrderedIssuedShareChange {
@@ -949,7 +951,14 @@ export function createDartFactSource(
               // 사건이 이 앵커를 필요로 할 때 파서가 사건 날짜와 함께 gap을 남긴다.
               continue;
             }
-            sharesByPeriod.push({ dateKey, shares });
+            const commonRows = shareRows.filter(row => readDartString(row, "se")?.replace(/\s/g, "") === "보통주");
+            const receipts = commonRows.map(row => receiptDateToAsOfTsMs(readDartString(row, "rcept_no") ?? ""));
+            const backwardAmbiguous = commonRows.some((row, index) => {
+              const rowDate = readDartString(row, "stlm_dt");
+              return readShareAmount(row) !== shares || rowDate === null || normalizeDateKey(rowDate) !== dateKey || receipts[index] === null;
+            });
+            sharesByPeriod.push({ dateKey, shares, backwardAmbiguous,
+              asOfTsMs: backwardAmbiguous ? null : Math.max(...receipts as number[]) });
           }
         }
         sharesByPeriod.sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
@@ -1040,6 +1049,7 @@ export function createDartFactSource(
           issuanceRows.map((row, order) => [row, order]),
         );
 
+        const backwardEvidence = new Map<string, number>();
         const sharesBefore = (
           dateKey: string,
           targetRow: DartIssuanceRow,
@@ -1049,9 +1059,45 @@ export function createDartFactSource(
             if (entry.dateKey >= dateKey) break;
             anchor = entry;
           }
-          if (anchor === null) return null;
           const targetOrder = rowOrder.get(targetRow);
           if (targetOrder === undefined) return null;
+          if (anchor === null) {
+            // 사건 이전 기준이 없을 때만 이후 분기와 그 사이의 모든 증감을 역산한다.
+            const unknownDate = issuanceRows.some(row => {
+              const kind = readDartString(row, "isu_dcrs_stock_knd");
+              if (kind !== null && !kind.replace(/\s/g, "").includes("보통")) return false;
+              const rawDate = readDartString(row, "isu_dcrs_de");
+              const style = readDartString(row, "isu_dcrs_stle");
+              if (rawDate?.trim() === "-" && style?.trim() === "-") return false;
+              return rawDate === null || normalizeDateKey(rawDate) === null;
+            });
+            if (unknownDate) return null;
+            const next = sharesByPeriod.find(entry => entry.dateKey >= dateKey);
+            if (next === undefined || next.dateKey === dateKey || next.backwardAmbiguous || next.asOfTsMs == null ||
+                !Number.isSafeInteger(next.shares) || next.shares <= 0) return null;
+            const sameDate = sharesByPeriod.filter(entry => entry.dateKey === next.dateKey);
+            if (sameDate.some(entry => entry.backwardAmbiguous || entry.shares !== next.shares || entry.asOfTsMs == null)) return null;
+            let evidence = Math.max(...sameDate.map(entry => entry.asOfTsMs!));
+            let shares = next.shares;
+            const changes = issuedShareChanges.filter(change =>
+              change.dateKey <= next.dateKey &&
+              (change.dateKey > dateKey || (change.dateKey === dateKey && change.order >= targetOrder)));
+            if (!changes.some(change => change.row === targetRow) ||
+                changes.some(change => change.dateKey === next.dateKey)) return null;
+            for (const change of changes.reverse()) {
+              if (change.delta === null || !Number.isSafeInteger(change.delta) ||
+                  (isAmbiguousSplitRow(change.row) && !splitInference.increasingRows.has(change.row) &&
+                   !decreasingSplitRows.has(change.row))) return null;
+              const sourceRow = latestIssuanceRows[change.order];
+              const receipt = receiptDateToAsOfTsMs(readDartString(sourceRow ?? change.row, "rcept_no") ?? "");
+              if (receipt === null) return null;
+              evidence = Math.max(evidence, receipt);
+              shares -= change.delta;
+              if (!Number.isSafeInteger(shares) || shares <= 0) return null;
+            }
+            backwardEvidence.set(dateKey, Math.max(backwardEvidence.get(dateKey) ?? 0, evidence));
+            return shares;
+          }
           let shares = anchor.shares;
           for (const change of issuedShareChanges) {
             if (change.dateKey <= anchor.dateKey) continue;
@@ -1088,7 +1134,8 @@ export function createDartFactSource(
                 decreasingSplitRows.has(row) ? "DECREASE" : undefined,
             },
           ), { itemCount: issuanceRows.length });
-          for (const fact of parsed.facts) {
+          for (const parsedFact of parsed.facts) {
+            const fact = { ...parsedFact, asOfTsMs: Math.max(parsedFact.asOfTsMs, backwardEvidence.get(parsedFact.periodKey) ?? 0) };
             // irdsSttus 는 자본변동 이력을 연도별로 누적 제공한다 — 같은 분할이 해마다
             // 다른 rcept_no 로 반복되고, asOfTsMs 가 다르면 저장소 dedupe 를 통과한다.
             // 그대로 두면 adjusted-price 가 비율을 곱해 2:1 분할이 2년치에서 factor 4 가

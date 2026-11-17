@@ -808,6 +808,8 @@ describe('parseIssuanceRows — 발행형태 분류 (전수 테이블)', () => {
     { style: '주식병합', direction: 'decrease' },
     { style: '무상감자', direction: 'decrease' },
     { style: '유상증자(주주배정)', direction: 'skip' },
+    { style: '현물출자', direction: 'skip' },
+    { style: '출자전환', direction: 'skip' },
     // 유상감자 — classifyCapitalChange 의 첫 두 검사 순서를 뒤집으면(유상 검사를 감자
     // 검사 뒤로 옮기면) 이 행이 DECREASE 로 분류돼 가격을 보정하는 가짜 SPLIT_RATIO 를
     // 낸다. 함수 주석이 "이 순서를 테스트 없이 바꾸면 안 된다" 고 못박고 있는데 정작
@@ -830,7 +832,7 @@ describe('parseIssuanceRows — 발행형태 분류 (전수 테이블)', () => {
 
       if (direction === 'skip') {
         expect(facts).toEqual([]);
-        expect(gaps).toEqual([]); // 유상감자와 마찬가지로 현금이 오간 것이라 의도된 제외
+        expect(gaps).toEqual([]); // 기존 주주의 보유 수량을 비례 조정하지 않는다
         return;
       }
 

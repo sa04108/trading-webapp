@@ -6,6 +6,7 @@ import type { TestApp } from '../helpers/test-app.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars } from '../helpers/seed.js';
 import * as resources from '../../src/agent/resources.js';
+import * as inputBars from '../../src/runtime/modules/backtest/application/backtest-input-bars.js';
 import { LOCAL_AGENT_ID } from '../../src/shared/agent-protocol.js';
 import type { PreparationInput } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
@@ -157,6 +158,10 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
   it('오프라인 등록 agent와 초과 크기 백테스트가 있어도 미리보기를 로컬에서 실행한다', { timeout: 90_000 }, async ({ scenario }) => {
     const { ctx } = scenario;
     ctx.container.agentCoordinator.registry.issue('disconnected');
+    // 수백만 행 대신 집계 경계에 실제 상한 초과를 주입해 미리보기 기아 방지 계약을 유지한다.
+    vi.spyOn(inputBars, 'countBacktestInputBars').mockResolvedValue({
+      tradeBars: 2_100_000, loadBars: 2_100_000, warmupFromDate: request.period.from,
+    });
     ctx.container.agentCoordinator.start();
     await ctx.container.agentCoordinator.snapshots.ensureLatest();
     const oversized = ctx.container.jobQueue.enqueue(

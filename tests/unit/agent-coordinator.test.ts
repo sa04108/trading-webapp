@@ -11,6 +11,8 @@ import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.
 import type { AgentLease, ServerAgentMessage } from '../../src/shared/agent-protocol.js';
 import { AgentInstallationService } from '../../src/server/modules/agents/application/agent-installation.js';
 import Fastify from 'fastify';
+import { seedDailyBars } from '../helpers/seed.js';
+import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
 import { registerAgentManagementRoutes } from '../../src/server/modules/agents/presentation/agent-routes.js';
 import { agentContainerImage, buildWindowsAgentInstaller } from '../../src/server/modules/agents/infrastructure/agent-windows-installer.js';
 
@@ -588,4 +590,56 @@ describe('이벤트로 대기 큐 재배정', () => {
     await vi.waitFor(() => expect(peer.received.filter((message) => message.type === 'JOB').map((message) => message.lease.jobId)).toContain(next.id));
     expect(ctx.container.jobQueue.getJob(next.id)?.attempt).toBe(1);
   });
+});
+
+
+it('게시 스냅샷의 준비 봉까지 수용하는 원격 장치만 배정하고 소유 리스만 자원 대기로 반환한다', async ({ scenario }) => {
+  const { ctx, connect } = scenario;
+  const coordinator = ctx.container.agentCoordinator;
+  const dates = ['2026-01-01', '2026-01-02', '2026-01-05', '2026-01-06'];
+  seedSymbolMasterUniverse(ctx.container, dates, [{ standardCode: 'KR7005930003', shortCode: '005930',
+    name: '삼성전자', market: 'KOSPI', marketCapKrw: '1000000000' }]);
+  seedDailyBars(ctx.container.database.db, dates.map(date => ({ symbol: '005930', market: 'KR' as const,
+    timeframe: '1d' as const, tsMs: Date.parse(`${date}T00:00:00Z`), open: 100, high: 110, low: 90, close: 100, volume: 1000 })));
+  vi.spyOn(coordinator.snapshots, 'file').mockReturnValue(ctx.container.database.dataPath);
+  const peer = await connect();
+  peer.submit({ type: 'CAPACITY', slots: 1, datasetVersion: 1, maxBars: 3 });
+  const body = { ...request, period: { from: '2026-01-05', to: '2026-01-06' } };
+  const job = ctx.container.jobQueue.enqueue(body, [{ rebalanceDate: body.period.from, effectiveTradingDate: body.period.from,
+    symbols: ['005930'], excludedNonTradingCount: 0 }], undefined, undefined, [], { estimatedBars: 1 });
+  // DEMAND는 정확한 집계를 끝내고 용량 부족을 판정한 관찰 가능한 경계다.
+  await vi.waitFor(() => expect(peer.received).toContainEqual({ type: 'DEMAND', estimatedBars: 4 }));
+  expect(peer.job()).toBeUndefined();
+  expect(ctx.container.jobQueue.getJob(job.id)).toMatchObject({ status: 'QUEUED', attempt: 0, estimatedBars: 2 });
+  peer.submit({ type: 'CAPACITY', slots: 1, datasetVersion: 1, maxBars: 4 });
+  await vi.waitFor(() => expect(peer.job()?.jobId).toBe(job.id));
+  const lease = peer.job()!;
+  expect(lease.inputBars).toEqual({ tradeBars: 2, loadBars: 4 });
+  const foreign = new Peer();
+  const credential = coordinator.registry.issue('other-device');
+  coordinator.connect(credential.id, foreign as unknown as WebSocket);
+  foreign.submit({ type: 'HELLO', protocolVersion: 4, runnerVersion: coordinator.runnerVersion });
+  await vi.waitFor(() => expect(foreign.received.some(message => message.type === 'WELCOME')).toBe(true));
+  const defer = { type: 'DEFER', kind: 'BACKTEST', jobId: lease.jobId, attempt: lease.attempt,
+    leaseToken: lease.leaseToken, reason: 'RESOURCE_UNAVAILABLE', requiredBytes: 5120, availableBytes: 3840 };
+  foreign.submit(defer);
+  await vi.waitFor(() => expect(foreign.received).toContainEqual(expect.objectContaining({ type: 'ACK', accepted: false })));
+  expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('STARTING');
+  peer.submit({ type: 'CAPACITY', slots: 0, datasetVersion: 1, maxBars: 3 });
+  peer.submit(defer);
+  await vi.waitFor(() => expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('QUEUED'));
+  expect(ctx.container.jobQueue.getJob(job.id)?.leaseFailures).toBe(0);
+});
+
+
+it('잘못된 일정 날짜는 봉 집계 없이 기존 워커의 입력 진단으로 보낸다', async ({ scenario }) => {
+  const { ctx, connect } = scenario;
+  const snapshotFile = vi.spyOn(ctx.container.agentCoordinator.snapshots, 'file');
+  const peer = await connect();
+  const job = ctx.container.jobQueue.enqueue(request, [{ rebalanceDate: 'bad-date', effectiveTradingDate: 'bad-date', symbols: ['005930'],
+    excludedNonTradingCount: 0 }], undefined, undefined, [], { estimatedBars: 1 });
+  capacity(peer);
+  await vi.waitFor(() => expect(peer.job()?.jobId).toBe(job.id));
+  expect(peer.job()?.inputBars).toBeUndefined();
+  expect(snapshotFile).not.toHaveBeenCalled();
 });

@@ -14,7 +14,7 @@ import type { CandleCoverageRow, CandleCoverageService } from "../../../../runti
 import type { StrategyRegistry } from "../../../../runtime/modules/strategy/application/strategy-registry.js";
 import { strategyRequiresFinancialData } from "../../../../runtime/modules/strategy/domain/strategy.js";
 import { KRX_FILTER_POLICY_VERSION } from "../../../../runtime/modules/market-data/domain/krx-filter-policy.js";
-import { estimateBars, MAX_BACKTEST_BARS } from "../domain/bar-estimate.js";
+import { MAX_BACKTEST_BARS } from "../domain/bar-estimate.js";
 import { getCostProfile, getSlippageProfile } from "../../../../runtime/modules/backtest/domain/cost-profiles.js";
 import { findRebalanceSpacingViolation, rebalanceSpacingViolationMessage } from "../../../../runtime/modules/backtest/domain/rebalance-spacing.js";
 import type { LegacyUniverseScheduleEntry, ResolvedUniverse } from "../../../../runtime/modules/backtest/application/universe-rule-resolver.js";
@@ -163,11 +163,13 @@ export function createSubmissionValidator(deps: SubmissionValidationDeps) {
   const checkPeriodCoverage = (
     codes: readonly string[],
     period: { from: string; to: string },
-  ): string | null => {
+  ): { error: string | null; barCount: number } => {
     const { fromTsMs, toTsMs } = periodToTsRange(period);
+    const uniqueCodes = [...new Set(codes)];
+    const periodCoverage = candleCoverage.getCoverageBetween(uniqueCodes, fromTsMs, toTsMs);
+    const barCount = periodCoverage.reduce((sum, row) => sum + row.barCount, 0);
     const inPeriod = new Map(
-      candleCoverage
-        .getCoverageBetween(codes, fromTsMs, toTsMs)
+      periodCoverage
         .map(
           (row) =>
             [
@@ -202,9 +204,9 @@ export function createSubmissionValidator(deps: SubmissionValidationDeps) {
       );
     }
 
-    return ranges.length === 0
+    return { barCount, error: ranges.length === 0
       ? null
-      : `선택한 기간에 일봉이 없는 유니버스 종목이 있습니다. 보유 범위 — ${ranges.join(", ")}`;
+      : `선택한 기간에 일봉이 없는 유니버스 종목이 있습니다. 보유 범위 — ${ranges.join(", ")}` };
   };
 
   /**
@@ -221,7 +223,7 @@ export function createSubmissionValidator(deps: SubmissionValidationDeps) {
     body: BacktestRequest,
     codes: readonly string[],
     errors: string[],
-    coverageCheck: (codes: readonly string[]) => string | null,
+    coverageCheck: (codes: readonly string[]) => { error: string | null; barCount: number },
   ): {
     universe: ConsumedVersionSnapshot;
     timeframe: "1d";
@@ -252,9 +254,9 @@ export function createSubmissionValidator(deps: SubmissionValidationDeps) {
       return null;
     }
 
-    const coverageError = coverageCheck(codes);
-    if (coverageError !== null) {
-      errors.push(coverageError);
+    const coverage = coverageCheck(codes);
+    if (coverage.error !== null) {
+      errors.push(coverage.error);
       return null;
     }
 
@@ -262,17 +264,11 @@ export function createSubmissionValidator(deps: SubmissionValidationDeps) {
     const universe = symbolService.versionSnapshotFor(codes);
 
     // 논리적 봉 수 상한 — 로컬 실행기는 날짜별 입력과 별도의 작업 메모리 예산을 적용한다.
-    const { fromTsMs, toTsMs } = periodToTsRange(body.period);
-    const estimated = estimateBars(
-      registeredCoverage(codes).map((row) => ({ ...row, symbol: row.code })),
-      codes,
-      fromTsMs,
-      toTsMs,
-    );
+    const estimated = coverage.barCount;
     const maxBars = deps.maxBacktestBars?.() ?? MAX_BACKTEST_BARS;
     if (estimated > maxBars) {
       errors.push(
-        `예상 봉 수가 상한을 넘습니다 (추정 ${estimated.toLocaleString()}봉 > ` +
+        `봉 수가 상한을 넘습니다 (${estimated.toLocaleString()}봉 > ` +
           `${maxBars.toLocaleString()}봉). 기간이나 종목 수를 줄이세요.`,
       );
       return null;

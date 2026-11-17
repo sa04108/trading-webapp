@@ -518,6 +518,22 @@ export class AgentClient {
       this.admission = { ...this.admission, budgetBytes,
         heapMb: Math.max(64, Math.floor(budgetBytes * 0.65 / 1024 ** 2)) };
     }
+    if (!this.runtime && lease.kind === "BACKTEST" && lease.inputBars) {
+      // 서버가 같은 스냅샷에서 센 준비 봉까지 수용할 수 있는지 시작 직전에 다시 확인한다.
+      this.admission = this.resources();
+      if (this.admission.slots <= this.running.size + this.universeTasks.size || this.admission.memoryPressure ||
+          lease.inputBars.loadBars > this.admission.maxBars) {
+        this.resourceRetryAt = Date.now() + AGENT_HEARTBEAT_MS;
+        const availableBytes = Math.max(0, Math.floor(this.admission.budgetBytes));
+        const requiredBytes = Math.max(128 * 1024 ** 2, Math.ceil(lease.inputBars.loadBars * 512 / 0.4));
+        this.capacity();
+        this.queueOutbox({ lease, message: {
+          type: "DEFER", ...this.identity(lease), kind: "BACKTEST", reason: "RESOURCE_UNAVAILABLE",
+          requiredBytes, availableBytes,
+        } });
+        return;
+      }
+    }
     const key = this.key(lease);
     const directory = path.join(this.directory, "jobs", key);
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });

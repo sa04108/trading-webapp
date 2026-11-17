@@ -274,3 +274,25 @@ describe("AgentClient 메모리 보호", () => {
     expect(fs.existsSync(path.join(h.client.directory, "jobs", "unreserved-memory-1"))).toBe(false);
   });
 });
+
+
+it.each(["봉 적재 한도", "보조 작업 슬롯"])("원격 장치의 %s가 부족하면 자식을 만들지 않고 리스를 반환한다", (reason) => {
+  const h = harness(false, false);
+  h.internals.running.clear();
+  h.internals.ready = true;
+  const internals = h.client as unknown as { resources(): ReturnType<AgentRuntimeAdapter['resources']>; send(message: unknown): void; universeTasks: { readonly size: number } };
+  vi.spyOn(internals, 'resources').mockReturnValue({ ...resources(false)(0), slots: 1, maxBars: reason === '봉 적재 한도' ? 3 : 4 });
+  if (reason === '보조 작업 슬롯') vi.spyOn(internals.universeTasks, 'size', 'get').mockReturnValue(1);
+  const send = vi.spyOn(internals, 'send');
+  vi.mocked(fork).mockClear();
+  const job: AgentLease = { ...lease(), kind: 'BACKTEST', inputBars: { tradeBars: 2, loadBars: 4 } };
+  try {
+    h.internals.spawn(job);
+    expect(fork).not.toHaveBeenCalled();
+    expect(send.mock.calls.some(([message]) => (message as { type: string }).type === 'DEFER')).toBe(true);
+    const directory = path.join(h.client.directory, 'jobs', 'memory-guard-1');
+    expect(fs.existsSync(path.join(directory, 'job.sqlite'))).toBe(false);
+    expect(JSON.parse(fs.readFileSync(path.join(directory, 'outbox.json'), 'utf8')).message)
+      .toMatchObject({ type: 'DEFER', kind: 'BACKTEST', reason: 'RESOURCE_UNAVAILABLE' });
+  } finally { vi.restoreAllMocks(); }
+});

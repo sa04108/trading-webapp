@@ -111,6 +111,11 @@ export const agentLeaseSchema = z.object({
     requiredBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     minimumBatchBars: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   }).optional(),
+  /** 같은 게시 스냅샷에서 센 거래 봉과 준비 기간을 포함한 적재 봉이다. */
+  inputBars: z.object({
+    tradeBars: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    loadBars: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  }).refine((counts) => counts.loadBars >= counts.tradeBars).optional(),
   payload: z.record(z.string(), z.unknown()),
 });
 export type AgentLease = z.infer<typeof agentLeaseSchema>;

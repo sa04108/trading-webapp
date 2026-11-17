@@ -82,6 +82,21 @@ describe('SqliteCorporateActionCoverageStore', () => {
     expect(store.getCoveredYears(['005930']).get('005930')).toEqual([2025]);
   });
 
+  it('새 수집 버전은 이전 gap 연도만 재검증하고 완료하지 않은 gap은 계속 보류한다', async ({ ctx }) => {
+    const { db } = await setup(ctx);
+    const old = new SqliteCorporateActionCoverageStore(db, { collectionVersion: 'old' });
+    old.addCoverageResult('005930', [2020, 2021, 2022], [2021, 2022], 100);
+    const current = new SqliteCorporateActionCoverageStore(db, { collectionVersion: 'new' });
+    expect(current.getCoveredYears(['005930']).get('005930')).toEqual([2020]);
+    expect(current.getCollectedYears(['005930']).get('005930')).toEqual([2020, 2021, 2022]);
+    current.addCoverageResult('005930', [2021], [], 200);
+    expect(current.getCoveredYears(['005930']).get('005930')).toEqual([2020, 2021]);
+    expect(current.getGapYears(['005930']).get('005930')).toEqual([2022]);
+    current.addCoverageResult('005930', [2022], [2022], 300);
+    expect(current.getCoveredYears(['005930']).get('005930')).toEqual([2020, 2021, 2022]);
+    expect(current.getGapYears(['005930']).get('005930')).toEqual([2022]);
+  });
+
   it('재무 커버리지를 건드리지 않는다', async ({ ctx }) => {
     const { db, store } = await setup(ctx);
     db.insert(symbolFactsState)
