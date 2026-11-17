@@ -6,7 +6,7 @@ import type { BacktestWizardService } from "../application/backtest-wizard-servi
 import { BacktestWizardError } from "../application/backtest-wizard-state.js";
 import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
 import { strategySourceHash } from "../../../../runtime/modules/strategy/application/strategy-source-hash.js";
-import type { BacktestRefreshAction, BacktestRefreshJob } from "../../../../shared/schemas/backtest-refresh.js";
+import { backtestRefreshActionSchema, type BacktestRefreshJob } from "../../../../shared/schemas/backtest-refresh.js";
 import { registerBenchmarkComparisonRoutes } from "./benchmark-comparison-routes.js";
 import { BenchmarkComparisonService } from "../application/benchmark-comparison-service.js";
 import { historyQuerySchema } from "../../../../shared/schemas/backtest-history.js";
@@ -789,7 +789,7 @@ export function registerBacktestRoutes(
         strategy: strategy ? strategySourceHash(strategy) : null });
     },
     buildSubmission: async (row, preview) => {
-      const action = JSON.parse(row.actionJson) as BacktestRefreshAction;
+      const action = backtestRefreshActionSchema.parse(JSON.parse(row.actionJson));
       if (action.kind === "PERIOD_VALIDATION") return () => {
         const experiment = validations.create(row.sourceJobId, action.config, { refreshData: true });
         return `/backtests/validations/${encodeURIComponent(experiment.id)}`;

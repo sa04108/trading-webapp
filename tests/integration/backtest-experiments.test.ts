@@ -13,7 +13,12 @@ function fixtures(database: DatabaseHandle) {
     db.insert(backtestJobs).values({ id, strategyId: "range-breakout", status: "COMPLETED", requestJson: "{}", universeRuleJson: "{}", universeScheduleJson: "[]", createdAtMs: 1, ...extra }).run();
     if (value !== null) db.insert(backtestMetrics).values({ jobId: id, totalReturnPct: value, maxDrawdownPct: -5, tradeCount: 1, metricsJson: "{}" }).run();
   };
-  const validation = (id: string, source: string, status = "COMPLETED", mode = "HOLDOUT") => db.insert(backtestValidations).values({ id, sourceJobId: source, status, configJson: JSON.stringify({ mode }), requestJson: "{}", planJson: "{}", strategyVersion: "1", strategySourceHash: "hash", engineVersion: "1", gitCommitSha: "sha", createdAtMs: 1 }).run();
+  const validation = (id: string, source: string, status = "COMPLETED", mode = "HOLDOUT") => {
+    const config = mode === "WALK_FORWARD" ? { mode, trainMonths: 3, testMonths: 1 } : { mode, splitDate: "2023-01-01",
+      ...(mode === "OPTIMIZED_HOLDOUT" ? { optimization: { axes: [{ key: "window", values: [5, 20] }] } } : {}),
+    };
+    db.insert(backtestValidations).values({ id, sourceJobId: source, status, configJson: JSON.stringify(config), requestJson: "{}", planJson: "{}", strategyVersion: "1", strategySourceHash: "hash", engineVersion: "1", gitCommitSha: "sha", createdAtMs: 1 }).run();
+  };
   const trial = (parent: string, id: string, value: number | null, role = "OOS", fold = 0, status = "COMPLETED", candidate: number | null = null) => {
     job(id, value, { status });
     db.insert(backtestValidationTrials).values({ id: `trial-${id}`, validationId: parent, jobId: id, role, fold, candidate }).run();
@@ -37,7 +42,7 @@ describe("백테스트 실험 요약과 결과 경로", () => {
     f.seed("batch", "source", "seed-1", 10, 0);
     f.seed("batch", "source", "seed-2", 30, 1);
     f.seed("batch", "source", "seed-failed", 999, 2, "FAILED");
-    f.validation("holdout", "source"); f.trial("holdout", "oos1", 10);
+    f.validation("holdout", "source", "COMPLETED", "OPTIMIZED_HOLDOUT"); f.trial("holdout", "oos1", 10);
     f.trial("holdout", "training", 900, "TRAIN");
     f.validation("walk", "source", "COMPLETED", "WALK_FORWARD");
     f.trial("walk", "oos2", 20, "OOS", 0); f.trial("walk", "oos3", 40, "OOS", 1);
@@ -53,7 +58,9 @@ describe("백테스트 실험 요약과 결과 경로", () => {
     expect(source).not.toHaveProperty('benchmarkExcessReturnPct');
     expect(source.seed).toMatchObject({ batchCount: 1, activeCount: 0, completedCount: 2, returns: { count: 2, mean: 20 } });
     expect(source.seed.returns.sampleStdDev).toBeCloseTo(Math.sqrt(200));
-    expect(source.validation).toMatchObject({ experimentCount: 4, completedCount: 3, returns: { count: 2, mean: 20 }, modes: { HOLDOUT: 3, OPTIMIZED_HOLDOUT: 0, WALK_FORWARD: 1 } });
+    expect(source.validation).toMatchObject({ experimentCount: 4, completedCount: 3, returns: { count: 2, mean: 20 }, modes: { HOLDOUT: 3, WALK_FORWARD: 1 } });
+    expect(source.validation.modes).not.toHaveProperty("OPTIMIZED_HOLDOUT");
+    expect(backtestLineage(database, "oos1")!.items.some(item => item.label.startsWith("홀드아웃 · 최적화 켜짐"))).toBe(true);
     expect(source.validation.returns.sampleStdDev).toBeCloseTo(Math.sqrt(200));
     expect(summaries.find((s: { jobId: string }) => s.jobId === "other").validation.returns).toEqual({ count: 1, mean: 700, sampleStdDev: null });
     f.batch("active-batch", "source", "ACTIVE"); f.validation("active-validation", "source", "ACTIVE");

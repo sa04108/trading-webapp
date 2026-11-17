@@ -5,7 +5,7 @@ import { newId } from "../../../../runtime/shared/ids.js";
 import { backtestPreparationJobs } from "../../../../runtime/shared/db/operations-schema.js";
 import type { BacktestPreparationOrchestrator, BacktestUniversePreview } from "../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js";
 import { backtestRefreshJobs } from "../../../shared/db/backtest-refresh-schema.js";
-import { backtestRefreshActionLabel, type BacktestRefreshAction, type BacktestRefreshJob, type BacktestRefreshStatus } from "../../../../shared/schemas/backtest-refresh.js";
+import { backtestRefreshActionLabel, backtestRefreshActionSchema, type BacktestRefreshAction, type BacktestRefreshJob, type BacktestRefreshStatus } from "../../../../shared/schemas/backtest-refresh.js";
 import type { BacktestRequest } from "../../../../shared/schemas/backtest-request.js";
 import { PreparationReferenceError, PreparationReferenceService } from "./preparation-reference-service.js";
 
@@ -38,13 +38,15 @@ export class BacktestRefreshService {
   }
 
   create(ownerId: string, requestId: string, sourceJobId: string, action: BacktestRefreshAction): BacktestRefreshJob {
+    const normalized = backtestRefreshActionSchema.parse(action);
     return this.deps.database.sqlite.transaction(() => {
       const existing = this.deps.database.db.select().from(backtestRefreshJobs).where(and(
         eq(backtestRefreshJobs.ownerId, ownerId), eq(backtestRefreshJobs.requestId, requestId),
       )).get();
-      const actionJson = JSON.stringify(action);
+      const actionJson = JSON.stringify(normalized);
       if (existing) {
-        if (existing.sourceJobId !== sourceJobId || existing.actionJson !== actionJson)
+        const existingAction = backtestRefreshActionSchema.parse(JSON.parse(existing.actionJson));
+        if (existing.sourceJobId !== sourceJobId || JSON.stringify(existingAction) !== actionJson)
           throw new BacktestRefreshError("같은 요청 번호에 다른 작업을 지정할 수 없습니다.", 409);
         return this.dto(existing);
       }
@@ -52,7 +54,7 @@ export class BacktestRefreshService {
         eq(backtestRefreshJobs.ownerId, ownerId), inArray(backtestRefreshJobs.status, activeStatuses),
       )).all();
       if (active.length >= 5) throw new BacktestRefreshError("진행 중인 데이터 업데이트 작업은 최대 5개입니다.", 429);
-      const snapshot = this.deps.snapshot(sourceJobId, action);
+      const snapshot = this.deps.snapshot(sourceJobId, normalized);
       const now = this.deps.clock.now();
       const row = this.deps.database.db.insert(backtestRefreshJobs).values({
         id: newId("btr"), ownerId, requestId, sourceJobId, actionJson,
@@ -72,7 +74,7 @@ export class BacktestRefreshService {
     if (row.status !== "FAILED" && row.status !== "CANCELLED")
       throw new BacktestRefreshError("실패하거나 취소된 작업만 다시 시작할 수 있습니다.", 409);
     // 같은 실패 화면을 여러 번 눌러도 한 번의 후속 재시도만 만든다.
-    return this.create(ownerId, `retry:${id}`, row.sourceJobId, JSON.parse(row.actionJson) as BacktestRefreshAction);
+    return this.create(ownerId, `retry:${id}`, row.sourceJobId, backtestRefreshActionSchema.parse(JSON.parse(row.actionJson)));
   }
 
   cancel(ownerId: string, id: string): BacktestRefreshJob {
@@ -111,7 +113,7 @@ export class BacktestRefreshService {
   }
 
   private dto(row: BacktestRefreshRow): BacktestRefreshJob {
-    const action = JSON.parse(row.actionJson) as BacktestRefreshAction;
+    const action = backtestRefreshActionSchema.parse(JSON.parse(row.actionJson));
     const status = row.status as BacktestRefreshStatus;
     const preparation = row.preparationJobId ? this.deps.preparation.get(row.preparationJobId) : null;
     const messages: Record<BacktestRefreshStatus, string> = {
@@ -196,7 +198,7 @@ export class BacktestRefreshService {
     const request = JSON.parse(row.requestJson) as BacktestRequest;
     if (this.deps.runtimeIdentity(request) !== row.runtimeIdentity)
       throw new Error("준비 중 실행 기준이 변경되어 자동 실행을 중단했습니다. 최신 기준으로 다시 시도하세요.");
-    const action = JSON.parse(row.actionJson) as BacktestRefreshAction;
+    const action = backtestRefreshActionSchema.parse(JSON.parse(row.actionJson));
     // 공유 준비와 기간검증도 새 작업을 승인한 시점의 공시 목록 확인을 거친다.
     if (row.status === "QUEUED" && this.deps.refreshProviderFilings) {
       await this.deps.refreshProviderFilings();

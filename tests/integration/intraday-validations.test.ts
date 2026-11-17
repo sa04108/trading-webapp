@@ -56,12 +56,17 @@ describe("분봉 기간 검증", () => {
   });
   it("부분 매도 건수를 사용하고 IS 성과만으로 OOS 후보를 선택한다", async () => {
     const f = fixture(true);
-    const created = await f.validations.create("owner", "source", { mode: "OPTIMIZED_HOLDOUT", splitDate: "2026-10-06", optimization: { axes: [{ key: "fast", values: [2, 3] }], objective: "sharpe", minTrades: 2, maxDrawdownPct: 30 } });
+    const created = await f.validations.create("owner", "source", { mode: "HOLDOUT", splitDate: "2026-10-06", optimization: { axes: [{ key: "fast", values: [2, 3] }], objective: "sharpe", minTrades: 2, maxDrawdownPct: 30 } });
     const result = await settle(f, created.id);
     expect(result.status).toBe("COMPLETED");
     expect(result.trials.find(t => t.role === "OOS")?.candidate).toBe(1);
     expect(result.trials.filter(t => t.role === "TRAIN").map(t => t.metrics?.tradeCount)).toEqual([2, 2]);
     expect(result.trials.find(t => t.role === "BASELINE")?.parameters).toEqual(request.parameters);
+    expect(result.config.mode).toBe("HOLDOUT");
+    const legacy = JSON.stringify({ ...result.config, mode: "OPTIMIZED_HOLDOUT" });
+    f.database.db.update(intradayValidations).set({ configJson: legacy }).where(eq(intradayValidations.id, result.id)).run();
+    expect(f.validations.get("owner", result.id)).toEqual(result);
+    expect(f.database.db.select().from(intradayValidations).where(eq(intradayValidations.id, result.id)).get()!.configJson).toBe(legacy);
   });
   it.each([false, true])("워크포워드에서 최적화가 켜진 경우에만 후보 조건으로 OOS를 미평가한다: %s", async (optimize) => {
     const source = { ...request, period: { from: "2026-08-01", to: "2026-10-31" } };
@@ -154,7 +159,7 @@ describe("분봉 기간 검증", () => {
     const f = fixture(true, block);
     const submit = vi.spyOn(f.runs, "createInternalRun");
     submit.mockImplementationOnce(() => { throw new IntradayError("용량 부족", 429); });
-    const created = await f.validations.create("owner", "source", { mode: "OPTIMIZED_HOLDOUT", splitDate: "2026-10-06", optimization: { axes: [{ key: "fast", values: [2, 3] }], objective: "sharpe", minTrades: 1, maxDrawdownPct: 30 } });
+    const created = await f.validations.create("owner", "source", { mode: "HOLDOUT", splitDate: "2026-10-06", optimization: { axes: [{ key: "fast", values: [2, 3] }], objective: "sharpe", minTrades: 1, maxDrawdownPct: 30 } });
     for (let i = 0; i < 50 && !f.captured.length; i++) { await f.validations.pump(); await new Promise(resolve => setImmediate(resolve)); }
     expect(f.captured).toHaveLength(1);
     for (let i = 0; i < 10; i++) await f.validations.pump();

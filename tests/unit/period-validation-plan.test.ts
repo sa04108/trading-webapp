@@ -18,6 +18,13 @@ describe('독립 구간 검증 계획', () => {
     const plan = buildPeriodValidationPlan(source, { mode: 'HOLDOUT', splitDate: '2023-01-01' });
     expect(plan.folds).toEqual([{ ordinal: 0, train: { from: '2020-01-01', to: '2022-12-31' }, test: { from: '2023-01-01', to: '2024-04-15' } }]);
     expect(plan.totalRuns).toBe(2);
+    const config = { mode: 'HOLDOUT' as const, splitDate: '2023-01-01', optimization };
+    const optimized = buildPeriodValidationPlan(source, periodValidationConfigSchema.parse(config));
+    expect(optimized.folds).toEqual(plan.folds);
+    expect(optimized.candidates).toEqual([{ lookbackDays: 10 }, { lookbackDays: 20 }]);
+    expect(optimized.totalRuns).toBe(4);
+    expect(periodValidationConfigSchema.parse({ ...config, mode: 'OPTIMIZED_HOLDOUT' })).toEqual(config);
+    expect(periodValidationConfigSchema.safeParse({ mode: 'OPTIMIZED_HOLDOUT', splitDate: config.splitDate }).success).toBe(false);
   });
   it('워크포워드 OOS는 겹치지 않으며 마지막 불완전 구간을 명시한다', () => {
     const plan = buildPeriodValidationPlan(source, { mode: 'WALK_FORWARD', trainMonths: 36, testMonths: 6, optimization });
@@ -33,7 +40,6 @@ describe('독립 구간 검증 계획', () => {
     expect(fixed.unusedPeriod).toEqual(plan.unusedPeriod);
     expect(fixed.candidates).toEqual([source.parameters]);
     expect(fixed.totalRuns).toBe(4);
-    expect(periodValidationConfigSchema.safeParse({ mode: 'OPTIMIZED_HOLDOUT', splitDate: '2023-01-01' }).success).toBe(false);
   });
   it('윤년과 월말에도 기준 날짜에서 이동한다', () => {
     expect(validationMonthOffset('2024-01-31', 1)).toBe('2024-02-29');
@@ -51,7 +57,7 @@ describe('독립 구간 검증 계획', () => {
     expect(periodValidationConfigSchema.safeParse({ mode: 'HOLDOUT', splitDate: '2024-02-30' }).success).toBe(false);
   });
   it('중복 후보와 실행 폭증을 미리 차단한다', () => {
-    expect(() => buildPeriodValidationPlan(source, { mode: 'OPTIMIZED_HOLDOUT', splitDate: '2023-01-01', optimization: { ...optimization, axes: [{ key: 'lookbackDays', values: [10, 10] }] } })).toThrow('중복');
+    expect(() => buildPeriodValidationPlan(source, { mode: 'HOLDOUT', splitDate: '2023-01-01', optimization: { ...optimization, axes: [{ key: 'lookbackDays', values: [10, 10] }] } })).toThrow('중복');
     expect(() => buildPeriodValidationPlan(source, { mode: 'WALK_FORWARD', trainMonths: 1, testMonths: 1, optimization: { ...optimization, axes: [{ key: 'lookbackDays', values: Array.from({ length: 20 }, (_, i) => i + 1) }] } })).toThrow('상한');
   });
 });
@@ -87,11 +93,11 @@ describe('분봉 검증 계획의 요청 경계', () => {
   it('분봉 원본을 검증하고 후보마다 EMA 관계와 일중 준비 시간을 적용한다', () => {
     expect(buildPeriodValidationPlan(intraday, { mode: 'HOLDOUT', splitDate: '2026-07-01' }).totalRuns).toBe(2);
     for (const axes of [{ key: 'fast', values: [2, 6] }, { key: 'slow', values: [80, 100] }]) {
-      expect(() => buildPeriodValidationPlan(intraday, { mode: 'OPTIMIZED_HOLDOUT', splitDate: '2026-07-01', optimization: { ...optimization, axes: [axes] } })).toThrow();
+      expect(() => buildPeriodValidationPlan(intraday, { mode: 'HOLDOUT', splitDate: '2026-07-01', optimization: { ...optimization, axes: [axes] } })).toThrow();
     }
   });
   it('정의되지 않은 CAGR과 전략 밖의 매개변수 탐색을 거부한다', () => {
-    const config = { mode: 'OPTIMIZED_HOLDOUT' as const, splitDate: '2026-07-01', optimization: { ...optimization, axes: [{ key: 'fast', values: [2, 3] }] } };
+    const config = { mode: 'HOLDOUT' as const, splitDate: '2026-07-01', optimization: { ...optimization, axes: [{ key: 'fast', values: [2, 3] }] } };
     expect(() => buildPeriodValidationPlan(intraday, { ...config, optimization: { ...config.optimization, objective: 'cagrPct' } })).toThrow('Sharpe');
     expect(() => buildPeriodValidationPlan(intraday, { ...config, optimization: { ...config.optimization, axes: [{ key: 'initialCash', values: [10000, 20000] }] } })).toThrow('매개변수');
   });

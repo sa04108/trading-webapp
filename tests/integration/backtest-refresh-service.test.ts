@@ -74,6 +74,20 @@ describe('영속 데이터 업데이트 작업', () => {
     expect(db.sqlite.prepare('SELECT preparation_job_id FROM backtest_jobs WHERE id=?').get(source)).toEqual({ preparation_job_id: 'original-prep' });
   });
 
+  it('기존 최적화 홀드아웃 요청은 새 설정으로 재전송해도 같은 작업을 이어간다', async () => {
+    const action = { ...period, config: { ...period.config, optimization: { axes: [{ key: 'window', values: [5, 20] }], objective: 'sharpe' as const, minTrades: 5, maxDrawdownPct: 30 } } };
+    const job = service.create('alice', 'period-request', source, action);
+    const legacy = JSON.stringify({ ...action, config: { ...action.config, mode: 'OPTIMIZED_HOLDOUT' } });
+    db.sqlite.prepare('UPDATE backtest_refresh_jobs SET action_json=? WHERE id=?').run(legacy, job.id);
+    expect(service.get('alice', job.id).action).toEqual(action);
+    expect(service.create('alice', 'period-request', source, action).id).toBe(job.id);
+    expect(() => service.create('alice', 'period-request', source, period)).toThrow('다른 작업');
+    await service.pump();
+    expect(service.get('alice', job.id)).toMatchObject({ status: 'COMPLETED', action });
+    expect(deps.buildSubmission).toHaveBeenCalledTimes(1);
+    expect(db.sqlite.prepare('SELECT action_json FROM backtest_refresh_jobs WHERE id=?').get(job.id)).toEqual({ action_json: legacy });
+  });
+
   it('제출 트랜잭션 오류는 생성된 후속 작업을 되돌린다', async () => {
     deps.buildSubmission = async () => () => {
       db.sqlite.prepare("INSERT INTO users (id, username, password_hash, created_at_ms, updated_at_ms) VALUES ('target', 'target', 'x', 0, 0)").run();

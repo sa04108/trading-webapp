@@ -7,12 +7,11 @@ import { backtestMetrics } from "../../../shared/db/backtest-result-schema.js";
 import { backtestCloneBatches, backtestCloneBatchItems } from "../../../shared/db/backtest-batch-schema.js";
 import { backtestValidations, backtestValidationTrials } from "../../../shared/db/backtest-validation-schema.js";
 import type { BacktestBreadcrumbEntry, BacktestHistoryExtras, BacktestLineage, ExperimentReturnDistribution } from "../../../../shared/schemas/backtest-experiments.js";
+import { periodValidationConfigSchema, periodValidationLabel, type PeriodValidationConfig } from "../../../../shared/schemas/period-validation.js";
 
-const modes = { HOLDOUT: "홀드아웃", OPTIMIZED_HOLDOUT: "최적화 홀드아웃", WALK_FORWARD: "워크포워드" } as const;
-function modeOf(json: string): keyof typeof modes | null {
+function configOf(json: string): PeriodValidationConfig | null {
   try {
-    const mode: unknown = (JSON.parse(json) as { mode?: unknown }).mode;
-    return typeof mode === "string" && Object.hasOwn(modes, mode) ? mode as keyof typeof modes : null;
+    return periodValidationConfigSchema.parse(JSON.parse(json));
   } catch { return null; }
 }
 function distribution(values: number[]): ExperimentReturnDistribution {
@@ -52,10 +51,10 @@ export function historyExtras(database: DatabaseHandle, ids: string[]): Backtest
       const mean = trials.reduce((sum, t) => sum + t.returns! / trials.length, 0);
       return Number.isFinite(mean) ? [mean] : [];
     });
-    const modeCounts = { HOLDOUT: 0, OPTIMIZED_HOLDOUT: 0, WALK_FORWARD: 0 };
+    const modeCounts = { HOLDOUT: 0, WALK_FORWARD: 0 };
     for (const experiment of ownExperiments) {
-      const mode = modeOf(experiment.config);
-      if (mode) modeCounts[mode]++;
+      const config = configOf(experiment.config);
+      if (config) modeCounts[config.mode]++;
     }
     return { jobId: job.id,
       seed: { batchCount: ownBatches.length, activeCount: ownBatches.filter((b) => b.status === "ACTIVE" || b.status === "CANCELLING").length,
@@ -92,12 +91,12 @@ export function backtestLineage(database: DatabaseHandle, id: string): BacktestL
       .from(backtestValidationTrials).innerJoin(backtestValidations, eq(backtestValidationTrials.validationId, backtestValidations.id))
       .where(eq(backtestValidationTrials.jobId, jobId)).get();
     if (trial) {
-      const mode = modeOf(trial.config);
+      const config = configOf(trial.config);
       const role = trial.role === "TRAIN" ? "IS 학습" : trial.role === "BASELINE" ? "OOS 기준 전략" : trial.role === "OOS" ? "OOS 검증" : trial.role;
       const label = `${trial.fold + 1}회차 · ${role}${trial.candidate !== null ? ` · 후보 ${trial.candidate + 1}` : ""}`;
       if (jobId === id) { kind = "validation"; roleLabel = label; }
       return [...walk(trial.parent), { label: "기간검증", href: `/backtests/${encodeURIComponent(trial.parent)}/validations` },
-        { label: `${mode ? modes[mode] : "기간검증"} ${trial.experiment.slice(-6)}`, href: `/backtests/validations/${encodeURIComponent(trial.experiment)}` }, { ...own, label }];
+        { label: `${config ? periodValidationLabel(config) : "기간검증"} ${trial.experiment.slice(-6)}`, href: `/backtests/validations/${encodeURIComponent(trial.experiment)}` }, { ...own, label }];
     }
     if (job.batch) {
       const batch = db.select({ source: backtestCloneBatches.sourceJobId }).from(backtestCloneBatches).where(eq(backtestCloneBatches.id, job.batch)).get();

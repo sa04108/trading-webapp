@@ -4,12 +4,12 @@ import { api } from "@/lib/api-client";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { PeriodValidationDto } from "@shared/schemas/period-validation";
+import { periodValidationLabel, type PeriodValidationDto } from "@shared/schemas/period-validation";
 import { BacktestBreadcrumbs } from "./backtest-breadcrumbs";
 import { experimentPaths, type ExperimentMode } from "./experiment-paths";
 import { useExperimentSource } from "./use-experiment-source";
 import { useExperimentParameters } from "./use-experiment-parameters";
-import { active, MODE_LABELS, PeriodValidationSection, ValidationResult } from "./period-validation-section";
+import { active, PeriodValidationSection, ValidationResult } from "./period-validation-section";
 
 export function PeriodValidationPage({ mode = "daily" }: { mode?: ExperimentMode }) {
   const { id = "" } = useParams();
@@ -57,7 +57,7 @@ function PeriodValidationDetail({ experiment, mode }: { experiment: PeriodValida
     ]);
   };
   return <div className="space-y-4 min-w-0">
-    <BacktestBreadcrumbs jobId={experiment.sourceJobId} mode={mode} trail={[{ label: "기간 검증", href: paths.validations(experiment.sourceJobId) }, { label: MODE_LABELS[experiment.config.mode] }]} />
+    <BacktestBreadcrumbs jobId={experiment.sourceJobId} mode={mode} trail={[{ label: "기간 검증", href: paths.validations(experiment.sourceJobId) }, { label: periodValidationLabel(experiment.config) }]} />
     {source.isError ? <Alert variant="destructive"><AlertDescription>원본 백테스트를 불러오지 못했습니다. 매개변수 이름은 원래 키로 표시합니다. {source.error?.message}</AlertDescription></Alert> : null}
     <ValidationResult experiment={experiment} specs={parameters.specs} refresh={refresh} mode={mode} onDeleted={() => void navigate(paths.validations(experiment.sourceJobId))} />
   </div>;

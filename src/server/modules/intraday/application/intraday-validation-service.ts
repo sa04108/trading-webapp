@@ -4,7 +4,7 @@ import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
 import { getIntradayStrategy } from "../../../../shared/schemas/intraday-strategies.js";
 import { intradayRequestSchema, type IntradayRequest, type IntradayResult } from "../../../../shared/schemas/intraday.js";
-import { buildPeriodValidationPlan, getValidationOptimization, periodValidationConfigSchema, selectValidationCandidate, evaluateValidationCandidate, type PeriodValidationDto, type PeriodValidationPlan, type PeriodValidationConfig, type ValidationMetrics, type ValidationStatus, type ValidationRole, type ValidationSkipReason } from "../../../../shared/schemas/period-validation.js";
+import { buildPeriodValidationPlan, getValidationOptimization, periodValidationConfigSchema, selectValidationCandidate, evaluateValidationCandidate, type PeriodValidationDto, type PeriodValidationPlan, type ValidationMetrics, type ValidationStatus, type ValidationRole, type ValidationSkipReason } from "../../../../shared/schemas/period-validation.js";
 import { summarizeIntradayTrades } from "../../../../shared/intraday-trades.js";
 import { intradayRuns } from "../../../shared/db/intraday-schema.js";
 import { intradayValidations, intradayValidationTrials } from "../../../shared/db/intraday-validation-schema.js";
@@ -49,7 +49,7 @@ export class IntradayValidationService {
   }
   get(owner: string, id: string): PeriodValidationDto | null {
     const row = this.row(owner, id); if (!row) return null;
-    const source = JSON.parse(row.requestJson) as IntradayRequest, config = JSON.parse(row.configJson) as PeriodValidationConfig, plan = JSON.parse(row.planJson) as PeriodValidationPlan;
+    const source = JSON.parse(row.requestJson) as IntradayRequest, config = periodValidationConfigSchema.parse(JSON.parse(row.configJson)), plan = JSON.parse(row.planJson) as PeriodValidationPlan;
     const optimization = getValidationOptimization(config);
     return { id, sourceJobId: row.sourceJobId, status: row.status as ValidationStatus, config, plan, initialCash: source.initialCash, createdAtMs: row.createdAtMs, error: row.error, trials: this.trials(id).map((trial) => {
       const request = trial.requestJson ? JSON.parse(trial.requestJson) as IntradayRequest : null;
@@ -117,7 +117,7 @@ export class IntradayValidationService {
     if (versions.executionVersion !== row.executionVersion || versions.validationVersion !== row.validationVersion || getIntradayStrategy(source.strategyId).version !== row.strategyVersion) throw new Error("검증 중 실행 버전이 변경되었습니다.");
     if (await this.runs.currentStoredRevision(source) !== row.dataRevision) throw new Error("검증 중 분봉 데이터가 변경되었습니다.");
     if (this.stopping || this.row(row.ownerId, row.id)?.status !== "ACTIVE") return;
-    const config = JSON.parse(row.configJson) as PeriodValidationConfig, plan = JSON.parse(row.planJson) as PeriodValidationPlan;
+    const config = periodValidationConfigSchema.parse(JSON.parse(row.configJson)), plan = JSON.parse(row.planJson) as PeriodValidationPlan;
     const trials = this.trials(row.id);
     if (trials.some(t => t.runId && (["QUEUED", "PREPARING", "RUNNING"].includes(this.runs.getRunState(row.ownerId, t.runId).status) || this.runs.isDraining(t.runId)))) return;
     for (const fold of plan.folds) {
