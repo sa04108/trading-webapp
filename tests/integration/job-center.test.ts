@@ -80,8 +80,10 @@ describe("작업 관찰·취소·이력 경계", () => {
     backtest(ctx.container, "expired", "COMPLETED", now - 20 * day, { completedAtMs: now - 8 * day });
     backtest(ctx.container, "recent-finish", "COMPLETED", now - 20 * day, { completedAtMs: now });
     for (let i = 0; i < 3; i++) backtest(ctx.container, `finished-${i}`, "FAILED", now - i, { completedAtMs: now - i });
+    backtest(ctx.container, "interrupted", "INTERRUPTED", now - 10, { completedAtMs: now - 10 });
+    backtest(ctx.container, "user-cancelled", "CANCELLED", now - 11, { completedAtMs: now - 11 });
     backtest(ctx.container, "batch-child", "QUEUED", now, { cloneBatchId: "batch" });
-    for (const [id, ownerId, status] of [["own", ctx.container.userRepository.findByUsername(admin.username)!.id, "PREPARING"], ["foreign", "another-owner", "RUNNING"]]) {
+    for (const [id, ownerId, status] of [["own", ctx.container.userRepository.findByUsername(admin.username)!.id, "PREPARING"], ["foreign", "another-owner", "RUNNING"], ["foreign-failed", "another-owner", "FAILED"]]) {
       ctx.container.database.db.insert(intradayRuns).values({ id: id!, ownerId: ownerId!, status: status!, requestJson: JSON.stringify(request), resultJson: "not parsed for observation", createdAtMs: now, updatedAtMs: now }).run();
     }
     for (const [id, parentRunId] of [["manual", null], ["internal", "own"]]) {
@@ -92,7 +94,7 @@ describe("작업 관찰·취소·이력 경계", () => {
     expect(first.statusCode, first.body).toBe(200);
     expect(first.headers["cache-control"]).toBe("no-store");
     const page = first.json<JobsResponse>();
-    expect(page.total).toBe(7);
+    expect(page.total).toBe(9);
     expect(page.activeCount).toBe(3);
     expect(page.jobs).toHaveLength(2);
     expect(page.jobs.every((job) => job.finishedAtMs === null)).toBe(true);
@@ -100,8 +102,13 @@ describe("작업 관찰·취소·이력 경계", () => {
     for (const hidden of ["backtest:expired", "backtest:batch-child", "intraday-backtest:foreign", "intraday-collection:internal"]) expect(all.map((job) => job.id)).not.toContain(hidden);
     expect(all.find((job) => job.id === "backtest:old-active")?.progress?.percent).toBe(25);
     expect(all.find((job) => job.id === "intraday-backtest:own")?.progress).toMatchObject({ current: 120, total: null, percent: null });
-    expect((await get("?status=finished")).json<JobsResponse>()).toMatchObject({ total: 4, activeCount: 3 });
-    expect((await get("?limit=2&offset=100")).json<JobsResponse>()).toMatchObject({ offset: 6, total: 7 });
+    expect((await get("?status=finished")).json<JobsResponse>()).toMatchObject({ total: 6, activeCount: 3 });
+    expect((await get("?limit=2&offset=100")).json<JobsResponse>()).toMatchObject({ offset: 8, total: 9 });
+    const errors = (await get("?status=error&limit=2&offset=2")).json<JobsResponse>();
+    expect(errors).toMatchObject({ total: 4, activeCount: 3, limit: 2, offset: 2 });
+    expect(errors.jobs.map((job) => job.id)).toEqual(["backtest:finished-2", "backtest:interrupted"]);
+    const allErrors = (await get("?status=error")).json<JobsResponse>();
+    expect(allErrors.jobs.map((job) => job.status)).toEqual(["FAILED", "FAILED", "FAILED", "INTERRUPTED"]);
     for (const path of ["/intraday-backtest:foreign", "/intraday-collection:internal"]) expect((await get(path)).statusCode).toBe(404);
     expect((await ctx.app.inject({ method: "POST", url: "/api/v1/jobs/intraday-backtest:foreign/cancel", cookies: { session: cookie } })).statusCode).toBe(404);
     expect((await ctx.app.inject({ method: "DELETE", url: "/api/v1/jobs", cookies: { session: cookie }, payload: { ids: ["intraday-backtest:foreign"] } })).statusCode).toBe(404);

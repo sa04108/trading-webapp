@@ -8,11 +8,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { api } from "@/lib/api-client";
 import { formatRelativeTime } from "@/lib/format";
+import { cn } from "@/lib/utils";
 import { useJobs } from "./api";
 import { JobProgressDisplay, JobStatusBadge } from "./job-display";
 
 const filters: { value: JobFilter; label: string }[] = [
-  { value: "all", label: "전체" }, { value: "active", label: "진행 중" }, { value: "finished", label: "종료됨" },
+  { value: "all", label: "전체" }, { value: "active", label: "진행 중" }, { value: "finished", label: "종료됨" }, { value: "error", label: "오류" },
 ];
 
 export function JobsPage() {
@@ -60,8 +61,10 @@ export function JobsPage() {
           </div>
         </div>
         <p className="text-sm text-muted-foreground">{query.data?.retentionDays === 0 ? "종료된 작업 기록은 자동으로 삭제되지 않습니다." : `종료된 작업 기록은 ${query.data?.retentionDays ?? 7}일간 보관됩니다.`} 기록을 삭제해도 원본 결과와 데이터는 유지됩니다.</p>
-        <div className="flex flex-wrap gap-2" aria-label="작업 필터">
-          {filters.map(({ value, label }) => <Button key={value} size="sm" variant={filter === value ? "secondary" : "ghost"} aria-pressed={filter === value} onClick={() => changeFilter(value)}>{label}</Button>)}
+        <div className="flex flex-wrap gap-2" role="group" aria-label="작업 필터">
+          {filters.map(({ value, label }) => <Button key={value} size="sm" variant={filter === value ? "secondary" : "ghost"}
+            className={value === "error" ? cn("text-destructive hover:text-destructive", filter === value && "bg-destructive/10 hover:bg-destructive/20") : undefined}
+            aria-pressed={filter === value} onClick={() => changeFilter(value)}>{label}</Button>)}
         </div>
         {remove.isError && <p role="alert" className="wrap-anywhere text-sm text-destructive">삭제 실패: {remove.error.message}</p>}
         {cancel.isError && <p role="alert" className="wrap-anywhere text-sm text-destructive">취소 실패: {cancel.error.message}</p>}
@@ -69,7 +72,7 @@ export function JobsPage() {
       <CardContent className="p-0">
         {query.isError && <div role="alert" className="flex flex-wrap items-center gap-2 px-6 py-3 text-sm wrap-anywhere text-destructive">작업을 불러오지 못했습니다: {query.error.message}<Button size="sm" variant="outline" onClick={() => void query.refetch()}>다시 불러오기</Button></div>}
         <div data-pagination-content>
-        {query.isLoading ? <p className="px-6 py-8 text-sm text-muted-foreground">불러오는 중…</p> : jobs.length === 0 && !query.isError ? <p className="px-6 py-8 text-sm text-muted-foreground">작업이 없습니다.</p> : <ul className="divide-y">
+        {query.isLoading ? <p className="px-6 py-8 text-sm text-muted-foreground">불러오는 중…</p> : jobs.length === 0 && !query.isError ? <p className="px-6 py-8 text-sm text-muted-foreground">{filter === "error" ? "오류가 발생한 작업이 없습니다." : "작업이 없습니다."}</p> : <ul className="divide-y">
           {jobs.map((job) => <li key={job.id} className="flex flex-wrap items-start gap-3 px-6 py-3 hover:bg-muted/50">
             {editing && isFinishedJob(job.status) && <Checkbox className="mt-1" disabled={query.isPlaceholderData} checked={selected.has(job.id)} aria-label={`${job.title} 선택`} onCheckedChange={() => setSelected((prev) => { const next = new Set(prev); if (next.has(job.id)) next.delete(job.id); else next.add(job.id); return next; })} />}
             <Link to={`/jobs/${encodeURIComponent(job.id)}`} className="min-w-0 flex-[1_1_14rem] rounded-sm text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">

@@ -6,7 +6,7 @@ export const jobKinds = [
 
 export type JobKind = (typeof jobKinds)[number];
 export type JobStatus = "QUEUED" | "RUNNING" | "WAITING" | "CANCELLING" | "COMPLETED" | "FAILED" | "CANCELLED" | "INTERRUPTED";
-export type JobFilter = "all" | "active" | "finished";
+export type JobFilter = "all" | "active" | "finished" | "error";
 
 export function isFinishedJob(status: JobStatus): boolean {
   return ["COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"].includes(status);

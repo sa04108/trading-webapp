@@ -9,7 +9,7 @@ import { JobCenterError, JobCenterService } from "../application/job-center-serv
 import { BackgroundJobHistory } from "../application/background-job-history.js";
 
 const querySchema = z.object({
-  status: z.enum(["all", "active", "finished"]).default("all"),
+  status: z.enum(["all", "active", "finished", "error"]).default("all"),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
 });

@@ -54,7 +54,7 @@ const jobsCte = `WITH jobs AS (${sources.map((source) => {
   SELECT * FROM jobs j WHERE (status IN ${active} OR @cutoff=0 OR finishedAtMs>=@cutoff)
     AND (status IN ${active} OR NOT EXISTS (SELECT 1 FROM job_dismissals d
       WHERE d.user_id=@owner AND d.job_id=j.id AND d.finished_at_ms=j.finishedAtMs)))`;
-const filterSql = `(@filter='all' OR (@filter='active' AND status IN ${active}) OR (@filter='finished' AND status IN ${terminal}))`;
+const filterSql = `(@filter='all' OR (@filter='active' AND status IN ${active}) OR (@filter='finished' AND status IN ${terminal}) OR (@filter='error' AND status IN ('FAILED', 'INTERRUPTED')))`;
 
 interface Metadata {
   id: string;
