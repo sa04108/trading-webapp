@@ -13,6 +13,13 @@ function Assert-Equal($Expected, $Actual, [string] $Message) {
   if ($Expected -cne $Actual) { throw "$Message. Expected '$Expected', got '$Actual'." }
 }
 
+function Find-CallIndex([string] $Pattern) {
+  for ($i = 0; $i -lt $script:Calls.Count; $i++) {
+    if ($script:Calls[$i] -match $Pattern) { return $i }
+  }
+  return -1
+}
+
 function docker {
   $parts = @($args | ForEach-Object { [string] $_ })
   $script:Calls += ,($parts -join ' ')
@@ -49,8 +56,15 @@ function docker {
       return 'pull complete'
     }
     'image inspect' { return ('sha256:' + ('a' * 64)) }
+    'image rm' {
+      if ($script:FailImageRemoval) { $script:LASTEXITCODE = 1 }
+      return
+    }
     'container inspect' {
-      if ($script:ExistingContainer) { return 'quant-agent' }
+      if ($script:ExistingContainer) {
+        if ($parts -contains '{{.Image}}') { return $script:OldImageId }
+        return $script:ExistingLabel
+      }
       $script:LASTEXITCODE = 1
       return
     }
@@ -60,7 +74,11 @@ function docker {
       return
     }
     'volume create' { $script:ExistingVolume = $true; return $parts[-1] }
-    'run --detach' { $script:RanContainer = $true; return 'container-id' }
+    'run --detach' {
+      $script:RanContainer = $true
+      if ($script:FailRun) { $script:LASTEXITCODE = 1 }
+      return 'container-id'
+    }
     'inspect --format' { return 'true' }
     default { throw "Unexpected Docker invocation: $($parts -join ' ')" }
   }
@@ -140,6 +158,10 @@ try {
   $script:ExistingContainer = $false
   $script:ExistingVolume = $false
   $script:FailPull = $false
+  $script:FailRun = $false
+  $script:FailImageRemoval = $false
+  $script:ExistingLabel = 'quant-agent'
+  $script:OldImageId = 'sha256:' + ('b' * 64)
   $script:EngineArchitecture = 'x86_64'
   $script:ContextFailures = 2
   $script:RanContainer = $false
@@ -165,6 +187,47 @@ try {
   if (-not $failedAsExpected) { throw 'A pull failure should stop the install.' }
   if ($script:Calls | Where-Object { $_ -match ' (stop|rm) quant-agent-' }) { throw 'A pull failure must preserve the existing container.' }
   if ($script:RanContainer) { throw 'A pull failure must prevent replacement container start.' }
+
+  $script:Calls = @()
+  $script:FailPull = $false
+  Invoke-InstallerFromHybrid $installerPath
+  $stopIndex = Find-CallIndex ' stop quant-agent-'
+  $removeIndex = Find-CallIndex ' rm quant-agent-'
+  $runIndex = Find-CallIndex ' run --detach '
+  $runningIndex = Find-CallIndex ' inspect --format .*State.Running'
+  $imageRemovalIndex = Find-CallIndex ' image rm sha256:b{64}$'
+  if ($stopIndex -lt 0 -or $removeIndex -le $stopIndex -or $runIndex -le $removeIndex -or $runningIndex -le $runIndex -or $imageRemovalIndex -le $runningIndex) { throw 'Replacement must remove the old container, confirm the new one is running, then remove the old image.' }
+  if ($script:Calls | Where-Object { $_ -match ' volume (create|rm) ' }) { throw 'Replacement must preserve and reuse the existing volume.' }
+  if (-not ($script:Calls | Where-Object { $_ -match ' --mount type=volume,source=quant-agent-.*-state,target=/var/lib/quant-agent ' })) { throw 'Replacement must mount its persistent state volume.' }
+
+  $script:Calls = @()
+  $script:FailRun = $true
+  $failedAsExpected = $false
+  try { Invoke-InstallerFromHybrid $installerPath } catch { $failedAsExpected = $true }
+  if (-not $failedAsExpected -or ($script:Calls | Where-Object { $_ -match ' image rm ' })) { throw 'A run failure must preserve the old image.' }
+  $script:FailRun = $false
+
+  $script:Calls = @()
+  $script:FailImageRemoval = $true
+  Invoke-InstallerFromHybrid $installerPath 3>$null
+  if (-not ($script:Calls | Where-Object { $_ -match ' image rm sha256:b{64}$' })) { throw 'A shared old image should be attempted without failing the installation.' }
+  $script:FailImageRemoval = $false
+
+  $script:Calls = @()
+  $script:OldImageId = 'sha256:' + ('a' * 64)
+  Invoke-InstallerFromHybrid $installerPath
+  if ($script:Calls | Where-Object { $_ -match ' image rm ' }) { throw 'The current image must not be removed when the image ID is unchanged.' }
+
+  foreach ($scenario in @('unrelated', 'invalid-image')) {
+    $script:Calls = @()
+    $script:ExistingLabel = if ($scenario -eq 'unrelated') { 'other-app' } else { 'quant-agent' }
+    $script:OldImageId = 'invalid'
+    $failedAsExpected = $false
+    try { Invoke-InstallerFromHybrid $installerPath } catch { $failedAsExpected = $true }
+    if (-not $failedAsExpected -or ($script:Calls | Where-Object { $_ -match ' (stop|rm|run) ' })) { throw "The $scenario container must be preserved." }
+  }
+  $script:ExistingLabel = 'quant-agent'
+  $script:OldImageId = 'sha256:' + ('b' * 64)
 
   foreach ($scenario in @('host', 'engine')) {
     $script:Calls = @()

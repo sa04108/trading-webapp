@@ -208,10 +208,20 @@ describe('연결과 리스 수명 분리', () => {
     first.close();
     const old = await connect('b'.repeat(64));
     expect(old.received[0]).toMatchObject({ type: 'UPDATE_REQUIRED' });
+    expect(ctx.container.agentCoordinator.listClients()[0]).toMatchObject({
+      runnerVersion: 'b'.repeat(64),
+      execution: { state: 'VERSION_MISMATCH', connected: true, canAcceptJobs: false,
+        requiredRunnerVersion: ctx.container.agentCoordinator.runnerVersion },
+    });
     expect(ctx.container.jobQueue.getJob('job-one')).toMatchObject({ status: 'QUEUED', leaseTokenHash: null, leaseFailures: 0, attempt: 1 });
     old.close();
+    expect(ctx.container.agentCoordinator.listClients()[0]?.execution).toMatchObject({
+      state: 'VERSION_MISMATCH', connected: false, canAcceptJobs: false,
+    });
     const fresh = await connect(); capacity(fresh);
     await vi.waitFor(() => expect(fresh.job()?.attempt).toBe(2));
+    expect(ctx.container.agentCoordinator.registry.list()[0]?.runnerVersion).toBe(ctx.container.agentCoordinator.runnerVersion);
+    expect(ctx.container.agentCoordinator.listClients()[0]?.execution.state).not.toBe('VERSION_MISMATCH');
     fresh.submit({ type: 'FINISH', kind: 'BACKTEST', jobId: lease.jobId, attempt: lease.attempt, leaseToken: lease.leaseToken, outcome: 'FAILED' });
     await vi.waitFor(() => expect(fresh.received).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'ACK', accepted: false })])));
     expect(ctx.container.jobQueue.getJob('job-one')).toMatchObject({ status: 'STARTING', leaseFailures: 0 });
@@ -311,9 +321,61 @@ describe('연결과 리스 수명 분리', () => {
       expect(response.statusCode).toBe(200);
       expect(response.json()).toEqual({ clients: expect.any(Array) });
       expect(response.json()).not.toHaveProperty('downloads');
+      expect(response.json().clients[0]).toMatchObject({
+        runnerVersion: null, protocolVersion: null,
+        execution: { state: 'NEVER_CONNECTED', canAcceptJobs: false, connected: false },
+      });
+      expect(response.body).not.toContain(token);
+      expect(response.body).not.toContain('token_hash');
     } finally {
       await app.close();
     }
+  });
+
+  it('최근 통신과 별개로 동기화·자원·슬롯·연결 상태에 따른 실행 가능 여부를 반환한다', async ({ scenario }) => {
+    const { ctx, connect, enqueue } = scenario;
+    const coordinator = ctx.container.agentCoordinator;
+    vi.spyOn(coordinator.snapshots, 'latest').mockReturnValue(dataset);
+    const status = () => coordinator.listClients()[0]!.execution;
+    const peer = await connect();
+    expect(status()).toMatchObject({ state: 'CONNECTING', canAcceptJobs: false });
+    peer.submit({ type: 'CAPACITY', slots: 0, datasetVersion: 0, maxBars: 1000 });
+    await vi.waitFor(() => expect(status().state).toBe('SYNCING'));
+    peer.submit({ type: 'DEVICE_ACTIVITY', progress: {
+      activity: 'VERIFYING_DATASET', datasetId: dataset.datasetId, datasetVersion: 1,
+      completed: 512, total: 1024, detail: null, occurredAtMs: Date.now(),
+    } });
+    await vi.waitFor(() => expect(status().detail).toContain('검증'));
+    capacity(peer, 0);
+    await vi.waitFor(() => expect(status()).toMatchObject({ state: 'NO_CAPACITY', canAcceptJobs: false }));
+    capacity(peer, 1);
+    await vi.waitFor(() => expect(status()).toMatchObject({ state: 'READY', canAcceptJobs: true, availableSlots: 1 }));
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + 61_000);
+    expect(status()).toMatchObject({ state: 'UNRESPONSIVE', canAcceptJobs: false });
+    clock.mockRestore();
+    enqueue();
+    capacity(peer, 1);
+    await vi.waitFor(() => expect(status()).toMatchObject({ state: 'BUSY', activeJobs: 1, availableSlots: 0, canAcceptJobs: false }));
+    peer.close();
+    expect(status()).toMatchObject({ state: 'OFFLINE', connected: false, canAcceptJobs: false });
+  });
+
+  it('지원하지 않는 통신 규격을 거부한 뒤에도 마지막 버전과 차단 사유를 보존한다', async ({ scenario }) => {
+    const { ctx, id, connect } = scenario;
+    const coordinator = ctx.container.agentCoordinator;
+    const peer = new Peer();
+    coordinator.connect(id, peer as unknown as WebSocket);
+    peer.submit({ type: 'HELLO', protocolVersion: 3, runnerVersion: coordinator.runnerVersion });
+    await vi.waitFor(() => expect(peer.readyState).toBe(3));
+    expect(coordinator.registry.list()[0]).toMatchObject({ protocolVersion: 3, runnerVersion: coordinator.runnerVersion });
+    expect(coordinator.listClients()[0]?.execution).toMatchObject({
+      state: 'PROTOCOL_MISMATCH', connected: false, canAcceptJobs: false, requiredProtocolVersion: 4,
+    });
+    const fresh = await connect();
+    expect(coordinator.listClients()[0]?.execution.state).toBe('CONNECTING');
+    fresh.close();
+    expect(coordinator.listClients()[0]?.execution.state).toBe('OFFLINE');
   });
 
   it('Windows 설치 파일은 웹 인증, 활성 Agent 토큰, HTTPS origin을 요구하고 비밀을 URL에 싣지 않는다', async ({ scenario }) => {

@@ -1,19 +1,27 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import type { AgentExecutionState, AgentList } from "@shared/agent-status";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, postJson } from "@/lib/api-client";
 
-interface AgentList {
-  clients: Array<{
-    id: string;
-    name: string;
-    lastSeenAtMs: number | null;
-    revokedAtMs: number | null;
-  }>;
-}
+const stateLabels: Record<AgentExecutionState, string> = {
+  NEVER_CONNECTED: "첫 연결 대기",
+  OFFLINE: "연결 끊김",
+  UNRESPONSIVE: "응답 없음",
+  CONNECTING: "상태 확인 중",
+  VERSION_MISMATCH: "업데이트 필요",
+  PROTOCOL_MISMATCH: "통신 규격 불일치",
+  SYNCING: "데이터 동기화 중",
+  NO_CAPACITY: "자원 대기",
+  BUSY: "작업 중",
+  READY: "실행 가능",
+  REVOKED: "연결 해제됨",
+};
+
 export function AgentSettings() {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
@@ -84,9 +92,9 @@ export function AgentSettings() {
             event.preventDefault();
             issue.mutate();
           }}
-          className="flex items-end gap-2"
+          className="flex flex-wrap items-end gap-2"
         >
-          <div className="flex-1 space-y-2">
+          <div className="min-w-0 flex-1 basis-40 space-y-2">
             <Label htmlFor="agent-name">Agent 이름</Label>
             <Input
               id="agent-name"
@@ -107,8 +115,8 @@ export function AgentSettings() {
               해당 PC에서 실행하세요. 설치 파일에 토큰이 포함되므로 안전하게 보관하세요.
             </p>
             <code className="block break-all select-all">{token}</code>
-            <div className="flex gap-2">
-              <Button size="sm" onClick={() => windowsInstaller.mutate(token)} disabled={windowsInstaller.isPending}>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" className="h-auto min-h-8 whitespace-normal" onClick={() => windowsInstaller.mutate(token)} disabled={windowsInstaller.isPending}>
                 {windowsInstaller.isPending ? "설치 파일 준비 중…" : "Windows Docker Desktop 설치 파일"}
               </Button>
               <Button
@@ -137,7 +145,8 @@ export function AgentSettings() {
           </div>
         )}
         <form
-          className="space-y-2 rounded-md border p-3"
+          id="saved-agent-installer"
+          className="scroll-mt-20 space-y-2 rounded-md border p-3"
           onSubmit={(event) => {
             event.preventDefault();
             setSavedPending(true);
@@ -149,9 +158,9 @@ export function AgentSettings() {
           }}
         >
           <Label htmlFor="saved-agent-token">저장한 기존 연결 토큰</Label>
-          <p className="text-muted-foreground">기존 Agent를 업데이트하려면 활성 토큰으로 현재 서버의 설치 파일을 다시 받으세요.</p>
-          <div className="flex gap-2">
-            <Input id="saved-agent-token" type="password" autoComplete="off" value={savedToken}
+          <p className="text-muted-foreground">기존 Agent를 업데이트하려면 활성 토큰으로 현재 서버의 설치 파일을 다시 받으세요. 기존 컨테이너와 이미지를 교체하며 저장 데이터는 버전 간 재사용됩니다. 다른 컨테이너가 사용 중인 이전 이미지는 유지됩니다.</p>
+          <div className="flex flex-wrap gap-2">
+            <Input className="min-w-0 flex-1 basis-40" id="saved-agent-token" type="password" autoComplete="off" value={savedToken}
               onChange={(event) => setSavedToken(event.target.value)} />
             <Button type="submit" disabled={!savedToken.trim() || savedPending}>
               {savedPending ? "설치 파일 준비 중…" : "설치 파일 다시 받기"}
@@ -177,15 +186,25 @@ export function AgentSettings() {
           .map((client) => (
             <div
               key={client.id}
-              className="flex items-center justify-between gap-3 border-t pt-3"
+              className="flex flex-wrap items-start justify-between gap-3 border-t pt-3"
             >
-              <div>
-                <p>{client.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  {client.lastSeenAtMs
-                    ? `최근 연결 ${new Date(client.lastSeenAtMs).toLocaleString()}`
-                    : "첫 연결 대기"}
-                </p>
+              <div className="min-w-0 flex-1 basis-48 space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="break-all">{client.name}</p>
+                  <Badge variant={client.execution.state === "VERSION_MISMATCH" || client.execution.state === "PROTOCOL_MISMATCH" ? "destructive" : "secondary"}>
+                    {stateLabels[client.execution.state]}
+                  </Badge>
+                </div>
+                <p className="break-words text-muted-foreground">{client.execution.detail}</p>
+                {(client.execution.state === "VERSION_MISMATCH" || client.execution.state === "PROTOCOL_MISMATCH") && (
+                  <p><a className="underline underline-offset-4" href="#saved-agent-installer">설치 파일 다시 받기</a></p>
+                )}
+                {client.execution.connected && (client.execution.state === "READY" || client.execution.state === "BUSY" || client.execution.state === "NO_CAPACITY") && (
+                  <p className="text-xs text-muted-foreground">진행 중 {client.execution.activeJobs}개 · 사용 가능한 슬롯 {client.execution.availableSlots}개</p>
+                )}
+                {client.lastSeenAtMs !== null && (
+                  <p className="text-xs text-muted-foreground">최근 통신 {new Date(client.lastSeenAtMs).toLocaleString()}</p>
+                )}
               </div>
               <Button
                 size="sm"

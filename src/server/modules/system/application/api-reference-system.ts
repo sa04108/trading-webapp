@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { agentClientStatusSchema } from '../../../../shared/agent-status.js';
 import { openApiTokenIssueSchema } from '../../../../shared/schemas/openapi-token.js';
 import type { ApiEndpoint, ApiParameter } from '../../../../shared/schemas/api-reference.js';
 import type { ApiReferenceMetadata } from './api-reference.js';
@@ -48,7 +49,7 @@ export const systemApiMetadata: Record<string, ApiReferenceMetadata> = {
     responses: [response(201, 'token을 안전하게 보관한 후 Authorization: Bearer <token>으로 전송합니다.', z.object({ token: z.string(), record: tokenRecord })), response(400, '요청 형식 오류.'), response(403, '로그인 세션에서만 발급 가능합니다.'), response(409, '유효 토큰 한도 초과.')],
   },
   'DELETE /api/v1/openapi-tokens/:id': { title: 'OpenAPI 토큰 폐기', authentication: 'SESSION', description: '현재 사용자 소유의 토큰을 즉시 폐기합니다. 이미 폐기한 토큰도 성공으로 응답합니다.', responses: [response(204, '폐기 완료.'), response(403, '로그인 세션에서만 폐기 가능합니다.'), response(404, '본인 소유 토큰 없음.')] },
-  'GET /api/v1/agents': { title: '에이전트 목록', authentication: 'SESSION', description: '등록된 실행 에이전트의 메타데이터를 조회합니다. OpenAPI 토큰과 별개의 자격증명입니다.', responses: [response(200, 'clients 목록.', z.object({ clients: z.array(z.object({ id: z.string(), name: z.string(), createdAtMs: z.number(), lastSeenAtMs: z.number().nullable(), revokedAtMs: z.number().nullable() })) })), response(403, '로그인 세션이 필요합니다.')] },
+  'GET /api/v1/agents': { title: '에이전트 목록', authentication: 'SESSION', description: '등록된 에이전트의 실행 가능 여부, 차단 사유, 마지막 보고 버전과 현재 요구 버전을 조회합니다. 최근 통신 시각은 작업 실행 가능 여부와 별개입니다. OpenAPI 토큰과 별개의 자격증명입니다.', responses: [response(200, 'clients 목록. execution에 현재 실행 상태와 사유를 포함합니다.', z.object({ clients: z.array(agentClientStatusSchema) })), response(403, '로그인 세션이 필요합니다.')] },
   'POST /api/v1/agents': { title: '에이전트 토큰 발급', authentication: 'SESSION', description: '실행 에이전트 전송 전용 토큰을 발급합니다. OpenAPI 토큰으로 발급할 수 없습니다.', requestBody: body('장치 이름.', z.object({ name: z.string().trim().min(1).max(80) })), responses: [response(200, 'token 원문은 발급 응답에만 포함됩니다.', z.object({ id: z.string(), name: z.string(), token: z.string() })), response(400, '요청 형식 오류.'), response(403, '로그인 세션이 필요합니다.')] },
   'POST /api/v1/agents/install/windows': { title: 'Windows 에이전트 설치 파일', authentication: 'SESSION', description: '유효한 에이전트 토큰과 서버 주소가 포함된 설치 파일을 내려받습니다. 파일을 비밀정보로 취급하세요.', requestBody: body('기존 Agent 토큰과 서버 원점 URL.', z.object({ token: z.string().min(32).max(256), serverUrl: z.string().max(2048) })), responses: [{ status: 200, description: 'quant-agent-windows.cmd 첨부 파일. Cache-Control: no-store.', contentType: 'application/octet-stream' }, response(400, '잘못된 주소 또는 본문.'), response(401, '유효한 에이전트 토큰이 필요합니다.'), response(403, '로그인 세션이 필요합니다.')] },
   'DELETE /api/v1/agents/:id': { title: '에이전트 토큰 폐기', authentication: 'SESSION', description: '등록된 에이전트의 자격증명을 폐기합니다.', responses: [response(200, 'status REVOKED.', status, { status: 'REVOKED' }), response(404, '장치 없음.'), response(403, '로그인 세션이 필요합니다.')] },

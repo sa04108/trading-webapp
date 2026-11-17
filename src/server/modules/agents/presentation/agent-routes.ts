@@ -206,7 +206,7 @@ export function registerAgentManagementRoutes(
   requireAuth: PreHandler,
 ): void {
   app.get("/agents", { preHandler: requireAuth }, async () => ({
-    clients: coordinator.registry.list(),
+    clients: coordinator.listClients(),
   }));
   app.post("/agents", { preHandler: requireAuth }, async (request, reply) => {
     const { name } = parseRequest(
