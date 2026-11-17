@@ -57,6 +57,7 @@ add('GET', '/intraday/experiments/summary', '분봉 실험 집계', '원본별 s
 const revision = body('현재 expectedRevision을 지정합니다.', tradingRevisionSchema);
 const activation = body('expectedRevision과 acknowledged=true를 지정합니다.', tradingRevisionSchema.extend({ acknowledged: z.literal(true) }));
 add('GET', '/trading', '실전 운용 상태', 'revision, deployment, broker, account, performance, positions, orders, events 및 blockers를 반환합니다.');
+add('GET', '/trading/quotes/:symbol', '운용 종목 현재 시세', '종목의 symbol, price, timestampMs를 반환합니다. 유효한 시세를 조회할 수 없으면 QUOTE_UNAVAILABLE 오류를 반환합니다.', { params: [{ name: 'symbol', in: 'path', type: 'string', required: true, description: '영문 또는 숫자 6자리 종목 코드.' }], errors: [400, 503] });
 add('GET', '/trading/strategies', '실전 운용 전략 버전', '사용 가능한 전략 아티팩트의 strategies 배열을 반환합니다.');
 add('GET', '/trading/source/:jobId', '운용 설정 원본 결과', '백테스트 결과에서 운용 설정에 사용할 원본 정보를 반환합니다.');
 add('POST', '/trading/strategy', '운용 전략 등록', '단일 운용 전략을 비활성 상태로 등록하고 변경된 상태를 반환합니다.', { input: body('전략 및 위험 설정과 expectedRevision.', tradingWriteSchema), errors: [400, 404, 409] });
