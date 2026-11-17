@@ -44,6 +44,10 @@ const BY_ACCOUNT_ID: Record<string, DartAccountRule> = {
     field: "CURRENT_LONG_TERM_DEBT",
     statement: "BS",
   },
+  dart_CurrentPortionOfBonds: { field: "BONDS", statement: "BS" },
+  "ifrs-full_NoncurrentPortionOfNoncurrentBondsIssued": { field: "BONDS", statement: "BS" },
+  "ifrs-full_NoncurrentPortionOfNoncurrentLoansReceived": { field: "LONG_TERM_BORROWINGS", statement: "BS" },
+  dart_LongTermBorrowingsGross: { field: "LONG_TERM_BORROWINGS", statement: "BS" },
   dart_BondsIssued: { field: "BONDS", statement: "BS" },
   "ifrs-full_LongtermBorrowings": {
     field: "LONG_TERM_BORROWINGS",
@@ -71,10 +75,16 @@ const BY_ACCOUNT_NAME: Record<string, DartAccountRule> = {
   단기차입금: { field: "SHORT_TERM_BORROWINGS", statement: "BS" },
   유동성장기부채: { field: "CURRENT_LONG_TERM_DEBT", statement: "BS" },
   유동성장기차입금: { field: "CURRENT_LONG_TERM_DEBT", statement: "BS" },
+  유동성장기차입금및유동성사채: { field: "CURRENT_LONG_TERM_DEBT", statement: "BS" },
   사채: { field: "BONDS", statement: "BS" },
   장기차입금: { field: "LONG_TERM_BORROWINGS", statement: "BS" },
   자본총계: { field: "TOTAL_EQUITY", statement: "BS" },
 };
+
+/** 구형 IFRS 접두사도 현재 태그와 같은 계정으로 해석한다. */
+export function normalizeDartAccountId(accountId: string): string {
+  return accountId.trim().replace(/^ifrs_/, "ifrs-full_");
+}
 
 /**
  * 두 인자는 **문자열임이 확인된 값** 이어야 한다 — 여기서 `.trim()`·`.replace()` 를
@@ -87,13 +97,20 @@ export function resolveAccount(
   accountId: string,
   accountName: string,
 ): DartAccountRule | null {
+  const id = normalizeDartAccountId(accountId);
+  const name = accountName.replace(/\s/g, "");
+  // 차입금 태그를 유동성 장기부채나 사채에 재사용하는 확인된 공시를 구분한다.
+  if ((id === "ifrs-full_ShorttermBorrowings" || id === "ifrs-full_LongtermBorrowings") &&
+      ["유동성장기차입금", "유동성장기부채", "유동성장기차입금및유동성사채"].includes(name))
+    return { field: "CURRENT_LONG_TERM_DEBT", statement: "BS" };
+  if (id === "ifrs-full_LongtermBorrowings" && name === "사채") return { field: "BONDS", statement: "BS" };
   // 지배·비지배주주 귀속 순이익은 전체 순이익의 구성 요소다.
-  if (["ifrs-full_ProfitLossAttributableToOwnersOfParent", "ifrs-full_ProfitLossAttributableToNoncontrollingInterests"].includes(accountId.trim())) return null;
+  if (["ifrs-full_ProfitLossAttributableToOwnersOfParent", "ifrs-full_ProfitLossAttributableToNoncontrollingInterests"].includes(id)) return null;
   // 일부 공시는 영업수익에 영업이익 태그를 잘못 사용한다.
-  if (accountId.trim() === "dart_OperatingIncomeLoss" && accountName.replace(/\s/g, "") === "영업수익") return null;
+  if (id === "dart_OperatingIncomeLoss" && name === "영업수익") return null;
   // 계속·중단영업별 순이익은 전체 당기순이익이 아니므로 합계 태그가 붙어도 제외한다.
-  if (accountId.trim() === "ifrs-full_ProfitLoss" && /^(계속|중단)영업당기순이익(?:\(손실\))?$/.test(accountName.replace(/\s/g, ""))) return null;
-  const byId = BY_ACCOUNT_ID[accountId.trim()];
+  if (id === "ifrs-full_ProfitLoss" && /^(계속|중단)영업당기순이익(?:\(손실\))?$/.test(name)) return null;
+  const byId = BY_ACCOUNT_ID[id];
   if (byId) return byId;
-  return BY_ACCOUNT_NAME[accountName.replace(/\s/g, "")] ?? null;
+  return BY_ACCOUNT_NAME[name] ?? null;
 }

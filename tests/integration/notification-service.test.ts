@@ -50,7 +50,7 @@ describe('NotificationService', () => {
         Array.from({ length: 205 }, (_, i) => ({
           id: `ntf_${String(i).padStart(3, '0')}`,
           type: 'backtest',
-          severity: 'info' as const,
+          severity: i === 0 ? 'error' as const : 'info' as const,
           title: `n${i}`,
           read: false,
           createdAtMs: base + i,
@@ -62,6 +62,7 @@ describe('NotificationService', () => {
     expect(listed).toHaveLength(200);
     expect(listed[0]?.id).toBe('ntf_204'); // 최신이 앞
     expect(listed[199]?.id).toBe('ntf_005'); // 가장 오래된 5건이 잘린다
+    expect(ctx.container.notificationService.list('error').map((row) => row.id)).toEqual(['ntf_000']);
   });
 
   it('marks all read and deletes by ids or all', ({ ctx }) => {

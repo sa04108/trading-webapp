@@ -5,7 +5,8 @@ import {
   type Fact,
   type FundamentalField,
 } from "../../../../../runtime/modules/facts/domain/fact.js";
-import { resolveAccount } from "./dart-account-map.js";
+import { normalizeDartAccountId, resolveAccount } from "./dart-account-map.js";
+import { analyzeBalanceSections, type BalanceSections } from "./dart-balance-sections.js";
 
 /** 정기보고서 코드 (DART reprt_code) */
 export type DartReportCode = "11013" | "11012" | "11014" | "11011";
@@ -43,6 +44,10 @@ export interface DartFinancialRow {
   readonly thstrm_amount: string;
   /** 당기 누적 금액. 있으면 이것을 누적으로 쓴다 */
   readonly thstrm_add_amount?: string;
+  /** 재무제표 안의 표시 순서와 범위. 구간 합산 근거로만 사용한다. */
+  readonly ord?: string;
+  readonly account_detail?: string;
+  readonly currency?: string;
 }
 
 export interface DartIssuanceRow {
@@ -190,6 +195,57 @@ interface CumulativePoint {
   readonly asOfTsMs: number;
 }
 
+interface BalancePoint extends CumulativePoint {
+  readonly row: DartFinancialRow;
+}
+
+function combineBalancePoints(
+  symbol: string,
+  periodKey: string,
+  field: FundamentalField,
+  points: readonly BalancePoint[],
+  sections: BalanceSections,
+  gaps: FactIngestionGap[],
+): CumulativePoint | undefined {
+  const first = points[0];
+  if (first === undefined) return undefined;
+  const canPartition = points.every(point => sections.section(point.row, field) !== undefined);
+  const groups = new Map<string, BalancePoint[]>();
+  for (const point of points) {
+    const key = canPartition ? sections.section(point.row, field)! : "UNKNOWN";
+    groups.set(key, [...(groups.get(key) ?? []), point]);
+  }
+  let sum = 0;
+  let conflict = false;
+  for (const group of groups.values()) {
+    const base = group[0]!;
+    if (sections.canAddWithinSection(group.map(point => point.row), field)) {
+      sum += group.reduce((total, point) => total + point.value, 0);
+      continue;
+    }
+    sum += base.value;
+    for (const point of group.slice(1)) {
+      if (base.value === point.value && base.row.rcept_no === point.row.rcept_no &&
+          typeof base.row.ord === "string" && /^\d+$/.test(base.row.ord) && Number.isSafeInteger(Number(base.row.ord)) &&
+          base.row.ord === point.row.ord && base.row.currency === point.row.currency &&
+          base.row.account_detail === point.row.account_detail &&
+          normalizeDartAccountId(base.row.account_id) === normalizeDartAccountId(point.row.account_id) &&
+          base.row.account_nm.replace(/\s/g, "") === point.row.account_nm.replace(/\s/g, "") &&
+          sections.label(base.row) === sections.label(point.row)) continue;
+      const describe = (row: DartFinancialRow) =>
+        `${row.account_nm} [${row.account_id}, ord=${row.ord ?? "없음"}, 구간=${sections.label(row) ?? "미확인"}]`;
+      gaps.push({
+        symbol, periodKey, field, asOfTsMs: point.asOfTsMs,
+        reason: `같은 보고서 안에서 ${field} 값이 서로 다릅니다 (${base.value} vs ${point.value}); 합산 근거 미확인: ${describe(base.row)} / ${describe(point.row)}`,
+        severity: "BLOCKING", kind: "CONFLICT",
+      });
+      conflict = true;
+    }
+  }
+  // 실제 충돌은 종전처럼 최초 값과 차단 gap을 함께 남긴다. 검증된 구간만 합산한다.
+  return conflict ? first : { value: sum, asOfTsMs: first.asOfTsMs };
+}
+
 /**
  * 정기보고서 4종을 분기 단독값 팩트로 바꾼다.
  *
@@ -228,8 +284,9 @@ export function parseFinancialRows(
     const periodKey = `${year}Q${quarter}`;
     yearByReport.set(report, year);
 
-    /** 같은 보고서 안에서 계정이 두 번 잡히면 값이 다를 때만 gap 을 남긴다 */
-    const seenBsInReport = new Map<string, number>();
+    const sections = analyzeBalanceSections(rows, parseAmount);
+    const balancePoints = new Map<FundamentalField, BalancePoint[]>();
+    const invalidBalanceFields = new Set<FundamentalField>();
 
     for (const row of rows) {
       // row.reprt_code 가 버킷 키(report)와 다르면 호출자가 잘못 묶은 것이다 —
@@ -304,7 +361,10 @@ export function parseFinancialRows(
         continue;
       }
 
-      const rule = resolveAccount(accountId, accountName);
+      const resolved = resolveAccount(accountId, accountName);
+      const rule = resolved?.statement === "BS"
+        ? { ...resolved, field: sections.field(row, resolved.field) }
+        : resolved;
       if (!rule) {
         gaps.push({
           symbol,
@@ -336,6 +396,7 @@ export function parseFinancialRows(
         const rawAmount = readString(row, "thstrm_amount");
         const amount = rawAmount === null ? null : parseAmount(rawAmount);
         if (amount === null) {
+          invalidBalanceFields.add(rule.field);
           gaps.push({
             symbol,
             periodKey,
@@ -349,31 +410,9 @@ export function parseFinancialRows(
           });
           continue;
         }
-        const previouslySeen = seenBsInReport.get(rule.field);
-        if (previouslySeen !== undefined) {
-          if (previouslySeen !== amount) {
-            gaps.push({
-              symbol,
-              periodKey,
-              field: rule.field,
-              asOfTsMs: asOf,
-              reason: `같은 보고서 안에서 ${rule.field} 값이 서로 다릅니다 (${previouslySeen} vs ${amount})`,
-              severity: "BLOCKING",
-              kind: "CONFLICT",
-            });
-          }
-          continue;
-        }
-        seenBsInReport.set(rule.field, amount);
-        facts.push({
-          scope: "SYMBOL",
-          key: symbol,
-          field: rule.field,
-          periodKey,
-          asOfTsMs: asOf,
-          value: amount,
-          unit: "KRW",
-        });
+        const points = balancePoints.get(rule.field) ?? [];
+        points.push({ row, value: amount, asOfTsMs: asOf });
+        balancePoints.set(rule.field, points);
         continue;
       }
 
@@ -417,6 +456,15 @@ export function parseFinancialRows(
       }
       byQuarter.set(quarter, { value: amount, asOfTsMs: asOf });
       cumulative.set(rule.field, byQuarter);
+    }
+    for (const [field, points] of balancePoints) {
+      const combined = combineBalancePoints(symbol, periodKey, field, points, sections, gaps);
+      // 일부 구간이 결측이면 나머지만 전사 합계로 저장하지 않는다.
+      // 유효 행끼리의 실제 충돌은 결측과 함께 있어도 차단 gap으로 남긴다.
+      if (invalidBalanceFields.has(field)) continue;
+      if (combined === undefined) continue;
+      facts.push({ scope: "SYMBOL", key: symbol, field, periodKey,
+        asOfTsMs: combined.asOfTsMs, value: combined.value, unit: "KRW" });
     }
   }
 

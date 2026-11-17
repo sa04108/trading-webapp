@@ -35,6 +35,12 @@ describe('notification routes', () => {
     const body = list.json() as { notifications: Array<{ id: string; read: boolean }> };
     expect(body.notifications.map((n) => n.id)).toEqual(['ntf_b', 'ntf_a']);
 
+    const errors = await ctx.app.inject({ method: 'GET', url: '/api/v1/notifications?severity=error', cookies: { session: cookie } });
+    expect(errors.statusCode).toBe(200);
+    expect(errors.json().notifications.map((n: { id: string }) => n.id)).toEqual(['ntf_b']);
+    const invalid = await ctx.app.inject({ method: 'GET', url: '/api/v1/notifications?severity=invalid', cookies: { session: cookie } });
+    expect(invalid.statusCode).toBe(400);
+
     const countRes = await ctx.app.inject({
       method: 'GET',
       url: '/api/v1/notifications/unread-count',

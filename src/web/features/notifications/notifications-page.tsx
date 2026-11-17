@@ -31,7 +31,7 @@ function NotificationRowBody({
   return (
     <>
       {item.severity === "error" ? (
-        <CircleAlert className="mt-0.5 size-4 shrink-0 text-loss" />
+        <CircleAlert className="mt-0.5 size-4 shrink-0 text-destructive" />
       ) : (
         <Info className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
       )}
@@ -66,7 +66,8 @@ function NotificationRowBody({
 export function NotificationsPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  const { data, isLoading } = useNotifications();
+  const [filter, setFilter] = useState<"all" | "error">("all");
+  const { data, isLoading } = useNotifications(filter === "error" ? "error" : undefined);
   const notifications = data?.notifications ?? [];
   const missingTargets = useMissingTargets();
 
@@ -101,8 +102,9 @@ export function NotificationsPage() {
     onError: (error) => toast.error(error.message),
   });
 
+  const selectedIds = notifications.filter(item => selected.has(item.id)).map(item => item.id);
   const allSelected =
-    notifications.length > 0 && selected.size === notifications.length;
+    notifications.length > 0 && selectedIds.length === notifications.length;
 
   const toggleAll = () =>
     setSelected(
@@ -158,41 +160,65 @@ export function NotificationsPage() {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0">
-        <CardTitle>알림</CardTitle>
-        <div className="flex items-center gap-2">
-          {editing && (
-            <>
-              <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Checkbox
-                  checked={allSelected}
-                  onCheckedChange={toggleAll}
-                  aria-label="전체 선택"
-                />
-                전체 선택
-              </label>
+      <CardHeader className="gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle>알림</CardTitle>
+          <div className="flex flex-wrap items-center gap-2">
+            {editing && (
+              <>
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Checkbox
+                    checked={allSelected}
+                    onCheckedChange={toggleAll}
+                    aria-label="전체 선택"
+                  />
+                  전체 선택
+                </label>
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  disabled={selectedIds.length === 0 || remove.isPending}
+                  onClick={() => remove.mutate(selectedIds)}
+                >
+                  삭제 ({selectedIds.length})
+                </Button>
+              </>
+            )}
+            {notifications.length > 0 && (
               <Button
-                variant="destructive"
+                variant="outline"
                 size="sm"
-                disabled={selected.size === 0 || remove.isPending}
-                onClick={() => remove.mutate([...selected])}
+                onClick={() => {
+                  setEditing((prev) => !prev);
+                  setSelected(new Set());
+                }}
               >
-                삭제 ({selected.size})
+                {editing ? "완료" : "편집"}
               </Button>
-            </>
-          )}
-          {notifications.length > 0 && (
+            )}
+          </div>
+        </div>
+        <div className="flex gap-2" role="group" aria-label="알림 필터">
+          {(["all", "error"] as const).map(value => (
             <Button
-              variant="outline"
+              key={value}
               size="sm"
+              variant={filter === value ? "secondary" : "ghost"}
+              className={value === "error" ? cn(
+                "text-destructive hover:text-destructive",
+                filter === value && "bg-destructive/10 hover:bg-destructive/20",
+              ) : undefined}
+              aria-pressed={filter === value}
+              disabled={remove.isPending}
               onClick={() => {
-                setEditing((prev) => !prev);
+                setFilter(value);
                 setSelected(new Set());
+                setEditing(false);
               }}
             >
-              {editing ? "완료" : "편집"}
+              {value === "all" ? "전체" : "오류"}
             </Button>
-          )}
+          ))}
         </div>
       </CardHeader>
       <CardContent className="p-0">
@@ -202,7 +228,7 @@ export function NotificationsPage() {
           </p>
         ) : notifications.length === 0 ? (
           <p className="px-6 py-8 text-sm text-muted-foreground">
-            알림이 없습니다.
+            {filter === "error" ? "오류 알림이 없습니다." : "알림이 없습니다."}
           </p>
         ) : (
           <ul className="divide-y">

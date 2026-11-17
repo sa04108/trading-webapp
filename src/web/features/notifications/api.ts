@@ -1,12 +1,14 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api-client";
-import type { NotificationItem } from "./types";
+import type { NotificationItem, NotificationSeverity } from "./types";
 
-export function useNotifications() {
+export function useNotifications(severity?: NotificationSeverity) {
   return useQuery({
-    queryKey: ["notifications", "list"],
-    queryFn: () => api<{ notifications: NotificationItem[] }>("/notifications"),
+    queryKey: ["notifications", "list", severity ?? "all"],
+    queryFn: () => api<{ notifications: NotificationItem[] }>(
+      severity ? `/notifications?severity=${severity}` : "/notifications",
+    ),
   });
 }
 

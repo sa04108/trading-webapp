@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { z } from "zod";
 import { SECURITY_HEADERS } from "../../../shared/security.js";
 import type {
   NotificationRow,
@@ -15,9 +16,11 @@ export function registerNotificationRoutes(
   service: NotificationService,
   requireAuth: PreHandler,
 ): void {
-  app.get("/notifications", { preHandler: requireAuth }, async () => ({
-    notifications: service.list(),
-  }));
+  app.get("/notifications", { preHandler: requireAuth }, async (request, reply) => {
+    const query = z.object({ severity: z.enum(["error", "info"]).optional() }).safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: "알림 필터가 올바르지 않습니다." });
+    return { notifications: service.list(query.data.severity) };
+  });
 
   app.get(
     "/notifications/unread-count",

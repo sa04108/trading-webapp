@@ -53,10 +53,11 @@ export class NotificationService {
     return row;
   }
 
-  list(): NotificationRow[] {
+  list(severity?: NotificationSeverity): NotificationRow[] {
     return this.db
       .select()
       .from(notifications)
+      .where(severity === undefined ? undefined : eq(notifications.severity, severity))
       .orderBy(desc(notifications.createdAtMs), desc(notifications.id))
       .limit(LIST_LIMIT)
       .all();
