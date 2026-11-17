@@ -6,6 +6,7 @@ import { isFinishedJob } from "../../../../shared/schemas/jobs.js";
 import { INTRADAY_STRATEGIES } from "../../../../shared/schemas/intraday-strategies.js";
 import { executionJobProgress, jobPhase, jobProgress } from "./job-progress.js";
 import type { BacktestRefreshService } from "../../backtest/application/backtest-refresh-service.js";
+import type { ConfigurationSearchService } from "../../backtest/application/configuration-search-service.js";
 import { backtestRefreshActionLabel } from "../../../../shared/schemas/backtest-refresh.js";
 
 const active = "('QUEUED', 'RUNNING', 'WAITING', 'CANCELLING')";
@@ -28,14 +29,15 @@ interface Source {
 }
 
 const sources: Source[] = [
+  { kind: "configuration-search", table: "configuration_searches", updated: "coalesce(completed_at_ms,created_at_ms)", finished: "completed_at_ms", where: "owner_id=@owner AND status<>'PREVIEW'" },
   { kind: "backtest-wizard", table: "backtest_wizard_jobs", status: "status", updated: "updated_at_ms", finished: "finished_at_ms", where: "owner_id=@owner" },
   { kind: "backtest-refresh", table: "backtest_refresh_jobs", updated: "updated_at_ms", finished: "completed_at_ms", where: "owner_id=@owner" },
-  { kind: "backtest", table: "backtest_jobs", updated: "coalesce(completed_at_ms, last_received_at_ms, last_progress_at_ms, started_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)", where: "clone_batch_id IS NULL AND NOT EXISTS (SELECT 1 FROM backtest_validation_trials t WHERE t.job_id=backtest_jobs.id) AND NOT EXISTS (SELECT 1 FROM backtest_wizard_children w JOIN backtest_wizard_jobs parent ON parent.id=w.wizard_id WHERE parent.owner_id=@owner AND w.kind='backtest' AND w.job_id=backtest_jobs.id)" },
+  { kind: "backtest", table: "backtest_jobs", updated: "coalesce(completed_at_ms, last_received_at_ms, last_progress_at_ms, started_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)", where: "clone_batch_id IS NULL AND NOT EXISTS (SELECT 1 FROM configuration_search_items s WHERE s.job_id=backtest_jobs.id) AND NOT EXISTS (SELECT 1 FROM backtest_validation_trials t WHERE t.job_id=backtest_jobs.id) AND NOT EXISTS (SELECT 1 FROM backtest_wizard_children w JOIN backtest_wizard_jobs parent ON parent.id=w.wizard_id WHERE parent.owner_id=@owner AND w.kind='backtest' AND w.job_id=backtest_jobs.id)" },
   { kind: "preparation", table: "backtest_preparation_jobs", status: preparationStatus, updated: "updated_at_ms", finished: "coalesce(completed_at_ms, updated_at_ms)", where: "(NOT EXISTS (SELECT 1 FROM backtest_wizard_children w JOIN backtest_wizard_jobs parent ON parent.id=w.wizard_id WHERE parent.owner_id=@owner AND w.kind='preparation' AND w.job_id=backtest_preparation_jobs.id) OR EXISTS (SELECT 1 FROM preparation_wizard_references r WHERE r.preparation_job_id=backtest_preparation_jobs.id AND r.user_id=@owner AND r.context NOT IN (SELECT id FROM backtest_wizard_jobs)))" },
   { kind: "clone-batch", table: "backtest_clone_batches", updated: "coalesce(completed_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)" },
   { kind: "validation", table: "backtest_validations", updated: "coalesce(completed_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)" },
   { kind: "intraday-validation", table: "intraday_validations", updated: "coalesce(completed_at_ms, created_at_ms)", finished: "coalesce(completed_at_ms, created_at_ms)", where: "owner_id=@owner" },
-  { kind: "intraday-backtest", table: "intraday_runs", status: intradayStatus, updated: "updated_at_ms", finished: "updated_at_ms", where: "owner_id=@owner AND NOT EXISTS (SELECT 1 FROM intraday_validation_trials t WHERE t.run_id=intraday_runs.id)" },
+  { kind: "intraday-backtest", table: "intraday_runs", status: intradayStatus, updated: "updated_at_ms", finished: "updated_at_ms", where: "owner_id=@owner AND NOT EXISTS (SELECT 1 FROM configuration_search_items s WHERE s.job_id=intraday_runs.id) AND NOT EXISTS (SELECT 1 FROM intraday_validation_trials t WHERE t.run_id=intraday_runs.id)" },
   { kind: "intraday-collection", table: "intraday_collections", status: intradayStatus, updated: "updated_at_ms", finished: "updated_at_ms", where: "owner_id=@owner AND parent_run_id IS NULL" },
 ];
 
@@ -69,7 +71,7 @@ export class JobCenterError extends Error {
 }
 
 export class JobCenterService {
-  constructor(private readonly container: Container, private readonly validations: PeriodValidationService, private readonly refreshJobs: BacktestRefreshService, private readonly intradayValidations?: IntradayValidationService) {}
+  constructor(private readonly container: Container, private readonly validations: PeriodValidationService, private readonly refreshJobs: BacktestRefreshService, private readonly intradayValidations?: IntradayValidationService, private readonly searches?: ConfigurationSearchService) {}
 
   private bindings(owner: string) {
     const days = this.container.config.notificationRetentionDays;
@@ -110,6 +112,7 @@ export class JobCenterService {
       UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id=@id AND status NOT IN ${terminal}
       UNION ALL SELECT 1 FROM backtest_clone_batches WHERE preparation_job_id=@id AND status IN ('ACTIVE','CANCELLING')
       UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id=@id AND status IN ('QUEUED','PREPARING','SUBMITTING')
+      UNION ALL SELECT 1 FROM configuration_search_items i JOIN configuration_searches s ON s.id=i.search_id WHERE i.preparation_job_id=@id AND s.status IN ('ACTIVE','CANCELLING')
       UNION ALL SELECT 1 FROM backtest_validation_trials t JOIN backtest_validations v ON v.id=t.validation_id
         WHERE t.preparation_job_id=@id AND v.status IN ('ACTIVE','CANCELLING') LIMIT 1`).get({ id, owner }));
   }
@@ -121,6 +124,12 @@ export class JobCenterService {
     const strategyName = (id: string) => this.container.strategyRegistry.describe(id)?.name ?? INTRADAY_STRATEGIES.find((strategy) => strategy.id === id)?.name ?? id;
     const period = (from: string | null, to: string | null) => from && to ? `${from} ~ ${to}` : null;
     switch (row.kind) {
+      case "configuration-search": {
+        const data = db.prepare("SELECT json_extract(catalog_json,'$.strategyName') AS name, error FROM configuration_searches WHERE id=? AND owner_id=?").get(row.sourceId, owner) as { name: string; error: string | null };
+        const counts = db.prepare("SELECT count(*) AS total, sum(CASE WHEN status IN ('COMPLETED','FAILED','CANCELLED') THEN 1 ELSE 0 END) AS done FROM configuration_search_items WHERE search_id=?").get(row.sourceId) as { total: number; done: number };
+        job = { ...job, title: `${data.name} · 설정 탐색 실험`, error: data.error, progress: jobProgress(counts.done, counts.total, "백테스트"), link: `/backtests/searches/${encodeURIComponent(row.sourceId)}` };
+        break;
+      }
       case "backtest-wizard": {
         const wizard = this.container.backtestWizardService.get(owner, row.sourceId);
         const strategy = this.container.backtestWizardDraftService.get(owner, row.sourceId, "strategy")?.payload.strategyId
@@ -260,6 +269,7 @@ export class JobCenterService {
     if (job.status === "CANCELLING") return job;
     if (!job.cancellable) throw new JobCenterError("이미 종료되었거나 다른 작업에서 사용 중인 작업은 취소할 수 없습니다.", 409);
     switch (row.kind) {
+      case "configuration-search": this.searches?.cancel(owner, row.sourceId); break;
       case "backtest-wizard": this.container.backtestWizardService.cancel(owner, row.sourceId); break;
       case "backtest-refresh": this.refreshJobs.cancel(owner, row.sourceId); break;
       case "backtest": this.container.jobOrchestrator.cancel(row.sourceId); break;

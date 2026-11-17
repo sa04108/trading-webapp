@@ -317,10 +317,11 @@ export class PeriodValidationService {
                 `
           SELECT 1 FROM backtest_validations WHERE source_job_id = ?
           UNION ALL SELECT 1 FROM backtest_clone_batches WHERE source_job_id = ?
+          UNION ALL SELECT 1 FROM configuration_searches WHERE mode='daily' AND source_job_id = ?
           UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE source_job_id = ? AND status IN ('QUEUED','PREPARING','SUBMITTING') LIMIT 1
         `,
               )
-              .get(trial.jobId, trial.jobId, trial.jobId)
+              .get(trial.jobId, trial.jobId, trial.jobId, trial.jobId)
           )
             throw new Error("하위 백테스트에서 만든 실험을 먼저 삭제하세요.");
         }

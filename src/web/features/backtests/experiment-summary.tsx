@@ -11,14 +11,12 @@ export function ExperimentSummary({ jobId, mode = "daily" }: { jobId: string; mo
   const query = useBacktestHistoryExtras([jobId], 5_000, mode);
   const summary = query.data?.summaries[0];
   const entries = [
-    { title: "난수 시드 실험", path: "seeds", count: summary?.seed.batchCount, active: summary?.seed.activeCount,
-      samples: summary?.seed.returns.count, deviation: summary?.seed.returns.sampleStdDev,
-      help: "같은 설정에서 난수 시드를 바꿔 결과의 민감도를 확인합니다. 모든 실험의 유효한 완료 실행 수익률로 표본 표준편차를 계산합니다. 표본이 두 개 미만이면 —로 표시합니다.", metric: "수익률 표준편차" },
     { title: "기간검증", path: "validations", count: summary?.validation.experimentCount, active: summary?.validation.activeCount,
       samples: summary?.validation.returns.count, deviation: summary?.validation.returns.sampleStdDev,
-      help: "홀드아웃·최적화 홀드아웃·워크포워드로 별도 기간의 성과를 확인합니다. 모든 OOS 회차가 평가된 완료 실험만 사용합니다. 각 실험의 OOS 평균 수익률을 구한 뒤 실험 간 표본 표준편차를 계산합니다. 독립 실행 구간을 연속 수익률로 합산하지 않습니다. 표본이 두 개 미만이면 —로 표시합니다.", metric: "OOS 수익률 표준편차" },
+      help: "홀드아웃 또는 워크포워드로 별도 기간의 성과를 확인하며 선택적으로 파라미터를 최적화할 수 있습니다. 모든 OOS 회차가 평가된 완료 실험만 사용합니다. 각 실험의 OOS 평균 수익률을 구한 뒤 실험 간 표본 표준편차를 계산합니다. 독립 실행 구간을 연속 수익률로 합산하지 않습니다. 표본이 두 개 미만이면 —로 표시합니다.", metric: "OOS 수익률 표준편차" },
   ];
   return <section aria-label="백테스트 실험" className="grid gap-3 md:grid-cols-2">
+    <Card><CardHeader><CardTitle className="text-sm">설정 탐색 실험</CardTitle></CardHeader><CardContent className="space-y-3"><p className="text-sm text-muted-foreground">원본의 전략과 기간을 유지하며 설정 조합을 비교합니다.</p>{query.isError ? <p role="alert" className="text-sm text-destructive">요약을 불러오지 못했습니다. <button className="underline" onClick={() => void query.refetch()}>다시 시도</button></p> : !summary ? <p className="text-sm text-muted-foreground">요약을 불러오는 중…</p> : <p className="text-sm">기록 {summary.search?.experimentCount ?? 0}개{summary.search?.activeCount ? ` · 진행 중 ${summary.search.activeCount}개` : ""}</p>}<Button variant="outline" asChild><Link to={paths.search(jobId)}>설정 탐색 실험 열기</Link></Button></CardContent></Card>
     {entries.map((entry) => <Card key={entry.path}>
       <CardHeader><CardTitle className="flex items-center gap-1 text-sm">{entry.title}<InfoHint label={`${entry.title} 안내`}>{entry.help}</InfoHint></CardTitle></CardHeader>
       <CardContent className="space-y-3">
@@ -27,8 +25,7 @@ export function ExperimentSummary({ jobId, mode = "daily" }: { jobId: string; mo
             <p className="text-sm">기록 {entry.count}개{entry.active ? ` · 진행 중 ${entry.active}개` : ""}</p>
             <p className="text-sm text-muted-foreground">{entry.metric} {entry.deviation == null ? "—" : `${formatNumber(entry.deviation)}%p`} · 유효 표본 {entry.samples}개</p>
           </>}
-        {mode === "intraday" && entry.path === "seeds" ? <p className="text-sm text-muted-foreground">이 전략은 난수를 사용하지 않습니다.</p> : null}
-        <Button variant="outline" asChild><Link to={entry.path === "seeds" ? paths.seeds(jobId) : paths.validations(jobId)}>{entry.title} 열기</Link></Button>
+        <Button variant="outline" asChild><Link to={paths.validations(jobId)}>{entry.title} 열기</Link></Button>
       </CardContent>
     </Card>)}
   </section>;

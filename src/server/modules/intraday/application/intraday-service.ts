@@ -577,6 +577,7 @@ export class IntradayService {
     return and(
       eq(intradayRuns.ownerId, ownerId),
       sql`NOT EXISTS (SELECT 1 FROM intraday_validation_trials WHERE run_id = ${intradayRuns.id})`,
+      sql`NOT EXISTS (SELECT 1 FROM configuration_search_items WHERE job_id = ${intradayRuns.id})`,
       strategyId === undefined ? undefined :
         sql`json_extract(${intradayRuns.requestJson}, '$.strategyId') = ${strategyId}`,
     );
@@ -638,6 +639,9 @@ export class IntradayService {
     return [...this.controllers].filter(([, controller]) => controller.signal.aborted).map(([id]) => id);
   }
   deleteRunHistory(ownerId: string, id: string): void {
+    const searchReference = this.options.db.get(sql`SELECT 1 FROM configuration_searches WHERE mode='intraday' AND source_job_id=${id}
+      UNION ALL SELECT 1 FROM configuration_search_items WHERE job_id=${id} LIMIT 1`);
+    if (searchReference) throw new IntradayError("설정 탐색에서 참조하는 결과입니다. 연결된 실험을 먼저 삭제하세요.", 409);
     const row = this.options.db
       .select({ id: intradayRuns.id, status: intradayRuns.status })
       .from(intradayRuns)

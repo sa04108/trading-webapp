@@ -1,0 +1,30 @@
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { api } from "@/lib/api-client";
+
+import type { ApiEndpoint as Endpoint, ApiReference as Reference } from "@shared/schemas/api-reference";
+const authLabels = { PUBLIC: "인증 불필요", SESSION: "브라우저 세션", SESSION_OR_TOKEN: "브라우저 세션 또는 OpenAPI 토큰", AGENT_TOKEN: "에이전트 전용 토큰" } as const;
+const json = (value: unknown) => typeof value === "string" ? value : JSON.stringify(value, null, 2);
+function Example({ label, value }: { label: string; value: unknown }) { return <div className="space-y-1"><p className="text-sm font-medium">{label}</p><pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 text-xs">{json(value)}</pre></div>; }
+function EndpointDetail({ endpoint }: { endpoint: Endpoint }) {
+  return <article className="space-y-5 rounded-lg border p-4 min-w-0"><div><h2 className="text-lg font-semibold">{endpoint.title}</h2><p className="break-all font-mono text-sm">{endpoint.method} {endpoint.path}</p><p className="mt-2 text-sm text-muted-foreground">{endpoint.description}</p><p className="mt-2 text-sm">인증: {authLabels[endpoint.authentication]}</p></div>
+    <section className="space-y-2"><h3 className="font-semibold">매개변수</h3>{endpoint.parameters.length ? <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr><th className="p-2">이름</th><th className="p-2">위치</th><th className="p-2">타입</th><th className="p-2">필수</th><th className="p-2">설명</th></tr></thead><tbody>{endpoint.parameters.map((p, i) => <tr className="border-t" key={`${p.in}:${p.name}:${i}`}><td className="p-2">{p.name}</td><td className="p-2">{p.in}</td><td className="p-2">{p.type}</td><td className="p-2">{p.required ? "예" : "아니요"}</td><td className="p-2">{p.description}{p.example !== undefined ? ` (예: ${json(p.example)})` : ""}</td></tr>)}</tbody></table></div> : <p className="text-sm text-muted-foreground">없음</p>}</section>
+    {endpoint.requestBody ? <section className="space-y-2"><h3 className="font-semibold">요청 본문</h3><p className="text-sm">{endpoint.requestBody.contentType} {endpoint.requestBody.description}</p>{endpoint.requestBody.example !== undefined ? <Example label="예시" value={endpoint.requestBody.example} /> : null}{endpoint.requestBody.schema ? <Example label="스키마" value={endpoint.requestBody.schema} /> : null}</section> : null}
+    <section className="space-y-4"><h3 className="font-semibold">응답</h3>{endpoint.responses.map((response, i) => <div className="space-y-2" key={`${response.status}:${i}`}><p className="text-sm font-medium">{response.status} · {response.description}{response.contentType ? ` · ${response.contentType}` : ""}</p>{response.example !== undefined ? <Example label="예시" value={response.example} /> : null}{response.schema ? <Example label="스키마" value={response.schema} /> : null}</div>)}</section>
+  </article>;
+}
+export function ApiReferencePage() {
+  const query = useQuery({ queryKey: ["api-reference"], queryFn: () => api<Reference>("/system/api-reference") });
+  const [search, setSearch] = useState(""); const [group, setGroup] = useState("all"); const [selected, setSelected] = useState<string | null>(null);
+  const endpoints = query.data?.endpoints ?? [];
+  const groups = useMemo(() => [...new Set(endpoints.map(e => e.group))].sort(), [endpoints]);
+  const filtered = endpoints.filter(e => (group === "all" || e.group === group) && `${e.method} ${e.path} ${e.title} ${e.description} ${e.group}`.toLocaleLowerCase().includes(search.toLocaleLowerCase().trim()));
+  const current = filtered.find(e => e.id === selected) ?? filtered[0];
+  return <div className="mx-auto max-w-7xl space-y-5"><div><Button variant="link" className="h-auto px-0" asChild><Link to="/settings">설정으로 돌아가기</Link></Button><h1 className="text-xl font-semibold">API 명세</h1><p className="text-sm text-muted-foreground">엔드포인트와 요청·응답 형식을 확인합니다.</p></div>
+    {query.isError ? <p role="alert">{query.error.message} <button className="underline" onClick={() => void query.refetch()}>다시 시도</button></p> : !query.data ? <p>API 명세를 불러오는 중…</p> : <><section className="space-y-2 rounded-lg border p-4 text-sm"><h2 className="font-semibold">인증 및 기본 경로</h2><p>{query.data.authentication.description}</p><pre className="overflow-auto rounded bg-muted p-2">{query.data.authentication.bearerExample}</pre><p>{query.data.authentication.tokenManagement}</p><p>기본 경로: <code>{query.data.basePath}</code></p></section><div className="grid gap-4 md:grid-cols-[minmax(220px,320px)_minmax(0,1fr)]"><aside className="space-y-3"><div className="space-y-2"><Label htmlFor="api-reference-search">API 검색</Label><Input id="api-reference-search" value={search} onChange={e => setSearch(e.target.value)} placeholder="경로, 이름, 설명" /></div><div className="space-y-2"><Label htmlFor="api-reference-group">분류</Label><select id="api-reference-group" className="h-10 w-full rounded-md border bg-background px-3" value={group} onChange={e => setGroup(e.target.value)}><option value="all">전체</option>{groups.map(value => <option key={value} value={value}>{value}</option>)}</select></div><p className="text-sm text-muted-foreground">{filtered.length}개 엔드포인트</p><nav aria-label="API 목록" className="max-h-[65vh] overflow-y-auto rounded border">{filtered.map(endpoint => <button key={endpoint.id} type="button" aria-current={current?.id === endpoint.id ? "true" : undefined} onClick={() => setSelected(endpoint.id)} className="block w-full border-b p-3 text-left text-sm last:border-b-0 aria-[current=true]:bg-muted"><span className="font-medium">{endpoint.method} {endpoint.title}</span><span className="block break-all font-mono text-xs text-muted-foreground">{endpoint.path}</span></button>)}</nav></aside>{current ? <EndpointDetail endpoint={current} /> : <p className="text-sm text-muted-foreground">일치하는 API가 없습니다.</p>}</div></>}
+  </div>;
+}

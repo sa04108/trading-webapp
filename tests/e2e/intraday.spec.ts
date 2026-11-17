@@ -402,7 +402,7 @@ test("일봉과 분봉 경로를 오가며 결과와 체결 시각을 확인한�
   await expect(page.getByRole("heading", { name: "EMA 교차", exact: true })).toBeVisible();
   await expect(page.getByText("완료", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "그대로 복제", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "새 난수로 복제", exact: true })).toBeDisabled();
+  await expect(page.getByRole("link", { name: "설정 탐색 실험", exact: true })).toHaveAttribute("href", "/backtests/intraday/done/search");
   await expect(page.getByRole("link", { name: "재설정 및 복제", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Export", exact: true })).toHaveAttribute("href", "/api/v1/intraday/runs/done/export");
   // 기존 시각 확인만으로는 부분청산 집계·공통 표·비용 패널 배치의 회귀를 잡지 못한다.
@@ -592,7 +592,8 @@ test("분봉 실험 페이지를 재사용하고 검증 하위 결과와 일반 
     { label: "홀드아웃", href: "/backtests/intraday/validations/validation" }, { label: "1회차 · OOS 검증" },
   ] } }));
   await page.goto("/backtests/intraday/done");
-  await page.getByRole("link", { name: "난수 시드 실험 열기" }).click();
+  await expect(page.getByRole("link", { name: "설정 탐색 실험 열기" })).toHaveAttribute("href", "/backtests/intraday/done/search");
+  await page.goto("/backtests/intraday/done/seeds");
   await expect(page).toHaveURL(/\/backtests\/intraday\/done\/seeds$/);
   await expect(page.getByRole("button", { name: "난수 실험 시작" })).toBeDisabled();
   await expect(page.getByText(/분봉 엔진은 주문 순서를 난수로 섞지 않습니다/)).toBeVisible();

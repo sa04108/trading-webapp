@@ -1,3 +1,4 @@
+import { ConfigurationSearchPage, ConfigurationSearchDetailPage } from "../features/backtests/configuration-search-page";
 import { SeedExperimentsPage } from "../features/backtests/seed-experiments-page";
 import { PeriodValidationPage, PeriodValidationDetailPage } from "../features/backtests/period-validation-pages";
 import { createBrowserRouter } from "react-router";
@@ -21,6 +22,7 @@ import {
 import { JobsPage } from "../features/jobs/jobs-page";
 import { JobDetailPage } from "../features/jobs/job-detail-page";
 import { NotificationsPage } from "../features/notifications/notifications-page";
+import { ApiReferencePage } from "../features/settings/api-reference-page";
 import { SettingsPage } from "../features/settings/settings-page";
 import { SymbolMasterPanel } from "../features/symbol-master/symbol-master-panel";
 import { BenchmarkPanel } from "../features/datasets/benchmark-panel";
@@ -43,6 +45,9 @@ export const router = createBrowserRouter([
           { path: "backtests/intraday", element: <IntradayListPage /> },
           { path: "backtests/intraday/new", element: <IntradayNewPage /> },
           { path: "backtests/intraday/:id", element: <IntradayDetailPage /> },
+          { path: "backtests/intraday/:id/search", element: <ConfigurationSearchPage mode="intraday" /> },
+          { path: "backtests/searches/:searchId", element: <ConfigurationSearchDetailPage /> },
+          { path: "backtests/:id/search", element: <ConfigurationSearchPage /> },
           { path: "backtests/intraday/:id/seeds", element: <SeedExperimentsPage mode="intraday" /> },
           { path: "backtests/intraday/:id/validations", element: <PeriodValidationPage mode="intraday" /> },
           { path: "backtests/intraday/validations/:validationId", element: <PeriodValidationDetailPage mode="intraday" /> },
@@ -71,6 +76,7 @@ export const router = createBrowserRouter([
           { path: "jobs/:id", element: <JobDetailPage /> },
           { path: "notifications", element: <NotificationsPage /> },
           { path: "settings", element: <SettingsPage /> },
+          { path: "settings/api-reference", element: <ApiReferencePage /> },
         ],
       },
     ],

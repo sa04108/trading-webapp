@@ -1,5 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { configurationSearches, configurationSearchItems } from "../../../shared/db/configuration-search-schema.js";
+import { searchCounts } from "../../backtest/presentation/backtest-experiment-routes.js";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import type { BacktestHistoryExtras, BacktestLineage } from "../../../../shared/schemas/backtest-experiments.js";
 import { intradayValidationTrials, intradayValidations } from "../../../shared/db/intraday-validation-schema.js";
@@ -31,6 +33,15 @@ export function registerIntradayValidationRoutes(app: FastifyInstance, database:
       visited.add(current);
       try { runs.getRunState(owner, current); } catch { complete = false; return [{ label: "삭제된 상위 백테스트", description: current }]; }
       const own = { label: `결과 ${current.slice(-6)}`, href: `/backtests/intraday/${encodeURIComponent(current)}`, description: current };
+      const search = database.db.select({ parent: configurationSearches.sourceJobId, id: configurationSearches.id, ordinal: configurationSearchItems.ordinal }).from(configurationSearchItems)
+        .innerJoin(configurationSearches, eq(configurationSearchItems.searchId, configurationSearches.id))
+        .where(and(eq(configurationSearchItems.jobId, current), eq(configurationSearches.mode, "intraday"), eq(configurationSearches.ownerId, owner))).get();
+      if (search) {
+        const label = `조합 ${search.ordinal + 1}`;
+        if (current === runId) { kind = "search"; roleLabel = label; }
+        return [...walk(search.parent), { label: "설정 탐색 실험", href: `/backtests/intraday/${encodeURIComponent(search.parent)}/search` },
+          { label: `실험 ${search.id.slice(-6)}`, href: `/backtests/searches/${encodeURIComponent(search.id)}` }, { ...own, label }];
+      }
       const trial = database.db.select({ parent: intradayValidations.sourceJobId, owner: intradayValidations.ownerId, experiment: intradayValidationTrials.validationId, fold: intradayValidationTrials.fold, role: intradayValidationTrials.role, candidate: intradayValidationTrials.candidate }).from(intradayValidationTrials).leftJoin(intradayValidations, eq(intradayValidationTrials.validationId, intradayValidations.id)).where(eq(intradayValidationTrials.runId, current)).get();
       if (!trial) return [own];
       if (!trial.parent || trial.owner !== owner) { complete = false; if (current === runId) { kind = "unknown"; roleLabel = "경로 확인 필요"; } return [{ label: "상위 경로 확인 불가" }, own]; }
@@ -46,10 +57,11 @@ export function registerIntradayValidationRoutes(app: FastifyInstance, database:
     const raw = (request.query as { jobIds?: string }).jobIds; if (!raw || raw.length > 13000) throw new IntradayError("잘못된 작업 ID입니다.", 400);
     const ids = [...new Set(raw.split(","))]; if (ids.length > 100 || ids.some(x => !x || x.length > 128)) throw new IntradayError("잘못된 작업 ID입니다.", 400);
     const distribution = (v: number[]) => { const mean = v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; return { count: v.length, mean, sampleStdDev: v.length > 1 ? Math.sqrt(v.reduce((a, b) => a + (b - mean!) ** 2, 0) / (v.length - 1)) : null }; };
+    const searches = searchCounts(database, "intraday", ids, request.authUser!.id);
     const summaries: BacktestHistoryExtras[] = ids.map(jobId => {
       const experiments = service.list(request.authUser!.id, jobId), modes = { HOLDOUT: 0, WALK_FORWARD: 0 };
       const samples: number[] = []; for (const e of experiments) { modes[e.config.mode]++; if (e.status !== "COMPLETED") continue; const oos = e.trials.filter(t => t.role === "OOS"); if (oos.length && oos.every(t => t.status === "COMPLETED" && t.metrics && t.metrics.intradayDaily?.isComplete !== false && Number.isFinite(t.metrics.totalReturnPct))) samples.push(oos.reduce((sum, t) => sum + t.metrics!.totalReturnPct / oos.length, 0)); }
-      return { jobId, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: distribution([]) }, validation: { experimentCount: experiments.length, activeCount: experiments.filter(e => e.status === "ACTIVE" || e.status === "CANCELLING").length, completedCount: experiments.filter(e => e.status === "COMPLETED").length, returns: distribution(samples), modes } };
+      return { jobId, search: searches(jobId), seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: distribution([]) }, validation: { experimentCount: experiments.length, activeCount: experiments.filter(e => e.status === "ACTIVE" || e.status === "CANCELLING").length, completedCount: experiments.filter(e => e.status === "COMPLETED").length, returns: distribution(samples), modes } };
     }); return { summaries };
   }));
   return service;

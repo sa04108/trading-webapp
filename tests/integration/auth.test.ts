@@ -116,6 +116,11 @@ describe('auth flow (스펙 §14, §16)', () => {
       cookies: { session: pendingCookie },
     });
     expect(mePending.statusCode).toBe(401);
+    const tokenPending = await ctx.app.inject({
+      method: 'POST', url: '/api/v1/openapi-tokens',
+      cookies: { session: pendingCookie }, payload: { name: 'pending-totp' },
+    });
+    expect(tokenPending.statusCode).toBe(401);
 
     const wrong = await ctx.app.inject({
       method: 'POST',

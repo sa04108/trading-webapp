@@ -151,6 +151,7 @@ export class PreparationReferenceService {
       UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id=@id
       UNION ALL SELECT 1 FROM backtest_clone_batches WHERE preparation_job_id=@id
       UNION ALL SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id=@id
+      UNION ALL SELECT 1 FROM configuration_search_items WHERE preparation_job_id=@id
       UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id=@id LIMIT 1`).get({ id: preparationJobId }));
   }
 
@@ -170,6 +171,8 @@ export class PreparationReferenceService {
           WHERE v.preparation_job_id = backtest_preparation_jobs.id)
         AND NOT EXISTS (SELECT 1 FROM backtest_refresh_jobs r
           WHERE r.preparation_job_id = backtest_preparation_jobs.id)
+        AND NOT EXISTS (SELECT 1 FROM configuration_search_items s
+          WHERE s.preparation_job_id = backtest_preparation_jobs.id)
     `,
       )
       .run().changes;

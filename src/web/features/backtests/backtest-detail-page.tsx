@@ -26,8 +26,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { BacktestProgressCard } from "./backtest-progress-card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -457,8 +455,6 @@ export function BacktestDetailPage() {
   const refresh = useBacktestRefresh(id, searchParams.get("refreshJob"));
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [seedCloneOpen, setSeedCloneOpen] = useState(false);
-  const [seedCloneCount, setSeedCloneCount] = useState("10");
 
   const {
     job,
@@ -508,35 +504,6 @@ export function BacktestDetailPage() {
       }
       toast.error(
         error instanceof ApiError ? error.message : "복제에 실패했습니다",
-      );
-    },
-  });
-
-  const seedCloneMutation = useMutation({
-    mutationFn: (count: number) =>
-      api<{ batch: { id: string }; warnings?: string[] }>(
-        `/backtests/${id}/clone-random-seeds`,
-        { method: "POST", body: JSON.stringify({ count }) },
-      ),
-    onSuccess: (data) => {
-      setSeedCloneOpen(false);
-      void queryClient.invalidateQueries({ queryKey: ["backtest-experiments"] });
-      void queryClient.invalidateQueries({ queryKey: ["backtests"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["backtest-clone-batches"],
-      });
-      void navigate(`/backtests/batches/${data.batch.id}`);
-    },
-    onError: (error: unknown, count) => {
-      if (isRefreshRequired(error)) {
-        setSeedCloneOpen(false);
-        refresh.offer({ kind: "RANDOM_SEEDS", count }, error);
-        return;
-      }
-      toast.error(
-        error instanceof ApiError
-          ? error.message
-          : "새 난수 복제에 실패했습니다",
       );
     },
   });
@@ -632,8 +599,7 @@ export function BacktestDetailPage() {
             <ResultActions
               onClone={() => cloneMutation.mutate()}
               clonePending={cloneMutation.isPending}
-              showSeedClone={job.cloneBatchId === null}
-              onSeedClone={supportsRandomSeed && strategy ? () => setSeedCloneOpen(true) : undefined}
+              searchHref={`/backtests/${encodeURIComponent(id)}/search`}
               reconfigureHref={`/backtests/new?from=${id}`}
               exportHref={completed ? `/api/v1/backtests/${id}/export` : undefined}
               onDelete={() => setDeleteOpen(true)}
@@ -769,53 +735,6 @@ export function BacktestDetailPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={seedCloneOpen} onOpenChange={setSeedCloneOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>새 난수로 일괄 복제</DialogTitle>
-            <DialogDescription>
-              다른 설정과 원본 유니버스는 그대로 유지하고 각 실행에 서로 다른
-              32비트 난수 시드를 부여합니다. 시드가 달라도 난수가 쓰이는 상황이
-              없으면 결과가 같을 수 있습니다.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-1">
-            <Label htmlFor="seed-clone-count">실행 개수</Label>
-            <Input
-              id="seed-clone-count"
-              type="number"
-              inputMode="numeric"
-              min={1}
-              max={100}
-              disabled={!supportsRandomSeed}
-              value={supportsRandomSeed ? seedCloneCount : ""}
-              onChange={(event) => setSeedCloneCount(event.target.value)}
-            />
-            <p className="text-xs text-muted-foreground">
-              최대 100개이며 기존 대기열에 여유가 생길 때마다 순차 실행됩니다.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSeedCloneOpen(false)}>
-              취소
-            </Button>
-            <Button
-              disabled={
-                !supportsRandomSeed ||
-                seedCloneMutation.isPending ||
-                !Number.isInteger(Number(seedCloneCount)) ||
-                Number(seedCloneCount) < 1 ||
-                Number(seedCloneCount) > 100
-              }
-              onClick={() => seedCloneMutation.mutate(Number(seedCloneCount))}
-            >
-              {seedCloneMutation.isPending
-                ? "생성 중…"
-                : `${seedCloneCount || "0"}개 생성 및 실행`}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

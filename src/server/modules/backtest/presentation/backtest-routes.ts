@@ -1,4 +1,6 @@
 import { registerBacktestExperimentRoutes } from "./backtest-experiment-routes.js";
+import { dailySearchCatalog, sampleConfigurations } from "../application/configuration-search-catalog.js";
+import { ConfigurationSearchError, type ConfigurationSearchAdapter } from "../application/configuration-search-service.js";
 import { registerBacktestRefreshRoutes } from "./backtest-refresh-routes.js";
 import { BacktestRefreshError, BacktestRefreshService } from "../application/backtest-refresh-service.js";
 import { PreparationReferenceError } from "../application/preparation-reference-service.js";
@@ -400,7 +402,7 @@ export function registerBacktestRoutes(
   app: FastifyInstance,
   deps: BacktestRouteDeps,
   requireAuth: PreHandler,
-): { validations: PeriodValidationService; refreshJobs: BacktestRefreshService } {
+): { validations: PeriodValidationService; refreshJobs: BacktestRefreshService; searchAdapter: ConfigurationSearchAdapter } {
   registerBacktestExperimentRoutes(app, deps.database, requireAuth);
   const {
     queue,
@@ -1674,5 +1676,73 @@ export function registerBacktestRoutes(
       });
     },
   );
-  return { validations, refreshJobs };
+  const searchRuntimeIdentity = (body: import("../../../../shared/schemas/configuration-search.js").ConfigurationSearchRequest) => {
+    const strategy = strategies.get(body.strategyId);
+    const versions = readRuntimeVersions();
+    return JSON.stringify({ execution: versions.executionVersion, preview: versions.previewVersion, validation: versions.validationVersion, strategy: strategy ? strategySourceHash(strategy) : null });
+  };
+  const searchAdapter: ConfigurationSearchAdapter = {
+    source: (_owner, sourceJobId) => {
+      const source = queue.getJob(sourceJobId);
+      if (!source) throw new ConfigurationSearchError("원본 백테스트를 찾을 수 없습니다.", 404);
+      if (!["COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"].includes(source.status)) throw new ConfigurationSearchError("종료된 백테스트에서 설정 탐색을 시작하세요.", 409);
+      const rebased = rebaseStoredRequest(source.requestJson, strategies.get(source.strategyId)?.version ?? null);
+      if (!rebased.ok) throw new ConfigurationSearchError(rebased.error);
+      const checked = strategies.validateParameters(rebased.request.strategyId, rebased.request.parameters);
+      if (!checked.ok) throw new ConfigurationSearchError(checked.error);
+      const body = backtestRequestSchema.parse({ ...rebased.request, parameters: checked.value });
+      const errors = validateStaticSubmission(body);
+      if (errors.length) throw new ConfigurationSearchError(errors[0]!);
+      return { request: body, catalog: dailySearchCatalog(sourceJobId, body, strategies), runtimeIdentity: searchRuntimeIdentity(body) };
+    },
+    sample: (source, config) => sampleConfigurations(source.request, source.catalog, config, strategies),
+    runtimeIdentity: searchRuntimeIdentity,
+    prepare: (raw, existingId) => {
+      const body = backtestRequestSchema.parse(raw);
+      if (existingId) {
+        const existing = preparation.get(existingId);
+        if (!existing) throw new PreparationReferenceError();
+        if (existing.status === "FAILED" || existing.status === "CANCELLED") throw new Error(existing.error ?? "유니버스 준비가 종료되었습니다.");
+        if (existing.status !== "COMPLETED") return { preparationJobId: existingId, ready: false };
+        if (preparation.getFreshPreviewDetails(body, existingId)) return { preparationJobId: existingId, ready: true };
+      }
+      const ready = preparation.getFreshPreviewDetails(body);
+      const id = ready?.preview.preparationJobId ?? preparation.getActive(body)?.id ?? preparation.start(body).id;
+      deps.database.sqlite.prepare("UPDATE backtest_preparation_jobs SET lifecycle_managed=1 WHERE id=?").run(id);
+      return { preparationJobId: id, ready: Boolean(ready) };
+    },
+    releasePreparation: id => {
+      const references = new PreparationReferenceService(deps.database);
+      if (!references.hasConsumers(id)) preparation.cancel(id);
+    },
+    buildSubmission: async (_owner, raw, preparationJobId) => {
+      if (queueDepthError()) return null;
+      const body = backtestRequestSchema.parse(raw);
+      const preview = preparationJobId ? preparation.getFreshPreviewDetails(body, preparationJobId)?.preview : null;
+      if (!preview) throw new PreparationReferenceError();
+      const resourceError = await checkResources(deps.dataRoot);
+      if (resourceError) throw new Error(resourceError);
+      const validated = await validateSubmission(body, preview);
+      if (!validated.ok) throw new Error(validated.errors.join("; "));
+      if (validated.fundamentalsIssue) throw new PreparationReferenceError();
+      return () => {
+        if (queueDepthError()) return null;
+        if (!preparation.getFreshPreviewDetails(body, preparationJobId!)?.preview) throw new PreparationReferenceError();
+        return queue.enqueue({ ...body, timeframe: validated.timeframe }, validated.resolved.schedule, validated.universe, validated.provenancePin, validated.warnings, {
+          estimatedBars: validated.estimatedBars, submissionSnapshot: validated.snapshot, preparationJobId,
+        }).id;
+      };
+    },
+    job: (_owner, id) => {
+      const job = queue.getJob(id);
+      if (!job) return null;
+      const metrics = job.status === "COMPLETED" ? results.getMetricsSummary(id) : null;
+      return { status: job.status, error: job.error, metrics: metrics ? { totalReturnPct: metrics.totalReturnPct, mddPct: metrics.maxDrawdownPct, sharpeRatio: metrics.sharpe } : null };
+    },
+    cancelJob: (_owner, id) => { orchestrator.cancel(id); },
+    deleteJob: (_owner, id) => {
+      if (seedCloneBatches.deleteSourceJob(id) === "NOT_DELETABLE") throw new ConfigurationSearchError("하위 결과에서 실행 중인 작업을 먼저 종료하세요.", 409);
+    },
+  };
+  return { validations, refreshJobs, searchAdapter };
 }
