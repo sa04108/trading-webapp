@@ -35,14 +35,18 @@ describe('Container lifecycle', () => {
     }) as never;
 
     const closing = Promise.resolve(container.close());
-    await Promise.resolve();
-    const beforeStopBoundary = [...events];
-    stopGate.resolve();
-    await closing;
+    try {
+      await Promise.resolve();
+      const beforeStopBoundary = [...events];
+      stopGate.resolve();
+      await closing;
 
-    expect(beforeStopBoundary).toEqual([]);
-    expect(events).toEqual(['sqlite-closed']);
-    fs.rmSync(dir, { recursive: true, force: true });
+      expect(beforeStopBoundary).toEqual([]);
+      expect(events).toEqual(['sqlite-closed']);
+    } finally {
+      stopGate.resolve();
+      try { await closing; } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    }
   });
 
   it('preparation stop이 symbol 경계에서 끝난 뒤에만 SQLite를 닫는다', async () => {
@@ -68,13 +72,17 @@ describe('Container lifecycle', () => {
     }) as never;
 
     const closing = Promise.resolve(container.close());
-    await Promise.resolve();
-    const beforeStopBoundary = [...events];
-    stopGate.resolve();
-    await closing;
+    try {
+      await Promise.resolve();
+      const beforeStopBoundary = [...events];
+      stopGate.resolve();
+      await closing;
 
-    expect(beforeStopBoundary).toEqual([]);
-    expect(events).toEqual(['sqlite-closed']);
-    fs.rmSync(dir, { recursive: true, force: true });
+      expect(beforeStopBoundary).toEqual([]);
+      expect(events).toEqual(['sqlite-closed']);
+    } finally {
+      stopGate.resolve();
+      try { await closing; } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    }
   });
 });

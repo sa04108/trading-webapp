@@ -75,7 +75,7 @@ async function fixture(
     });
     return bars;
   },
-  options: { now?: number; closedDates?: string[]; onRecoveryFailure?: () => void; onTerminal?: (event: IntradayTerminalEvent) => void; validateSymbol?: (symbol: string) => Promise<{ listDate: string; isinCode: string }> } = {},
+  options: { now?: number | (() => number); classify?: (date: string) => { state: string }; closedDates?: string[]; onRecoveryFailure?: () => void; onTerminal?: (event: IntradayTerminalEvent) => void; validateSymbol?: (symbol: string) => Promise<{ listDate: string; isinCode: string }> } = {},
 ) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "intraday-flow-")),
     database = openDatabase(":memory:");
@@ -90,8 +90,8 @@ async function fixture(
     onRecoveryFailure: options.onRecoveryFailure,
     onTerminal: (event) => { terminalEvents.push(event); options.onTerminal?.(event); },
     validateSymbol: options.validateSymbol,
-    now: () => options.now ?? now,
-    calendar: { classify: (date) => ({ state: options.closedDates?.includes(date) ? "CLOSED" : "OPEN" }) },
+    now: () => typeof options.now === "function" ? options.now() : options.now ?? now,
+    calendar: { classify: (date) => options.classify?.(date) ?? ({ state: options.closedDates?.includes(date) ? "CLOSED" : "OPEN" }) },
     execute: executeIntraday,
     search: async () => [{ symbol: "005930", name: "삼성전자" }],
     });
@@ -137,6 +137,7 @@ function rateLimitedSource() {
       waiting();
     }),
   });
+  cleanups.unshift(async () => { client.close(); });
   const source = new TossIntradaySource(client, () => now);
   return { fetch: source.fetch.bind(source), fetchImpl, entered, release: () => release(), client };
 }
@@ -236,6 +237,61 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
     }
     expect((await app.inject({ method: "POST", url: "/intraday/runs", headers, payload: { ...request, timeframe: "1h" } })).statusCode).toBe(400);
   });
+  // 반복 조회 재사용과 정정·기간·주기 변경 및 반환값 변이에 대한 격리를 확인한다.
+  it("시세 집계를 재사용하고 데이터와 조회 조건이 바뀌면 다시 계산한다", async () => {
+    let current = now;
+    const classify = vi.fn(() => ({ state: "OPEN" }));
+    const { service, store } = await fixture(undefined, { now: () => current, classify });
+    await store.merge("005930", bars, now);
+    const period = { from: date, to: date };
+    const first = await service.chart("005930", period, "5m");
+    const original = structuredClone(first);
+    first.bars[0]!.close = -1;
+    current += 1_000;
+    expect(await service.chart("005930", period, "5m")).toEqual(original);
+    expect(classify).toHaveBeenCalledTimes(1);
+    expect((await service.chart("005930", period, "1m")).bars).toHaveLength(380);
+    expect(classify).toHaveBeenCalledTimes(2);
+    await service.chart("005930", { from: "2026-11-11", to: date }, "5m");
+    expect(classify).toHaveBeenCalledTimes(4);
+    await store.merge("005930", [{ ...bars[0]!, close: 999, low: 999 }], now);
+    const corrected = await service.chart("005930", period, "1m");
+    expect(corrected.revision).not.toBe(original.revision);
+    expect(corrected.bars[0]!.close).toBe(999);
+    expect(classify).toHaveBeenCalledTimes(5);
+  });
+
+  // 저장 버전이 그대로여도 보관 시작과 확정된 최신 봉의 경계가 함께 이동한다.
+  it("시간이 지나면 양쪽 조회 경계의 봉을 갱신한다", async () => {
+    let current = Date.parse("2026-11-14T09:03:00+09:00");
+    const old = current - 365 * 86_400_000;
+    const ends = [old, old + 60_000, current - 60_000, current];
+    const { service, store } = await fixture(undefined, { now: () => current });
+    await store.merge("005930", ends.map((endMs) => ({ ...bars[0]!, endMs })), current);
+    const period = { from: "2025-11-14", to: "2026-11-14" };
+    const first = await service.chart("005930", period, "1m");
+    expect(first.bars.map((bar) => bar.endMs)).toEqual(ends.slice(0, 3));
+    current += 60_000;
+    const second = await service.chart("005930", period, "1m");
+    expect(second.revision).toBe(first.revision);
+    expect(second.bars.map((bar) => bar.endMs)).toEqual(ends.slice(1));
+  });
+
+  // 시간 경과에 따라 현재 거래일의 누락 구간은 같은 저장 버전에서도 확장된다.
+  it("저장 버전이 같아도 경과한 시간에 맞춰 누락 구간을 갱신한다", async () => {
+    const today = "2026-11-14";
+    let current = Date.parse(`${today}T09:03:00+09:00`);
+    const { service } = await fixture(undefined, { now: () => current });
+    const period = { from: today, to: today };
+    const first = await service.chart("005930", period, "1m");
+    current += 3 * 60_000;
+    const second = await service.chart("005930", period, "1m");
+    expect(second.revision).toBe(first.revision);
+    expect(second.gaps[0]!.missingMinutes).toBeGreaterThan(first.gaps[0]!.missingMinutes);
+    second.gaps[0]!.missingMinutes = -1;
+    expect((await service.chart("005930", period, "1m")).gaps[0]!.missingMinutes).toBeGreaterThan(0);
+  });
+
   // 기존 실행 흐름 검사는 100건 이후 이력과 목록 지표·정렬의 소유권 경계를 다루지 않는다.
   it("전체 이력의 지표를 정렬하고 결과 본문 없이 소유자별 페이지와 개수를 반환한다", async () => {
     const { app, database } = await fixture();
@@ -553,15 +609,17 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
       id: "cancel-child", ownerId: "owner", parentRunId: "cancel-parent", symbol: "005930",
       periodJson: JSON.stringify(request.period), status: "QUEUED", createdAtMs: now, updatedAtMs: now,
     }).run();
-    service.recover();
-    await vi.waitFor(() => expect(validateSymbol).toHaveBeenCalled());
-    service.cancelRun("owner", "cancel-parent");
-    expect(service.getCollection("owner", "cancel-child").status).toBe("CANCELLED");
-    release({ listDate: "2000-01-01", isinCode: "KR0000000000" });
-    await service.close();
-    expect(service.getRun("owner", "cancel-parent").status).toBe("CANCELLED");
-    expect(service.getCollection("owner", "cancel-child").status).toBe("CANCELLED");
-    expect(fetch).not.toHaveBeenCalled();
+    try {
+      service.recover();
+      await vi.waitFor(() => expect(validateSymbol).toHaveBeenCalled());
+      service.cancelRun("owner", "cancel-parent");
+      expect(service.getCollection("owner", "cancel-child").status).toBe("CANCELLED");
+      release({ listDate: "2000-01-01", isinCode: "KR0000000000" });
+      await service.close();
+      expect(service.getRun("owner", "cancel-parent").status).toBe("CANCELLED");
+      expect(service.getCollection("owner", "cancel-child").status).toBe("CANCELLED");
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { release({ listDate: "2000-01-01", isinCode: "KR0000000000" }); }
   });
 
   it("백테스트는 누락된 하루만 수집하고 병합된 전체 분봉으로 실행한다", async () => {
@@ -644,7 +702,7 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
   });
   it("수집 실패를 실행 실패로 종료하고 같은 결과 조회에 원인을 전달한다", async () => {
     const { service, app, terminalEvents } = await fixture(async () => {
-      throw new Error("토스 요청 실패 (429)");
+      throw new Error("토스 요청 실패 (502)");
     });
     const run = service.submit("owner", request);
     await vi.waitFor(() =>
@@ -656,13 +714,13 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
     });
     expect(response.json()).toMatchObject({
       status: "FAILED",
-      error: "토스 요청 실패 (429)",
+      error: "토스 요청 실패 (502)",
     });
     expect((await service.overview("owner")).collections[0]).toMatchObject({
       status: "FAILED",
-      error: "토스 요청 실패 (429)",
+      error: "토스 요청 실패 (502)",
     });
-    expect(terminalEvents).toEqual([expect.objectContaining({ kind: "run", id: run.id, status: "FAILED", error: "토스 요청 실패 (429)" })]);
+    expect(terminalEvents).toEqual([expect.objectContaining({ kind: "run", id: run.id, status: "FAILED", error: "토스 요청 실패 (502)" })]);
   });
   it("준비 취소 뒤 도착한 데이터는 실행하지 않으며 만료 기간은 거부한다", async () => {
     let release!: (value: IntradayBar[]) => void;
@@ -685,24 +743,24 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
         period: { from: "2025-11-14", to: date },
       }),
     ).toThrow("하루 전체");
-    const run = service.submit("owner", request);
-    await vi.waitFor(() => expect(source).toHaveBeenCalledOnce());
-    const child = database.db.select().from(intradayCollections).all()[0]!;
-    expect(child.parentRunId).toBe(run.id);
-    const cancel = await app.inject({ method: "DELETE", url: `/intraday/runs/${run.id}`, headers });
-    expect(cancel.statusCode).toBe(200);
-    expect(cancel.json().status).toBe("CANCELLED");
-    expect(service.getCollection("owner", child.id).status).toBe("CANCELLED");
-    expect(service.pendingCancellationIds()).toEqual(expect.arrayContaining([run.id, child.id]));
-    expect((await app.inject({ method: "DELETE", url: `/intraday/history/${run.id}`, headers })).statusCode).toBe(409);
-    release(bars);
-    await service.close();
-    expect(service.pendingCancellationIds()).toEqual([]);
-    expect(service.getRun("owner", run.id)).toMatchObject({
-      status: "CANCELLED",
-    });
-    expect(service.getRun("owner", run.id).result).toBeUndefined();
-    expect((await app.inject({ method: "DELETE", url: `/intraday/history/${run.id}`, headers })).statusCode).toBe(204);
+    try {
+      const run = service.submit("owner", request);
+      await vi.waitFor(() => expect(source).toHaveBeenCalledOnce());
+      const child = database.db.select().from(intradayCollections).all()[0]!;
+      expect(child.parentRunId).toBe(run.id);
+      const cancel = await app.inject({ method: "DELETE", url: `/intraday/runs/${run.id}`, headers });
+      expect(cancel.statusCode).toBe(200);
+      expect(cancel.json().status).toBe("CANCELLED");
+      expect(service.getCollection("owner", child.id).status).toBe("CANCELLED");
+      expect(service.pendingCancellationIds()).toEqual(expect.arrayContaining([run.id, child.id]));
+      expect((await app.inject({ method: "DELETE", url: `/intraday/history/${run.id}`, headers })).statusCode).toBe(409);
+      release(bars);
+      await service.close();
+      expect(service.pendingCancellationIds()).toEqual([]);
+      expect(service.getRun("owner", run.id)).toMatchObject({ status: "CANCELLED" });
+      expect(service.getRun("owner", run.id).result).toBeUndefined();
+      expect((await app.inject({ method: "DELETE", url: `/intraday/history/${run.id}`, headers })).statusCode).toBe(204);
+    } finally { release?.(bars); }
   });
   it("가득 찬 실행 대기열도 내부 수집을 허용하고 취소한 대기 슬롯을 반환한다", async () => {
     let release!: (value: IntradayBar[]) => void;
@@ -713,17 +771,19 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
         }),
     );
     const { service } = await fixture(source);
-    const runs = Array.from({ length: 20 }, () =>
-      service.submit("owner", request),
-    );
-    await vi.waitFor(() => expect(source).toHaveBeenCalledOnce());
-    expect(service.getRun("owner", runs[0]!.id).status).toBe("PREPARING");
-    for (const run of runs.slice(1)) service.cancelRun("owner", run.id);
-    const replacement = service.submit("owner", request);
-    expect(replacement.status).toBe("QUEUED");
-    service.cancelRun("owner", replacement.id);
-    service.cancelRun("owner", runs[0]!.id);
-    release(bars);
-    await service.close();
+    try {
+      const runs = Array.from({ length: 20 }, () =>
+        service.submit("owner", request),
+      );
+      await vi.waitFor(() => expect(source).toHaveBeenCalledOnce());
+      expect(service.getRun("owner", runs[0]!.id).status).toBe("PREPARING");
+      for (const run of runs.slice(1)) service.cancelRun("owner", run.id);
+      const replacement = service.submit("owner", request);
+      expect(replacement.status).toBe("QUEUED");
+      service.cancelRun("owner", replacement.id);
+      service.cancelRun("owner", runs[0]!.id);
+      release(bars);
+      await service.close();
+    } finally { release?.(bars); }
   });
 });

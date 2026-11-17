@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { SqliteFactCoverageStore } from '../../src/runtime/modules/facts/application/fact-coverage-store.js';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
 import {
@@ -9,8 +9,16 @@ import {
   symbols as symbolsTable,
 } from '../../src/runtime/shared/db/schema.js';
 
+const openDatabases: ReturnType<typeof openDatabase>[] = [];
+afterEach(() => {
+  for (const database of openDatabases.splice(0)) {
+    if (database.sqlite.open) database.close();
+  }
+});
+
 function setup() {
   const database = openDatabase(':memory:');
+  openDatabases.push(database);
   database.db
     .insert(symbolsTable)
     .values([

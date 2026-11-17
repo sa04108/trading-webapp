@@ -1,4 +1,5 @@
-import { describe, expect } from 'vitest';
+import { afterEach, beforeEach, describe, expect, vi } from 'vitest';
+import { otpauthTotpService } from '../../src/server/modules/auth/infrastructure/otpauth-totp.js';
 import * as OTPAuth from 'otpauth';
 import { createTestAdmin } from '../helpers/test-app.js';
 import { test as it } from '../helpers/test-fixtures.js';
@@ -10,13 +11,22 @@ function sessionCookie(response: { cookies: Array<{ name: string; value: string 
   return cookie.value;
 }
 
+const NOW = Date.UTC(2026, 0, 1);
+const SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+
+beforeEach(() => {
+  vi.spyOn(Date, 'now').mockReturnValue(NOW);
+  vi.spyOn(otpauthTotpService, 'generateSecret').mockReturnValue(SECRET);
+});
+afterEach(() => vi.restoreAllMocks());
+
 function totpToken(secret: string): string {
   return new OTPAuth.TOTP({
     issuer: 'Quant Platform',
     secret: OTPAuth.Secret.fromBase32(secret),
     digits: 6,
     period: 30,
-  }).generate();
+  }).generate({ timestamp: NOW });
 }
 
 describe('auth flow (스펙 §14, §16)', () => {

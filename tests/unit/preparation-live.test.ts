@@ -16,6 +16,7 @@ describe('pollInterval (SSE 실패 시 폴백 규칙 — useBacktestLive 와 같
     expect(pollInterval('RUNNING', true)).toBe(2_000);
     expect(pollInterval('WAITING_DAILY_QUOTA', true)).toBe(2_000);
     expect(pollInterval('QUEUED', true)).toBe(2_000);
+    expect(pollInterval('WAITING_DATA', true)).toBe(2_000);
   });
 
   it('SSE 가 살아 있으면 폴링하지 않는다', () => {
@@ -45,6 +46,7 @@ describe('newerPreparationJob', () => {
   it('같은 서버 세대의 늦은 응답과 종료 뒤 RUNNING 역행을 거부한다', () => {
     expect(newerPreparationJob(snapshot(3), snapshot(2)).progressRevision).toBe(3);
     expect(newerPreparationJob(snapshot(3, 'COMPLETED'), snapshot(4)).status).toBe('COMPLETED');
+    expect(newerPreparationJob(snapshot(3), snapshot(2, 'COMPLETED')).status).toBe('COMPLETED');
   });
 
   it('서버 재시작 세대의 snapshot은 revision을 새로 시작해도 받는다', () => {
@@ -61,7 +63,7 @@ describe('shouldCloseStream', () => {
     },
   );
 
-  it.each(['QUEUED', 'RUNNING', 'WAITING_DAILY_QUOTA'] as const)(
+  it.each(['QUEUED', 'RUNNING', 'WAITING_DAILY_QUOTA', 'WAITING_DATA'] as const)(
     '%s 는 진행 중이라 스트림을 유지한다',
     (status) => {
       expect(shouldCloseStream(status)).toBe(false);

@@ -5,11 +5,11 @@ import type { AnyTradingStrategy } from "../../../../runtime/modules/strategy/do
 import type { OrderIntent } from "../../../../runtime/modules/backtest/domain/types.js";
 import { backtestJobs } from "../../../../runtime/shared/db/operations-schema.js";
 import { backtestRuns } from "../../../shared/db/backtest-result-schema.js";
-import { tradingControl, tradingDeployments, tradingEvents, tradingOrders } from "../../../shared/db/trading-schema.js";
+import { paperTradingAccount, tradingControl, tradingDeployments, tradingEvents, tradingOrders } from "../../../shared/db/trading-schema.js";
 import { backtestRequestSchema } from "../../../../shared/schemas/backtest-request.js";
-import { tradingSetupSchema, type TradingArtifact, type TradingDeployment, type TradingOrder, type TradingSetup, type TradingSnapshot, type TradingSource } from "../../../../shared/schemas/trading.js";
+import { PAPER_TRADING_ACCOUNT_ID, PAPER_TRADING_INITIAL_CASH_KRW, paperInitialCashSchema, tradingSetupSchema, type TradingArtifact, type TradingDeployment, type TradingOrder, type TradingQuote, type TradingSetup, type TradingSnapshot, type TradingSource } from "../../../../shared/schemas/trading.js";
 import { kstDateOf } from "../../../../runtime/modules/market-data/domain/kst-date.js";
-import { BrokerRequestError, type BrokerHolding, type BrokerOrder, type TradingBroker } from "./broker-port.js";
+import { BrokerHoldingsChangedError, BrokerRequestError, type BrokerHolding, type BrokerOrder, type TradingBroker } from "./broker-port.js";
 
 export interface StrategyArtifactStore {
   list(): TradingArtifact[];
@@ -47,6 +47,7 @@ export class TradingService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private running: Promise<void> | null = null;
   private refreshing: Promise<void> | null = null;
+  private brokerOperation: Promise<unknown> = Promise.resolve();
   private stopping = false;
   private acquired = false;
   private terminalSyncAt = 0;
@@ -63,6 +64,25 @@ export class TradingService {
   }) {
     this.db = deps.database.db;
     this.db.insert(tradingControl).values({singleton:1}).onConflictDoNothing().run();
+    if (this.isPaper) this.initializePaper();
+    else if (this.control().mode === "PAPER") throw new TradingError("모의투자 저장소를 실매매 실행기로 열 수 없습니다.");
+  }
+  private get isPaper() { return this.deps.broker.mode === "PAPER"; }
+  private initializePaper() {
+    this.deps.database.sqlite.transaction(() => {
+      if (this.control().mode === "PAPER") return;
+      const previous = this.current();
+      const now = this.now();
+      // 실계좌의 잔고·주문·손익은 이력으로 보관하고 설정만 새 모의 전략으로 복사한다.
+      if (previous) {
+        this.db.update(tradingDeployments).set({slot:null,status:"INACTIVE",updatedAtMs:now,activity:"모의투자 전환 · 실매매 이력 보관"}).where(eq(tradingDeployments.id,previous.id)).run();
+        const setup = tradingSetupSchema.parse(JSON.parse(previous.setupJson));
+        const id = randomUUID();
+        this.db.insert(tradingDeployments).values({id,slot:1,mode:"PAPER",setupJson:previous.setupJson,name:previous.name,version:previous.version,status:"INACTIVE",createdAtMs:now,updatedAtMs:now,returnBase:setup.budgetKrw,activity:"모의투자 · 자동매매 OFF"}).run();
+        this.event("기존 설정을 모의투자로 복사 · 실계좌 포지션과 주문은 이력으로 분리 보관", "system", "INFO", id);
+      }
+      this.db.update(tradingControl).set({mode:"PAPER",revision:sql`${tradingControl.revision}+1`,accountId:PAPER_TRADING_ACCOUNT_ID,accountsJson:"[]",snapshotJson:null,syncedAtMs:null,error:null,executorToken:null,executorExpiresAtMs:null}).where(eq(tradingControl.singleton,1)).run();
+    }).immediate();
   }
   private now(): number { return this.deps.now?.() ?? Date.now(); }
   private control() { return this.db.select().from(tradingControl).where(eq(tradingControl.singleton,1)).get()!; }
@@ -85,7 +105,7 @@ export class TradingService {
     return row;
   }
   private pending(id?: string): OrderRow[] {
-    return this.db.select().from(tradingOrders).where(and(inArray(tradingOrders.status,PENDING),id?eq(tradingOrders.deploymentId,id):undefined)).all();
+    return this.db.select().from(tradingOrders).where(and(inArray(tradingOrders.status,PENDING),id?eq(tradingOrders.deploymentId,id):undefined,this.isPaper?eq(tradingOrders.accountId,PAPER_TRADING_ACCOUNT_ID):undefined)).all();
   }
   private deployment(row: DeploymentRow): TradingDeployment {
     const setup=tradingSetupSchema.parse(JSON.parse(row.setupJson));
@@ -93,6 +113,25 @@ export class TradingService {
     return {...setup,id:row.id,name:row.name,version:row.version,status:row.status,createdAtMs:row.createdAtMs,updatedAtMs:row.updatedAtMs,activatedAtMs:row.activatedAtMs,lastDecisionAtMs:row.lastDecisionAtMs,lastError:row.lastError,activity:row.activity,latestArtifactHash:latest?.artifactHash??null,latestVersion:latest?.version??null};
   }
   artifacts(): TradingArtifact[] { return this.deps.artifacts.list(); }
+  private paperCapital(): TradingSnapshot["paperCapital"] {
+    if(!this.isPaper)return null;
+    const account=this.db.select().from(paperTradingAccount).where(eq(paperTradingAccount.singleton,1)).get();
+    const filled=this.deps.database.sqlite.prepare("SELECT 1 FROM paper_trading_orders WHERE json_extract(payload_json, '$.order.filledQuantity') > 0 LIMIT 1").get();
+    const status=this.current()?.status;
+    return {initialCashKrw:account?.initialCash??PAPER_TRADING_INITIAL_CASH_KRW,canEdit:(!status||status==="INACTIVE")&&!filled&&!this.pending().length&&Object.keys(JSON.parse(account?.holdingsJson??"{}")).length===0};
+  }
+  private setInitialCash(value:number|undefined,actor:string) {
+    if(value===undefined)return;
+    const amount=paperInitialCashSchema.parse(value);
+    const capital=this.paperCapital();
+    if(!capital)throw new TradingError("초기 모의자금은 모의투자에서만 설정할 수 있습니다.");
+    if(amount===capital.initialCashKrw)return;
+    if(!capital.canEdit)throw new TradingError("초기 모의자금은 자동매매 OFF 상태에서 첫 체결 전까지만 변경할 수 있습니다.");
+    // 전략 설정과 같은 트랜잭션에서 저장해 실패한 설정이 잔고만 바꾸지 않게 한다.
+    this.db.insert(paperTradingAccount).values({singleton:1,initialCash:amount,cash:amount}).onConflictDoUpdate({target:paperTradingAccount.singleton,set:{initialCash:amount,cash:amount}}).run();
+    this.db.update(tradingControl).set({snapshotJson:JSON.stringify({holdings:[],cashBuyingPower:amount}),syncedAtMs:this.now(),error:null}).where(eq(tradingControl.singleton,1)).run();
+    this.event(`초기 모의자금 변경: ${amount.toLocaleString("ko-KR")}원`,actor);
+  }
   preparationProgress(id:string,message:string,error=false) {
     const row=this.current();if(row?.id!==id)return;
     this.db.update(tradingDeployments).set({activity:message,...(row.status!=="ACTIVE"?{lastError:error?message:null}:{})}).where(eq(tradingDeployments.id,id)).run();
@@ -117,20 +156,22 @@ export class TradingService {
       if(complete)performance={realizedPnl:row.realizedPnl,unrealizedPnl:ownPnl,totalPnl:row.realizedPnl+ownPnl,returnPercent:row.returnBase&&row.returnBase>0?(row.realizedPnl+ownPnl)/row.returnBase*100:null};
     }
     const blockers:string[]=[];
-    if(this.deps.enabled===false)blockers.push("서버 설정에서 실매매가 비활성화되어 있습니다. 운영 설정을 확인하세요.");
-    if(!this.deps.broker.configured)blockers.push("서버의 토스증권 API 자격 증명이 설정되지 않았습니다.");
-    if(!control.accountId)blockers.push("토스 계좌를 연결하고 운용 계좌를 선택하세요.");
-    if(control.accountId&&!account)blockers.push("계좌 잔고를 먼저 동기화하세요.");
+    if(this.deps.enabled===false)blockers.push("서버 설정에서 자동매매가 비활성화되어 있습니다.");
+    if(!this.isPaper) {
+      if(!this.deps.broker.configured)blockers.push("서버의 토스증권 API 자격 증명이 설정되지 않았습니다.");
+      if(!control.accountId)blockers.push("토스 계좌를 연결하고 운용 계좌를 선택하세요.");
+      if(control.accountId&&!account)blockers.push("계좌 잔고를 먼저 동기화하세요.");
+    }
     if(control.error)blockers.push(control.error);
     if(row&&!this.artifacts().some(a=>a.strategyId===JSON.parse(row.setupJson).strategyId&&a.artifactHash===JSON.parse(row.setupJson).artifactHash))blockers.push("고정된 전략 실행 파일을 찾을 수 없습니다. 자동으로 다른 버전을 사용하지 않습니다.");
     if(this.pending().some(o=>o.status==="UNKNOWN"||o.status==="SENDING"))blockers.push("접수 여부가 불명확한 주문이 있습니다. 증권사 주문 내역 확인이 필요합니다.");
     return {
-      revision:control.revision,deployment:row?this.deployment(row):null,
-      broker:{provider:"TOSS",configured:this.deps.broker.configured,accounts:JSON.parse(control.accountsJson),selectedAccountId:control.accountId,lastSyncAtMs:control.syncedAtMs,error:control.error},
+      revision:control.revision,paperCapital:this.paperCapital(),deployment:row?this.deployment(row):null,
+      broker:{provider:this.isPaper?"PAPER":"TOSS",configured:this.deps.broker.configured,accounts:JSON.parse(control.accountsJson),selectedAccountId:control.accountId,lastSyncAtMs:control.syncedAtMs,error:control.error},
       account:account?{cashBuyingPower:account.cashBuyingPower,marketValue,unrealizedPnl,unrealizedReturnPercent:cost>0?unrealizedPnl/cost*100:null}:null,
       performance,positions,
-      orders:this.db.select().from(tradingOrders).orderBy(desc(tradingOrders.createdAtMs)).limit(100).all().map(o=>({...JSON.parse(o.payloadJson),status:o.status}) as TradingOrder),
-      events:this.db.select().from(tradingEvents).orderBy(desc(tradingEvents.id)).limit(100).all().map(e=>({id:e.id,message:e.message,severity:e.severity as "INFO"|"WARNING"|"ERROR",createdAtMs:e.createdAtMs})),blockers,
+      orders:this.db.select().from(tradingOrders).where(this.isPaper?eq(tradingOrders.accountId,PAPER_TRADING_ACCOUNT_ID):undefined).orderBy(desc(tradingOrders.createdAtMs)).limit(100).all().map(o=>({...JSON.parse(o.payloadJson),status:o.status}) as TradingOrder),
+      events:this.db.select().from(tradingEvents).where(this.isPaper?inArray(tradingEvents.deploymentId,this.db.select({id:tradingDeployments.id}).from(tradingDeployments).where(eq(tradingDeployments.mode,"PAPER"))):undefined).orderBy(desc(tradingEvents.id)).limit(100).all().map(e=>({id:e.id,message:e.message,severity:e.severity as "INFO"|"WARNING"|"ERROR",createdAtMs:e.createdAtMs})),blockers,
     };
   }
   async source(jobId:string):Promise<TradingSource> {
@@ -152,25 +193,27 @@ export class TradingService {
     setup.parameters=parsed.data as Record<string,unknown>;
     const topN=setup.parameters.topN;
     if(typeof topN==="number"&&(topN>setup.maxPositions||topN>setup.universeRule.stages.at(-1)!.limit))throw new TradingError("보유 종목 수는 동시 보유 상한과 최종 유니버스 크기 이하여야 합니다.","INVALID_PARAMETERS",422);
-    if(setup.maxOrderKrw>=100_000_000)throw new TradingError("초기 실매매는 건당 1억원 미만 주문만 지원합니다.","INVALID_PARAMETERS",422);
+    if(setup.maxOrderKrw>=100_000_000)throw new TradingError("건당 1억원 미만 주문만 지원합니다.","INVALID_PARAMETERS",422);
     if(strategy.requiredRebalanceGapBars&&setup.universeRule.rebalanceInterval.unit==="DAY"&&setup.universeRule.rebalanceInterval.value<strategy.requiredRebalanceGapBars+1)throw new TradingError("이 전략은 매도·매수 단계 사이에 거래일이 필요합니다. 더 긴 리밸런스 주기를 선택하세요.","INVALID_PARAMETERS",422);
     return {setup,artifact};
   }
-  async register(input:TradingSetup,expectedRevision:number,actor:string) {
+  async register(input:TradingSetup,expectedRevision:number,actor:string,initialCashKrw?:number) {
     const {setup,artifact}=await this.validate(input);
     this.change(expectedRevision,()=>{
       if(this.current())throw new TradingError("전략은 최대 1개까지 등록할 수 있습니다. 기존 전략을 먼저 제거하세요.");
       if(this.pending().length)throw new TradingError("확인이 끝나지 않은 주문이 있어 새 전략을 등록할 수 없습니다.");
       const id=randomUUID();const now=this.now();
-      this.db.insert(tradingDeployments).values({id,slot:1,setupJson:JSON.stringify(setup),name:artifact.name,version:artifact.version,status:"INACTIVE",createdAtMs:now,updatedAtMs:now,activity:"비활성 · 활성화 전 주문하지 않습니다.",returnBase:setup.budgetKrw}).run();
+      this.db.insert(tradingDeployments).values({id,slot:1,mode:this.isPaper?"PAPER":"LIVE",setupJson:JSON.stringify(setup),name:artifact.name,version:artifact.version,status:"INACTIVE",createdAtMs:now,updatedAtMs:now,activity:"비활성 · 활성화 전 주문하지 않습니다.",returnBase:setup.budgetKrw}).run();
+      this.setInitialCash(initialCashKrw,actor);
       this.event(`전략 등록: ${artifact.name} v${artifact.version}`,actor,"INFO",id);
     });return this.snapshot();
   }
-  async update(input:TradingSetup,expectedRevision:number,actor:string) {
+  async update(input:TradingSetup,expectedRevision:number,actor:string,initialCashKrw?:number) {
     const {setup}=await this.validate(input);
     this.change(expectedRevision,()=>{
       const row=this.requireInactive();const previous=this.deployment(row);
       if(previous.strategyId!==setup.strategyId||previous.artifactHash!==setup.artifactHash)throw new TradingError("전략 교체는 기존 전략 제거 후 등록하고, 버전 변경은 별도 기능을 사용하세요.");
+      this.setInitialCash(initialCashKrw,actor);
       this.db.update(tradingDeployments).set({setupJson:JSON.stringify(setup),checkpoint:null,lastDecisionAtMs:null,updatedAtMs:this.now(),returnBase:row.activatedAtMs===null?setup.budgetKrw:previous.budgetKrw===setup.budgetKrw?row.returnBase:null,activity:"설정 변경 · 비활성 유지"}).where(eq(tradingDeployments.id,row.id)).run();
       this.event("사용자가 매매 파라미터·운용 설정 변경",actor);
     });return this.snapshot();
@@ -193,6 +236,7 @@ export class TradingService {
     });return this.snapshot();
   }
   async selectAccount(accountId:string,expectedRevision:number,actor:string) {
+    if(this.isPaper)throw new TradingError("모의투자는 계좌 연결을 사용하지 않습니다.");
     this.change(expectedRevision,()=>{
       if(this.current())throw new TradingError("운용 계좌 변경 전 등록 전략을 제거하세요.");
       if(this.pending().length)throw new TradingError("기존 주문 확인이 끝나지 않았습니다.");
@@ -204,8 +248,24 @@ export class TradingService {
   }
   async refresh():Promise<TradingSnapshot> {
     if(!this.deps.broker.configured)throw new TradingError("토스증권 API 자격 증명이 설정되지 않았습니다.","BROKER_NOT_CONFIGURED",503);
-    if(!this.refreshing)this.refreshing=this.sync().finally(()=>{this.refreshing=null;});
+    if(!this.refreshing)this.refreshing=this.withPaperLedger(()=>this.sync()).finally(()=>{this.refreshing=null;});
     await this.refreshing;return this.snapshot();
+  }
+  private withPaperLedger<T>(operation:()=>Promise<T>):Promise<T> {
+    if(!this.isPaper)return operation();
+    // 체결과 잔고 대조 사이에 다른 조회가 끼어들어 정상 수량을 불일치로 판단하지 않는다.
+    const running=this.brokerOperation.then(operation);
+    this.brokerOperation=running.catch(()=>{});
+    return running;
+  }
+  async quote(symbol:string):Promise<TradingQuote> {
+    try {
+      const quote=(await this.deps.broker.quotes([symbol])).find(q=>q.symbol===symbol);
+      if(!quote||!Number.isFinite(quote.price)||quote.price<=0||!Number.isFinite(quote.timestampMs)||quote.timestampMs>this.now()+5_000)throw new Error("유효한 시세를 받지 못했습니다.");
+      return quote;
+    } catch {
+      throw new TradingError("현재 시세를 조회할 수 없습니다. 시세 제공 상태를 확인하세요.","QUOTE_UNAVAILABLE",503);
+    }
   }
   private async sync() {
     const selected=this.control().accountId;
@@ -214,6 +274,7 @@ export class TradingService {
       this.db.update(tradingControl).set({accountsJson:JSON.stringify(accounts)}).where(eq(tradingControl.singleton,1)).run();
       if(!selected){this.db.update(tradingControl).set({error:null}).where(eq(tradingControl.singleton,1)).run();return;}
       if(!accounts.some(a=>a.id===selected))throw new TradingError("선택한 토스 계좌에 접근할 수 없습니다.");
+      if(this.isPaper){await this.syncPaper(selected);return;}
       // 누적 체결을 먼저 반영한 뒤 잔고를 읽어 부분 체결을 수동 매매로 오인하지 않는다.
       await this.reconcileOrders(selected);
       const observedAt=this.now();
@@ -229,6 +290,47 @@ export class TradingService {
       this.db.update(tradingControl).set({error:message}).where(eq(tradingControl.singleton,1)).run();
       const row=this.current();if(row?.status==="ACTIVE")this.fail(message);
       throw new TradingError(message,"BROKER_SYNC_FAILED",503);
+    }
+  }
+  private async syncPaper(accountId:string) {
+    for(let attempt=0;attempt<3;attempt++) {
+      let observed:BrokerHolding[];
+      try { observed=await this.deps.broker.holdings(accountId); }
+      catch(error) {
+        if(error instanceof BrokerHoldingsChangedError) continue;
+        throw error;
+      }
+      const observedAt=this.now();
+      const complete=this.deps.database.sqlite.transaction(()=>{
+        if(this.control().accountId!==accountId)return true;
+        const ledger=this.deps.database.sqlite.prepare("SELECT cash, holdings_json FROM paper_trading_account WHERE singleton = 1").get() as {cash:number;holdings_json:string}|undefined;
+        const positions=JSON.parse(ledger?.holdings_json??"{}") as Record<string,{quantity:number;cost:number}>;
+        const prices=new Map(observed.map(h=>[h.symbol,h]));
+        if(Object.entries(positions).some(([symbol,p])=>p.quantity>0&&!prices.has(symbol)))return false;
+        this.reconcilePaperOrders(accountId);
+        const holdings=Object.entries(positions).filter(([,p])=>p.quantity>0).map(([symbol,p])=>{
+          const quote=prices.get(symbol)!;const marketValue=p.quantity*quote.price;
+          return {...quote,quantity:p.quantity,availableQuantity:p.quantity,averagePrice:p.cost/p.quantity,marketValue,unrealizedPnl:marketValue-p.cost};
+        });
+        const row=this.current();
+        if(row){for(const [symbol,p] of Object.entries(this.portfolio(row))){if((holdings.find(h=>h.symbol===symbol)?.quantity??0)!==p.quantity)throw new TradingError(`보유 수량 불일치: ${symbol}. 외부 주문·자본변동과 미확인 체결을 확인하세요.`);}}
+        this.db.update(tradingControl).set({snapshotJson:JSON.stringify({holdings,cashBuyingPower:ledger?.cash??PAPER_TRADING_INITIAL_CASH_KRW}),syncedAtMs:observedAt,error:null}).where(eq(tradingControl.singleton,1)).run();
+        return true;
+      }).immediate();
+      if(complete)return;
+    }
+  }
+  private reconcilePaperOrders(accountId:string) {
+    const pending=this.db.select().from(tradingOrders).where(and(eq(tradingOrders.accountId,accountId),inArray(tradingOrders.status,PENDING.filter(s=>s!=="CREATED")))).all();
+    for(const row of pending) {
+      const id=row.brokerOrderId??row.id;
+      const saved=this.deps.database.sqlite.prepare("SELECT payload_json FROM paper_trading_orders WHERE id = ?").get(id) as {payload_json:string}|undefined;
+      if(!saved) {
+        if(!row.brokerOrderId&&(row.status==="SENDING"||row.status==="UNKNOWN"))continue;
+        throw new TradingError(`모의 주문 원장을 찾을 수 없습니다: ${id}`);
+      }
+      if(!row.brokerOrderId)this.saveOrder(row,{brokerOrderId:id});
+      this.applyOrder({...row,brokerOrderId:id},(JSON.parse(saved.payload_json) as {order:BrokerOrder}).order);
     }
   }
   async activate(expectedRevision:number,actor:string) {
@@ -257,12 +359,14 @@ export class TradingService {
       if(row.status==="INACTIVE")return;
       this.db.update(tradingDeployments).set({status:"STOPPING",updatedAtMs:this.now(),activity:"중지 중 · 미체결 취소 및 최종 체결 확인",lastError:null}).where(eq(tradingDeployments.id,row.id)).run();
       for(const order of this.pending(row.id).filter(o=>o.status==="CREATED"))this.saveOrder(order,{status:"CANCELLED",error:null});
+      if(this.isPaper&&!this.pending(row.id).length)this.db.update(tradingDeployments).set({status:"INACTIVE",activity:"모의투자 · 자동매매 OFF · 포지션 유지"}).where(eq(tradingDeployments.id,row.id)).run();
       this.event("사용자가 신규 주문 차단 · 미체결 취소 요청",actor,"WARNING");
     });this.kick();return this.snapshot();
   }
   async resolveOrder(orderId:string,brokerOrderId:string|null,expectedRevision:number,actor:string) {
     const row=this.db.select().from(tradingOrders).where(eq(tradingOrders.id,orderId)).get();
     if(!row||row.status!=="UNKNOWN")throw new TradingError("수동 확인 대상 주문이 아닙니다.");
+    if(this.isPaper&&row.accountId!==PAPER_TRADING_ACCOUNT_ID)throw new TradingError("모의투자에서 실계좌 주문을 변경할 수 없습니다.");
     if(this.current()?.status==="ACTIVE")throw new TradingError("주문이 중지된 상태에서만 접수 여부를 확인할 수 있습니다.");
     const order=JSON.parse(row.payloadJson) as TradingOrder;
     const history=await this.deps.broker.orders(row.accountId,kstDateOf(row.createdAtMs),kstDateOf(this.now()));
@@ -285,7 +389,8 @@ export class TradingService {
       const stopping=row.status==="STOPPING";
       const duplicate=(row.status==="ERROR"||stopping)&&row.lastError===message;
       if(duplicate)return;
-      this.db.update(tradingDeployments).set({status:stopping?"STOPPING":"ERROR",lastError:message,activity:stopping?"중지 중 · 미체결 취소·체결 확인 재시도":"주문 중지 · 오류 확인 필요",updatedAtMs:this.now()}).where(eq(tradingDeployments.id,row.id)).run();
+      const paperStopped=this.isPaper&&!this.pending(row.id).length;
+      this.db.update(tradingDeployments).set({status:paperStopped?"INACTIVE":stopping?"STOPPING":"ERROR",lastError:message,activity:paperStopped?"모의투자 · 자동매매 OFF · 오류 확인 필요":stopping?"중지 중 · 미체결 취소·체결 확인 재시도":"주문 중지 · 오류 확인 필요",updatedAtMs:this.now()}).where(eq(tradingDeployments.id,row.id)).run();
       this.db.update(tradingControl).set({revision:sql`${tradingControl.revision}+1`}).where(eq(tradingControl.singleton,1)).run();
       this.event(message,"system","ERROR");notify=true;
     }).immediate();
@@ -322,6 +427,7 @@ export class TradingService {
     }).immediate();
   }
   private async reconcileOrders(accountId:string) {
+    if(this.isPaper){this.deps.database.sqlite.transaction(()=>this.reconcilePaperOrders(accountId)).immediate();return;}
     const pending=this.db.select().from(tradingOrders).where(and(eq(tradingOrders.accountId,accountId),inArray(tradingOrders.status,PENDING.filter(s=>s!=="CREATED")))).all();
     const failures:string[]=[];
     for(const row of pending){
@@ -359,7 +465,13 @@ export class TradingService {
       this.db.update(tradingControl).set({executorToken:this.token,executorExpiresAtMs:now+LEASE_MS}).where(eq(tradingControl.singleton,1)).run();
       if(!this.acquired){
         this.acquired=true;
-        for(const order of this.pending().filter(o=>o.status==="SENDING"))this.saveOrder(order,{status:"UNKNOWN",error:"이전 실행기 중단으로 접수 여부 확인 필요"});
+        for(const order of this.pending().filter(o=>o.status==="SENDING")) {
+          // 모의 체결과 주문은 로컬 원장에 원자적으로 기록되어 재시작 후에도 확정할 수 있다.
+          if(this.isPaper) {
+            const saved=this.deps.database.sqlite.prepare("SELECT 1 FROM paper_trading_orders WHERE id = ?").get(order.id);
+            this.saveOrder(order,saved?{brokerOrderId:order.id,status:"OPEN",error:null}:{status:"REJECTED",error:"모의 주문 전송 전 실행기 중단"});
+          } else this.saveOrder(order,{status:"UNKNOWN",error:"이전 실행기 중단으로 접수 여부 확인 필요"});
+        }
         const row=this.current();if(row?.status==="ACTIVE")this.fail("실행기가 재시작되었습니다. 잔고·주문을 확인한 후 직접 다시 활성화하세요.");
       }return true;
     }).immediate();
@@ -388,7 +500,8 @@ export class TradingService {
       }
     }
     if(this.stopping)return;
-    try{await this.refresh();}catch(error){failures.push(error instanceof Error?error.message:"최종 잔고 확인 실패");}
+    // 모의 주문의 종료는 원장으로 확정한다. 시세 장애가 OFF 전환을 막지 않는다.
+    if(!this.isPaper)try{await this.refresh();}catch(error){failures.push(error instanceof Error?error.message:"최종 잔고 확인 실패");}
     if(this.stopping)return;
     const pending=this.pending(row.id);
     for(const id of this.cancelRetry.keys())if(!pending.some(order=>order.id===id))this.cancelRetry.delete(id);
@@ -398,8 +511,8 @@ export class TradingService {
       return;
     }
     this.deps.database.sqlite.transaction(()=>{
-      const current=this.current();if(current?.id!==row.id||current.status!=="STOPPING")return;
-      this.db.update(tradingDeployments).set({status:"INACTIVE",lastError:null,updatedAtMs:this.now(),activity:"비활성 · 매수·매도·자동 손절 중지"}).where(eq(tradingDeployments.id,row.id)).run();
+      const current=this.current();if(current?.id!==row.id||(current.status!=="STOPPING"&&!(this.isPaper&&current.status==="ERROR")))return;
+      this.db.update(tradingDeployments).set({status:"INACTIVE",lastError:current.status==="ERROR"?current.lastError:null,updatedAtMs:this.now(),activity:"비활성 · 매수·매도·자동 손절 중지"}).where(eq(tradingDeployments.id,row.id)).run();
       this.db.update(tradingControl).set({revision:sql`${tradingControl.revision}+1`}).where(eq(tradingControl.singleton,1)).run();this.event("비활성 완료 · 미체결·체결 대조 완료, 포지션 유지");
     }).immediate();
   }
@@ -477,15 +590,32 @@ export class TradingService {
             if(value*1.01>currentSnapshot.account.cashBuyingPower||heldValue+pendingValue+value>deployment.budgetKrw||(holding?.marketValue??0)+pendingSymbolValue+value>deployment.budgetKrw*deployment.maxPositionPercent/100||order.price>quote.price*(1+deployment.maxSlippageBps/10_000))throw new TradingError("주문 직전 매수 가능 금액·보유 한도·가격 조건이 변경되었습니다.");
           }else if(!holding||order.quantity>holding.quantity||order.quantity>(sellable??holding.availableQuantity??0)||order.price<quote.price*(1-deployment.maxSlippageBps/10_000))throw new TradingError("주문 직전 매도 가능 수량·가격 조건이 변경되었습니다.");
           const liveDay=this.current()?.dailyBaseJson;
-          if(liveDay&&currentSnapshot.performance){const baseline=JSON.parse(liveDay) as {date:string;pnl:number};if(baseline.date===kstDateOf(this.now())&&(currentSnapshot.performance.totalPnl-baseline.pnl)/deployment.budgetKrw*100<=-deployment.dailyLossLimitPercent){this.deactivate(control.revision,"risk-limit");throw new TradingError("일일 손실 한도에 도달했습니다.","ORDER_GATE_CLOSED");}}
+          if(liveDay&&currentSnapshot.performance){const baseline=JSON.parse(liveDay) as {date:string;pnl:number};if(baseline.date===kstDateOf(this.now())&&(currentSnapshot.performance.totalPnl-baseline.pnl)/deployment.budgetKrw*100<=-deployment.dailyLossLimitPercent)throw new TradingError("일일 손실 한도에 도달했습니다.","DAILY_LOSS_LIMIT");}
         };
-        guard();this.saveOrder(stored,{status:"SENDING"});
-        const result=await this.deps.broker.place(control.accountId!,{clientOrderId:order.id,symbol:order.symbol,side:order.side,quantity:order.quantity,price:order.price},()=>{requestStarted=false;guard();requestStarted=true;});
-        this.saveOrder(stored,{brokerOrderId:result.orderId,status:"OPEN"});this.event(`${order.symbol} ${order.side==="BUY"?"매수":"매도"} ${order.quantity}주 주문 접수`);
+        await this.withPaperLedger(async()=>{
+          guard();this.saveOrder(stored,{status:"SENDING"});
+          try {
+            const result=await this.deps.broker.place(control.accountId!,{clientOrderId:order.id,symbol:order.symbol,side:order.side,quantity:order.quantity,price:order.price},()=>{requestStarted=false;guard();requestStarted=true;});
+            this.deps.database.sqlite.transaction(()=>{
+              const latest=this.db.select().from(tradingOrders).where(eq(tradingOrders.id,stored.id)).get()!;
+              if(!["FILLED","REJECTED","CANCELLED"].includes(latest.status))this.saveOrder(latest,{brokerOrderId:result.orderId,status:"OPEN"});
+            }).immediate();
+          } catch(error) {
+            if(this.isPaper&&error instanceof BrokerRequestError&&!error.uncertain)this.saveOrder(stored,{status:"REJECTED",error:error.message});
+            throw error;
+          }
+        });
+        this.event(`${order.symbol} ${order.side==="BUY"?"매수":"매도"} ${order.quantity}주 주문 접수`);
       }catch(error){
-        const uncertain=requestStarted&&(error instanceof BrokerRequestError?error.uncertain:!(error instanceof TradingError&&error.code==="ORDER_GATE_CLOSED"));
-        this.saveOrder(stored,{status:uncertain?"UNKNOWN":"REJECTED",error:error instanceof Error?error.message:"주문 실패"});
-        throw error;
+        const failure=error instanceof BrokerRequestError&&error.cause instanceof TradingError?error.cause:error;
+        const uncertain=requestStarted&&(error instanceof BrokerRequestError?error.uncertain:!(failure instanceof TradingError&&failure.code==="ORDER_GATE_CLOSED"));
+        this.saveOrder(stored,{status:uncertain?"UNKNOWN":"REJECTED",error:failure instanceof Error?failure.message:"주문 실패"});
+        // 원장 트랜잭션이 롤백된 뒤 중지 상태를 확정해야 주문 차단이 함께 롤백되지 않는다.
+        if(failure instanceof TradingError&&failure.code==="DAILY_LOSS_LIMIT") {
+          if(this.current()?.status==="ACTIVE")this.deactivate(this.control().revision,"risk-limit");
+          throw new TradingError(failure.message,"ORDER_GATE_CLOSED");
+        }
+        throw failure;
       }
     }
   }

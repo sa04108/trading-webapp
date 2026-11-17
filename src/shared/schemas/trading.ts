@@ -1,6 +1,16 @@
 import { z } from "zod";
 import { universeRuleSchema } from "./universe-rule.js";
 
+export const PAPER_TRADING_ACCOUNT_ID = "PAPER";
+export const PAPER_TRADING_INITIAL_CASH_KRW = 100_000_000;
+export const paperInitialCashSchema = z.number().int().min(10_000).max(1_000_000_000_000);
+
+export interface TradingQuote {
+  symbol: string;
+  price: number;
+  timestampMs: number;
+}
+
 export const tradingSetupSchema = z.object({
   strategyId: z.string().min(1).max(100),
   artifactHash: z.string().regex(/^[a-f0-9]{64}$/),
@@ -86,9 +96,10 @@ export interface TradingEvent {
 
 export interface TradingSnapshot {
   revision: number;
+  paperCapital: { initialCashKrw: number; canEdit: boolean } | null;
   deployment: TradingDeployment | null;
   broker: {
-    provider: "TOSS";
+    provider: "TOSS" | "PAPER";
     configured: boolean;
     accounts: { id: string; label: string }[];
     selectedAccountId: string | null;
@@ -126,4 +137,5 @@ export const tradingRevisionSchema = z.object({
 
 export const tradingWriteSchema = tradingSetupSchema.extend({
   expectedRevision: z.number().int().nonnegative(),
+  initialCashKrw: paperInitialCashSchema.optional(),
 });

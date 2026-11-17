@@ -38,8 +38,8 @@ describe("종목 사전과 개인 목록", () => {
     expect(await service.search("042700", lookup)).toEqual([{ symbol: stock.symbol, name: stock.name, market: stock.market }]);
     const restarted = new SymbolLibraryService(database.sqlite);
     const unavailable = vi.fn(async () => { throw new Error("연결 끊김"); });
-    expect(await restarted.search("한미 반도체", unavailable)).toHaveLength(1);
-    expect(await restarted.search("042700", unavailable)).toHaveLength(1);
+    expect(await restarted.search("한미 반도체", unavailable)).toEqual([{ symbol: "042700", name: "한미반도체", market: "KOSPI" }]);
+    expect(await restarted.search("042700", unavailable)).toEqual([{ symbol: "042700", name: "한미반도체", market: "KOSPI" }]);
     expect(unavailable).not.toHaveBeenCalled();
     expect(await restarted.search("%", unavailable)).toEqual([]);
     expect(source.getStockInfo).toHaveBeenCalledTimes(1);

@@ -91,13 +91,17 @@ describe('연결과 리스 수명 분리', () => {
     let stopped = false;
     const stopping = ctx.container.agentCoordinator.stop().then(() => { stopped = true; });
 
-    await vi.waitFor(() => expect(shutdownSignal?.aborted).toBe(true));
-    expect(stopped).toBe(false);
-    finished.resolve();
+    try {
+      await vi.waitFor(() => expect(shutdownSignal?.aborted).toBe(true));
+      expect(stopped).toBe(false);
+      finished.resolve();
 
-    await rejection;
-    await stopping;
-    expect(stopped).toBe(true);
+      await rejection;
+      await stopping;
+      expect(stopped).toBe(true);
+    } finally {
+      finished.resolve();
+    }
   });
 
   it('종료 전에 시작한 WebSocket 메시지 handler를 끝까지 기다린다', async ({ scenario }) => {
@@ -112,16 +116,20 @@ describe('연결과 리스 수명 분리', () => {
       protocolVersion: 4,
       runnerVersion: ctx.container.agentCoordinator.runnerVersion,
     });
-    await vi.waitFor(() => expect(peer.received[0]).toMatchObject({ type: 'WELCOME' }));
-    let stopped = false;
-    const stopping = ctx.container.agentCoordinator.stop().then(() => { stopped = true; });
+    try {
+      await vi.waitFor(() => expect(peer.received[0]).toMatchObject({ type: 'WELCOME' }));
+      let stopped = false;
+      const stopping = ctx.container.agentCoordinator.stop().then(() => { stopped = true; });
 
-    await Promise.resolve();
-    expect(stopped).toBe(false);
-    snapshot.resolve(dataset);
+      await Promise.resolve();
+      expect(stopped).toBe(false);
+      snapshot.resolve(dataset);
 
-    await stopping;
-    expect(stopped).toBe(true);
+      await stopping;
+      expect(stopped).toBe(true);
+    } finally {
+      snapshot.resolve(dataset);
+    }
   });
 
   it('배정 전 데이터 동기화는 작업 lease 없이 장치명과 바이트 진행을 표시한다', async ({ scenario }) => {

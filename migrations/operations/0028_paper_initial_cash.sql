@@ -1,0 +1,1 @@
+ALTER TABLE `paper_trading_account` ADD `initial_cash` real DEFAULT 100000000 NOT NULL;

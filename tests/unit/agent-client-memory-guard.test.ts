@@ -211,11 +211,14 @@ describe("AgentClient 메모리 보호", () => {
 
   it("원격 워커 RSS 예산 초과는 기존 IPC 취소 경로를 유지한다", () => {
     const h = harness(false, false);
-    h.internals.sample();
-    expect(h.kill).not.toHaveBeenCalled();
-    expect(h.send).toHaveBeenCalledWith({ type: "cancel" }, expect.any(Function));
-    expect(h.running.cancellationReason).toBe("MEMORY_BUDGET_EXCEEDED");
-    for (const timer of h.running.timers) clearTimeout(timer);
+    try {
+      h.internals.sample();
+      expect(h.kill).not.toHaveBeenCalled();
+      expect(h.send).toHaveBeenCalledWith({ type: "cancel" }, expect.any(Function));
+      expect(h.running.cancellationReason).toBe("MEMORY_BUDGET_EXCEEDED");
+    } finally {
+      for (const timer of h.running.timers) clearTimeout(timer);
+    }
   });
 
   it("늦게 감지한 로컬 압력은 작업 폴더를 만들기 전에 setup 실패로 돌린다", () => {

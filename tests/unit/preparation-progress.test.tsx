@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PreparationProgress } from '@/features/backtests/preparation-progress';
 import {
-  formatPreparationResumeTime,
   type BacktestPreparationJob,
 } from '@/features/backtests/preparation-live';
 
@@ -177,7 +176,7 @@ describe('PreparationProgress', () => {
     expect(html).toContain('일일 호출 한도');
     expect(html).toContain('DART 일일 호출 한도 해제 대기');
     expect(html).not.toContain('73%');
-    expect(html).toContain(formatPreparationResumeTime(waitingJob.nextResumeAtMs));
+    expect(html).toContain('8월 11일 00:00 (KST)');
     expect(html).toContain('취소');
   });
 
@@ -192,7 +191,7 @@ describe('PreparationProgress', () => {
     );
     expect(html).toContain('KRX 일일 호출 한도 해제 대기');
     expect(html).toContain('KRX 일일 호출 한도에 도달했습니다');
-    expect(html).toContain(formatPreparationResumeTime(waitingJob.nextResumeAtMs));
+    expect(html).toContain('8월 11일 00:00 (KST)');
   });
 
   it('COMPLETED 는 취소·재시도 버튼 없이 완료를 알린다', () => {

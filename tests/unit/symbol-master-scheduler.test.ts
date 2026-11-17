@@ -309,9 +309,10 @@ describe('SymbolMasterScheduler', () => {
 
   it('여러 번 tick 호출 시 중복 처리를 방지한다', async () => {
     const clock = new MutableClock(kstTimeMs('2024-01-10', 19));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
     const ingestDate = vi.fn().mockImplementation(async () => {
-      // 느린 ingestDate 시뮬레이션
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await gate;
       return { kind: 'TRADING_DAY' };
     });
     const coverageRanges = vi.fn().mockReturnValue([
@@ -339,13 +340,13 @@ describe('SymbolMasterScheduler', () => {
     });
 
     // tick 을 동시에 여러 번 호출
-    await Promise.all([
-      scheduler.tick(),
-      scheduler.tick(),
-      scheduler.tick(),
-    ]);
-
-    // 첫 번째 tick 만 실행되고 나머지는 차단됨
+    const ticks = [scheduler.tick(), scheduler.tick(), scheduler.tick()];
+    try {
+      expect(ingestDate).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await Promise.all(ticks);
+    }
     expect(ingestDate).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,11 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { FinancialFactAvailabilityService } from '../../src/runtime/modules/facts/application/financial-fact-availability.js';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
 import { facts } from '../../src/runtime/shared/db/schema.js';
 
+const openDatabases: ReturnType<typeof openDatabase>[] = [];
+afterEach(() => {
+  for (const database of openDatabases.splice(0)) {
+    if (database.sqlite.open) database.close();
+  }
+});
+
 describe('FinancialFactAvailabilityService', () => {
   it('종목별 PIT cutoff까지 실제 재무 fact가 있는 요청 종목만 돌려준다', () => {
     const database = openDatabase(':memory:');
+    openDatabases.push(database);
     const cutoff = Date.parse('2025-12-31T23:59:59.999Z');
     database.db.insert(facts).values([
       {
@@ -42,6 +50,7 @@ describe('FinancialFactAvailabilityService', () => {
 
   it('종목별 마지막 실행 봉 뒤의 재무 fact는 다른 종목의 늦은 봉으로 보이지 않는다', () => {
     const database = openDatabase(':memory:');
+    openDatabases.push(database);
     database.db.insert(facts).values([
       {
         scope: 'SYMBOL', key: 'EARLY_STOP', field: 'NET_INCOME', periodKey: '2025Q1',

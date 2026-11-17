@@ -16,21 +16,25 @@ describe('waitForCondition', () => {
   });
 
   it('대기 중 취소 뒤 상태를 다시 읽지 않는다', async () => {
-    const abort = new AbortController();
-    const read = vi.fn(() => 'RUNNING');
-    const waiting = waitForCondition(read, () => false, {
-      signal: abort.signal,
-      timeoutMs: 1_000,
-      intervalMs: 100,
-      label: 'job',
-    });
-    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
-    abort.abort(new Error('cancelled while waiting'));
-
-    await expect(waiting).rejects.toThrow();
-    const readsAfterAbort = read.mock.calls.length;
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    expect(read).toHaveBeenCalledTimes(readsAfterAbort);
+    vi.useFakeTimers();
+    try {
+      const abort = new AbortController();
+      const read = vi.fn(() => 'RUNNING');
+      const waiting = waitForCondition(read, () => false, {
+        signal: abort.signal,
+        timeoutMs: 1_000,
+        intervalMs: 100,
+        label: 'job',
+      });
+      expect(read).toHaveBeenCalledOnce();
+      abort.abort(new Error('cancelled while waiting'));
+      await expect(waiting).rejects.toThrow();
+      const readsAfterAbort = read.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(120);
+      expect(read).toHaveBeenCalledTimes(readsAfterAbort);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('제한시간 오류에 마지막 상태와 label을 포함한다', async () => {

@@ -220,6 +220,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       expect(created.statusCode).toBe(201);
       const jobId = (created.json().job as { id: string }).id;
       const pinnedSchedule = JSON.parse(ctx.container.jobQueue.getJob(jobId)!.universeScheduleJson) as Array<{ symbols: string[] }>;
+      expect(pinnedSchedule).toHaveLength(2);
       expect(pinnedSchedule.every((entry) => entry.symbols.includes('NOFACTS'))).toBe(true);
 
       startLocalAgent(ctx);
@@ -265,6 +266,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       expect(batch.items).toHaveLength(2);
       for (const { job: child } of batch.items) {
         const childSchedule = JSON.parse(child!.universeScheduleJson) as Array<{ symbols: string[] }>;
+        expect(childSchedule).toHaveLength(2);
         expect(childSchedule.every((entry) => entry.symbols.includes('NOFACTS'))).toBe(true);
       }
     },

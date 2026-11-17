@@ -1,3 +1,4 @@
+import { gunzipSync } from 'node:zlib';
 import { describe, expect } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { test as base } from '../helpers/test-fixtures.js';
@@ -19,6 +20,7 @@ describe('응답 압축', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-encoding']).toBe('gzip');
+    expect(JSON.parse(gunzipSync(res.rawPayload).toString('utf8'))).toEqual({ data: 'x'.repeat(4096) });
   });
 
   test('Accept-Encoding 이 없으면 압축하지 않는다', async ({ ctx }) => {

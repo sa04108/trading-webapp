@@ -239,7 +239,8 @@ describe('유휴 에이전트 우선과 즉시 로컬 실행', () => {
     ctx.container.agentCoordinator.start();
     const job = ctx.container.jobQueue.enqueue(request, schedule);
     await vi.waitFor(() => expect(ctx.container.jobQueue.getJob(job.id)?.status).toBe('FAILED'), { timeout: 3000 });
-    expect(ctx.container.jobQueue.getJob(job.id)?.error).toBeTruthy();
+    expect(ctx.container.jobQueue.getJob(job.id)?.error).toMatch(/\[JOB_SETUP_FAILED\].*(?:SQLITE_CANTOPEN|unable to open database)/i);
+    expect(ctx.container.resultsService.getRun(job.id)).toBeNull();
     expect((await ctx.app.inject({ method: 'GET', url: '/api/agents/datasets/1' })).statusCode).toBe(401);
   });
 

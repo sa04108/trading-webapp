@@ -79,14 +79,16 @@ describe('에이전트 리스와 데이터 대기', () => {
     const ready = vi.fn();
     const snapshots = { ensureLatest: async () => ({ ...dataset, version: 2 }) } as DatasetSnapshots;
     const queue = new AgentDataQueue(database, snapshots, collect, ready, pino({ enabled: false }));
-    queue.request('PREPARATION', 'prep-one', 1, { kind: 'MARKET', dates: ['2026-01-06', '2026-01-05'] });
-    queue.request('PREPARATION', 'prep-two', 1, { kind: 'MARKET', dates: ['2026-01-05', '2026-01-06'] });
-    queue.tick();
-    await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(2));
-    await queue.stop();
-    expect(collect).toHaveBeenCalledTimes(1);
-    expect(database.sqlite.prepare('SELECT available_version FROM agent_data_requests').get()).toEqual({ available_version: 2 });
-    expect(() => queue.request('PREPARATION', 'prep-three', 2, { kind: 'MARKET', dates: ['2026-01-05', '2026-01-06'] })).toThrow('같은 결손');
+    try {
+      queue.request('PREPARATION', 'prep-one', 1, { kind: 'MARKET', dates: ['2026-01-06', '2026-01-05'] });
+      queue.request('PREPARATION', 'prep-two', 1, { kind: 'MARKET', dates: ['2026-01-05', '2026-01-06'] });
+      queue.tick();
+      await vi.waitFor(() => expect(ready).toHaveBeenCalledTimes(2));
+      await queue.stop();
+      expect(collect).toHaveBeenCalledTimes(1);
+      expect(database.sqlite.prepare('SELECT available_version FROM agent_data_requests').get()).toEqual({ available_version: 2 });
+      expect(() => queue.request('PREPARATION', 'prep-three', 2, { kind: 'MARKET', dates: ['2026-01-05', '2026-01-06'] })).toThrow('같은 결손');
+    } finally { await queue.stop(); }
   });
 
   it('공유 수집 진행을 모든 대기 작업에 알리고 요청 행에서 한 번만 읽는다', async () => {
@@ -102,16 +104,18 @@ describe('에이전트 리스와 데이터 대기', () => {
     const queue = new AgentDataQueue(database, snapshots, collect, vi.fn(), pino({ enabled: false }), {
       onProgress: changed,
     });
-    queue.request('PREPARATION', 'shared-one', 1, { kind: 'MARKET', dates: ['2026-01-05', '2026-01-06'] });
-    queue.request('PREPARATION', 'shared-two', 1, { kind: 'MARKET', dates: ['2026-01-05', '2026-01-06'] });
-    queue.tick();
-    await vi.waitFor(() => expect(queue.progressForJob('shared-one')).toMatchObject({ completed: 1, total: 2, currentItem: '2026-01-05' }));
-    expect(queue.progressForJob('shared-two')).toMatchObject({ completed: 1, total: 2 });
-    expect(changed).toHaveBeenCalledWith('PREPARATION', 'shared-one');
-    expect(changed).toHaveBeenCalledWith('PREPARATION', 'shared-two');
-    release();
-    await vi.waitFor(() => expect(collect).toHaveBeenCalledTimes(1));
-    await queue.stop();
+    try {
+      queue.request('PREPARATION', 'shared-one', 1, { kind: 'MARKET', dates: ['2026-01-05', '2026-01-06'] });
+      queue.request('PREPARATION', 'shared-two', 1, { kind: 'MARKET', dates: ['2026-01-05', '2026-01-06'] });
+      queue.tick();
+      await vi.waitFor(() => expect(queue.progressForJob('shared-one')).toMatchObject({ completed: 1, total: 2, currentItem: '2026-01-05' }));
+      expect(queue.progressForJob('shared-two')).toMatchObject({ completed: 1, total: 2 });
+      expect(changed).toHaveBeenCalledWith('PREPARATION', 'shared-one');
+      expect(changed).toHaveBeenCalledWith('PREPARATION', 'shared-two');
+      release();
+      await vi.waitFor(() => expect(collect).toHaveBeenCalledTimes(1));
+      await queue.stop();
+    } finally { release(); await queue.stop(); }
   });
 
   it('수집 실행 버전이 달라져도 완료된 같은 요청을 다시 수집하지 않는다', async () => {

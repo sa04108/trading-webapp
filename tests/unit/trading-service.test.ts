@@ -7,6 +7,8 @@ import { BrokerRequestError, type BrokerHolding, type BrokerOrder, type TradingB
 import { TradingService, type StrategyArtifactStore, type TradingDecisionEngine } from "../../src/server/modules/trading/application/trading-service.js";
 import { backtestJobs } from "../../src/runtime/shared/db/operations-schema.js";
 import { backtestRuns } from "../../src/server/shared/db/backtest-result-schema.js";
+import { createPaperTradingBroker } from "../../src/server/modules/trading/infrastructure/paper-trading-broker.js";
+import { kstDateOf } from "../../src/runtime/modules/market-data/domain/kst-date.js";
 
 const oldHash = "a".repeat(64), newHash = "b".repeat(64);
 const setup: TradingSetup = { strategyId: "alpha", artifactHash: oldHash, parameters: {}, universeRule: { markets: ["KOSPI"], stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 100 }], rebalanceInterval: { unit: "MONTH", value: 1 } }, timeframe: "1d", budgetKrw: 1_000_000, maxPositions: 10, maxPositionPercent: 100, dailyLossLimitPercent: 5, maxOrderKrw: 100_000, maxSlippageBps: 0, randomSeed: 42, sourceJobId: null };
@@ -14,7 +16,7 @@ const artifact = (artifactHash: string, version: string, latest: boolean): Tradi
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0)) await close(); });
 
-function fixture() {
+function fixture(paper = false) {
   const database = openDatabase(":memory:");
   let now = 1_800_000_000_000;
   let list = [artifact(oldHash, "1", true)];
@@ -37,7 +39,8 @@ function fixture() {
   const strategy: AnyTradingStrategy = { id: "alpha", version: "1", name: "알파", description: "", parameterSchema: z.object({}).strict(), initialize: () => ({}), onBars: () => ({ orders: [] }) };
   const artifacts: StrategyArtifactStore = { list: () => list, load: async () => strategy, bundlePath: () => "" };
   const engine: TradingDecisionEngine = { canTrade: () => true, evaluate: vi.fn<TradingDecisionEngine["evaluate"]>(async ({ warmupOnly }) => ({ checkpoint: "checkpoint", barTsMs: warmupOnly ? 1 : 2, orders: warmupOnly ? [] : [{ symbol: "005930", side: "BUY", quantity: 10 }] })), close: async () => {} };
-  const service = new TradingService({ database, broker, artifacts, engine, now: () => now });
+  const executionBroker = paper ? createPaperTradingBroker({ database, marketData: broker, now: () => now }) : broker;
+  const service = new TradingService({ database, broker: executionBroker, artifacts, engine, now: () => now });
   cleanup.push(async () => { await service.close(); database.close(); });
   return { service, broker, database, engine, artifacts, now: () => now, advance: (ms: number) => { now += ms; }, setArtifacts: (next: TradingArtifact[]) => { list = next; }, setHoldings: (next: BrokerHolding[]) => { holdings = next; }, setRemote: (next: BrokerOrder[]) => { remote = next; }, getRemote: () => remote };
 }
@@ -49,6 +52,164 @@ async function prepare(f: ReturnType<typeof fixture>, config: TradingSetup = set
 }
 async function active(f: ReturnType<typeof fixture>, config: TradingSetup = setup) { await prepare(f, config); await f.service.activate(f.service.snapshot().revision, "user"); }
 const holding = (quantity: number): BrokerHolding => ({ symbol: "005930", name: "삼성전자", quantity, availableQuantity: quantity, averagePrice: 1000, price: 1000, marketValue: quantity * 1000, unrealizedPnl: 0 });
+
+describe("모의투자 실행 경계", () => {
+  async function paperActive(f: ReturnType<typeof fixture>) {
+    await f.service.tick();
+    await f.service.register(setup, f.service.snapshot().revision, "user");
+    await f.service.activate(f.service.snapshot().revision, "user");
+  }
+  it("초기 자금을 설정과 함께 저장하고 재조회·다른 설정 변경에도 유지한다", async () => {
+    const f=fixture(true);await f.service.tick();
+    await f.service.register(setup,f.service.snapshot().revision,"user",5_000_000);
+    await f.service.refresh();
+    expect(f.service.snapshot()).toMatchObject({paperCapital:{initialCashKrw:5_000_000,canEdit:true},account:{cashBuyingPower:5_000_000}});
+    const revision=f.service.snapshot().revision;
+    await expect(f.service.update(setup,revision-1,"user",2_000_000)).rejects.toMatchObject({code:"STALE_REVISION"});
+    expect(f.service.snapshot().paperCapital?.initialCashKrw).toBe(5_000_000);
+    await f.service.update(setup,revision,"user",3_000_000);
+    await f.service.update({...setup,dailyLossLimitPercent:4},f.service.snapshot().revision,"user");
+    const reopened=createPaperTradingBroker({database:f.database,marketData:f.broker,now:f.now});
+    expect(await reopened.buyingPower("PAPER")).toBe(3_000_000);
+    expect(f.service.snapshot().paperCapital?.initialCashKrw).toBe(3_000_000);
+  });
+  it("ON 또는 첫 체결 이후에는 원금을 바꿀 수 없고 전략 교체로도 잔고가 초기화되지 않는다", async () => {
+    const f=fixture(true);await f.service.tick();
+    await f.service.register(setup,f.service.snapshot().revision,"user",50_000);
+    await f.service.activate(f.service.snapshot().revision,"user");
+    expect(f.service.snapshot().paperCapital?.canEdit).toBe(false);
+    await expect(f.service.update(setup,f.service.snapshot().revision,"user",70_000)).rejects.toThrow();
+    await f.service.tick();await f.service.refresh();
+    f.service.deactivate(f.service.snapshot().revision,"user");await f.service.tick();
+    let cash=50_000-10_000-1.5;
+    expect(f.service.snapshot()).toMatchObject({paperCapital:{initialCashKrw:50_000,canEdit:false},account:{cashBuyingPower:cash}});
+    await expect(f.service.update({...setup,dailyLossLimitPercent:4},f.service.snapshot().revision,"user",70_000)).rejects.toThrow(/첫 체결/);
+    expect(f.service.snapshot().deployment?.dailyLossLimitPercent).toBe(5);
+    await f.service.update({...setup,dailyLossLimitPercent:4},f.service.snapshot().revision,"user");
+    vi.mocked(f.engine.evaluate).mockImplementation(async ({warmupOnly})=>({checkpoint:"sold",barTsMs:warmupOnly?3:4,orders:warmupOnly?[]:[{symbol:"005930",side:"SELL",quantity:10}]}));
+    await f.service.activate(f.service.snapshot().revision,"user");
+    await f.service.tick();await f.service.refresh();
+    f.service.deactivate(f.service.snapshot().revision,"user");await f.service.tick();
+    cash=f.service.snapshot().account!.cashBuyingPower;
+    expect(cash).toBeLessThan(50_000);
+    expect(f.service.snapshot().positions).toEqual([]);
+    f.service.remove(f.service.snapshot().revision,"user");
+    await expect(f.service.register(setup,f.service.snapshot().revision,"user",70_000)).rejects.toThrow(/첫 체결/);
+    expect(f.service.snapshot().deployment).toBeNull();
+    await f.service.register(setup,f.service.snapshot().revision,"user");
+    await f.service.refresh();
+    expect(f.service.snapshot()).toMatchObject({paperCapital:{initialCashKrw:50_000,canEdit:false},account:{cashBuyingPower:cash},positions:[]});
+  });
+  it("계좌 연결 없이 모의 체결하며 OFF와 전략 제거 후에도 잔고를 유지한다", async () => {
+    const f=fixture(true);
+    await paperActive(f);
+    await f.service.tick();
+    await f.service.refresh();
+    expect(f.service.snapshot()).toMatchObject({ broker:{provider:"PAPER"}, blockers:[], positions:[{quantity:10}], performance:{unrealizedPnl:0} });
+    expect(f.service.snapshot().performance?.realizedPnl).toBeCloseTo(-1.5);
+    expect(f.service.snapshot().account?.cashBuyingPower).toBeCloseTo(100_000_000-10_000-1.5);
+    const revision=f.service.snapshot().revision;
+    await expect(f.service.update(setup, revision, "user")).rejects.toThrow();
+    f.service.deactivate(revision,"user");
+    await f.service.tick();
+    expect(f.service.snapshot().deployment?.status).toBe("INACTIVE");
+    f.service.remove(f.service.snapshot().revision,"user");
+    expect(f.service.snapshot().positions).toMatchObject([{quantity:10,deploymentId:null}]);
+    for(const method of [f.broker.accounts,f.broker.holdings,f.broker.buyingPower,f.broker.orders,f.broker.place,f.broker.cancel])expect(method).not.toHaveBeenCalled();
+  });
+  it("실계좌 이력과 미체결을 보존하되 모의 상태에 섞거나 실계좌를 호출하지 않는다", async () => {
+    const f=fixture();await active(f);await f.service.tick();
+    const previous=f.service.snapshot();
+    await f.service.close();
+    const paper=createPaperTradingBroker({database:f.database,marketData:f.broker,now:f.now});
+    const service=new TradingService({database:f.database,broker:paper,artifacts:f.artifacts,engine:f.engine,now:f.now});
+    cleanup.unshift(()=>service.close());
+    await service.tick();
+    expect(service.snapshot()).toMatchObject({deployment:{status:"INACTIVE",artifactHash:oldHash},positions:[],orders:[],blockers:[]});
+    expect(service.snapshot().deployment?.id).not.toBe(previous.deployment?.id);
+    expect(f.database.sqlite.prepare("SELECT status FROM trading_orders WHERE id = ?").get(previous.orders[0]!.id)).toEqual({status:"OPEN"});
+    expect(f.broker.place).toHaveBeenCalledTimes(1);
+    expect(f.broker.cancel).not.toHaveBeenCalled();
+    expect(()=>new TradingService({database:f.database,broker:f.broker,artifacts:f.artifacts,engine:f.engine})).toThrow(/실매매 실행기/);
+  });
+  it("시세 대기 중 OFF 전환을 원장에 반영하고 체결을 만들지 않는다", async () => {
+    const f=fixture(true);await paperActive(f);
+    const original=f.broker.quotes.getMockImplementation()!;
+    let reached!:()=>void;
+    const ready=new Promise<void>(resolve=>{reached=resolve;});
+    let release!:()=>void;
+    const wait=new Promise<void>(resolve=>{release=resolve;});
+    let count=0;
+    f.broker.quotes.mockImplementation(async symbols=>{
+      if(++count===3){reached();await wait;}
+      return original(symbols);
+    });
+    const ticking=f.service.tick();await ready;
+    f.service.deactivate(f.service.snapshot().revision,"user");release();await ticking;await f.service.tick();
+    expect(f.service.snapshot().deployment?.status).toBe("INACTIVE");
+    expect(f.database.sqlite.prepare("SELECT count(*) AS n FROM paper_trading_orders").get()).toEqual({n:0});
+    expect(f.service.snapshot().positions).toEqual([]);
+  });
+  it("모의 체결 중 잔고 조회가 들어와도 정상 체결을 수량 불일치로 중지하지 않는다", async () => {
+    const f=fixture(true);await paperActive(f);
+    const original=f.broker.quotes.getMockImplementation()!;
+    let reached!:()=>void, release!:()=>void;
+    const ready=new Promise<void>(resolve=>{reached=resolve;});
+    const wait=new Promise<void>(resolve=>{release=resolve;});
+    let count=0;
+    f.broker.quotes.mockImplementation(async symbols=>{if(++count===3){reached();await wait;}return original(symbols);});
+    const ticking=f.service.tick();await ready;
+    const refreshing=f.service.refresh();release();
+    await Promise.all([ticking,refreshing]);
+    expect(f.service.snapshot()).toMatchObject({deployment:{status:"ACTIVE",lastError:null},positions:[{quantity:10}],orders:[{status:"FILLED"}]});
+  });
+  it("다른 서비스의 잔고 조회 중 체결해도 원장과 전략 수량을 함께 대조한다", async () => {
+    const f=fixture(true);await paperActive(f);await f.service.tick();await f.service.refresh();
+    const broker=createPaperTradingBroker({database:f.database,marketData:f.broker,now:f.now});
+    const other=new TradingService({database:f.database,broker,artifacts:f.artifacts,engine:f.engine,now:f.now});
+    cleanup.unshift(()=>other.close());
+    const original=f.broker.quotes.getMockImplementation()!;
+    let reached!:()=>void,release!:()=>void;
+    const ready=new Promise<void>(resolve=>{reached=resolve;});
+    const wait=new Promise<void>(resolve=>{release=resolve;});
+    f.broker.quotes.mockImplementationOnce(async symbols=>{reached();await wait;return original(symbols);});
+    const refreshing=other.refresh();await ready;
+    const previous=f.service.snapshot().orders[0]!;
+    const id="22222222-2222-4222-8222-222222222222";
+    const order={...previous,id,brokerOrderId:null,status:"SENDING",quantity:1,filledQuantity:0,averageFillPrice:null};
+    f.database.sqlite.prepare("INSERT INTO trading_orders (id,deployment_id,account_id,decision_key,payload_json,status,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,?,?)").run(id,previous.deploymentId,"PAPER","second",JSON.stringify(order),"SENDING",f.now(),f.now());
+    await broker.place("PAPER",{clientOrderId:id,symbol:"005930",side:"BUY",quantity:1,price:1000});
+    release();await refreshing;
+    expect(other.snapshot()).toMatchObject({deployment:{status:"ACTIVE",lastError:null},positions:[{quantity:11}]});
+    expect(other.snapshot().orders.find(item=>item.id===id)).toMatchObject({status:"FILLED",filledQuantity:1});
+  });
+  it("체결 직전 손실 한도에 걸리면 주문 롤백 뒤 OFF 상태를 확정한다", async () => {
+    const f=fixture(true);await paperActive(f);
+    const original=f.broker.quotes.getMockImplementation()!;
+    let count=0;
+    f.broker.quotes.mockImplementation(async symbols=>{
+      if(++count===3)f.database.sqlite.prepare("UPDATE trading_deployments SET daily_base_json = ? WHERE slot = 1").run(JSON.stringify({date:kstDateOf(f.now()),pnl:999_999}));
+      return original(symbols);
+    });
+    await f.service.tick();
+    expect(f.service.snapshot().deployment).toMatchObject({status:"INACTIVE",lastError:null});
+    expect(f.database.sqlite.prepare("SELECT count(*) AS n FROM paper_trading_orders").get()).toEqual({n:0});
+  });
+  it("체결 직후 프로세스가 중단되어도 원장과 대조하여 중복 없이 복구한다", async () => {
+    const f=fixture(true);await paperActive(f);await f.service.tick();
+    const order=f.service.snapshot().orders[0]!;
+    f.database.sqlite.prepare("UPDATE trading_orders SET status = 'SENDING', broker_order_id = NULL, payload_json = ? WHERE id = ?").run(JSON.stringify({...order,status:"SENDING",brokerOrderId:null}),order.id);
+    await f.service.close();
+    const broker=createPaperTradingBroker({database:f.database,marketData:f.broker,now:f.now});
+    const service=new TradingService({database:f.database,broker,artifacts:f.artifacts,engine:f.engine,now:f.now});
+    cleanup.unshift(()=>service.close());
+    await service.tick();await service.refresh();
+    expect(service.snapshot()).toMatchObject({deployment:{status:"INACTIVE"},positions:[{quantity:10}],orders:[{status:"FILLED"}]});
+    service.deactivate(service.snapshot().revision,"user");
+    expect(service.snapshot().deployment?.status).toBe("INACTIVE");
+    expect(f.database.sqlite.prepare("SELECT count(*) AS n FROM paper_trading_orders").get()).toEqual({n:1});
+  });
+});
 
 describe("실매매 전략 생명주기", () => {
   it.each([undefined, 12.5])("백테스트 비중 %s를 실매매 설정으로 가져오고 미설정은 100%%로 유지한다", async (cap) => {

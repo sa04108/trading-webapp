@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { parquetReadObjects } from "hyparquet";
 import { parquetWriteBuffer } from "hyparquet-writer";
+import { BoundedIntradayCache } from "../application/intraday-cache.js";
 import {
   INTRADAY_RETENTION_DAYS,
   intradayBarSchema,
@@ -23,6 +24,7 @@ const monthOf = (endMs: number) =>
 
 export class ParquetIntradayStore {
   private readonly root: string;
+  private readonly decoded = new BoundedIntradayCache<readonly IntradayBar[]>(500_000, 128);
   constructor(root: string) {
     this.root = path.resolve(root);
   }
@@ -106,26 +108,33 @@ export class ParquetIntradayStore {
       const bytes = await fs.readFile(path.join(this.dir(symbol), entry.file));
       if (hash(bytes) !== entry.sha256)
         throw new Error(`분봉 파일 checksum이 일치하지 않습니다: ${symbol}`);
-      const file = bytes.buffer.slice(
-        bytes.byteOffset,
-        bytes.byteOffset + bytes.byteLength,
-      ) as ArrayBuffer;
-      const rows = await parquetReadObjects({ file });
-      for (const row of rows) {
-        const data = Object.fromEntries(
-          fields.map((field) => [
-            field,
-            typeof row[field] === "bigint" ? Number(row[field]) : row[field],
-          ]),
-        );
-        const bar = intradayBarSchema.parse(data);
-        if (
-          monthOf(bar.endMs) !== entry.month ||
-          (bars.length && bars[bars.length - 1]!.endMs >= bar.endMs)
-        )
-          throw new Error("분봉 파일 순서가 올바르지 않습니다");
-        bars.push(bar);
+      // 매번 파일 해시를 확인하므로 캐시가 있어도 삭제·손상된 원본을 숨기지 않는다.
+      const key = `${symbol}:${entry.month}:${entry.sha256}`;
+      let decoded = this.decoded.get(key);
+      if (!decoded) {
+        const file = bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength,
+        ) as ArrayBuffer;
+        const rows = await parquetReadObjects({ file });
+        const validated: IntradayBar[] = [];
+        const number = (value: unknown) => typeof value === "bigint" ? Number(value) : value;
+        for (const row of rows) {
+          const bar = intradayBarSchema.parse({
+            endMs: number(row.endMs), open: number(row.open), high: number(row.high),
+            low: number(row.low), close: number(row.close), volume: number(row.volume),
+          });
+          if (monthOf(bar.endMs) !== entry.month ||
+            (validated.length && validated[validated.length - 1]!.endMs >= bar.endMs))
+            throw new Error("분봉 파일 순서가 올바르지 않습니다");
+          validated.push(bar);
+        }
+        decoded = validated;
+        this.decoded.set(key, decoded, decoded.length);
       }
+      if (bars.length && decoded.length && bars[bars.length - 1]!.endMs >= decoded[0]!.endMs)
+        throw new Error("분봉 파일 순서가 올바르지 않습니다");
+      for (const bar of decoded) bars.push(bar);
     }
     if (
       entries.length === manifest.files.length &&
@@ -245,7 +254,8 @@ export class ParquetIntradayStore {
       if (!m) return { bars: [], revision: revision([]) };
       const bars = await this.load(symbol, m, { fromMs, toMs });
       return {
-        bars: bars.filter((bar) => bar.endMs >= fromMs && bar.endMs <= toMs),
+        // 호출자가 반환된 봉을 바꾸어도 검증된 내부 캐시는 오염되지 않는다.
+        bars: bars.filter((bar) => bar.endMs >= fromMs && bar.endMs <= toMs).map((bar) => ({ ...bar })),
         revision: m.revision,
       };
     });

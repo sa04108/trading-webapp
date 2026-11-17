@@ -39,6 +39,7 @@ export interface BrokerQuote {
 
 /** 증권사 취소 응답은 체결 부재의 증거가 아니다. 최종 주문·잔고를 별도로 대조한다. */
 export interface TradingBroker {
+  readonly mode?: "LIVE" | "PAPER";
   readonly configured: boolean;
   accounts(): Promise<BrokerAccount[]>;
   holdings(accountId: string): Promise<BrokerHolding[]>;
@@ -60,8 +61,13 @@ export interface TradingBroker {
 
 /** 접수 여부가 불명확한 통신 실패는 거절과 구분하고 재주문하지 않는다. */
 export class BrokerRequestError extends Error {
-  constructor(message: string, readonly uncertain: boolean, readonly statusCode?: number) {
-    super(message);
+  constructor(message: string, readonly uncertain: boolean, readonly statusCode?: number, options?: ErrorOptions) {
+    super(message, options);
     this.name = "BrokerRequestError";
   }
+}
+
+/** 시세 조회 중 새 보유 종목이 생기면 잔고 스냅샷을 다시 읽는다. */
+export class BrokerHoldingsChangedError extends BrokerRequestError {
+  constructor() { super("시세 조회 중 보유 종목이 변경되었습니다.", false); }
 }
