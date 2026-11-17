@@ -7,7 +7,7 @@ test('API 토큰을 한 번 표시하고 명세를 읽기 전용으로 탐색한
   const record = { id: 'token-id', name: '로컬 도구', prefix: 'api_abc', scope: 'READ_WRITE', createdAtMs: 1, expiresAtMs: 2_000_000_000_000, lastUsedAtMs: null, revokedAtMs: null };
   await page.route('**/api/v1/openapi-tokens', async route => {
     if (route.request().method() === 'POST') { issued = route.request().postDataJSON(); await route.fulfill({ status: 201, json: { token: 'api_secret_once', record } }); }
-    else await route.fulfill({ json: { tokens: issued ? [{ ...record, revokedAtMs: revoked ? 1 : null }] : [] } });
+    else await route.fulfill({ json: { tokens: issued && !revoked ? [record] : [] } });
   });
   await page.route('**/api/v1/openapi-tokens/token-id', route => { revoked = true; return route.fulfill({ status: 204 }); });
   await page.route('**/api/v1/system/api-reference', route => route.fulfill({ json: { version: '1', generatedAtMs: 1, basePath: '/api/v1', authentication: { description: '세션 또는 토큰', bearerExample: 'Authorization: Bearer TOKEN', tokenManagement: '설정에서 관리' }, endpoints: [
@@ -27,7 +27,8 @@ test('API 토큰을 한 번 표시하고 명세를 읽기 전용으로 탐색한
   await page.getByRole('button', { name: '폐기', exact: true }).click();
   await page.getByRole('dialog').getByRole('button', { name: '폐기' }).click();
   await expect.poll(() => revoked).toBe(true);
-  await expect(page.getByText(/폐기됨/)).toBeVisible();
+  await expect(page.getByText(/api_abc/)).toHaveCount(0);
+  await expect(page.getByText('발급된 API 토큰이 없습니다.')).toBeVisible();
   await page.getByRole('link', { name: 'API 명세 열기' }).click();
   await expect(page).toHaveURL('/settings/api-reference');
   await page.getByLabel('API 검색').fill('/backtests');
