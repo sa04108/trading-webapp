@@ -1,4 +1,5 @@
 import type { FundamentalField } from "../../../../../runtime/modules/facts/domain/fact.js";
+import { reconcileBorrowingRows } from "./dart-borrowing-components.js";
 import { normalizeDartAccountId, resolveAccount } from "./dart-account-map.js";
 import type { DartFinancialRow } from "./dart-report-parser.js";
 
@@ -47,6 +48,7 @@ export interface BalanceSections {
   label(row: DartFinancialRow): Section | undefined;
   field(row: DartFinancialRow, field: FundamentalField): FundamentalField;
   canAddWithinSection(rows: readonly DartFinancialRow[], field: FundamentalField): boolean;
+  reconcileWithinSection(rows: readonly DartFinancialRow[], field: FundamentalField): readonly DartFinancialRow[] | null;
 }
 
 /**
@@ -74,8 +76,8 @@ export function analyzeBalanceSections(
     const value = typeof row?.thstrm_amount === "string" ? parseAmount(row.thstrm_amount) : null;
     return value !== null && Number.isSafeInteger(value) && value >= 0 ? value : null;
   };
+  const ordered = valid ? [...bs].sort((a, b) => Number(a.ord) - Number(b.ord)) : [];
   if (valid) {
-    const ordered = [...bs].sort((a, b) => Number(a.ord) - Number(b.ord));
     const standaloneDisposals = new Set<DartFinancialRow>();
     for (const row of ordered) {
       const kind = boundary(row);
@@ -131,6 +133,9 @@ export function analyzeBalanceSections(
           normalizeDartAccountId(row.account_id) === "ifrs-full_CurrentBorrowingsAndCurrentPortionOfNoncurrentBorrowings" &&
           row.account_nm.replace(/\s/g, "") === "장기차입금") return "CURRENT_LONG_TERM_DEBT";
       return field;
+    },
+    reconcileWithinSection(candidates, field) {
+      return valid ? reconcileBorrowingRows(ordered, candidates, field, section, parseAmount) : null;
     },
     canAddWithinSection(candidates, field) {
       // 단기차입금과 '유동 차입금'을 별도 행으로 공시한 사례: 모든 구성 금액이

@@ -1,3 +1,4 @@
+import { BacktestDeleteDialog } from "./backtest-delete-dialog";
 import { isRefreshRequired, useBacktestRefresh } from "./backtest-refresh-dialog";
 import { ResultBenchmarkComparison } from "./result-benchmark-comparison";
 import { ExperimentSummary } from "./experiment-summary";
@@ -17,14 +18,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageSizeInput, Pagination } from "@/components/pagination";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { BacktestProgressCard } from "./backtest-progress-card";
 import {
   Select,
@@ -508,19 +501,6 @@ export function BacktestDetailPage() {
     },
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: () => api(`/backtests/${id}`, { method: "DELETE" }),
-    onSuccess: () => {
-      toast.success("삭제되었습니다");
-      void queryClient.invalidateQueries({ queryKey: ["backtests"] });
-      void queryClient.invalidateQueries({
-        queryKey: ["backtest-clone-batches"],
-      });
-      void navigate("/backtests");
-    },
-    onError: (error) => toast.error(error.message),
-  });
-
   const strategies = useStrategies();
 
   // 조회가 실패하면 결과가 없다고 말한다 — 알림에서 넘어오면 그 사이 삭제된 잡일 수
@@ -710,31 +690,7 @@ export function BacktestDetailPage() {
       </div>
 
       {refresh.modal}
-      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>백테스트 삭제</DialogTitle>
-            <DialogDescription>
-              이 작업의 결과·거래 내역과 이 작업에서 만든 난수 시드 실험이 모두
-              삭제됩니다. 되돌릴 수 없습니다.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteOpen(false)}>
-              취소
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                setDeleteOpen(false);
-                deleteMutation.mutate();
-              }}
-            >
-              삭제
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {deleteOpen ? <BacktestDeleteDialog mode="daily" ids={[id]} onClose={() => setDeleteOpen(false)} onDeleted={() => { setDeleteOpen(false); void navigate("/backtests"); }} /> : null}
 
     </div>
   );

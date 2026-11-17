@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronRight,
   LayoutGrid,
-  Pencil,
   Table2,
 } from "lucide-react";
 import { InfoHint } from "@/components/info-hint";
@@ -167,6 +166,7 @@ export function HistoryStrategyGroup({
   total,
   collapsed,
   onToggle,
+  actions,
   children,
 }: {
   name: string;
@@ -174,33 +174,38 @@ export function HistoryStrategyGroup({
   total: number;
   collapsed: boolean;
   onToggle: () => void;
+  actions?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <Collapsible open={!collapsed} onOpenChange={onToggle} asChild>
       <section className="space-y-2">
-        <div className="flex min-w-0 items-center gap-1.5">
-          <h3 className="min-w-0 truncate font-semibold">{name}</h3>
-          <InfoHint
-            label={`${name} 전략 설명`}
-            className="flex size-8 shrink-0 items-center justify-center"
-          >
-            <p className="font-medium">{name}</p>
-            {description ? <p>{description}</p> : null}
-          </InfoHint>
-          <span className="ml-1 shrink-0 text-xs text-muted-foreground">
-            {total}건
-          </span>
-          <CollapsibleTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="ml-auto"
-              aria-label={`${name} ${collapsed ? "펼치기" : "접기"}`}
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <div className="flex min-w-0 flex-1 basis-40 items-center gap-1.5">
+            <h3 className="min-w-0 truncate font-semibold">{name}</h3>
+            <InfoHint
+              label={`${name} 전략 설명`}
+              className="flex size-8 shrink-0 items-center justify-center"
             >
-              {collapsed ? <ChevronRight /> : <ChevronDown />}
-            </Button>
-          </CollapsibleTrigger>
+              <p className="font-medium">{name}</p>
+              {description ? <p>{description}</p> : null}
+            </InfoHint>
+            <span className="ml-1 shrink-0 text-xs text-muted-foreground">
+              {total}건
+            </span>
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {actions}
+            <CollapsibleTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`${name} ${collapsed ? "펼치기" : "접기"}`}
+              >
+                {collapsed ? <ChevronRight /> : <ChevronDown />}
+              </Button>
+            </CollapsibleTrigger>
+          </div>
         </div>
         <CollapsibleContent className="space-y-3">
           {children}
@@ -214,14 +219,10 @@ export function HistoryToolbar({
   controls,
   intraday,
   onChange,
-  editing = false,
-  onEditingChange,
 }: {
   controls: HistoryControlsState;
   intraday?: boolean;
   onChange?: () => void;
-  editing?: boolean;
-  onEditingChange?: (editing: boolean) => void;
 }) {
   const viewLabel =
     controls.view === "table" ? "카드 보기로 전환" : "표 보기로 전환";
@@ -287,23 +288,6 @@ export function HistoryToolbar({
         )}
       </Button>
       <HistoryColumnPicker enabled={controls.view === "table"}>
-        {onEditingChange ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                size="icon"
-                variant={editing ? "secondary" : "outline"}
-                className="size-11 sm:size-8"
-                aria-label="편집"
-                aria-pressed={editing}
-                onClick={() => onEditingChange(!editing)}
-              >
-                <Pencil aria-hidden />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{editing ? "편집 종료" : "백테스트 편집"}</TooltipContent>
-          </Tooltip>
-        ) : null}
         <Tooltip>
           <TooltipTrigger asChild>
             <Switch
@@ -382,39 +366,47 @@ export function HistoryPager({
   );
 }
 
-export function HistorySelectionActions({
+export function HistoryEditActions({
+  editing,
+  onEditingChange,
   total,
   selected,
   pending,
+  selectionDisabled = false,
   onToggleAll,
   onRemoveSelected,
-  onRemoveAll,
 }: {
+  editing: boolean;
+  onEditingChange: (editing: boolean) => void;
   total: number;
   selected: number;
   pending: boolean;
+  selectionDisabled?: boolean;
   onToggleAll: () => void;
   onRemoveSelected: () => void;
-  onRemoveAll: () => void;
 }) {
   return (
-    <div className="flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1">
-      <label className="flex shrink-0 items-center gap-2 text-sm">
-        <Checkbox
-          checked={selected > 0 && selected < total ? "indeterminate" : total > 0 && selected === total}
-          disabled={pending || total === 0}
-          onCheckedChange={onToggleAll}
-          aria-label="현재 페이지 선택"
-        />
-        현재 페이지 선택
-      </label>
-      <Button variant="destructive" size="sm" disabled={!selected || pending} onClick={onRemoveSelected}>
-        현재 페이지 선택 삭제 ({selected})
+    <>
+      {editing ? (
+        <>
+          <label className="flex shrink-0 items-center gap-2 whitespace-nowrap text-sm text-muted-foreground">
+            <Checkbox
+              checked={selected > 0 && selected < total ? "indeterminate" : total > 0 && selected === total}
+              disabled={pending || selectionDisabled || total === 0}
+              onCheckedChange={onToggleAll}
+              aria-label="전체 선택"
+            />
+            전체 선택
+          </label>
+          <Button variant="destructive" size="sm" disabled={!selected || pending || selectionDisabled} onClick={onRemoveSelected}>
+            삭제 ({selected})
+          </Button>
+        </>
+      ) : null}
+      <Button variant="outline" size="sm" disabled={pending} aria-pressed={editing} onClick={() => onEditingChange(!editing)}>
+        {editing ? "완료" : "편집"}
       </Button>
-      <Button variant="outline" size="sm" disabled={!total || pending} onClick={onRemoveAll}>
-        현재 페이지 전체 삭제
-      </Button>
-    </div>
+    </>
   );
 }
 

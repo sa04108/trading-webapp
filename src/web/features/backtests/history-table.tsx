@@ -37,7 +37,7 @@ export function HistoryTable({ columns, busy, children }: {
           {columns.map((id) => (
             <TableHead key={id} className="text-right text-muted-foreground">
               {HISTORY_TABLE_COLUMNS.find((column) => column.id === id)!.label}
-              {id === "seed" ? <InfoHint label="난수 시드 통계 설명">건수는 난수 시드 실험 수이며 괄호는 완료된 실행 중 유효한 수익률의 표본 표준편차입니다.</InfoHint> : null}
+              {id === "seed" ? <InfoHint label="난수 시드 통계 설명">건수는 이전 설정 탐색 실험 수이며 괄호는 완료된 실행 중 유효한 수익률의 표본 표준편차입니다.</InfoHint> : null}
               {id === "validation" ? <InfoHint label="기간 검증 통계 설명">건수는 기간 검증 실험 수이며 괄호는 모든 OOS 회차가 평가된 완료 실험별 OOS 평균 수익률 분포의 표본 표준편차입니다.</InfoHint> : null}
             </TableHead>
           ))}

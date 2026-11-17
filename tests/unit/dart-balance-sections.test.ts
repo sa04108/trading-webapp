@@ -103,7 +103,8 @@ describe('재무상태표 구간별 집계', () => {
       [1, '', '단기차입금', 20],
       [2, 'ifrs-full_ShorttermBorrowings', '유동 차입금', 20],
     ]);
-    expect(parse(distinct).gaps).toContainEqual(expect.objectContaining({ field: 'SHORT_TERM_BORROWINGS', kind: 'CONFLICT' }));
+    expect(parse(distinct).gaps).toContainEqual(expect.objectContaining({ field: 'SHORT_TERM_BORROWINGS', kind: 'CONFLICT',
+      reason: expect.stringContaining('동일 금액의 중복 범위를 확인할 수 없습니다') }));
     expect(parse([distinct[0]!, { ...distinct[0]! }]).gaps.some(gap => gap.kind === 'CONFLICT')).toBe(false);
     const noOrder = distinct.map(() => ({ ...distinct[0]!, ord: undefined }));
     expect(parse(noOrder).gaps).toContainEqual(expect.objectContaining({ field: 'SHORT_TERM_BORROWINGS', kind: 'CONFLICT' }));
@@ -273,4 +274,47 @@ it('326030 2024년 3분기 사채 포함 유동 차입금은 소계가 검증되
   const incomplete = input.filter(row => row.ord !== '43');
   expect(parseFinancialRows('326030', new Map([['11014', incomplete]])).gaps)
     .toContainEqual(expect.objectContaining({ field: 'SHORT_TERM_BORROWINGS', kind: 'CONFLICT' }));
+});
+
+
+describe('차입금 상위·상세 행 관계', () => {
+  it.each([
+    { kind: '장기', year: '2019', receipt: '20190515002306', field: 'LONG_TERM_BORROWINGS' as const,
+      current: 2000000000000, noncurrent: 2000000000000, parent: 1084652669161, child: 1100000000000,
+      component: 15347330839, expected: 1084652669161 },
+    { kind: '단기', year: '2016', receipt: '20160516001972', field: 'SHORT_TERM_BORROWINGS' as const,
+      current: 117168064508, noncurrent: 7885446436, parent: 47725030891, child: 47169630891,
+      component: 555400000, expected: 47169630891 },
+  ])('$kind 차입금은 입증된 상세 관계만 반영한다', sample => {
+    const long = sample.kind === '장기';
+    const input = rows([
+      [1, 'ifrs-full_CurrentLiabilities', '유동부채', sample.current],
+      ...(long ? [[2, 'ifrs-full_NoncurrentLiabilities', '비유동부채', sample.noncurrent] as const] : []),
+      [10, long ? 'dart_LongTermBorrowingsGross' : 'dart_ShortTermBorrowings', long ? '장기차입금' : '단기차입금', sample.parent],
+      [11, '-표준계정코드 미사용-', long ? '장기차입금' : '단기차입금', sample.child],
+      [12, '-표준계정코드 미사용-', long ? '(장기차입금 현재가치할인차금)' : '유동성장기부채', sample.component],
+      ...(!long ? [[20, 'ifrs-full_NoncurrentLiabilities', '비유동부채', sample.noncurrent] as const] : []),
+      [30, 'ifrs-full_Liabilities', '부채총계', sample.current + sample.noncurrent],
+    ], sample.receipt).map(row => ({ ...row, reprt_code: '11013', bsns_year: sample.year }));
+    const run = (data: readonly DartFinancialRow[]) => parseFinancialRows('000001', new Map([['11013', data]]));
+    const result = run(input);
+    expect(result.facts).toContainEqual(expect.objectContaining({ field: sample.field, periodKey: `${sample.year}Q1`, value: sample.expected,
+      asOfTsMs: receiptDateToAsOfTsMs(sample.receipt) }));
+    if (!long) expect(result.facts).toContainEqual(expect.objectContaining({ field: 'CURRENT_LONG_TERM_DEBT', value: 555400000 }));
+    expect(result.gaps.some(gap => gap.field === sample.field && gap.kind === 'CONFLICT')).toBe(false);
+    const change = (ord: string, update: Partial<DartFinancialRow>) => input.map(row => row.ord === ord ? { ...row, ...update } : row);
+    const variants = [
+      change('12', { thstrm_amount: '1' }),
+      input.map(row => row.ord === '10' ? { ...row, thstrm_amount: String(sample.child) } : row.ord === '12' ? { ...row, thstrm_amount: '0' } : row),
+      [...change('11', { ord: '13' }).map(row => row.ord === '12' ? { ...row, ord: '14' } : row), { ...input.find(row => row.ord === '12')!, ord: '11', account_nm: '끼인 계정' }],
+      [...input, { ...input.find(row => row.ord === '11')!, ord: '13', thstrm_amount: '1' }],
+      change('12', { ord: long ? '0' : '21' }),
+      change('11', { rcept_no: '20160516003484' }),
+      change('11', { currency: 'USD' }),
+      change('11', { ord: undefined }),
+      change('30', { thstrm_amount: String(sample.current + sample.noncurrent + 1) }),
+      [...input, { ...input.find(row => row.ord === '11')!, ord: '13', thstrm_amount: '-' }],
+    ];
+    for (const changed of variants) expect(run(changed).gaps).toContainEqual(expect.objectContaining({ field: sample.field, kind: 'CONFLICT' }));
+  });
 });

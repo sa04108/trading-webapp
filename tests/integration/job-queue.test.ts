@@ -2176,7 +2176,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
-  it('난수 시드 실험 취소는 새 승격을 막고 대기 중인 자식도 취소한다', async ({ scenario }) => {
+  it('설정 탐색 실험 취소는 새 승격을 막고 대기 중인 자식도 취소한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
@@ -2207,7 +2207,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(0);
   });
 
-  it('난수 시드 실험 취소는 실행 중 자식이 끝날 때까지 CANCELLING을 유지한다', async ({ scenario }) => {
+  it('설정 탐색 실험 취소는 실행 중 자식이 끝날 때까지 CANCELLING을 유지한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
@@ -2253,7 +2253,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(cancelled.batch.completedAtMs).not.toBeNull();
   });
 
-  it('실행 중인 난수 실험 삭제는 막고 취소 완료 뒤에는 원본을 남긴 채 단독 삭제한다', async ({ scenario }) => {
+  it('실행 중인 설정 탐색 실험 삭제는 막고 취소 완료 뒤에는 원본을 남긴 채 단독 삭제한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
@@ -2304,7 +2304,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(childIds.every((id) => ctx.container.jobQueue.getJob(id) === null)).toBe(true);
   });
 
-  it('원본 삭제는 종료된 난수 실험 묶음과 모든 자식 백테스트를 함께 삭제한다', async ({ scenario }) => {
+  it('원본 삭제는 종료된 설정 탐색 실험 묶음과 모든 자식 백테스트를 함께 삭제한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({
@@ -2433,7 +2433,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.jobQueue.getJob(sourceId)).not.toBeNull();
   });
 
-  it('난수 실험 목록은 기본 50개 job 페이지 밖의 원본 요약도 함께 반환한다', async ({ scenario }) => {
+  it('설정 탐색 실험 목록은 기본 50개 job 페이지 밖의 원본 요약도 함께 반환한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const created = await ctx.app.inject({

@@ -8,8 +8,8 @@ import {
   BacktestsPage,
   BacktestJobCard,
   deletableBacktestIds,
-  toggleAllBacktests,
 } from '../../src/web/features/backtests/backtests-page.js';
+import { toggleHistorySelection } from '../../src/web/features/backtests/history-editing.js';
 import type {
   BacktestMetrics,
   JobSummary,
@@ -134,8 +134,8 @@ describe('백테스트 목록', () => {
     ]);
 
     expect(ids).toEqual(['completed', 'failed']);
-    expect([...toggleAllBacktests(new Set(), ids)]).toEqual(ids);
-    expect(toggleAllBacktests(new Set(ids), ids).size).toBe(0);
+    expect([...toggleHistorySelection(new Set(), ids)]).toEqual(ids);
+    expect(toggleHistorySelection(new Set(ids), ids).size).toBe(0);
   });
 
   it('목록에서 원본과 기록된 실험 화면으로 이동한다', () => {

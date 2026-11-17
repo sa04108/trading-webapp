@@ -1,6 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
 import { login } from "./login";
 
+function strategyGroup(page: Page, name = "전략 A") {
+  return page.locator("section").filter({ has: page.getByRole("heading", { name, exact: true }) });
+}
+
 async function historyFixture(page: Page) {
   const jobs = Array.from({ length: 13 }, (_, i) => ({
     id: `history-${i}`,
@@ -48,6 +52,15 @@ async function historyFixture(page: Page) {
   }));
   const deleted: string[] = [];
   const requests: URLSearchParams[] = [];
+  await page.route("**/api/v1/backtests/deletion-preview", (route) => {
+    const { ids } = route.request().postDataJSON() as { ids: string[] };
+    return route.fulfill({ json: { backtestCount: ids.length, configurationSearchCount: 0, periodValidationCount: 3, blockers: [], token: "preview" } });
+  });
+  await page.route("**/api/v1/backtests/delete", (route) => {
+    const { ids, mode, token } = route.request().postDataJSON() as { ids: string[]; mode: string; token: string };
+    expect(mode).toBe("daily"); expect(token).toBe("preview"); deleted.push(...ids);
+    return route.fulfill({ status: 204 });
+  });
   await page.route("**/api/v1/strategies", (route) =>
     route.fulfill({
       json: {
@@ -151,12 +164,13 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
   await expect(viewToggle).toHaveText("");
   if (testInfo.project.name === "desktop") await viewToggle.click();
   await expect(viewToggle).not.toBeChecked();
-  const edit = page.getByRole("button", { name: "편집", exact: true });
+  const edit = strategyGroup(page).getByRole("button", { name: "편집", exact: true });
   const editBox = await edit.boundingBox();
-  const viewBox = await viewToggle.boundingBox();
-  if (!editBox || !viewBox) throw new Error("이력 도구를 찾을 수 없습니다");
-  expect(editBox.x + editBox.width).toBeLessThan(viewBox.x);
-  expect(Math.abs(editBox.y + editBox.height / 2 - viewBox.y - viewBox.height / 2)).toBeLessThanOrEqual(1);
+  const moreBox = await group.getByRole("button", { name: "전략 A 접기", exact: true }).boundingBox();
+  if (!editBox || !moreBox) throw new Error("전략별 편집 도구를 찾을 수 없습니다");
+  await expect(edit).toHaveText("편집");
+  expect(editBox.x + editBox.width).toBeLessThan(moreBox.x);
+  expect(Math.abs(editBox.y + editBox.height / 2 - moreBox.y - moreBox.height / 2)).toBeLessThanOrEqual(1);
   await expect(group.locator("tbody > tr")).toHaveCount(10);
   const firstRow = group.locator("tbody > tr").first();
   await expect(firstRow.getByRole("link", { name: "난수", exact: true })).toHaveAttribute("href", "/backtests/history-0/seeds");
@@ -252,13 +266,16 @@ test("삭제는 펼친 전략의 현재 페이지에 한정하고 빈 마지막 
     .locator("section")
     .filter({ has: page.getByRole("button", { name: /전략 A/ }) });
   await expect(group.locator("tbody > tr")).toHaveCount(2);
-  await page.getByRole("button", { name: "편집", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "현재 페이지 전체 삭제", exact: true }),
-  ).toBeEnabled();
-  await page
-    .getByRole("button", { name: "현재 페이지 전체 삭제", exact: true })
-    .click();
+  await strategyGroup(page).getByRole("button", { name: "편집", exact: true }).click();
+  await group.getByRole("checkbox", { name: "전체 선택", exact: true }).check();
+  await group.getByRole("button", { name: "삭제 (2)", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("기간검증 3개");
+  await expect(dialog).not.toContainText("설정 탐색 실험");
+  await dialog.getByRole("button", { name: "취소" }).click();
+  expect(deleted).toEqual([]);
+  await group.getByRole("button", { name: "삭제 (2)", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "삭제", exact: true }).click();
   await expect.poll(() => deleted.length).toBe(2);
   expect([...deleted].sort()).toEqual(["history-10", "history-11"]);
   await expect(group.locator("tbody > tr")).toHaveCount(10);
@@ -371,7 +388,7 @@ for (const view of ["table", "cards"] as const) {
       await route.fulfill({ json: { summaries: new URL(route.request().url()).searchParams.get("jobIds")?.split(",").map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null } }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) ?? [] } });
     });
     await page.goto(`/backtests?view=${view}&collapsed=strategy-b`);
-    await page.getByRole("button", { name: "편집", exact: true }).click();
+    await strategyGroup(page).getByRole("button", { name: "편집", exact: true }).click();
     const checkboxes = page.getByRole("checkbox", { name: /백테스트 선택$/ });
     const count = view === "table" ? 10 : 6;
     await expect(checkboxes).toHaveCount(count);
@@ -380,7 +397,7 @@ for (const view of ["table", "cards"] as const) {
     await checkbox.focus();
     const element = await checkbox.elementHandle();
     const before = await checkbox.boundingBox();
-    const remove = page.getByRole("button", { name: "현재 페이지 선택 삭제 (1)", exact: true });
+    const remove = page.getByRole("button", { name: "삭제 (1)", exact: true });
     await expect(remove).toBeEnabled();
     holdResponse = true;
     try {
@@ -406,7 +423,7 @@ for (const view of ["table", "cards"] as const) {
   });
 }
 
-test("실험 정보 재조회 실패에도 선택을 표시하고 삭제를 막는다", async ({ page }) => {
+test("실험 정보 재조회 실패에도 선택과 삭제 확인을 허용한다", async ({ page }) => {
   await login(page);
   await historyFixture(page);
   await page.clock.install();
@@ -417,17 +434,53 @@ test("실험 정보 재조회 실패에도 선택을 표시하고 삭제를 막�
     return route.fulfill({ json: { summaries: ids.map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null } }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) } });
   });
   await page.goto("/backtests?view=table&collapsed=strategy-b");
-  await page.getByRole("button", { name: "편집", exact: true }).click();
+  await strategyGroup(page).getByRole("button", { name: "편집", exact: true }).click();
   const checkbox = page.getByRole("checkbox", { name: /백테스트 선택$/ }).first();
   await checkbox.check();
-  await expect(page.getByRole("checkbox", { name: "현재 페이지 선택" })).toHaveAttribute("data-state", "indeterminate");
+  await expect(page.getByRole("checkbox", { name: "전체 선택" })).toHaveAttribute("data-state", "indeterminate");
   fail = true;
   await page.clock.runFor(10_000);
-  await expect(page.getByRole("alert")).toContainText("실험 정보");
   await expect(checkbox).toBeChecked();
   await expect(checkbox).toBeEnabled();
-  await expect(page.getByRole("button", { name: "현재 페이지 선택 삭제 (1)" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "현재 페이지 전체 삭제" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "삭제 (1)" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "현재 페이지 전체 삭제" })).toHaveCount(0);
+});
+
+test("삭제 미리보기 실패와 변경은 확인을 다시 요구한다", async ({ page }) => {
+  await login(page);
+  const { deleted } = await historyFixture(page);
+  let previewAttempt = 0;
+  let deleteAttempt = 0;
+  await page.route("**/api/v1/backtests/deletion-preview", (route) => {
+    previewAttempt++;
+    if (previewAttempt === 1) return route.fulfill({ status: 503, json: { error: "unavailable" } });
+    return route.fulfill({ json: { backtestCount: 1, configurationSearchCount: 0, periodValidationCount: 3, blockers: [], token: `token-${previewAttempt}` } });
+  });
+  await page.route("**/api/v1/backtests/delete", (route) => {
+    deleteAttempt++;
+    if (deleteAttempt === 1) return route.fulfill({ status: 409, json: { error: "changed" } });
+    const body = route.request().postDataJSON() as { ids: string[]; token: string };
+    expect(body.token).toBe("token-3");
+    deleted.push(...body.ids);
+    return route.fulfill({ status: 204 });
+  });
+  await page.goto("/backtests?view=table&collapsed=strategy-b");
+  const group = strategyGroup(page);
+  await group.getByRole("button", { name: "편집", exact: true }).click();
+  await group.getByRole("checkbox", { name: /백테스트 선택$/ }).first().check();
+  await group.getByRole("button", { name: "삭제 (1)" }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("삭제 범위를 불러오지 못했습니다");
+  await expect(dialog.getByRole("button", { name: "삭제", exact: true })).toBeDisabled();
+  await dialog.getByRole("button", { name: "다시 시도" }).click();
+  await expect(dialog).toContainText("기간검증 3개");
+  await dialog.getByRole("button", { name: "삭제", exact: true }).click();
+  await expect(dialog).toContainText("삭제 범위가 변경되었습니다");
+  await expect.poll(() => previewAttempt).toBe(3);
+  await expect(dialog.getByRole("button", { name: "삭제", exact: true })).toBeEnabled();
+  expect(deleted).toEqual([]);
+  await dialog.getByRole("button", { name: "삭제", exact: true }).click();
+  await expect.poll(() => deleted.length).toBe(1);
 });
 
 test("다른 전략의 페이지 자동 보정은 기존 선택을 유지한다", async ({ page }) => {
@@ -435,9 +488,9 @@ test("다른 전략의 페이지 자동 보정은 기존 선택을 유지한다"
   const { deleted } = await historyFixture(page);
   await page.clock.install();
   await page.goto("/backtests?view=table&page.strategy-a=2");
-  const group = page.locator("section").filter({ has: page.getByRole("heading", { name: "전략 B", exact: true }) });
-  await page.getByRole("button", { name: "편집", exact: true }).click();
-  const checkbox = group.getByRole("checkbox");
+  const group = strategyGroup(page, "전략 B");
+  await group.getByRole("button", { name: "편집", exact: true }).click();
+  const checkbox = group.getByRole("checkbox", { name: /백테스트 선택$/ });
   await checkbox.check();
   deleted.push("history-10", "history-11");
   await page.clock.runFor(5_100);
@@ -464,7 +517,7 @@ test("새 목록의 실험 정보를 기다리거나 실패해도 기존 선택�
     return route.fulfill({ json: { summaries: ids.map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null } }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) } });
   });
   await page.goto("/backtests?view=table&collapsed=strategy-b");
-  await page.getByRole("button", { name: "편집", exact: true }).click();
+  await strategyGroup(page).getByRole("button", { name: "편집", exact: true }).click();
   const checkbox = page.getByRole("checkbox", { name: /백테스트 선택$/ }).first();
   await checkbox.check();
   hold = true;
@@ -473,15 +526,58 @@ test("새 목록의 실험 정보를 기다리거나 실패해도 기존 선택�
     await page.clock.runFor(5_100);
     await started;
     await expect(checkbox).toBeChecked();
-    await expect(page.getByRole("button", { name: "현재 페이지 선택 삭제 (1)" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "삭제 (1)" })).toBeEnabled();
     release();
     await page.clock.runFor(5_000);
-    await expect(page.getByRole("alert")).toContainText("실험 정보");
     await expect(checkbox).toBeChecked();
-    // 선택 해제 뒤에는 권한을 확인할 때까지 체크박스 자체가 사라진다.
     await checkbox.click();
-    await expect(page.getByRole("button", { name: "현재 페이지 선택 삭제 (0)" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "삭제 (0)" })).toBeDisabled();
   } finally {
     release();
   }
 });
+
+// 기존 삭제 검사는 한 전략만 편집해 다른 전략의 선택·페이지까지 삭제에 섞이는 오류를 잡지 못한다.
+for (const view of ["table", "cards"] as const) {
+  test(`${view} 전략별 편집 도구로 선택과 삭제 범위를 분리한다`, async ({ page }) => {
+    await login(page);
+    const { deleted } = await historyFixture(page);
+    await page.goto(`/backtests?view=${view}`);
+    const first = strategyGroup(page), second = strategyGroup(page, "전략 B");
+    await expect(page.getByRole("button", { name: "편집", exact: true })).toHaveCount(2);
+    await expect(page.getByRole("checkbox")).toHaveCount(0);
+    await first.getByRole("button", { name: "편집", exact: true }).click();
+    await expect(second.getByRole("checkbox")).toHaveCount(0);
+    await second.getByRole("button", { name: "편집", exact: true }).click();
+    const otherSelection = second.getByRole("checkbox", { name: /백테스트 선택$/ });
+    await otherSelection.check();
+    await first.getByRole("checkbox", { name: "전체 선택", exact: true }).check();
+    const selectedCount = view === "table" ? 10 : 6;
+    await expect(first.getByRole("button", { name: `삭제 (${selectedCount})`, exact: true })).toBeEnabled();
+    await expect(second.getByRole("button", { name: "삭제 (1)", exact: true })).toBeEnabled();
+    const tools = [first.getByRole("checkbox", { name: "전체 선택", exact: true }), first.getByRole("button", { name: `삭제 (${selectedCount})`, exact: true }), first.getByRole("button", { name: "완료", exact: true }), first.getByRole("button", { name: "전략 A 접기", exact: true })];
+    const boxes = await Promise.all(tools.map(tool => tool.boundingBox()));
+    for (let i = 1; i < boxes.length; i++) {
+      const before = boxes[i - 1]!, after = boxes[i]!;
+      expect(before.x + before.width).toBeLessThanOrEqual(after.x);
+      expect(Math.abs(before.y + before.height / 2 - after.y - after.height / 2)).toBeLessThanOrEqual(1);
+    }
+    await expect(page.getByRole("checkbox", { name: "현재 페이지 선택", exact: true })).toHaveCount(0);
+    // 전략 A의 페이지 전환과 편집 종료가 전략 B의 선택을 초기화하지 않는다.
+    await first.getByRole("button", { name: "다음", exact: true }).click();
+    await expect(first.getByRole("button", { name: "삭제 (0)", exact: true })).toBeDisabled();
+    await expect(otherSelection).toBeChecked();
+    await first.getByRole("button", { name: "완료", exact: true }).click();
+    await expect(first.getByRole("checkbox")).toHaveCount(0);
+    await expect(otherSelection).toBeChecked();
+    await first.getByRole("button", { name: "편집", exact: true }).click();
+    await first.getByRole("checkbox", { name: "전체 선택", exact: true }).check();
+    const lastCount = view === "table" ? 2 : 6;
+    await first.getByRole("button", { name: `삭제 (${lastCount})`, exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "삭제", exact: true }).click();
+    await expect.poll(() => [...deleted].sort()).toEqual(view === "table" ? ["history-10", "history-11"] : ["history-10", "history-11", "history-6", "history-7", "history-8", "history-9"]);
+    await expect(first.getByRole("button", { name: "편집", exact: true })).toBeVisible();
+    await expect(otherSelection).toBeChecked();
+    await expect(second.getByRole("button", { name: "삭제 (1)", exact: true })).toBeEnabled();
+  });
+}

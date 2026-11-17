@@ -181,7 +181,7 @@ describe('createBacktestNotificationListener', () => {
     expect(gone.created).toEqual([]);
   });
 
-  it('난수 시드 실험 자식은 개별 종료 알림을 만들지 않는다', () => {
+  it('설정 탐색 실험 자식은 개별 종료 알림을 만들지 않는다', () => {
     const { created, listener } = harness(
       fakeJob({ status: 'COMPLETED', cloneBatchId: 'btb_1' }),
     );
@@ -242,7 +242,7 @@ describe('createSeedCloneBatchNotificationListener', () => {
     expect(created).toEqual([
       expect.objectContaining({
         severity: 'error',
-        title: '난수 시드 실험이 완료되었습니다',
+        title: '설정 탐색 실험이 완료되었습니다',
         body: '횡단면 모멘텀 · 총 5개\n완료 2 · 실패 1 · 취소 1 · 중단 1 · 미실행 0 · 삭제 0',
         link: '/backtests/batches/btb_1',
       }),

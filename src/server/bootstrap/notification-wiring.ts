@@ -117,7 +117,7 @@ export function createBacktestNotificationListener(deps: {
         event.jobId,
       );
       if (!job) return;
-      // 난수 시드 실험은 최대 100개 자식이 끝난다. 자식별 알림은 센터를 덮으므로
+      // 설정 탐색 실험은 최대 100개 자식이 끝난다. 자식별 알림은 센터를 덮으므로
       // 배치 서비스의 최종 전이 알림 하나가 대신한다.
       if (job.cloneBatchId !== null && job.cloneBatchId !== undefined) return;
       const terminal = TERMINAL_NOTIFICATIONS[job.status];
@@ -161,9 +161,9 @@ export function createBacktestNotificationListener(deps: {
 }
 
 const BATCH_TERMINAL_TITLES: Record<SeedCloneBatchEvent["status"], string> = {
-  COMPLETED: "난수 시드 실험이 완료되었습니다",
-  FAILED: "난수 시드 실험이 실패했습니다",
-  CANCELLED: "난수 시드 실험이 취소되었습니다",
+  COMPLETED: "설정 탐색 실험이 완료되었습니다",
+  FAILED: "설정 탐색 실험이 실패했습니다",
+  CANCELLED: "설정 탐색 실험이 취소되었습니다",
 };
 
 /** 자식 알림 대신 배치가 최종 상태로 한 번 전이될 때 만드는 요약 알림. */

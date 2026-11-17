@@ -40,6 +40,7 @@ import {
 } from "../../../../runtime/modules/intraday/domain/engine.js";
 import { intradayValidations, intradayValidationTrials } from "../../../shared/db/intraday-validation-schema.js";
 import { aggregateChartBars } from "./chart-bars.js";
+import { BacktestDeletionError, BacktestDeletionService } from "../../backtest/application/backtest-deletion-service.js";
 
 export class IntradayError extends Error {
   constructor(
@@ -644,29 +645,12 @@ export class IntradayService {
     return [...this.controllers].filter(([, controller]) => controller.signal.aborted).map(([id]) => id);
   }
   deleteRunHistory(ownerId: string, id: string): void {
-    const searchReference = this.options.db.get(sql`SELECT 1 FROM configuration_searches WHERE mode='intraday' AND source_job_id=${id}
-      UNION ALL SELECT 1 FROM configuration_search_items WHERE job_id=${id} LIMIT 1`);
-    if (searchReference) throw new IntradayError("설정 탐색에서 참조하는 결과입니다. 연결된 실험을 먼저 삭제하세요.", 409);
-    const row = this.options.db
-      .select({ id: intradayRuns.id, status: intradayRuns.status })
-      .from(intradayRuns)
-      .where(and(eq(intradayRuns.id, id), eq(intradayRuns.ownerId, ownerId)))
-      .get();
-    if (!row) throw new IntradayError("분봉 백테스트를 찾을 수 없습니다.", 404);
-    if (this.options.db.select({ id: intradayValidations.id }).from(intradayValidations).where(eq(intradayValidations.sourceJobId, id)).get() || this.options.db.select({ id: intradayValidationTrials.id }).from(intradayValidationTrials).where(eq(intradayValidationTrials.runId, id)).get()) throw new IntradayError("검증 실험에서 참조하는 결과는 삭제할 수 없습니다.", 409);
-    if (this.controllers.has(id) || !["COMPLETED", "FAILED", "CANCELLED"].includes(row.status)) {
-      throw new IntradayError("실행이 완전히 종료된 백테스트만 삭제할 수 있습니다.", 409);
+    try {
+      new BacktestDeletionService(this.options.db, { isIntradayDraining: runId => this.controllers.has(runId) }).delete(ownerId, "intraday", [id]);
+    } catch (error) {
+      if (error instanceof BacktestDeletionError) throw new IntradayError(error.message, error.statusCode);
+      throw error;
     }
-    const deleted = this.options.db
-      .delete(intradayRuns)
-      .where(and(
-        eq(intradayRuns.id, id),
-        eq(intradayRuns.ownerId, ownerId),
-        inArray(intradayRuns.status, ["COMPLETED", "FAILED", "CANCELLED"]),
-      ))
-      .returning({ id: intradayRuns.id })
-      .get();
-    if (!deleted) throw new IntradayError("백테스트 상태가 변경되어 삭제할 수 없습니다.", 409);
   }
   submit(ownerId: string, raw: unknown): IntradayRun {
     this.checkCapacity();

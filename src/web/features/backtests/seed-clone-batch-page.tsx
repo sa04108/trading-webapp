@@ -79,7 +79,7 @@ export function SeedCloneBatchPage() {
       api(`/backtest-clone-batches/${id}`, { method: "DELETE" }),
     onSuccess: () => {
       setDeleteOpen(false);
-      toast.success("난수 시드 실험을 삭제했습니다");
+      toast.success("이전 설정 탐색 실험을 삭제했습니다");
       void queryClient.invalidateQueries({ queryKey: ["backtest-experiments"] });
       void queryClient.invalidateQueries({ queryKey: ["backtests"] });
       void queryClient.invalidateQueries({
@@ -92,7 +92,7 @@ export function SeedCloneBatchPage() {
   if (query.isError && (!query.data || isUnavailableApiError(query.error))) {
     return (
       <Alert variant="destructive">
-        <AlertTitle>난수 시드 실험을 불러올 수 없습니다</AlertTitle>
+        <AlertTitle>이전 설정 탐색 실험을 불러올 수 없습니다</AlertTitle>
         <AlertDescription>{query.error.message}</AlertDescription>
       </Alert>
     );
@@ -117,11 +117,11 @@ export function SeedCloneBatchPage() {
     <div className="space-y-4">
       {query.isError ? <Alert variant="destructive"><AlertDescription>실험을 새로 불러오지 못했습니다. <Button variant="outline" onClick={() => void query.refetch()}>다시 시도</Button></AlertDescription></Alert> : null}
       <BacktestBreadcrumbs jobId={batch.sourceJobId} trail={[
-        { label: "난수 시드 실험", href: `/backtests/${batch.sourceJobId}/seeds` },
+        { label: "이전 설정 탐색 실험", href: `/backtests/${batch.sourceJobId}/seeds` },
         { label: `실험 ${batch.id.slice(-6)}` },
       ]} />
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-lg font-semibold">난수 시드 실험</h2>
+        <h2 className="text-lg font-semibold">이전 설정 탐색 실험</h2>
         {batch.status !== "COMPLETED" ? <Badge
           variant={
             batch.status === "FAILED"
@@ -360,7 +360,7 @@ export function SeedCloneBatchPage() {
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>난수 시드 실험을 삭제할까요?</DialogTitle>
+            <DialogTitle>이전 설정 탐색 실험을 삭제할까요?</DialogTitle>
             <DialogDescription>
               이 실험에 포함된 모든 seed 백테스트와 결과가 함께 삭제됩니다. 원본
               백테스트는 유지됩니다.
