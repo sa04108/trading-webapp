@@ -185,6 +185,7 @@ export async function buildServer(
           clock: container.clock,
           benchmarks: container.benchmarkService,
           seedCloneBatches: container.seedCloneBatchService,
+          isIntradayDraining: id => container.intradayService.isDraining(id),
           database: container.database,
           refreshProviderFilings: container.config.dartApiKey === null ? undefined : () => container.refreshProviderFilings(),
           onRefreshFinished: (job) => {

@@ -14,7 +14,7 @@ const request: BacktestRequest = {
 };
 const metrics = { initialCash: 10000000, finalEquity: 11000000, totalReturnPct: 10, cagrPct: 3, maxDrawdownPct: -5, sharpe: 1, tradeCount: 12, winRate: 50, totalCommission: 100, totalTax: 100, totalSlippage: 100 };
 const rootItems = [{ label: "백테스트", href: "/backtests" }, { label: "결과 source", href: `/backtests/${sourceId}` }];
-const seedItems = [...rootItems, { label: "난수 시드 실험", href: `/backtests/${sourceId}/seeds` }, { label: "실험 batch", href: "/backtests/batches/navigation-batch" }, { label: "시드 77", href: `/backtests/${seedId}` }];
+const seedItems = [...rootItems, { label: "이전 설정 탐색 실험", href: `/backtests/${sourceId}/seeds` }, { label: "실험 batch", href: "/backtests/batches/navigation-batch" }, { label: "시드 77", href: `/backtests/${seedId}` }];
 const oosItems = [...rootItems, { label: "기간검증", href: `/backtests/${sourceId}/validations` }, { label: "홀드아웃 · 최적화 꺼짐 validation", href: "/backtests/validations/navigation-validation" }, { label: "1회차 · OOS 검증", href: `/backtests/${oosId}` }];
 
 async function setup(page: Page) {
@@ -58,9 +58,9 @@ test("원본 요약에서 난수·기간검증으로 이동하고 직접 열린 
   await expect(page.getByText("모멘텀 점수가 같은 종목끼리 순서를 정할 때 시드를 사용합니다.")).toBeVisible();
   await expect(page.getByRole("link", { name: "실험 보기", exact: true })).toHaveAttribute("href", "/backtests/batches/navigation-batch");
   await page.getByLabel("복제 개수 (1~100)").fill("0");
-  await expect(page.getByRole("button", { name: "난수 실험 시작" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "이전 실험 시작" })).toBeDisabled();
   await page.getByLabel("복제 개수 (1~100)").fill("3");
-  await page.getByRole("button", { name: "난수 실험 시작" }).click();
+  await page.getByRole("button", { name: "이전 실험 시작" }).click();
   await expect.poll(() => state.count).toBe(3);
   await expect(page).toHaveURL("/backtests/batches/navigation-batch");
   await page.locator(`a[href='/backtests/${seedId}']`).click();

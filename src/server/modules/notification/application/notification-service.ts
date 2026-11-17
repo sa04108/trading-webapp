@@ -23,6 +23,8 @@ export type NotificationRow = typeof notifications.$inferSelect;
  * 드물고, 넘치면 오래된 것이 잘린다 — 페이징 대신 상한이다.
  */
 const LIST_LIMIT = 200;
+// 저장된 과거 알림도 현재 실험 명칭으로 표시하되 원본 기록은 보존한다.
+const experimentTitle = (value: string) => value.replace(/난수(?: 시드)? 실험/g, "설정 탐색 실험");
 
 /**
  * 사용자 알림. 저장이 전달이다 — 접속 중이면 events 를 SSE 가 실어 나르고,
@@ -42,8 +44,8 @@ export class NotificationService {
       id: newId("ntf"),
       type: input.type,
       severity: input.severity,
-      title: input.title,
-      body: input.body ?? null,
+      title: experimentTitle(input.title),
+      body: input.body ? experimentTitle(input.body) : input.body ?? null,
       link: input.link ?? null,
       read: false,
       createdAtMs: this.clock.now(),
@@ -60,7 +62,8 @@ export class NotificationService {
       .where(severity === undefined ? undefined : eq(notifications.severity, severity))
       .orderBy(desc(notifications.createdAtMs), desc(notifications.id))
       .limit(LIST_LIMIT)
-      .all();
+      .all()
+      .map(row => ({ ...row, title: experimentTitle(row.title), body: row.body ? experimentTitle(row.body) : row.body }));
   }
 
   unreadCount(): number {

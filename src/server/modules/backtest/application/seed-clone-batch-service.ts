@@ -290,7 +290,7 @@ export class SeedCloneBatchService {
   }
 
   /**
-   * 종료된 난수 실험과 그 자식 job·결과를 한 트랜잭션에서 지운다.
+   * 종료된 설정 탐색 실험과 그 자식 job·결과를 한 트랜잭션에서 지운다.
    * 실행 중인 자식을 DB에서 먼저 지우면 워커가 고아 결과를 쓰게 되므로 거부한다.
    */
   delete(batchId: string): SeedCloneDeleteResult {
@@ -307,7 +307,7 @@ export class SeedCloneBatchService {
       .immediate();
   }
 
-  /** 원본 백테스트와 그 원본에서 만든 모든 난수 실험·자식 결과를 원자적으로 지운다. */
+  /** 원본 백테스트와 그 원본에서 만든 모든 설정 탐색 실험·자식 결과를 원자적으로 지운다. */
   deleteSourceJob(sourceJobId: string): SeedCloneDeleteResult {
     return this.database.sqlite
       .transaction(() => {

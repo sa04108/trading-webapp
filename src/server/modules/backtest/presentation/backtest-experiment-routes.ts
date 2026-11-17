@@ -117,11 +117,11 @@ export function backtestLineage(database: DatabaseHandle, id: string, ownerId?: 
     if (job.batch) {
       const batch = db.select({ source: backtestCloneBatches.sourceJobId }).from(backtestCloneBatches).where(eq(backtestCloneBatches.id, job.batch)).get();
       const item = db.select({ seed: backtestCloneBatchItems.randomSeed }).from(backtestCloneBatchItems).where(eq(backtestCloneBatchItems.jobId, jobId)).get();
-      if (jobId === id) { kind = "seed"; roleLabel = item ? `난수 시드 ${item.seed}` : "난수 실험 결과"; }
+      if (jobId === id) { kind = "seed"; roleLabel = item ? `난수 시드 ${item.seed}` : "설정 탐색 실험 결과"; }
       const source = batch?.source ?? job.source;
       if (!batch || !source) complete = false;
       return [...(source ? walk(source) : [{ label: "삭제된 상위 백테스트" }]),
-        ...(source ? [{ label: "난수 시드 실험", href: `/backtests/${encodeURIComponent(source)}/seeds` }] : []),
+        ...(source ? [{ label: "이전 설정 탐색 실험", href: `/backtests/${encodeURIComponent(source)}/seeds` }] : []),
         { label: `실험 ${job.batch.slice(-6)}`, ...(batch ? { href: `/backtests/batches/${encodeURIComponent(job.batch)}` } : {}) },
         { ...own, label: item ? `시드 ${item.seed}` : own.label }];
     }

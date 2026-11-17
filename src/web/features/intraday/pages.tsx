@@ -1,3 +1,4 @@
+import { BacktestDeleteDialog } from "../backtests/backtest-delete-dialog";
 import { IntradayChartView } from "./intraday-chart";
 export { IntradayDataPage } from "./intraday-data-page";
 import { useHistoryQueries } from "../backtests/use-history-queries";
@@ -52,7 +53,6 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { TableCell, TableRow } from "@/components/ui/table";
@@ -254,8 +254,8 @@ export function IntradayListPage() {
   const controls = useHistoryControls(true);
   const tablePreferences = useHistoryTablePreferences();
   const columns = tablePreferences.visibleColumns.map((column) => column.id);
-  const client = useQueryClient();
   const historyEditing = useHistoryEditing();
+  const [deletion, setDeletion] = useState<{ strategyId: string; ids: string[] } | null>(null);
   const groups = useQuery({
     queryKey: ["intraday-runs", "groups"],
     queryFn: () => api<{ groups: HistoryGroup[] }>("/intraday/runs/groups"),
@@ -292,21 +292,6 @@ export function IntradayListPage() {
   );
   const extras = useBacktestHistoryExtras(visibleRuns.map((run) => run.id), 5_000, "intraday");
   const extrasById = new Map(extras.data?.summaries.map((item) => [item.jobId, item]) ?? []);
-  const remove = useMutation({
-    mutationFn: async ({ ids }: { strategyId: string; ids: string[] }) => {
-      const results = await Promise.allSettled(ids.map(async (id) => {
-        await api(`/intraday/history/${encodeURIComponent(id)}`, { method: "DELETE" });
-        client.removeQueries({ queryKey: ["intraday-run", id], exact: true });
-      }));
-      const failed = results.find((result) => result.status === "rejected");
-      if (failed?.status === "rejected") throw failed.reason;
-    },
-    onSuccess: (_result, { strategyId, ids }) => {
-      toast.success(`백테스트 ${ids.length}개를 삭제했습니다`);
-      historyEditing.setEditing(strategyId, false);
-    },
-    onSettled: () => client.invalidateQueries({ queryKey: ["intraday-runs"] }),
-  });
   const corrections = (groups.data?.groups ?? []).flatMap((group, index) => {
     const query = pages[index];
     if (
@@ -338,13 +323,13 @@ export function IntradayListPage() {
       />
       <HistoryToolbar controls={controls} intraday onChange={() => historyEditing.clear()} />
       <ErrorAlert error={groups.error} />
-      <ErrorAlert error={remove.error} />
       {groups.isLoading ? (
         <p className="text-sm text-muted-foreground">
           이력을 불러오는 중입니다.
         </p>
       ) : null}
       {groups.data?.groups.length === 0 ? <p>백테스트가 없습니다.</p> : null}
+      {deletion ? <BacktestDeleteDialog mode="intraday" ids={deletion.ids} onClose={() => setDeletion(null)} onDeleted={() => { historyEditing.setEditing(deletion.strategyId, false); setDeletion(null); }} /> : null}
       <HistoryLayout columns={columns} view={controls.view}>
         {(groups.data?.groups ?? []).map((group, index) => {
           const query = pages[index];
@@ -371,10 +356,10 @@ export function IntradayListPage() {
                 }}
                 total={deletableIds.length}
                 selected={selectedIds.length}
-                pending={remove.isPending}
+                pending={deletion !== null}
                 selectionDisabled={query?.isPlaceholderData}
                 onToggleAll={() => historyEditing.toggleAll(group.strategyId, deletableIds)}
-                onRemoveSelected={() => remove.mutate({ strategyId: group.strategyId, ids: selectedIds })}
+                onRemoveSelected={() => setDeletion({ strategyId: group.strategyId, ids: selectedIds })}
               />}
               onToggle={() => {
                 controls.toggle(group.strategyId);
@@ -449,7 +434,7 @@ export function IntradayListPage() {
                               id={`intraday-${run.id}`}
                               className="mt-5"
                               checked={selected.has(run.id)}
-                              disabled={active(run.status) || remove.isPending || query?.isPlaceholderData}
+                              disabled={active(run.status) || deletion !== null || query?.isPlaceholderData}
                               onCheckedChange={() => historyEditing.toggleOne(group.strategyId, run.id)}
                               aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
                             />
@@ -472,7 +457,7 @@ export function IntradayListPage() {
                               <>
                                 <Checkbox
                                   checked={selected.has(run.id)}
-                                  disabled={active(run.status) || remove.isPending || query?.isPlaceholderData}
+                                  disabled={active(run.status) || deletion !== null || query?.isPlaceholderData}
                                   onCheckedChange={() => historyEditing.toggleOne(group.strategyId, run.id)}
                                   aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
                                 />
@@ -904,16 +889,6 @@ function IntradayResult({ id }: { id: string }) {
     },
     onError: (error) => toast.error(error.message),
   });
-  const remove = useMutation({
-    mutationFn: () => api(`/intraday/history/${encodeURIComponent(id)}`, { method: "DELETE" }),
-    onSuccess: () => {
-      client.removeQueries({ queryKey: ["intraday-run", id], exact: true });
-      void client.invalidateQueries({ queryKey: ["intraday-runs"] });
-      void client.invalidateQueries({ queryKey: ["intraday-experiments"] });
-      void client.invalidateQueries({ queryKey: ["jobs"] });
-      void navigate("/backtests/intraday");
-    },
-  });
   const r = run.data;
   const result = r?.result;
   const names = useStockNames(r ? [r.request.symbol] : []);
@@ -980,7 +955,7 @@ function IntradayResult({ id }: { id: string }) {
         <p>전략 버전 {result.strategyVersion} · {money(result.processedBars)}개 분봉 처리 · {result.session}</p>
       </CardContent></Card>
     </> : null}
-    <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}><DialogContent><DialogHeader><DialogTitle>백테스트 삭제</DialogTitle><DialogDescription>이 백테스트 결과를 삭제합니다. 기간검증에 연결된 결과는 해당 실험을 먼저 삭제해야 합니다.</DialogDescription></DialogHeader><ErrorAlert error={remove.error} /><DialogFooter><Button variant="outline" onClick={() => setDeleteOpen(false)}>취소</Button><Button variant="destructive" disabled={remove.isPending} onClick={() => remove.mutate()}>삭제</Button></DialogFooter></DialogContent></Dialog>
+    {deleteOpen ? <BacktestDeleteDialog mode="intraday" ids={[id]} onClose={() => setDeleteOpen(false)} onDeleted={() => { client.removeQueries({ queryKey: ["intraday-run", id], exact: true }); setDeleteOpen(false); void navigate("/backtests/intraday"); }} /> : null}
   </div>;
 }
 

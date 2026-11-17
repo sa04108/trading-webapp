@@ -1,4 +1,7 @@
 import { registerBacktestExperimentRoutes } from "./backtest-experiment-routes.js";
+import { BacktestDeletionError, BacktestDeletionService } from "../application/backtest-deletion-service.js";
+import { backtestDeletionRequestSchema, backtestDeletionConfirmSchema } from "../../../../shared/schemas/backtest-deletion.js";
+import { preserveCompletedWizards } from "../application/backtest-wizard-state.js";
 import { dailySearchCatalog, sampleConfigurations } from "../application/configuration-search-catalog.js";
 import { ConfigurationSearchError, type ConfigurationSearchAdapter } from "../application/configuration-search-service.js";
 import { registerBacktestRefreshRoutes } from "./backtest-refresh-routes.js";
@@ -143,6 +146,7 @@ export interface BacktestRouteDeps {
   readonly clock: Clock;
   readonly benchmarks: BenchmarkService;
   readonly seedCloneBatches: SeedCloneBatchService;
+  readonly isIntradayDraining: (id: string) => boolean;
 }
 
 const MIN_FREE_DISK_BYTES = 500 * 1024 * 1024;
@@ -420,6 +424,31 @@ export function registerBacktestRoutes(
     benchmarks,
     seedCloneBatches,
   } = deps;
+
+  const deletions = new BacktestDeletionService(deps.database.db, {
+    isIntradayDraining: deps.isIntradayDraining,
+    beforeDeleteDaily: ids => preserveCompletedWizards(deps.database, ids),
+    collectPreparations: () => { new PreparationReferenceService(deps.database).collect(); },
+  });
+  const deletionError = (reply: FastifyReply, error: unknown) => {
+    if (error instanceof BacktestDeletionError) return reply.code(error.statusCode).send({ error: error.message });
+    throw error;
+  };
+  app.post("/backtests/deletion-preview", { preHandler: requireAuth }, (request, reply) => {
+    const parsed = backtestDeletionRequestSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "삭제할 백테스트 목록이 올바르지 않습니다." });
+    try { return deletions.preview(request.authUser!.id, parsed.data.mode, parsed.data.ids); }
+    catch (error) { return deletionError(reply, error); }
+  });
+  app.post("/backtests/delete", { preHandler: requireAuth }, (request, reply) => {
+    const parsed = backtestDeletionConfirmSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "삭제할 백테스트 목록과 확인 정보가 올바르지 않습니다." });
+    try {
+      const result = deletions.delete(request.authUser!.id, parsed.data.mode, parsed.data.ids, parsed.data.token);
+      audit.record(request.authUser!.username, "backtest.deleted", { mode: parsed.data.mode, jobIds: parsed.data.ids, ...result });
+      return reply.code(204).send();
+    } catch (error) { return deletionError(reply, error); }
+  });
 
   const wizardContext = (request: FastifyRequest): string | undefined => {
     const raw = (request.query as { wizardId?: unknown }).wizardId;
@@ -774,7 +803,7 @@ export function registerBacktestRoutes(
       const capacity = checkPositionCapacity(rebased.request);
       if (errors.length || capacity) throw new BacktestRefreshError(errors[0] ?? capacity!, 400);
       if (action.kind === "RANDOM_SEEDS") {
-        if (source.cloneBatchId !== null) throw new BacktestRefreshError("난수 실험은 원본 백테스트에서 시작하세요.", 409);
+        if (source.cloneBatchId !== null) throw new BacktestRefreshError("설정 탐색 실험은 원본 백테스트에서 시작하세요.", 409);
         if (strategies.describe(source.strategyId)?.supportsRandomSeed === false)
           throw new BacktestRefreshError("이 전략은 난수 시드의 영향을 받지 않습니다.", 400);
       }
@@ -1284,7 +1313,7 @@ export function registerBacktestRoutes(
       if (sourceJob.cloneBatchId !== null) {
         return reply.code(409).send({
           error:
-            "난수 시드 실험의 자식 실행에서는 새 난수 실험을 만들 수 없습니다. 원본 백테스트에서 시작하세요.",
+            "설정 탐색 실험의 자식 실행에서는 새 설정 탐색 실험을 만들 수 없습니다. 원본 백테스트에서 시작하세요.",
         });
       }
       if (
@@ -1466,7 +1495,7 @@ export function registerBacktestRoutes(
       if (!batch)
         return reply
           .code(404)
-          .send({ error: "난수 시드 실험을 찾을 수 없습니다" });
+          .send({ error: "설정 탐색 실험을 찾을 수 없습니다" });
       return { batch: serializeBatch(batch, true) };
     },
   );
@@ -1480,7 +1509,7 @@ export function registerBacktestRoutes(
       if (!batch)
         return reply
           .code(404)
-          .send({ error: "난수 시드 실험을 찾을 수 없습니다" });
+          .send({ error: "설정 탐색 실험을 찾을 수 없습니다" });
       for (const { job } of batch.items) {
         if (job && !queue.isTerminal(job.status)) orchestrator.cancel(job.id);
       }
@@ -1504,13 +1533,13 @@ export function registerBacktestRoutes(
       if (result === "NOT_FOUND") {
         return reply
           .code(404)
-          .send({ error: "난수 시드 실험을 찾을 수 없습니다" });
+          .send({ error: "설정 탐색 실험을 찾을 수 없습니다" });
       }
       if (result === "NOT_DELETABLE") {
         return reply
           .code(409)
           .send({
-            error: "실행 중인 난수 시드 실험은 취소 완료 후 삭제할 수 있습니다",
+            error: "실행 중인 설정 탐색 실험은 취소 완료 후 삭제할 수 있습니다",
           });
       }
       audit.record(
@@ -1529,21 +1558,8 @@ export function registerBacktestRoutes(
     { preHandler: requireAuth },
     async (request, reply) => {
       const { id } = request.params as { id: string };
-      if (validations.referencesJob(id) || validations.list(id).length > 0) {
-        return reply
-          .code(409)
-          .send({ error: "연결된 기간 검증 실험을 먼저 삭제하세요." });
-      }
-      const result = seedCloneBatches.deleteSourceJob(id);
-      if (result === "NOT_FOUND") {
-        return reply.code(404).send({ error: "백테스트를 찾을 수 없습니다" });
-      }
-      if (result === "NOT_DELETABLE") {
-        return reply.code(409).send({
-          error:
-            "실행 중인 백테스트나 난수 시드 실험은 취소 완료 후 삭제할 수 있습니다",
-        });
-      }
+      try { deletions.delete(request.authUser!.id, "daily", [id]); }
+      catch (error) { return deletionError(reply, error); }
       audit.record(request.authUser?.username ?? "admin", "backtest.deleted", {
         jobId: id,
       });

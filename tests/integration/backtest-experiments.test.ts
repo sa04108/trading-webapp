@@ -6,6 +6,10 @@ import { backtestCloneBatches, backtestCloneBatchItems } from "../../src/server/
 import { backtestValidations, backtestValidationTrials } from "../../src/server/shared/db/backtest-validation-schema.js";
 import { backtestLineage, historyExtras } from "../../src/server/modules/backtest/presentation/backtest-experiment-routes.js";
 import type { DatabaseHandle } from "../../src/runtime/shared/db/database.js";
+import { configurationSearches, configurationSearchItems } from "../../src/server/shared/db/configuration-search-schema.js";
+import { intradayRuns } from "../../src/server/shared/db/intraday-schema.js";
+import { intradayValidations, intradayValidationTrials } from "../../src/server/shared/db/intraday-validation-schema.js";
+import { BacktestDeletionService } from "../../src/server/modules/backtest/application/backtest-deletion-service.js";
 
 function fixtures(database: DatabaseHandle) {
   const db = database.db;
@@ -32,6 +36,74 @@ function fixtures(database: DatabaseHandle) {
 }
 
 describe("백테스트 실험 요약과 결과 경로", () => {
+  // 기존 계보 검사는 읽기 전용이다. 혼합된 실험 그래프의 실제 삭제·중복 집계·소유권·롤백은 별도로 보호한다.
+  for (const mode of ["daily", "intraday"] as const) {
+    it(`${mode} 삭제 확인은 중첩 실험을 중복 없이 집계하고 함께 삭제한다`, async ({ ctx, cookie, admin }) => {
+      const database = ctx.container.database, db = database.db, f = fixtures(database);
+      const owner = (database.sqlite.prepare("SELECT id FROM users WHERE username=?").get(admin.username) as { id: string }).id;
+      const job = (id: string) => mode === "daily" ? f.job(id, 10) : db.insert(intradayRuns).values({ id, ownerId: owner, requestJson: "{}", status: "COMPLETED", createdAtMs: 1, updatedAtMs: 1 }).run();
+      for (const id of ["source", "search-child", "validation-child", "independent"]) job(id);
+      db.insert(configurationSearches).values({ id: "search", ownerId: owner, requestId: "request", mode, sourceJobId: "source", configJson: "{}", catalogJson: "{}", runtimeIdentity: "v1", status: "COMPLETED", notifiedAtMs: 1, createdAtMs: 1 }).run();
+      db.insert(configurationSearchItems).values({ id: "item", searchId: "search", ordinal: 0, requestJson: "{}", valuesJson: "{}", status: "COMPLETED", jobId: "search-child" }).run();
+      if (mode === "daily") {
+        f.validation("validation", "search-child");
+        db.insert(backtestValidationTrials).values({ id: "trial", validationId: "validation", jobId: "validation-child", fold: 0, role: "OOS" }).run();
+        // 보통 복제는 연관 실험이 아니므로 함께 삭제하면 안 된다.
+        database.sqlite.prepare("UPDATE backtest_jobs SET clone_source_job_id='source' WHERE id='independent'").run();
+      } else {
+        db.insert(intradayValidations).values({ id: "validation", ownerId: owner, sourceJobId: "search-child", requestJson: "{}", configJson: "{}", planJson: "{}", executionVersion: "v1", validationVersion: "v1", strategyVersion: "1", dataRevision: "1", status: "COMPLETED", createdAtMs: 1 }).run();
+        db.insert(intradayValidationTrials).values({ id: "trial", validationId: "validation", runId: "validation-child", fold: 0, role: "OOS" }).run();
+      }
+      const preview = await ctx.app.inject({ method: "POST", url: "/api/v1/backtests/deletion-preview", cookies: { session: cookie }, payload: { mode, ids: ["source", "search-child"] } });
+      expect(preview.statusCode).toBe(200);
+      expect(preview.json()).toMatchObject({ backtestCount: 3, configurationSearchCount: 1, periodValidationCount: 1, blockers: [] });
+      const response = await ctx.app.inject({ method: "POST", url: "/api/v1/backtests/delete", cookies: { session: cookie }, payload: { mode, ids: ["source", "search-child"], token: preview.json().token } });
+      expect(response.statusCode, response.body).toBe(204);
+      expect(database.sqlite.prepare(`SELECT id FROM ${mode === "daily" ? "backtest_jobs" : "intraday_runs"}`).all()).toEqual([{ id: "independent" }]);
+      expect(db.select().from(configurationSearches).all()).toHaveLength(0);
+      expect(db.select().from(configurationSearchItems).all()).toHaveLength(0);
+      expect(database.sqlite.prepare(`SELECT id FROM ${mode === "daily" ? "backtest_validations" : "intraday_validations"}`).all()).toHaveLength(0);
+      expect(database.sqlite.pragma("foreign_key_check")).toEqual([]);
+    });
+  }
+
+  it("삭제 범위 변경·활성 후손·다른 소유자·실패는 어떤 결과도 부분 삭제하지 않는다", async ({ ctx, cookie }) => {
+    const database = ctx.container.database, f = fixtures(database);
+    f.job("source"); f.job("unrelated");
+    const payload = { mode: "daily", ids: ["source", "unrelated"] };
+    const request = (path: string, body: Record<string, unknown> = payload) => ctx.app.inject({ method: "POST", url: `/api/v1/backtests/${path}`, cookies: { session: cookie }, payload: body });
+    expect((await ctx.app.inject({ method: "POST", url: "/api/v1/backtests/deletion-preview", payload })).statusCode).toBe(401);
+    const preview = (await request("deletion-preview")).json();
+    f.validation("new-validation", "source"); f.trial("new-validation", "new-child", 1);
+    const stale = await request("delete", { ...payload, token: preview.token });
+    expect(stale.statusCode).toBe(409);
+    expect(database.sqlite.prepare("SELECT count(*) AS n FROM backtest_jobs").get()).toEqual({ n: 3 });
+    database.sqlite.prepare("UPDATE backtest_jobs SET status='RUNNING' WHERE id='new-child'").run();
+    const active = (await request("deletion-preview")).json();
+    expect(active.blockers.length).toBeGreaterThan(0);
+    expect((await request("delete", { ...payload, token: active.token })).statusCode).toBe(409);
+    database.sqlite.prepare("UPDATE backtest_jobs SET status='COMPLETED' WHERE id='new-child'").run();
+    database.db.insert(configurationSearches).values({ id: "foreign-search", ownerId: "other-user", requestId: "foreign", mode: "daily", sourceJobId: "source", configJson: "{}", catalogJson: "{}", runtimeIdentity: "v1", status: "PREVIEW", createdAtMs: 1 }).run();
+    expect((await request("deletion-preview")).statusCode).toBe(404);
+    expect((await ctx.app.inject({ method: "DELETE", url: "/api/v1/backtests/source", cookies: { session: cookie } })).statusCode).toBe(404);
+    database.sqlite.prepare("DELETE FROM configuration_searches WHERE id='foreign-search'").run();
+    database.sqlite.exec("CREATE TRIGGER refuse_result_delete BEFORE DELETE ON backtest_jobs BEGIN SELECT RAISE(ABORT, 'test rollback'); END");
+    expect(() => new BacktestDeletionService(database.db).delete("owner", "daily", ["source"])).toThrow(expect.objectContaining({ cause: expect.objectContaining({ message: "test rollback" }) }));
+    expect(database.sqlite.prepare("SELECT count(*) AS n FROM backtest_validations").get()).toEqual({ n: 1 });
+    expect(database.sqlite.prepare("SELECT count(*) AS n FROM backtest_validation_trials").get()).toEqual({ n: 1 });
+    expect(database.sqlite.prepare("SELECT count(*) AS n FROM backtest_jobs").get()).toEqual({ n: 3 });
+  });
+
+  it("실험 자식 직접 삭제는 해당 실험의 형제를 포함하고 원본은 보존한다", async ({ ctx, cookie }) => {
+    const f = fixtures(ctx.container.database);
+    f.job("source"); f.batch("batch", "source");
+    f.seed("batch", "source", "child1", 1, 0); f.seed("batch", "source", "child2", 2, 1);
+    const deletion = new BacktestDeletionService(ctx.container.database.db);
+    expect(deletion.preview("owner", "daily", ["child1"])).toMatchObject({ backtestCount: 2, configurationSearchCount: 1, periodValidationCount: 0 });
+    expect((await ctx.app.inject({ method: "DELETE", url: "/api/v1/backtests/child1", cookies: { session: cookie } })).statusCode).toBe(204);
+    expect(ctx.container.database.sqlite.prepare("SELECT id FROM backtest_jobs").all()).toEqual([{ id: "source" }]);
+  });
+
   // 기존 이력 검사는 정렬만 확인한다. 부분 OOS·기준 전략이 요약을 왜곡하거나 원본 간 섞이는 경계를 검증한다.
   it("완료된 실험의 독립 OOS 평균을 집계하고 표본 수와 기록 수를 구분한다", async ({ ctx, cookie }) => {
     const database = ctx.container.database;

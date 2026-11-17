@@ -52,7 +52,9 @@ describe("분봉 기간 검증", () => {
     expect(f.captured.map(r => r.period)).toEqual([{ from: "2026-10-01", to: "2026-10-05" }, { from: "2026-10-06", to: "2026-10-10" }]);
     expect(f.captured.every(r => r.initialCash === request.initialCash)).toBe(true);
     expect(f.runs.countRuns("owner")).toBe(1);
-    expect(f.validations.delete("owner", created.id)).toBe(true);
+    f.runs.deleteRunHistory("owner", "source");
+    expect(f.validations.get("owner", created.id)).toBeNull();
+    expect(f.database.db.select().from(intradayRuns).all()).toHaveLength(0);
     expect(f.database.db.select().from(intradayValidationTrials).all()).toHaveLength(0);
   });
   it("부분 매도 건수를 사용하고 IS 성과만으로 OOS 후보를 선택한다", async () => {

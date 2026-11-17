@@ -7,6 +7,7 @@ import { backtestRefreshActionSchema } from '../../../../shared/schemas/backtest
 import { preparationInputSchema } from '../../../../shared/schemas/backtest-preparation.js';
 import { benchmarkSelectionSchema } from '../../../../shared/schemas/benchmark.js';
 import { backtestWizardDraftWritePayloadSchemas } from '../../../../shared/schemas/backtest-wizard-draft.js';
+import { backtestDeletionRequestSchema, backtestDeletionConfirmSchema } from '../../../../shared/schemas/backtest-deletion.js';
 
 const map: Record<string, ApiReferenceMetadata> = {};
 const schema = (zod: z.ZodType) => z.toJSONSchema(zod, { io: 'input' }) as Record<string, unknown>;
@@ -27,7 +28,9 @@ add('POST', '/backtests/:id/clone', '백테스트 복제', '원본을 복제해 
 add('POST', '/backtests/:id/clone-configured', '설정 변경 복제', '요청 설정으로 복제해 job과 warnings를 반환합니다. 원본 준비 결과를 재사용할 수 없으면 미리보기가 필요합니다.', { input: body('새 일봉 백테스트 설정.', schema(backtestRequestSchema)), params: [query('wizardId', 'string', '완료된 미리보기의 편집 가능한 위저드 ID, 1~128자.')], status: 201, errors: [400, 404, 409, 422, 429, 503, 507] });
 add('POST', '/backtests/:id/clone-random-seeds', '난수 시드 복제', '서로 다른 난수로 실행할 batch와 warnings를 반환합니다.', { input: body('count: 1~100 정수.', schema(z.object({ count: z.number().int().min(1).max(100) }))), status: 201 });
 add('GET', '/backtests/:id/clone-draft', '복제 초안', '원본 요청, 전략 정보, blockers와 reusablePreview를 반환합니다.');
-add('DELETE', '/backtests/:id', '백테스트 삭제', '종료된 원본과 연결된 결과를 삭제합니다.', { status: 204 });
+add('DELETE', '/backtests/:id', '백테스트 삭제', '종료된 결과와 연결된 설정 탐색 실험·기간검증·하위 결과를 함께 삭제합니다. 진행 중인 관련 작업이 있으면 전체 삭제를 거부합니다.', { status: 204, errors: [404, 409] });
+add('POST', '/backtests/deletion-preview', '백테스트 삭제 범위 확인', '중복을 제외한 backtestCount, configurationSearchCount, periodValidationCount, blockers와 확인용 token을 반환합니다. 실험의 자식 결과를 선택하면 해당 실험과 형제 결과도 포함됩니다. 일반 복제 결과는 독립적입니다.', { input: body('일봉·분봉 mode와 선택한 ids(1~100개).', schema(backtestDeletionRequestSchema)), errors: [400, 404] });
+add('POST', '/backtests/delete', '백테스트 일괄 삭제', '확인한 결과·실험을 하나의 트랜잭션으로 삭제합니다. 삭제 범위가 바뀌면 409를 반환하므로 미리보기를 다시 확인해야 합니다.', { input: body('미리보기의 mode, ids 및 token.', schema(backtestDeletionConfirmSchema)), status: 204, errors: [400, 404, 409] });
 add('GET', '/backtests/:id/trades', '거래 목록', 'trades 배열과 필터 기준 total을 반환합니다.', { params: [query('limit', 'integer', '1~500, 기본 100.'), query('offset', 'integer', '0 이상, 기본 0.'), query('symbol', 'string', '종목 코드 필터.'), query('sort', 'string', 'EXIT_TS, ENTRY_TS, QUANTITY, NET_PNL, RETURN_PCT 또는 HOLDING_TIME. 기본 EXIT_TS.'), query('dir', 'string', 'ASC 또는 DESC. 기본 ASC.')], errors: [400, 404] });
 add('GET', '/backtests/:id/series', '백테스트 차트 시계열', 'equity, drawdown, monthly, symbols, totalEquityPoints를 반환합니다.', { errors: [404] });
 add('GET', '/backtests/:id/export', '백테스트 결과 다운로드', 'job과 전체 결과 및 benchmarkIds를 JSON 파일로 반환합니다.');

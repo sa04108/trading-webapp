@@ -574,7 +574,7 @@ export function createContainer(
       ) {
         throw new Error(
           "종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — " +
-            "기간 전체 KRX 데이터를 동기화한 뒤 난수 시드 실험을 다시 시작하세요.",
+            "기간 전체 KRX 데이터를 동기화한 뒤 설정 탐색 실험을 다시 시작하세요.",
         );
       }
       const symbols = [
@@ -592,7 +592,7 @@ export function createContainer(
       if (missingSymbols.length > 0) {
         throw new Error(
           `선택한 기간에 일봉이 없는 유니버스 종목이 있습니다: ${missingSymbols.join(", ")} — ` +
-            "일봉을 동기화한 뒤 난수 시드 실험을 다시 시작하세요.",
+            "일봉을 동기화한 뒤 설정 탐색 실험을 다시 시작하세요.",
         );
       }
       const strategy = strategyRegistry.get(request.strategyId);
@@ -627,7 +627,7 @@ export function createContainer(
       if (missingCutoffs.length > 0) {
         throw new Error(
           `실제 편입 기간·상장폐지 이전에 실행 가능한 일봉이 없는 종목이 있습니다: ${missingCutoffs.join(", ")} — ` +
-            "일봉과 유니버스 데이터를 다시 준비한 뒤 난수 시드 실험을 다시 시작하세요.",
+            "일봉과 유니버스 데이터를 다시 준비한 뒤 설정 탐색 실험을 다시 시작하세요.",
         );
       }
       // 공시 결측은 원본 실행과 같은 시점별 전략 판정으로 처리한다.
@@ -663,7 +663,7 @@ export function createContainer(
       if (incomplete.length > 0) {
         throw new Error(
           "준비 완료 후 전략이 요구하는 PIT 재무 입력이 사라진 종목이 있습니다: " +
-            `${incomplete.join(", ")} — 고정된 난수 시드 실험 유니버스를 재순위할 수 없으므로 ` +
+            `${incomplete.join(", ")} — 고정된 설정 탐색 실험 유니버스를 재순위할 수 없으므로 ` +
             "새 미리보기를 준비한 뒤 실험을 다시 시작하세요.",
         );
       }

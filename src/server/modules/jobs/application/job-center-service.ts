@@ -216,7 +216,7 @@ export class JobCenterService {
         const data = db.prepare("SELECT strategy_id AS strategyId, total_count AS total, error FROM backtest_clone_batches WHERE id=?").get(row.sourceId) as { strategyId: string; total: number; error: string | null };
         const counts = db.prepare(`SELECT count(*) AS done FROM backtest_clone_batch_items i LEFT JOIN backtest_jobs j ON j.id=i.job_id
           WHERE i.batch_id=? AND (i.state='CANCELLED' OR j.status IN ${terminal})`).get(row.sourceId) as { done: number };
-        job = { ...job, title: `${strategyName(data.strategyId)} · 난수 시드 실험`, error: data.error, progress: jobProgress(counts.done, data.total, "백테스트"), link: `/backtests/batches/${encodeURIComponent(row.sourceId)}` };
+        job = { ...job, title: `${strategyName(data.strategyId)} · 설정 탐색 실험`, error: data.error, progress: jobProgress(counts.done, data.total, "백테스트"), link: `/backtests/batches/${encodeURIComponent(row.sourceId)}` };
         break;
       }
       case "validation": {

@@ -39,7 +39,7 @@ const item = (seed: number, value: number): SeedCloneBatchItem => ({
   metrics: metrics(value),
 });
 
-describe('난수 시드 실험 지표 요약', () => {
+describe('이전 설정 탐색 실험 지표 요약', () => {
   it('완료 결과만으로 수익률·Sharpe·MDD 분포를 계산한다', () => {
     const summary = summarizeSeedCloneMetrics([
       { ...item(10, 30), metrics: metrics(30, 1.5, -30) },

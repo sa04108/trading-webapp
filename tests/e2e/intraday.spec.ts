@@ -555,9 +555,10 @@ test("분봉 편집은 현재 페이지의 종료된 이력만 삭제한다", as
     const offset = Number(q.get("offset")), limit = Number(q.get("limit"));
     return route.fulfill({ json: { runs: rows.slice(offset, offset + limit), total: rows.length } });
   });
-  await page.route("**/api/v1/intraday/history/*", (route) => {
-    expect(route.request().method()).toBe("DELETE");
-    deleted.push(new URL(route.request().url()).pathname.split("/").at(-1)!);
+  await page.route("**/api/v1/backtests/deletion-preview", (route) => route.fulfill({ json: { backtestCount: 2, configurationSearchCount: 0, periodValidationCount: 0, blockers: [], token: "preview" } }));
+  await page.route("**/api/v1/backtests/delete", (route) => {
+    const { ids, mode, token } = route.request().postDataJSON() as { ids: string[]; mode: string; token: string };
+    expect(mode).toBe("intraday"); expect(token).toBe("preview"); deleted.push(...ids);
     return route.fulfill({ status: 204 });
   });
   await page.goto("/backtests/intraday?view=table&page.intraday-ema=2");
@@ -571,6 +572,11 @@ test("분봉 편집은 현재 페이지의 종료된 이력만 삭제한다", as
   await expect(other.getByRole("checkbox")).toHaveCount(0);
   await group.getByRole("checkbox", { name: "전체 선택", exact: true }).check();
   await group.getByRole("button", { name: "삭제 (2)", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("백테스트 결과 2개");
+  await expect(dialog).not.toContainText("설정 탐색 실험");
+  await expect(dialog).not.toContainText("기간검증");
+  await dialog.getByRole("button", { name: "삭제", exact: true }).click();
   await expect.poll(() => [...deleted].sort()).toEqual(["history-10", "history-11"]);
   await expect(group.locator("tbody > tr")).toHaveCount(10);
   await expect(group.getByRole("button", { name: "편집", exact: true })).toBeVisible();
@@ -629,7 +635,7 @@ test("분봉 실험 페이지를 재사용하고 검증 하위 결과와 일반 
   await expect(page.getByRole("link", { name: "설정 탐색 실험 열기" })).toHaveAttribute("href", "/backtests/intraday/done/search");
   await page.goto("/backtests/intraday/done/seeds");
   await expect(page).toHaveURL(/\/backtests\/intraday\/done\/seeds$/);
-  await expect(page.getByRole("button", { name: "난수 실험 시작" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "이전 실험 시작" })).toBeDisabled();
   await expect(page.getByText(/분봉 엔진은 주문 순서를 난수로 섞지 않습니다/)).toBeVisible();
   await page.getByRole("link", { name: "원본 결과", exact: true }).click();
   await page.getByRole("link", { name: "기간검증 열기" }).click();

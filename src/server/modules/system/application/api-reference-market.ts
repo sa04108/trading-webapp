@@ -41,7 +41,7 @@ add('GET', '/intraday/runs', '분봉 결과 목록', '사용자 소유 runs와 t
 add('POST', '/intraday/runs', '분봉 백테스트 제출', '분봉 백테스트를 대기열에 등록하고 실행 상태를 반환합니다.', { input: body('전략, 종목, 기간과 실행 설정.', intradayRequestSchema), status: 202, errors: [400, 429] });
 add('GET', '/intraday/runs/:id', '분봉 백테스트 상세', '사용자 소유 실행의 요청, 상태 및 완료 결과를 반환합니다.');
 add('DELETE', '/intraday/runs/:id', '분봉 백테스트 취소', '실행 취소를 요청하고 실행 상태를 반환합니다.');
-add('DELETE', '/intraday/history/:id', '분봉 결과 삭제', '종료된 사용자 소유 실행 이력을 삭제합니다. 연결된 실험이 있으면 삭제할 수 없습니다.', { status: 204, errors: [400, 404, 409] });
+add('DELETE', '/intraday/history/:id', '분봉 결과 삭제', '종료된 사용자 소유 실행과 연결된 설정 탐색 실험·기간검증·하위 결과를 함께 삭제합니다. 실행 또는 정리 중인 작업이 있으면 전체 삭제를 거부합니다.', { status: 204, errors: [400, 404, 409] });
 const validation = body('HOLDOUT 또는 WALK_FORWARD 기간 설정과 선택적 최적화.', periodValidationConfigSchema);
 add('POST', '/intraday/runs/:id/validations/preview', '분봉 기간 검증 계획', '설정으로 분할 구간 및 실행량 plan을 반환합니다.', { input: validation });
 add('GET', '/intraday/runs/:id/validations', '분봉 기간 검증 목록', '원본의 experiments 배열을 반환합니다.');
