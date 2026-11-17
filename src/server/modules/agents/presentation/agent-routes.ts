@@ -12,6 +12,7 @@ import type { AgentCoordinator } from "../application/agent-coordinator.js";
 import type { AgentInstallationService } from "../application/agent-installation.js";
 import type { RemoteResultUploadManager } from "../../backtest/infrastructure/remote-result-upload-manager.js";
 import { agentContainerImage, buildWindowsAgentInstaller, validateAgentServerOrigin } from "../infrastructure/agent-windows-installer.js";
+import { DatasetTransferLimiter } from "../infrastructure/dataset-transfer-limiter.js";
 
 type PreHandler = (
   request: FastifyRequest,
@@ -41,7 +42,10 @@ export function registerAgentControlRoutes(
   coordinator: AgentCoordinator,
   uploads: RemoteResultUploadManager,
   installations: AgentInstallationService,
+  datasetBytesPerSecond: number,
 ): void {
+  const downloads = new DatasetTransferLimiter(datasetBytesPerSecond);
+  app.addHook("preClose", async () => { downloads.close(); });
   app.post("/install/resolve", async (request, reply) => {
     const { installation, previousToken } = parseRequest(z.object({
       installation: z.string().min(1).max(4096),
@@ -92,7 +96,7 @@ export function registerAgentControlRoutes(
         .header("content-length", manifest.bytes)
         .header("etag", `"${manifest.sha256}"`)
         .header("cache-control", "private, immutable")
-        .send(fs.createReadStream(file));
+        .send(downloads.stream(file));
     },
   );
   app.addContentTypeParser(ARTIFACT_TYPE, (_request, stream, done) =>

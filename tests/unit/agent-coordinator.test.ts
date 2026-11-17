@@ -1,6 +1,8 @@
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import * as buildInfo from '../../src/runtime/shared/build-info.js';
 import { EventEmitter } from 'node:events';
+import fs from 'node:fs';
+import path from 'node:path';
 import { BacktestResultArtifactRejectedError } from '../../src/runtime/modules/backtest/application/backtest-result-artifact.js';
 import { createHash, randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
@@ -242,6 +244,31 @@ describe('연결과 리스 수명 분리', () => {
         'content-length': String(1024 ** 3), 'x-agent-attempt': String(lease.attempt), 'x-agent-lease-token': 'x'.repeat(48), 'x-content-sha256': 'a'.repeat(64) }, payload: Buffer.from('x') });
     expect(response.statusCode).toBe(413);
     expect(receive).not.toHaveBeenCalled();
+  });
+
+  // inject만으로는 실제 소켓 종료가 전송 스트림과 서버 종료로 전파되는지 확인할 수 없다.
+  it('데이터셋 전송의 바이트·헤더를 보존하고 연결 취소와 서버 종료를 처리한다', async ({ scenario }) => {
+    const { ctx, token } = scenario;
+    const payload = Buffer.alloc(128 * 1024, 37);
+    const file = path.join(ctx.dir, 'network-dataset.sqlite');
+    fs.writeFileSync(file, payload);
+    const manifest = { ...dataset, bytes: payload.length, sha256: createHash('sha256').update(payload).digest('hex') };
+    vi.spyOn(ctx.container.agentCoordinator.snapshots, 'get').mockReturnValue(manifest);
+    vi.spyOn(ctx.container.agentCoordinator.snapshots, 'file').mockReturnValue(file);
+    const address = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+    const headers = { authorization: `Bearer ${token}` };
+    const response = await fetch(`${address}/api/agents/datasets/1`, { headers });
+    expect(response.headers.get('content-length')).toBe(String(payload.length));
+    expect(response.headers.get('etag')).toBe(`"${manifest.sha256}"`);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(payload);
+    const abort = new AbortController();
+    const cancelled = await fetch(`${address}/api/agents/datasets/1`, { headers, signal: abort.signal });
+    abort.abort();
+    await expect(cancelled.arrayBuffer()).rejects.toThrow();
+    const active = await fetch(`${address}/api/agents/datasets/1`, { headers });
+    const interrupted = expect(active.arrayBuffer()).rejects.toThrow();
+    await ctx.app.close();
+    await interrupted;
   });
 
   it('결과 검증 자식이 거부한 파일은 일시 장애 대신 422로 응답한다', async ({ scenario }) => {

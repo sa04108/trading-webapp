@@ -245,7 +245,7 @@ describe('Docker 서버 설정과 업데이트', () => {
     expect(h.run(['init']).status).toBe(0);
     const sentinel = h.file('must-not-execute');
     const secret = `literal $HOME \\ "quoted" '#hash' = $(touch ${sentinel})`;
-    fs.appendFileSync(h.file('config.env'), `DART_API_KEY=${secret}\n`);
+    fs.appendFileSync(h.file('config.env'), `DART_API_KEY=${secret}\nAGENT_DATASET_BYTES_PER_SECOND=524288\n`);
     const result = h.run(['validate'], { DOMAIN: 'wrong.example.com', SERVER_MEMORY: '1m' });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout + result.stderr).not.toContain(secret);
@@ -253,6 +253,7 @@ describe('Docker 서버 설정과 업데이트', () => {
     const validation = h.calls().find(call => call.args.some(arg => arg.includes('loadConfig();')))!;
     expect(validation.appEnv).toContain(`DART_API_KEY=${secret}\n`);
     expect(validation.appEnv).toContain('NODE_ENV=production\n');
+    expect(validation.appEnv).toContain('AGENT_DATASET_BYTES_PER_SECOND=524288\n');
     expect(validation.appEnv).not.toMatch(/^(DOMAIN|SERVER_|TRAEFIK_)/m);
     expect(validation.domain).toBe('trading.hyunbbai.com');
     expect(validation.memory).toBe('12g');

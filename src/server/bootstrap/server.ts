@@ -274,6 +274,7 @@ export async function buildServer(
         container.agentCoordinator,
         container.remoteResultUploadManager,
         agentInstallations,
+        config.agentDatasetBytesPerSecond,
       );
     },
     { prefix: "/api/agents" },

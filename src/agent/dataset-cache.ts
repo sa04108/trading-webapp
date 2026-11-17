@@ -113,16 +113,16 @@ export class AgentDatasetCache {
       throw new Error("계산 데이터 다운로드 공간이 부족합니다");
     const temporary = `${file}.part`;
     this.abort = new AbortController();
+    const abort = this.abort;
+    const timeout = setTimeout(() => abort.abort(new Error("계산 데이터 다운로드가 중단되었습니다")), 120_000);
+    timeout.unref();
     try {
       const response = await fetch(
         `${this.settings.serverUrl}/api/agents/datasets/${manifest.version}`,
         {
           headers: { authorization: `Bearer ${this.settings.token}` },
           redirect: "error",
-          signal: AbortSignal.any([
-            this.abort.signal,
-            AbortSignal.timeout(30 * 60_000),
-          ]),
+          signal: abort.signal,
         },
       );
       if (!response.ok || !response.body)
@@ -133,6 +133,7 @@ export class AgentDatasetCache {
       const report = this.report.bind(this);
       const verify = new Transform({
         transform(chunk: Buffer, _encoding, callback) {
+          if (chunk.length > 0) timeout.refresh();
           bytes += chunk.length;
           if (bytes > manifest.bytes) {
             callback(new Error("데이터 파일이 명세보다 큽니다"));
@@ -157,6 +158,7 @@ export class AgentDatasetCache {
         Readable.fromWeb(response.body),
         verify,
         fs.createWriteStream(temporary, { mode: 0o600 }),
+        { signal: abort.signal },
       );
       if (bytes !== manifest.bytes || hash.digest("hex") !== manifest.sha256)
         throw new Error("계산 데이터 해시 또는 길이 불일치");
@@ -176,6 +178,8 @@ export class AgentDatasetCache {
     } catch (error) {
       fs.rmSync(temporary, { force: true });
       throw error;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

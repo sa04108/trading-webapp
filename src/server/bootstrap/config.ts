@@ -19,6 +19,8 @@ const envSchema = z.object({
   TEMP_ROOT: z.string().default("./data/temp"),
   /** 대기(QUEUED) 백테스트 상한 — 연타로 대기열이 무한히 쌓이는 것을 막는다 (D-025) */
   MAX_QUEUED_BACKTESTS: z.coerce.number().int().min(1).max(200).default(20),
+  /** 원격 에이전트 데이터셋 다운로드 전체가 공유하는 초당 전송 바이트 상한. */
+  AGENT_DATASET_BYTES_PER_SECOND: z.coerce.number().int().min(1024).max(1024 ** 3).default(512 * 1024),
   SESSION_SECRET: z.string().min(32).optional(),
   SESSION_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().min(60).default(43200),
   SESSION_ABSOLUTE_TIMEOUT_SECONDS: z.coerce
@@ -94,6 +96,7 @@ export interface AppConfig {
   readonly exportRoot: string;
   readonly tempRoot: string;
   readonly maxQueuedBacktests: number;
+  readonly agentDatasetBytesPerSecond: number;
   readonly sessionSecret: string;
   readonly sessionIdleTimeoutSeconds: number;
   readonly sessionAbsoluteTimeoutSeconds: number;
@@ -164,6 +167,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     exportRoot: raw.EXPORT_ROOT,
     tempRoot: raw.TEMP_ROOT,
     maxQueuedBacktests: raw.MAX_QUEUED_BACKTESTS,
+    agentDatasetBytesPerSecond: raw.AGENT_DATASET_BYTES_PER_SECOND,
     sessionSecret: raw.SESSION_SECRET ?? randomBytes(48).toString("base64"),
     sessionIdleTimeoutSeconds: raw.SESSION_IDLE_TIMEOUT_SECONDS,
     sessionAbsoluteTimeoutSeconds: raw.SESSION_ABSOLUTE_TIMEOUT_SECONDS,

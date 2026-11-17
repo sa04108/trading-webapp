@@ -13,6 +13,7 @@ describe('loadConfig', () => {
     expect(config.bindAddress).toBe('127.0.0.1');
     expect(config.port).toBe(3000);
     expect(config.maxQueuedBacktests).toBe(20);
+    expect(config.agentDatasetBytesPerSecond).toBe(512 * 1024);
     expect(config.sessionIdleTimeoutSeconds).toBe(43200);
     expect(config.sessionAbsoluteTimeoutSeconds).toBe(604800);
     expect(config.liveTradingEnabled).toBe(false);
@@ -48,6 +49,9 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ APP_PORT: 'not-a-port' })).toThrow(ConfigError);
     expect(() => loadConfig({ APP_PORT: '99999' })).toThrow(ConfigError);
     expect(() => loadConfig({ LOG_LEVEL: 'verbose' })).toThrow(ConfigError);
+    for (const value of ['0', '-1', '512', 'unlimited', String(1024 ** 3 + 1)]) {
+      expect(() => loadConfig({ AGENT_DATASET_BYTES_PER_SECOND: value })).toThrow(ConfigError);
+    }
     for (const address of ['true', '*', '0.0.0.0/0', '::/0', '172.30.83.2/99']) {
       expect(() => loadConfig({ TRUST_PROXY_ADDRESSES: address })).toThrow(ConfigError);
     }
@@ -58,10 +62,12 @@ describe('loadConfig', () => {
     const config = loadConfig({
       APP_PORT: '4100',
       LIVE_TRADING_ENABLED: 'true',
+      AGENT_DATASET_BYTES_PER_SECOND: '1048576',
       TRUST_PROXY_ADDRESSES: '172.30.83.2, 2001:db8::1/128',
     });
     expect(config.port).toBe(4100);
     expect(config.liveTradingEnabled).toBe(true);
+    expect(config.agentDatasetBytesPerSecond).toBe(1048576);
     expect(config.trustedProxyAddresses).toEqual(['172.30.83.2', '2001:db8::1/128']);
   });
 
