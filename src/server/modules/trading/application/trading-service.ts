@@ -5,9 +5,9 @@ import type { AnyTradingStrategy } from "../../../../runtime/modules/strategy/do
 import type { OrderIntent } from "../../../../runtime/modules/backtest/domain/types.js";
 import { backtestJobs } from "../../../../runtime/shared/db/operations-schema.js";
 import { backtestRuns } from "../../../shared/db/backtest-result-schema.js";
-import { tradingControl, tradingDeployments, tradingEvents, tradingOrders } from "../../../shared/db/trading-schema.js";
+import { paperTradingAccount, tradingControl, tradingDeployments, tradingEvents, tradingOrders } from "../../../shared/db/trading-schema.js";
 import { backtestRequestSchema } from "../../../../shared/schemas/backtest-request.js";
-import { PAPER_TRADING_ACCOUNT_ID, PAPER_TRADING_INITIAL_CASH_KRW, tradingSetupSchema, type TradingArtifact, type TradingDeployment, type TradingOrder, type TradingQuote, type TradingSetup, type TradingSnapshot, type TradingSource } from "../../../../shared/schemas/trading.js";
+import { PAPER_TRADING_ACCOUNT_ID, PAPER_TRADING_INITIAL_CASH_KRW, paperInitialCashSchema, tradingSetupSchema, type TradingArtifact, type TradingDeployment, type TradingOrder, type TradingQuote, type TradingSetup, type TradingSnapshot, type TradingSource } from "../../../../shared/schemas/trading.js";
 import { kstDateOf } from "../../../../runtime/modules/market-data/domain/kst-date.js";
 import { BrokerHoldingsChangedError, BrokerRequestError, type BrokerHolding, type BrokerOrder, type TradingBroker } from "./broker-port.js";
 
@@ -113,6 +113,25 @@ export class TradingService {
     return {...setup,id:row.id,name:row.name,version:row.version,status:row.status,createdAtMs:row.createdAtMs,updatedAtMs:row.updatedAtMs,activatedAtMs:row.activatedAtMs,lastDecisionAtMs:row.lastDecisionAtMs,lastError:row.lastError,activity:row.activity,latestArtifactHash:latest?.artifactHash??null,latestVersion:latest?.version??null};
   }
   artifacts(): TradingArtifact[] { return this.deps.artifacts.list(); }
+  private paperCapital(): TradingSnapshot["paperCapital"] {
+    if(!this.isPaper)return null;
+    const account=this.db.select().from(paperTradingAccount).where(eq(paperTradingAccount.singleton,1)).get();
+    const filled=this.deps.database.sqlite.prepare("SELECT 1 FROM paper_trading_orders WHERE json_extract(payload_json, '$.order.filledQuantity') > 0 LIMIT 1").get();
+    const status=this.current()?.status;
+    return {initialCashKrw:account?.initialCash??PAPER_TRADING_INITIAL_CASH_KRW,canEdit:(!status||status==="INACTIVE")&&!filled&&!this.pending().length&&Object.keys(JSON.parse(account?.holdingsJson??"{}")).length===0};
+  }
+  private setInitialCash(value:number|undefined,actor:string) {
+    if(value===undefined)return;
+    const amount=paperInitialCashSchema.parse(value);
+    const capital=this.paperCapital();
+    if(!capital)throw new TradingError("초기 모의자금은 모의투자에서만 설정할 수 있습니다.");
+    if(amount===capital.initialCashKrw)return;
+    if(!capital.canEdit)throw new TradingError("초기 모의자금은 자동매매 OFF 상태에서 첫 체결 전까지만 변경할 수 있습니다.");
+    // 전략 설정과 같은 트랜잭션에서 저장해 실패한 설정이 잔고만 바꾸지 않게 한다.
+    this.db.insert(paperTradingAccount).values({singleton:1,initialCash:amount,cash:amount}).onConflictDoUpdate({target:paperTradingAccount.singleton,set:{initialCash:amount,cash:amount}}).run();
+    this.db.update(tradingControl).set({snapshotJson:JSON.stringify({holdings:[],cashBuyingPower:amount}),syncedAtMs:this.now(),error:null}).where(eq(tradingControl.singleton,1)).run();
+    this.event(`초기 모의자금 변경: ${amount.toLocaleString("ko-KR")}원`,actor);
+  }
   preparationProgress(id:string,message:string,error=false) {
     const row=this.current();if(row?.id!==id)return;
     this.db.update(tradingDeployments).set({activity:message,...(row.status!=="ACTIVE"?{lastError:error?message:null}:{})}).where(eq(tradingDeployments.id,id)).run();
@@ -147,7 +166,7 @@ export class TradingService {
     if(row&&!this.artifacts().some(a=>a.strategyId===JSON.parse(row.setupJson).strategyId&&a.artifactHash===JSON.parse(row.setupJson).artifactHash))blockers.push("고정된 전략 실행 파일을 찾을 수 없습니다. 자동으로 다른 버전을 사용하지 않습니다.");
     if(this.pending().some(o=>o.status==="UNKNOWN"||o.status==="SENDING"))blockers.push("접수 여부가 불명확한 주문이 있습니다. 증권사 주문 내역 확인이 필요합니다.");
     return {
-      revision:control.revision,deployment:row?this.deployment(row):null,
+      revision:control.revision,paperCapital:this.paperCapital(),deployment:row?this.deployment(row):null,
       broker:{provider:this.isPaper?"PAPER":"TOSS",configured:this.deps.broker.configured,accounts:JSON.parse(control.accountsJson),selectedAccountId:control.accountId,lastSyncAtMs:control.syncedAtMs,error:control.error},
       account:account?{cashBuyingPower:account.cashBuyingPower,marketValue,unrealizedPnl,unrealizedReturnPercent:cost>0?unrealizedPnl/cost*100:null}:null,
       performance,positions,
@@ -178,21 +197,23 @@ export class TradingService {
     if(strategy.requiredRebalanceGapBars&&setup.universeRule.rebalanceInterval.unit==="DAY"&&setup.universeRule.rebalanceInterval.value<strategy.requiredRebalanceGapBars+1)throw new TradingError("이 전략은 매도·매수 단계 사이에 거래일이 필요합니다. 더 긴 리밸런스 주기를 선택하세요.","INVALID_PARAMETERS",422);
     return {setup,artifact};
   }
-  async register(input:TradingSetup,expectedRevision:number,actor:string) {
+  async register(input:TradingSetup,expectedRevision:number,actor:string,initialCashKrw?:number) {
     const {setup,artifact}=await this.validate(input);
     this.change(expectedRevision,()=>{
       if(this.current())throw new TradingError("전략은 최대 1개까지 등록할 수 있습니다. 기존 전략을 먼저 제거하세요.");
       if(this.pending().length)throw new TradingError("확인이 끝나지 않은 주문이 있어 새 전략을 등록할 수 없습니다.");
       const id=randomUUID();const now=this.now();
       this.db.insert(tradingDeployments).values({id,slot:1,mode:this.isPaper?"PAPER":"LIVE",setupJson:JSON.stringify(setup),name:artifact.name,version:artifact.version,status:"INACTIVE",createdAtMs:now,updatedAtMs:now,activity:"비활성 · 활성화 전 주문하지 않습니다.",returnBase:setup.budgetKrw}).run();
+      this.setInitialCash(initialCashKrw,actor);
       this.event(`전략 등록: ${artifact.name} v${artifact.version}`,actor,"INFO",id);
     });return this.snapshot();
   }
-  async update(input:TradingSetup,expectedRevision:number,actor:string) {
+  async update(input:TradingSetup,expectedRevision:number,actor:string,initialCashKrw?:number) {
     const {setup}=await this.validate(input);
     this.change(expectedRevision,()=>{
       const row=this.requireInactive();const previous=this.deployment(row);
       if(previous.strategyId!==setup.strategyId||previous.artifactHash!==setup.artifactHash)throw new TradingError("전략 교체는 기존 전략 제거 후 등록하고, 버전 변경은 별도 기능을 사용하세요.");
+      this.setInitialCash(initialCashKrw,actor);
       this.db.update(tradingDeployments).set({setupJson:JSON.stringify(setup),checkpoint:null,lastDecisionAtMs:null,updatedAtMs:this.now(),returnBase:row.activatedAtMs===null?setup.budgetKrw:previous.budgetKrw===setup.budgetKrw?row.returnBase:null,activity:"설정 변경 · 비활성 유지"}).where(eq(tradingDeployments.id,row.id)).run();
       this.event("사용자가 매매 파라미터·운용 설정 변경",actor);
     });return this.snapshot();

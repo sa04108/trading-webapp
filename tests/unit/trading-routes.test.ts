@@ -27,6 +27,21 @@ const mutations = [
 ] as const;
 
 describe("거래 경로 인증과 요청 계약", () => {
+  it("초기 모의자금은 유효한 원화 정수만 받고 전략 파라미터와 분리해 전달한다", async () => {
+    const {app,service}=fixture();
+    const body={expectedRevision:3,strategyId:"alpha",artifactHash:"a".repeat(64),parameters:{},universeRule:{markets:["KOSPI"],stages:[{criterion:"MARKET_CAP",direction:"HIGH",limit:100}],rebalanceInterval:{unit:"MONTH",value:1}},timeframe:"1d",budgetKrw:1_000_000,maxPositions:10,maxPositionPercent:10,dailyLossLimitPercent:3,maxOrderKrw:100_000,maxSlippageBps:50,randomSeed:42,sourceJobId:null};
+    for(const initialCashKrw of [0,-1,9999,10000.5,1_000_000_000_001,"50000"]) {
+      expect((await app.inject({method:"POST",url:"/trading/strategy",headers:auth,payload:{...body,initialCashKrw}})).statusCode).toBe(400);
+    }
+    expect(service.register).not.toHaveBeenCalled();
+    service.register.mockReturnValue({revision:4});
+    service.update.mockReturnValue({revision:4});
+    for(const method of ["POST","PUT"] as const)expect((await app.inject({method,url:"/trading/strategy",headers:auth,payload:{...body,initialCashKrw:50_000}})).statusCode).toBe(200);
+    const {expectedRevision,...setup}=body;
+    expect(service.register).toHaveBeenCalledWith(setup,expectedRevision,"user-1",50_000);
+    expect(service.update).toHaveBeenCalledWith(setup,expectedRevision,"user-1",50_000);
+    await app.close();
+  });
   it("모든 변경 요청에 인증이 필요하다", async () => {
     const { app, service } = fixture();
     for (const [method, url] of mutations) {

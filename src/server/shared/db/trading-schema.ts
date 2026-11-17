@@ -71,6 +71,7 @@ export const tradingEvents = sqliteTable("trading_events", {
 /** 모의 잔고는 전략을 제거하거나 서버를 다시 시작해도 유지한다. */
 export const paperTradingAccount = sqliteTable("paper_trading_account", {
   singleton: integer("singleton").primaryKey(),
+  initialCash: real("initial_cash").notNull().default(100_000_000),
   cash: real("cash").notNull(),
   holdingsJson: text("holdings_json").notNull().default("{}"),
 }, table => [check("paper_trading_singleton", sql`${table.singleton} = 1`)]);

@@ -3,6 +3,7 @@ import { universeRuleSchema } from "./universe-rule.js";
 
 export const PAPER_TRADING_ACCOUNT_ID = "PAPER";
 export const PAPER_TRADING_INITIAL_CASH_KRW = 100_000_000;
+export const paperInitialCashSchema = z.number().int().min(10_000).max(1_000_000_000_000);
 
 export interface TradingQuote {
   symbol: string;
@@ -95,6 +96,7 @@ export interface TradingEvent {
 
 export interface TradingSnapshot {
   revision: number;
+  paperCapital: { initialCashKrw: number; canEdit: boolean } | null;
   deployment: TradingDeployment | null;
   broker: {
     provider: "TOSS" | "PAPER";
@@ -135,4 +137,5 @@ export const tradingRevisionSchema = z.object({
 
 export const tradingWriteSchema = tradingSetupSchema.extend({
   expectedRevision: z.number().int().nonnegative(),
+  initialCashKrw: paperInitialCashSchema.optional(),
 });

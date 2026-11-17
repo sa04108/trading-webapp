@@ -5,6 +5,7 @@ import type { TradingArtifact, TradingSnapshot } from "../../src/shared/schemas/
 const snapshot: TradingSnapshot = {
   revision: 17,
   deployment: null,
+  paperCapital: { initialCashKrw: 100_000_000, canEdit: true },
   broker: {
     provider: "PAPER",
     configured: true,
@@ -42,11 +43,17 @@ test("전략이 외부에서 교체되어도 초안을 유지하고 명시적 �
   await page.route("**/api/v1/trading/strategies", (route) => route.fulfill({ json: { strategies: [artifact] } }));
   let saved: unknown;
   await page.route("**/api/v1/trading/strategy", (route) => {
-    saved = { method: route.request().method(), body: route.request().postDataJSON() };
+    const body = route.request().postDataJSON();
+    saved = { method: route.request().method(), body };
+    current = { ...current, revision: current.revision + 1, paperCapital: { initialCashKrw: body.initialCashKrw ?? current.paperCapital!.initialCashKrw, canEdit: current.paperCapital!.canEdit } };
     return route.fulfill({ json: current });
   });
   await page.goto("/trading");
+  await expect(page.getByText(/초기 모의 자금 100,000,000원/)).toBeVisible();
   await page.getByRole("button", { name: "매매 설정" }).click();
+  const capital = page.getByLabel("초기 모의자금 (원)", { exact: true });
+  await expect(capital).toHaveValue("100000000");
+  await capital.fill("150000000");
   const budget = page.getByLabel("운용 예산 (원)", { exact: true });
   await expect(budget).toHaveValue("10000000");
   await budget.fill("27000000");
@@ -54,6 +61,7 @@ test("전략이 외부에서 교체되어도 초안을 유지하고 명시적 �
   await page.clock.runFor(5_100);
   await expect.poll(() => reads).toBeGreaterThan(before);
   await expect(budget).toHaveValue("27000000");
+  await expect(capital).toHaveValue("150000000");
   current = { ...current, revision: 18, deployment: { ...current.deployment!, id: "deployment-b", budgetKrw: 30_000_000 } };
   await page.clock.runFor(5_100);
   await expect(page.getByRole("alert")).toContainText("작성 중인 입력은 유지했습니다");
@@ -62,9 +70,22 @@ test("전략이 외부에서 교체되어도 초안을 유지하고 명시적 �
   expect(saved).toBeUndefined();
   await page.getByRole("button", { name: "최신 설정 불러오기", exact: true }).click();
   await expect(budget).toHaveValue("30000000");
+  await expect(capital).toHaveValue("100000000");
+  await capital.fill("150000000");
   await budget.fill("31000000");
   await page.getByRole("button", { name: "설정 저장", exact: true }).click();
-  await expect.poll(() => saved).toMatchObject({ method: "PUT", body: { budgetKrw: 31_000_000, expectedRevision: 18 } });
+  await expect.poll(() => saved).toMatchObject({ method: "PUT", body: { budgetKrw: 31_000_000, initialCashKrw: 150_000_000, expectedRevision: 18 } });
+  await expect(page.getByText(/초기 모의 자금 150,000,000원/)).toBeVisible();
+  current = { ...current, paperCapital: { initialCashKrw: 150_000_000, canEdit: false } };
+  await page.clock.runFor(5_100);
+  await page.getByRole("button", { name: "매매 설정" }).click();
+  await expect(capital).toBeDisabled();
+  await expect(page.getByText("진행 중인 주문이 있거나 첫 체결 이후에는 초기 모의자금을 변경할 수 없습니다.")).toBeVisible();
+  await expect(budget).toBeEnabled();
+  await budget.fill("32000000");
+  await page.getByRole("button", { name: "설정 저장", exact: true }).click();
+  await expect.poll(() => saved).toMatchObject({ body: { budgetKrw: 32_000_000 } });
+  expect((saved as { body: Record<string, unknown> }).body).not.toHaveProperty("initialCashKrw");
 });
 
 test("자동 매매는 양방향 확인 후 전환하고 ON에서는 설정을 잠근다", async ({ page }) => {
@@ -76,8 +97,8 @@ test("자동 매매는 양방향 확인 후 전환하고 ON에서는 설정을 �
   await page.route("**/api/v1/trading", (route) => route.fulfill({ json: current }));
   await page.route("**/api/v1/trading/strategies", (route) => route.fulfill({ json: { strategies: [artifact] } }));
   let writes = 0;
-  await page.route("**/api/v1/trading/activate", (route) => { writes++; current = { ...current, revision: 18, deployment: { ...current.deployment!, status: "ACTIVE" } }; return route.fulfill({ json: current }); });
-  await page.route("**/api/v1/trading/deactivate", (route) => { writes++; current = { ...current, revision: 19, deployment: { ...current.deployment!, status: "INACTIVE" } }; return route.fulfill({ json: current }); });
+  await page.route("**/api/v1/trading/activate", (route) => { writes++; current = { ...current, revision: 18, paperCapital: { ...current.paperCapital!, canEdit: false }, deployment: { ...current.deployment!, status: "ACTIVE" } }; return route.fulfill({ json: current }); });
+  await page.route("**/api/v1/trading/deactivate", (route) => { writes++; current = { ...current, revision: 19, paperCapital: { ...current.paperCapital!, canEdit: true }, deployment: { ...current.deployment!, status: "INACTIVE" } }; return route.fulfill({ json: current }); });
   await page.goto("/trading");
   await expect(page.getByText("계좌 연결")).toHaveCount(0);
   await page.getByRole("button", { name: "자동 매매 OFF" }).click();
@@ -88,6 +109,8 @@ test("자동 매매는 양방향 확인 후 전환하고 ON에서는 설정을 �
   await expect(page.getByRole("button", { name: "자동 매매 ON" })).toBeVisible();
   await page.getByRole("button", { name: "매매 설정" }).click();
   await expect(page.getByLabel("운용 예산 (원)", { exact: true })).toBeDisabled();
+  await expect(page.getByLabel("초기 모의자금 (원)", { exact: true })).toBeDisabled();
+  await expect(page.getByText("자동매매 OFF 상태에서 변경할 수 있습니다.")).toBeVisible();
   await page.getByRole("dialog").getByRole("button", { name: "Close" }).click();
   await page.getByRole("button", { name: "자동 매매 ON" }).click();
   await expect(page.getByRole("alertdialog")).toContainText("자동으로 매도하지 않습니다");

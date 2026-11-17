@@ -59,6 +59,47 @@ describe("모의투자 실행 경계", () => {
     await f.service.register(setup, f.service.snapshot().revision, "user");
     await f.service.activate(f.service.snapshot().revision, "user");
   }
+  it("초기 자금을 설정과 함께 저장하고 재조회·다른 설정 변경에도 유지한다", async () => {
+    const f=fixture(true);await f.service.tick();
+    await f.service.register(setup,f.service.snapshot().revision,"user",5_000_000);
+    await f.service.refresh();
+    expect(f.service.snapshot()).toMatchObject({paperCapital:{initialCashKrw:5_000_000,canEdit:true},account:{cashBuyingPower:5_000_000}});
+    const revision=f.service.snapshot().revision;
+    await expect(f.service.update(setup,revision-1,"user",2_000_000)).rejects.toMatchObject({code:"STALE_REVISION"});
+    expect(f.service.snapshot().paperCapital?.initialCashKrw).toBe(5_000_000);
+    await f.service.update(setup,revision,"user",3_000_000);
+    await f.service.update({...setup,dailyLossLimitPercent:4},f.service.snapshot().revision,"user");
+    const reopened=createPaperTradingBroker({database:f.database,marketData:f.broker,now:f.now});
+    expect(await reopened.buyingPower("PAPER")).toBe(3_000_000);
+    expect(f.service.snapshot().paperCapital?.initialCashKrw).toBe(3_000_000);
+  });
+  it("ON 또는 첫 체결 이후에는 원금을 바꿀 수 없고 전략 교체로도 잔고가 초기화되지 않는다", async () => {
+    const f=fixture(true);await f.service.tick();
+    await f.service.register(setup,f.service.snapshot().revision,"user",50_000);
+    await f.service.activate(f.service.snapshot().revision,"user");
+    expect(f.service.snapshot().paperCapital?.canEdit).toBe(false);
+    await expect(f.service.update(setup,f.service.snapshot().revision,"user",70_000)).rejects.toThrow();
+    await f.service.tick();await f.service.refresh();
+    f.service.deactivate(f.service.snapshot().revision,"user");await f.service.tick();
+    let cash=50_000-10_000-1.5;
+    expect(f.service.snapshot()).toMatchObject({paperCapital:{initialCashKrw:50_000,canEdit:false},account:{cashBuyingPower:cash}});
+    await expect(f.service.update({...setup,dailyLossLimitPercent:4},f.service.snapshot().revision,"user",70_000)).rejects.toThrow(/첫 체결/);
+    expect(f.service.snapshot().deployment?.dailyLossLimitPercent).toBe(5);
+    await f.service.update({...setup,dailyLossLimitPercent:4},f.service.snapshot().revision,"user");
+    vi.mocked(f.engine.evaluate).mockImplementation(async ({warmupOnly})=>({checkpoint:"sold",barTsMs:warmupOnly?3:4,orders:warmupOnly?[]:[{symbol:"005930",side:"SELL",quantity:10}]}));
+    await f.service.activate(f.service.snapshot().revision,"user");
+    await f.service.tick();await f.service.refresh();
+    f.service.deactivate(f.service.snapshot().revision,"user");await f.service.tick();
+    cash=f.service.snapshot().account!.cashBuyingPower;
+    expect(cash).toBeLessThan(50_000);
+    expect(f.service.snapshot().positions).toEqual([]);
+    f.service.remove(f.service.snapshot().revision,"user");
+    await expect(f.service.register(setup,f.service.snapshot().revision,"user",70_000)).rejects.toThrow(/첫 체결/);
+    expect(f.service.snapshot().deployment).toBeNull();
+    await f.service.register(setup,f.service.snapshot().revision,"user");
+    await f.service.refresh();
+    expect(f.service.snapshot()).toMatchObject({paperCapital:{initialCashKrw:50_000,canEdit:false},account:{cashBuyingPower:cash},positions:[]});
+  });
   it("계좌 연결 없이 모의 체결하며 OFF와 전략 제거 후에도 잔고를 유지한다", async () => {
     const f=fixture(true);
     await paperActive(f);

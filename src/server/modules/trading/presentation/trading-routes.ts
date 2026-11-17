@@ -29,12 +29,12 @@ export function registerTradingRoutes(app: FastifyInstance, service: TradingServ
   app.get("/trading/strategies", auth, async (_request, reply) => respond(reply, () => ({ strategies: service.artifacts() })));
   app.get("/trading/source/:jobId", auth, async (request, reply) => respond(reply, () => service.source(sourceParamsSchema.parse(request.params).jobId)));
   app.post("/trading/strategy", auth, async (request, reply) => respond(reply, () => {
-    const { expectedRevision, ...setup } = tradingWriteSchema.parse(request.body);
-    return service.register(setup, expectedRevision, request.authUser!.id);
+    const { expectedRevision, initialCashKrw, ...setup } = tradingWriteSchema.parse(request.body);
+    return service.register(setup, expectedRevision, request.authUser!.id, initialCashKrw);
   }));
   app.put("/trading/strategy", auth, async (request, reply) => respond(reply, () => {
-    const { expectedRevision, ...setup } = tradingWriteSchema.parse(request.body);
-    return service.update(setup, expectedRevision, request.authUser!.id);
+    const { expectedRevision, initialCashKrw, ...setup } = tradingWriteSchema.parse(request.body);
+    return service.update(setup, expectedRevision, request.authUser!.id, initialCashKrw);
   }));
   app.delete("/trading/strategy", auth, async (request, reply) => respond(reply, () => {
     const { expectedRevision } = tradingRevisionSchema.parse(request.body);
