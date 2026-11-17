@@ -103,7 +103,7 @@ export function resolveAccount(
   if ((id === "ifrs-full_ShorttermBorrowings" || id === "ifrs-full_LongtermBorrowings") &&
       ["유동성장기차입금", "유동성장기부채", "유동성장기차입금및유동성사채"].includes(name))
     return { field: "CURRENT_LONG_TERM_DEBT", statement: "BS" };
-  if (id === "ifrs-full_LongtermBorrowings" && name === "사채") return { field: "BONDS", statement: "BS" };
+  if (["ifrs-full_LongtermBorrowings", "dart_LongTermBorrowingsGross"].includes(id) && name === "사채") return { field: "BONDS", statement: "BS" };
   // 지배·비지배주주 귀속 순이익은 전체 순이익의 구성 요소다.
   if (["ifrs-full_ProfitLossAttributableToOwnersOfParent", "ifrs-full_ProfitLossAttributableToNoncontrollingInterests"].includes(id)) return null;
   // 일부 공시는 영업수익에 영업이익 태그를 잘못 사용한다.

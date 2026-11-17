@@ -176,3 +176,66 @@ for (const sample of currentBorrowings) {
     ]) expect(parse(changed).gaps).toContainEqual(expect.objectContaining({ field: 'SHORT_TERM_BORROWINGS', kind: 'CONFLICT' }));
   });
 }
+
+// 기존 유동+비유동 검산은 별도 분배예정 집단이 있는 KCC 2019 공시의 정상 사채까지 충돌로 처리했다.
+// 금액 근거: KIND 20201015000892 참고서류의 2019 재무상태표. 계정 코드·사채 ord는 오류 로그에 따른다.
+describe('별도 처분·분배예정 집단과 차입금 태그 재사용', () => {
+  const kcc = rows([
+    [25, 'ifrs-full_CurrentLiabilities', '유동부채', 2850327454058],
+    [29, 'dart_CurrentPortionOfBonds', '유동성사채', 199953500839],
+    [33, '-표준계정코드 미사용-', '소유주분배예정부채집단', 262883413682],
+    [34, 'ifrs-full_NoncurrentLiabilities', '비유동부채', 1647142175954],
+    [36, 'dart_BondsIssued', '비유동사채', 898561179354],
+    [41, 'ifrs-full_Liabilities', '부채총계', 4760353043694],
+  ]);
+  it('별도 집단까지 합계가 맞을 때만 유동·비유동 사채를 합산한다', () => {
+    for (const input of [kcc, [...kcc].reverse()]) {
+      expect(values(input).BONDS).toBe(1098514680193);
+      expect(parse(input).gaps.filter(gap => gap.severity === 'BLOCKING')).toEqual([]);
+    }
+    // 롯데칠성 2017Q3 별도 재무상태표도 분배예정부채를 유동/비유동 밖에 공시한다.
+    // 수치 근거: 2017-12-05 정정 분기보고서, 계정 코드·ord는 오류 로그.
+    const chilsung = rows([
+      [340, 'ifrs_CurrentLiabilities', '유동부채', 2043495227041],
+      [348, 'dart_CurrentPortionOfBonds', '차입금 및 유동성사채', 490829153757],
+      [420, '-표준계정코드 미사용-', '소유주분배예정부채', 118422354855],
+      [424, 'ifrs_NoncurrentLiabilities', '비유동부채', 1164907340960],
+      [425, 'dart_BondsIssued', '차입금 및 사채', 972708238165],
+      [450, 'ifrs_Liabilities', '부채총계', 3326824922856],
+    ]);
+    expect(values(chilsung).BONDS).toBe(1463537391922);
+    expect(parse(chilsung).gaps.filter(gap => gap.severity === 'BLOCKING')).toEqual([]);
+    for (const changed of [
+      kcc.filter(row => row.ord !== '33'),
+      kcc.map(row => row.ord === '33' ? { ...row, thstrm_amount: '262883413683' } : row),
+      kcc.map(row => row.ord === '33' ? { ...row, thstrm_amount: '' } : row),
+      kcc.map(row => row.ord === '33' ? { ...row, currency: 'USD' } : row),
+    ]) expect(parse(changed).gaps).toContainEqual(expect.objectContaining({ field: 'BONDS', kind: 'CONFLICT' }));
+  });
+  it('유동부채에 이미 포함된 처분집단을 이중 합산하거나 뒤의 유동 사채 구간을 잃지 않는다', () => {
+    const input = rows([
+      [1, 'ifrs_CurrentLiabilities', '유동부채', 1000],
+      [2, 'ifrs_LiabilitiesIncludedInDisposalGroupsClassifiedAsHeldForSale', '매각예정부채', 100],
+      [3, 'dart_CurrentPortionOfBonds', '유동성사채', 200],
+      [4, 'ifrs_NoncurrentLiabilities', '비유동부채', 2000],
+      [5, 'dart_BondsIssued', '사채', 300],
+      [6, 'ifrs_Liabilities', '부채총계', 3000],
+    ]);
+    expect(values(input).BONDS).toBe(500);
+    expect(parse(input).gaps.filter(gap => gap.severity === 'BLOCKING')).toEqual([]);
+  });
+  // 같은 태그라도 이름이 사채인 행을 장기차입금에 합치면 부채 분류와 총차입금이 틀어진다.
+  it('049770 오류의 사채와 장기차입금을 각각 한 번씩 기록한다', () => {
+    const input = rows([
+      [210, 'ifrs_CurrentLiabilities', '유동부채', 50000000000],
+      [211, 'ifrs_NoncurrentLiabilities', '비유동부채', 200000000000],
+      [217, 'dart_LongTermBorrowingsGross', '사채', 109822756594],
+      [218, '-표준계정코드 미사용-', '장기차입금', 21000000000],
+      [230, 'ifrs_Liabilities', '부채총계', 250000000000],
+    ]);
+    expect(values(input)).toMatchObject({ BONDS: 109822756594, LONG_TERM_BORROWINGS: 21000000000 });
+    expect(parse(input).gaps.filter(gap => gap.severity === 'BLOCKING')).toEqual([]);
+    expect(parse([...input, { ...input[3]!, ord: '219', thstrm_amount: '22000000000' }]).gaps)
+      .toContainEqual(expect.objectContaining({ field: 'LONG_TERM_BORROWINGS', kind: 'CONFLICT' }));
+  });
+});
