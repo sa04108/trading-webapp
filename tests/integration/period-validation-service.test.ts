@@ -129,6 +129,28 @@ describe('독립 구간 검증 실행', () => {
     expect(queue.getJob(test.jobId!)).toBeNull();
   });
 
+  it('최적화 없는 워크포워드는 IS 성과와 무관하게 모든 구간을 원본 설정으로 독립 실행한다', async () => {
+    const config = { mode: 'WALK_FORWARD', trainMonths: 36, testMonths: 6 } as const;
+    const experiment = service.create(sourceId, config);
+    for (let i = 0; i < 80 && service.get(experiment.id)!.status === 'ACTIVE'; i += 1) {
+      await service.pump();
+      for (const trial of service.get(experiment.id)!.trials.filter((trial) => trial.status === 'QUEUED')) {
+        complete(trial.jobId!, { ...metrics(0, 0), sharpe: null, cagrPct: null, maxDrawdownPct: -90 });
+      }
+    }
+    const detail = service.get(experiment.id)!;
+    expect(detail.status).toBe('COMPLETED');
+    expect(detail.config).toEqual(config);
+    expect(detail.plan.totalRuns).toBe(4);
+    expect(detail.trials).toHaveLength(4);
+    expect(detail.trials.filter((trial) => trial.role === 'BASELINE')).toHaveLength(0);
+    expect(detail.trials.filter((trial) => trial.role === 'OOS')).toHaveLength(2);
+    for (const trial of detail.trials) {
+      expect(trial).toMatchObject({ status: 'COMPLETED', skipReason: null, selection: null, parameters: source.parameters });
+      expect(JSON.parse(queue.getJob(trial.jobId!)!.requestJson)).toEqual({ ...source, period: trial.period });
+    }
+  });
+
   it('모든 IS 후보가 끝난 뒤 선택하며 OOS 성과는 선택에 관여하지 않는다', async () => {
     const experiment = service.create(sourceId, optimized);
     await until(() => service.get(experiment.id)!.trials.filter((trial) => trial.role === 'TRAIN' && trial.jobId).length === 2);

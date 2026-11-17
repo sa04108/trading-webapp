@@ -27,6 +27,13 @@ describe('독립 구간 검증 계획', () => {
     ]);
     expect(plan.totalRuns).toBe(8);
     expect(plan.unusedPeriod).toEqual({ from: '2024-01-01', to: '2024-04-15' });
+    const fixedConfig = periodValidationConfigSchema.parse({ mode: 'WALK_FORWARD', trainMonths: 36, testMonths: 6 });
+    const fixed = buildPeriodValidationPlan(source, fixedConfig);
+    expect(fixed.folds).toEqual(plan.folds);
+    expect(fixed.unusedPeriod).toEqual(plan.unusedPeriod);
+    expect(fixed.candidates).toEqual([source.parameters]);
+    expect(fixed.totalRuns).toBe(4);
+    expect(periodValidationConfigSchema.safeParse({ mode: 'OPTIMIZED_HOLDOUT', splitDate: '2023-01-01' }).success).toBe(false);
   });
   it('윤년과 월말에도 기준 날짜에서 이동한다', () => {
     expect(validationMonthOffset('2024-01-31', 1)).toBe('2024-02-29');

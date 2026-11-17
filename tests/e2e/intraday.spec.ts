@@ -541,6 +541,10 @@ test("분봉 실험 페이지를 재사용하고 검증 하위 결과와 일반 
   await page.getByRole("option", { name: "워크포워드", exact: true }).click();
   await expect(form.getByLabel("학습 기간 (개월)")).toHaveValue("3");
   await expect(form.getByLabel("평가·이동 기간 (개월)")).toHaveValue("1");
+  await expect(form.getByLabel("파라미터 최적화")).not.toBeChecked();
+  await expect(form.getByLabel("IS 선택 기준")).toHaveCount(0);
+  await expect(form.getByText(/원본 설정으로 IS와 OOS를 독립적으로 실행/)).toBeVisible();
+  await form.getByLabel("파라미터 최적화").check();
   await form.getByLabel("IS 선택 기준").click();
   await expect(page.getByRole("option", { name: "CAGR 최대" })).toHaveCount(0);
   await page.keyboard.press("Escape");

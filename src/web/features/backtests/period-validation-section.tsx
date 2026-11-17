@@ -46,6 +46,8 @@ import { backtestRequestSchema } from "../../../shared/schemas/backtest-request.
 import { intradayRequestSchema, type IntradayRequest } from "@shared/schemas/intraday";
 import {
   buildPeriodValidationPlan,
+  getValidationOptimization,
+  type ValidationOptimization,
   periodValidationConfigSchema,
   type PeriodValidationConfig,
   type PeriodValidationDto,
@@ -93,11 +95,11 @@ function parameterText(
   config: PeriodValidationConfig,
   specs: NumberParamSpec[],
 ): string {
+  const optimization = getValidationOptimization(config);
   if (trial?.status === "NOT_EVALUATED") return "선택 후보 없음";
-  if (!trial?.parameters) return "선택 대기";
-  if (config.mode === "HOLDOUT" || trial.role === "BASELINE")
-    return "원본 설정";
-  return config.optimization.axes
+  if (!trial?.parameters) return optimization ? "선택 대기" : "원본 설정";
+  if (!optimization || trial.role === "BASELINE") return "원본 설정";
+  return optimization.axes
     .map(({ key }) => {
       const spec = specs.find((item) => item.key === key);
       return `${spec ? paramLabel(spec) : key} ${String(trial.parameters![key])}`;
@@ -110,7 +112,7 @@ function CandidateSelection({
   optimization,
 }: {
   trial: ValidationTrialDto;
-  optimization: Extract<PeriodValidationConfig, { mode: "WALK_FORWARD" | "OPTIMIZED_HOLDOUT" }>["optimization"];
+  optimization: ValidationOptimization;
 }) {
   const selection = trial.selection;
   if (!selection) return null;
@@ -192,6 +194,7 @@ export function ValidationResult({
     (trial) => trial.status === "COMPLETED",
   ).length;
   const summary = summarizeValidationOos(experiment.trials);
+  const optimization = getValidationOptimization(experiment.config);
   const notEvaluated = experiment.trials.filter((trial) => trial.status === "NOT_EVALUATED").length;
   return (
     <Card>
@@ -227,14 +230,14 @@ export function ValidationResult({
           {experiment.plan.totalRuns}회 완료 · 미평가 {notEvaluated}회 · 각 구간 초기자금{" "}
           {formatKrw(experiment.initialCash)}
         </p>
-        {experiment.config.mode !== "HOLDOUT" ? (
+        {optimization ? (
           <p className="text-sm text-muted-foreground">
             IS 선택 기준:{" "}
-            {experiment.config.optimization.objective === "sharpe"
+            {optimization.objective === "sharpe"
               ? "Sharpe"
               : "CAGR"}{" "}
-            최대 · 매도 체결 {experiment.config.optimization.minTrades}건 이상 ·
-            MDD 크기 {experiment.config.optimization.maxDrawdownPct}% 이하
+            최대 · 매도 체결 {optimization.minTrades}건 이상 ·
+            MDD 크기 {optimization.maxDrawdownPct}% 이하
           </p>
         ) : null}
       </CardHeader>
@@ -247,23 +250,23 @@ export function ValidationResult({
           </Alert>
         ) : null}
         <div className="space-y-1 text-sm">
-          <p>선택 전략 OOS 평가 {summary.evaluated}/{experiment.plan.folds.length}회 · 후보가 없어 미평가 {summary.notEvaluated}회</p>
+          <p>{optimization ? "선택 전략" : "원본 설정"} OOS 평가 {summary.evaluated}/{experiment.plan.folds.length}회{optimization ? ` · 후보가 없어 미평가 ${summary.notEvaluated}회` : ""}</p>
           <p>평균 수익률 {summary.mean === null ? "—" : formatSignedPct(summary.mean)} · 수익률 표준편차 {summary.standardDeviation === null ? "—" : `${formatNumber(summary.standardDeviation)}%p`} <InfoHint label="수익률 표준편차 설명">평가된 회차의 수익률로 모집단 표준편차를 계산합니다. 평가된 회차가 두 개 미만이면 —로 표시합니다.</InfoHint> · 수익 회차 {summary.profitable}/{summary.evaluated}회 · 최악 회차 {summary.worst === null ? "—" : formatSignedPct(summary.worst)}</p>
-          {experiment.status === "COMPLETED" && summary.evaluated === 0 ? <p>평가된 선택 전략 OOS가 없습니다.</p> : null}
+          {experiment.status === "COMPLETED" && summary.evaluated === 0 ? <p>평가된 OOS가 없습니다.</p> : null}
           <p className="text-muted-foreground">평가된 회차 기준이며, 전체 기간의 연속 운용 성과가 아닙니다.</p>
         </div>
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>회차 / 기간</TableHead>
-              <TableHead>선택 매개변수</TableHead>
+              <TableHead>{optimization ? "선택 매개변수" : "매개변수"}</TableHead>
               <TableHead>IS 수익률</TableHead>
               <TableHead>OOS 수익률</TableHead>
               <TableHead>OOS CAGR</TableHead>
               <TableHead>OOS MDD</TableHead>
               <TableHead>OOS Sharpe</TableHead>
               <TableHead>OOS 매도 체결</TableHead>
-              {experiment.config.mode !== "HOLDOUT" ? (
+              {optimization ? (
                 <TableHead>고정 전략 OOS</TableHead>
               ) : null}
             </TableRow>
@@ -278,7 +281,7 @@ export function ValidationResult({
                 (trial) =>
                   trial.role === "TRAIN" &&
                   trial.candidate ===
-                    (experiment.config.mode === "HOLDOUT"
+                    (!optimization
                       ? 0
                       : test?.candidate),
               );
@@ -297,7 +300,7 @@ export function ValidationResult({
                   </TableCell>
                   <TableCell>
                     {parameterText(
-                      experiment.config.mode === "HOLDOUT" ? train : test,
+                      !optimization ? train : test,
                       experiment.config,
                       specs,
                     )}
@@ -326,7 +329,7 @@ export function ValidationResult({
                     {formatNumber(testMetrics?.sharpe ?? null)}
                   </TableCell>
                   <TableCell>{testMetrics?.tradeCount ?? "-"}</TableCell>
-                  {experiment.config.mode !== "HOLDOUT" ? (
+                  {optimization ? (
                     <TableCell>
                       <TrialLink trial={baseline} mode={mode}>
                         {formatSignedPct(
@@ -342,7 +345,7 @@ export function ValidationResult({
         </Table>
         <details>
           <summary className="cursor-pointer text-sm">
-            후보별 실행과 상세 결과
+            {optimization ? "후보별 실행과 상세 결과" : "실행 상세 결과"}
           </summary>
           <Table>
             <TableHeader>
@@ -350,7 +353,7 @@ export function ValidationResult({
                 <TableHead>회차 / 용도</TableHead>
                 <TableHead>매개변수</TableHead>
                 <TableHead>상태 / 결과</TableHead>
-                <TableHead>후보 선택 조건</TableHead>
+                {optimization ? <TableHead>후보 선택 조건</TableHead> : null}
                 <TableHead>수익률</TableHead>
                 <TableHead>CAGR</TableHead>
                 <TableHead>MDD</TableHead>
@@ -364,10 +367,10 @@ export function ValidationResult({
                   <TableCell>
                     {trial.fold + 1} /{" "}
                     {trial.role === "TRAIN"
-                      ? "IS 후보"
+                      ? optimization ? "IS 후보" : "원본 설정 IS"
                       : trial.role === "BASELINE"
                         ? "고정 전략 OOS"
-                        : "선택 전략 OOS"}
+                        : optimization ? "선택 전략 OOS" : "원본 설정 OOS"}
                   </TableCell>
                   <TableCell>
                     {parameterText(trial, experiment.config, specs)}
@@ -383,11 +386,11 @@ export function ValidationResult({
                       <p className="text-destructive">{trial.error}</p>
                     ) : null}
                   </TableCell>
-                  <TableCell>
-                    {trial.role === "TRAIN" && experiment.config.mode !== "HOLDOUT" && trial.selection ? (
-                      <CandidateSelection trial={trial} optimization={experiment.config.optimization} />
+                  {optimization ? <TableCell>
+                    {trial.role === "TRAIN" && trial.selection ? (
+                      <CandidateSelection trial={trial} optimization={optimization} />
                     ) : "—"}
-                  </TableCell>
+                  </TableCell> : null}
                   <TableCell>
                     {formatSignedPct(trial.status === "NOT_EVALUATED" ? null : trial.metrics?.totalReturnPct ?? null)}
                   </TableCell>
@@ -471,6 +474,8 @@ export function PeriodValidationSection({
   });
   const [trainMonths, setTrainMonths] = useState(intraday ? "3" : "36");
   const [testMonths, setTestMonths] = useState(intraday ? "1" : "6");
+  const [walkForwardOptimization, setWalkForwardOptimization] = useState(false);
+  const optimizationEnabled = mode === "OPTIMIZED_HOLDOUT" || (mode === "WALK_FORWARD" && walkForwardOptimization);
   const [axes, setAxes] = useState([{ key: "", values: "" }]);
   const [objective, setObjective] = useState("sharpe");
   const [minTrades, setMinTrades] = useState("5");
@@ -478,7 +483,7 @@ export function PeriodValidationSection({
   const preview = useMemo(() => {
     try {
       const optimization = {
-        axes: (mode === "HOLDOUT" ? [] : axes).map((axis) => {
+        axes: (optimizationEnabled ? axes : []).map((axis) => {
           const values = axis.values.split(",").map((value) => value.trim());
           if (values.some((value) => value === ""))
             throw new Error("후보값을 쉼표로 구분해 2개 이상 입력하세요.");
@@ -497,12 +502,14 @@ export function PeriodValidationSection({
                 mode,
                 trainMonths: Number(trainMonths),
                 testMonths: Number(testMonths),
-                optimization,
+                ...(optimizationEnabled ? { optimization } : {}),
               };
       const parsed = periodValidationConfigSchema.safeParse(input);
       if (!parsed.success)
         throw new Error(
-          "기간과 최적화 설정을 확인하세요. 매개변수 후보는 2개 이상 필요합니다.",
+          optimizationEnabled
+            ? "기간과 최적화 설정을 확인하세요. 매개변수 후보는 2개 이상 필요합니다."
+            : "기간 설정을 확인하세요.",
         );
       return {
         config: parsed.data,
@@ -523,6 +530,7 @@ export function PeriodValidationSection({
     request,
     intraday,
     mode,
+    optimizationEnabled,
     splitDate,
     trainMonths,
     testMonths,
@@ -631,7 +639,16 @@ export function PeriodValidationSection({
               </div>
             )}
           </div>
-          {mode !== "HOLDOUT" ? (
+          {mode === "WALK_FORWARD" ? (
+            <div className="flex items-center gap-2">
+              <input id="validation-optimize" type="checkbox" checked={walkForwardOptimization} onChange={(event) => setWalkForwardOptimization(event.target.checked)} />
+              <Label htmlFor="validation-optimize">파라미터 최적화</Label>
+            </div>
+          ) : null}
+          {mode === "WALK_FORWARD" && !optimizationEnabled ? (
+            <p className="text-sm text-muted-foreground">각 회차에서 원본 설정으로 IS와 OOS를 독립적으로 실행합니다. IS 성과와 관계없이 원본 설정을 OOS에 사용합니다.</p>
+          ) : null}
+          {optimizationEnabled ? (
             <>
               {axes.map((axis, index) => (
                 <div
@@ -755,7 +772,7 @@ export function PeriodValidationSection({
                 {preview.plan.folds.length}개 구간 · 후보{" "}
                 {preview.plan.candidates.length}개 · 백테스트 총{" "}
                 {preview.plan.totalRuns}회
-                {mode === "HOLDOUT" ? "" : " (고정 전략 OOS 비교 포함)"}
+                {optimizationEnabled ? " (고정 전략 OOS 비교 포함)" : ""}
               </p>
               <Table>
                 <TableHeader>

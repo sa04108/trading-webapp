@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { login } from './login';
-import { buildPeriodValidationPlan, type PeriodValidationConfig, type PeriodValidationDto, type ValidationTrialDto } from '../../src/shared/schemas/period-validation.js';
+import { buildPeriodValidationPlan, getValidationOptimization, type PeriodValidationConfig, type PeriodValidationDto, type ValidationTrialDto } from '../../src/shared/schemas/period-validation.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 
 const id = 'bt_period_validation';
@@ -37,7 +37,7 @@ async function setup(page: Page) {
         })),
         { id: `oos-${fold.ordinal}`, fold: fold.ordinal, role: 'OOS', candidate: null, parameters: null,
           period: fold.test, jobId: null, status: 'PENDING', progress: null, error: null, metrics: null, skipReason: null, selection: null },
-        ...(config.mode === 'HOLDOUT' ? [] : [{ id: `baseline-${fold.ordinal}`, fold: fold.ordinal, role: 'BASELINE' as const,
+        ...(!getValidationOptimization(config) ? [] : [{ id: `baseline-${fold.ordinal}`, fold: fold.ordinal, role: 'BASELINE' as const,
           candidate: null, parameters: request.parameters, period: fold.test, jobId: null, status: 'PENDING', progress: null, error: null, metrics: null, skipReason: null, selection: null }]),
       ]);
       state.experiments = [{ id: 'val_test', sourceJobId: id, status: 'ACTIVE', config, plan, initialCash: request.capital.initialCash, createdAtMs: 1, error: null, trials }];
@@ -93,10 +93,19 @@ test('워크포워드의 후보·고정 전략 실행량과 제외 구간을 표
   const section = page.getByRole('region', { name: '기간 검증' });
   await section.getByLabel('검증 방식', { exact: true }).click();
   await page.getByRole('option', { name: '워크포워드', exact: true }).click();
+  await expect(section.getByLabel('파라미터 최적화')).not.toBeChecked();
+  await expect(section.getByText('2개 구간 · 후보 1개 · 백테스트 총 4회', { exact: true })).toBeVisible();
+  await expect(section.getByLabel('후보값 (쉼표 구분)')).toHaveCount(0);
+  await section.getByRole('button', { name: '검증 실험 실행' }).click();
+  await expect.poll(() => state.submitted).toEqual({ mode: 'WALK_FORWARD', trainMonths: 36, testMonths: 6 });
+  await section.getByLabel('파라미터 최적화').check();
   await section.getByLabel('탐색 매개변수 1').click();
   await page.getByRole('option', { name: '관찰 기간' }).click();
   await section.getByLabel('후보값 (쉼표 구분)').fill('10, 20');
   await expect(section.getByText('2개 구간 · 후보 2개 · 백테스트 총 8회 (고정 전략 OOS 비교 포함)')).toBeVisible();
+  await section.getByLabel('파라미터 최적화').uncheck();
+  await section.getByLabel('파라미터 최적화').check();
+  await expect(section.getByLabel('후보값 (쉼표 구분)')).toHaveValue('10, 20');
   await expect(section.getByText(/평가 기간보다 짧아 제외한 마지막 구간: 2024-01-01 ~ 2024-04-15/)).toBeVisible();
   await section.getByRole('button', { name: '검증 실험 실행' }).click();
   await expect.poll(() => state.submitted).toEqual({ mode: 'WALK_FORWARD', trainMonths: 36, testMonths: 6,

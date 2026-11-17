@@ -36,13 +36,22 @@ export const periodValidationConfigSchema = z.discriminatedUnion("mode", [
     mode: z.literal("WALK_FORWARD"),
     trainMonths: z.number().int().min(1).max(120),
     testMonths: z.number().int().min(1).max(60),
-    optimization: optimizationSchema,
+    optimization: optimizationSchema.optional(),
   }),
 ]);
 
 export type PeriodValidationConfig = z.infer<
   typeof periodValidationConfigSchema
 >;
+export type ValidationOptimization = z.infer<typeof optimizationSchema>;
+
+/** 최적화 설정이 없는 워크포워드는 원본 매개변수로만 검증한다. */
+export function getValidationOptimization(
+  config: PeriodValidationConfig,
+): ValidationOptimization | undefined {
+  return config.mode === "HOLDOUT" ? undefined : config.optimization;
+}
+
 export interface ValidationFold {
   ordinal: number;
   train: BacktestPeriod;
@@ -80,10 +89,11 @@ export function buildPeriodValidationPlan(
   config: PeriodValidationConfig,
 ): PeriodValidationPlan {
   const intraday = "mode" in source && source.mode === "intraday";
-  if (intraday && config.mode !== "HOLDOUT") {
-    if (config.optimization.objective !== "sharpe")
+  const optimization = getValidationOptimization(config);
+  if (intraday && optimization) {
+    if (optimization.objective !== "sharpe")
       throw new Error("분봉 기간검증은 Sharpe를 기준으로 최적화합니다.");
-    for (const axis of config.optimization.axes) {
+    for (const axis of optimization.axes) {
       if (!Object.hasOwn(source.parameters, axis.key) || typeof source.parameters[axis.key as keyof typeof source.parameters] !== "number")
         throw new Error(`숫자 전략 매개변수만 탐색할 수 있습니다: ${axis.key}`);
     }
@@ -92,9 +102,9 @@ export function buildPeriodValidationPlan(
   if (from >= to)
     throw new Error("검증 기간은 시작일보다 종료일이 뒤여야 합니다.");
   let candidates = [{ ...source.parameters }];
-  if (config.mode !== "HOLDOUT") {
+  if (optimization) {
     const keys = new Set<string>();
-    for (const axis of config.optimization.axes) {
+    for (const axis of optimization.axes) {
       if (keys.has(axis.key)) throw new Error("탐색 매개변수가 중복됐습니다.");
       keys.add(axis.key);
       if (new Set(axis.values).size !== axis.values.length)
@@ -152,7 +162,7 @@ export function buildPeriodValidationPlan(
     });
   }
   const totalRuns =
-    folds.length * (candidates.length + (config.mode === "HOLDOUT" ? 1 : 2));
+    folds.length * (candidates.length + (optimization ? 2 : 1));
   if (totalRuns > MAX_VALIDATION_RUNS)
     throw new Error(
       `예상 실행 ${totalRuns}회가 상한 ${MAX_VALIDATION_RUNS}회를 초과합니다.`,
@@ -228,7 +238,7 @@ export interface PeriodValidationDto {
 /** 선택과 화면 진단이 같은 조건을 사용하며 한 후보의 여러 탈락 사유를 모두 남긴다. */
 export function evaluateValidationCandidate(
   metrics: ValidationMetrics,
-  optimization: z.infer<typeof optimizationSchema>,
+  optimization: ValidationOptimization,
 ): ValidationCandidateAssessment {
   const reasons: ValidationCandidateRejection[] = [];
   const score = metrics[optimization.objective];
@@ -243,7 +253,7 @@ export function evaluateValidationCandidate(
 /** OOS와 고정 전략 성과는 선택 함수에 전달하지 않는다. 동률이면 후보 입력 순서를 유지한다. */
 export function selectValidationCandidate(
   candidates: readonly { candidate: number; metrics: ValidationMetrics }[],
-  optimization: z.infer<typeof optimizationSchema>,
+  optimization: ValidationOptimization,
 ): number | null {
   const eligible = candidates.filter(({ metrics }) => evaluateValidationCandidate(metrics, optimization).eligible);
   eligible.sort(
