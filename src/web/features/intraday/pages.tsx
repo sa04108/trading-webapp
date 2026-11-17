@@ -1,6 +1,7 @@
 import { IntradayChartView } from "./intraday-chart";
 export { IntradayDataPage } from "./intraday-data-page";
 import { useHistoryQueries } from "../backtests/use-history-queries";
+import { useHistoryEditing } from "../backtests/history-editing";
 import { BacktestBreadcrumbs } from "../backtests/backtest-breadcrumbs";
 import { ResultActions } from "../backtests/result-actions";
 import { IntradayReproductionInfo } from "./intraday-reproduction-info";
@@ -23,7 +24,7 @@ import { BacktestHeader, NewBacktestButton } from "../backtests/backtest-header"
 import { BacktestProgressCard } from "../backtests/backtest-progress-card";
 import {
   HistoryPager,
-  HistorySelectionActions,
+  HistoryEditActions,
   HistoryStrategyGroup,
   HistoryToolbar,
   historyPeriod,
@@ -254,15 +255,7 @@ export function IntradayListPage() {
   const tablePreferences = useHistoryTablePreferences();
   const columns = tablePreferences.visibleColumns.map((column) => column.id);
   const client = useQueryClient();
-  const [editing, setEditing] = useState(false);
-  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  const clear = () => setSelected(new Set());
-  const toggleOne = (id: string) => setSelected((previous) => {
-    const next = new Set(previous);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    return next;
-  });
+  const historyEditing = useHistoryEditing();
   const groups = useQuery({
     queryKey: ["intraday-runs", "groups"],
     queryFn: () => api<{ groups: HistoryGroup[] }>("/intraday/runs/groups"),
@@ -299,10 +292,8 @@ export function IntradayListPage() {
   );
   const extras = useBacktestHistoryExtras(visibleRuns.map((run) => run.id), 5_000, "intraday");
   const extrasById = new Map(extras.data?.summaries.map((item) => [item.jobId, item]) ?? []);
-  const deletableIds = visibleRuns.filter((run) => !active(run.status)).map((run) => run.id);
-  const selectedIds = deletableIds.filter((id) => selected.has(id));
   const remove = useMutation({
-    mutationFn: async (ids: string[]) => {
+    mutationFn: async ({ ids }: { strategyId: string; ids: string[] }) => {
       const results = await Promise.allSettled(ids.map(async (id) => {
         await api(`/intraday/history/${encodeURIComponent(id)}`, { method: "DELETE" });
         client.removeQueries({ queryKey: ["intraday-run", id], exact: true });
@@ -310,10 +301,9 @@ export function IntradayListPage() {
       const failed = results.find((result) => result.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;
     },
-    onSuccess: (_result, ids) => {
+    onSuccess: (_result, { strategyId, ids }) => {
       toast.success(`백테스트 ${ids.length}개를 삭제했습니다`);
-      clear();
-      setEditing(false);
+      historyEditing.setEditing(strategyId, false);
     },
     onSettled: () => client.invalidateQueries({ queryKey: ["intraday-runs"] }),
   });
@@ -346,26 +336,7 @@ export function IntradayListPage() {
         mode="intraday"
         actions={<NewBacktestButton mode="intraday" />}
       />
-      <HistoryToolbar
-        controls={controls}
-        intraday
-        onChange={clear}
-        editing={editing}
-        onEditingChange={visibleRuns.length > 0 || editing ? (value) => {
-          setEditing(value);
-          clear();
-        } : undefined}
-      />
-      {editing ? (
-        <HistorySelectionActions
-          total={deletableIds.length}
-          selected={selectedIds.length}
-          pending={remove.isPending}
-          onToggleAll={() => setSelected(selectedIds.length === deletableIds.length ? new Set() : new Set(deletableIds))}
-          onRemoveSelected={() => remove.mutate(selectedIds)}
-          onRemoveAll={() => remove.mutate(deletableIds)}
-        />
-      ) : null}
+      <HistoryToolbar controls={controls} intraday onChange={() => historyEditing.clear()} />
       <ErrorAlert error={groups.error} />
       <ErrorAlert error={remove.error} />
       {groups.isLoading ? (
@@ -377,6 +348,10 @@ export function IntradayListPage() {
       <HistoryLayout columns={columns} view={controls.view}>
         {(groups.data?.groups ?? []).map((group, index) => {
           const query = pages[index];
+          const { editing, selected } = historyEditing.state(group.strategyId);
+          const runs = controls.collapsed(group.strategyId) || query?.isPlaceholderData ? [] : (query?.data?.runs ?? []);
+          const deletableIds = runs.filter((run) => !active(run.status)).map((run) => run.id);
+          const selectedIds = deletableIds.filter((id) => selected.has(id));
           const strategy = INTRADAY_STRATEGIES.find(
             (s) => s.id === group.strategyId,
           );
@@ -388,9 +363,22 @@ export function IntradayListPage() {
               description={strategy?.description}
               total={group.total}
               collapsed={controls.collapsed(group.strategyId)}
+              actions={<HistoryEditActions
+                editing={editing}
+                onEditingChange={(value) => {
+                  if (value && controls.collapsed(group.strategyId)) controls.toggle(group.strategyId);
+                  historyEditing.setEditing(group.strategyId, value);
+                }}
+                total={deletableIds.length}
+                selected={selectedIds.length}
+                pending={remove.isPending}
+                selectionDisabled={query?.isPlaceholderData}
+                onToggleAll={() => historyEditing.toggleAll(group.strategyId, deletableIds)}
+                onRemoveSelected={() => remove.mutate({ strategyId: group.strategyId, ids: selectedIds })}
+              />}
               onToggle={() => {
                 controls.toggle(group.strategyId);
-                clear();
+                historyEditing.setEditing(group.strategyId, false);
               }}
             >
               <ErrorAlert error={query?.error} />
@@ -462,7 +450,7 @@ export function IntradayListPage() {
                               className="mt-5"
                               checked={selected.has(run.id)}
                               disabled={active(run.status) || remove.isPending || query?.isPlaceholderData}
-                              onCheckedChange={() => toggleOne(run.id)}
+                              onCheckedChange={() => historyEditing.toggleOne(group.strategyId, run.id)}
                               aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
                             />
                             <label htmlFor={`intraday-${run.id}`} className="min-w-0 flex-1 cursor-pointer">{card}</label>
@@ -485,7 +473,7 @@ export function IntradayListPage() {
                                 <Checkbox
                                   checked={selected.has(run.id)}
                                   disabled={active(run.status) || remove.isPending || query?.isPlaceholderData}
-                                  onCheckedChange={() => toggleOne(run.id)}
+                                  onCheckedChange={() => historyEditing.toggleOne(group.strategyId, run.id)}
                                   aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
                                 />
                                 <span className="whitespace-nowrap">
@@ -532,7 +520,7 @@ export function IntradayListPage() {
                   pending={query.isPlaceholderData}
                   onPage={(page) => {
                     controls.setPage(group.strategyId, page);
-                    clear();
+                    historyEditing.clear(group.strategyId);
                   }}
                 />
               ) : null}

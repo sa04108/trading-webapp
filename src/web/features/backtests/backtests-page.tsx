@@ -1,11 +1,12 @@
 import { ExperimentLinks, hasExperimentRecords } from "./experiment-links";
 import { useHistoryQueries } from "./use-history-queries";
+import { useHistoryEditing } from "./history-editing";
 import {
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
@@ -20,7 +21,7 @@ import { useStrategies } from "./api";
 import { useBacktestHistoryExtras } from "./experiment-api";
 import {
   HistoryPager,
-  HistorySelectionActions,
+  HistoryEditActions,
   HistoryStrategyGroup,
   HistoryToolbar,
   historyPeriod,
@@ -49,15 +50,6 @@ import {
 
 export function deletableBacktestIds(jobs: readonly JobSummary[]): string[] {
   return jobs.filter((job) => isTerminal(job.status)).map((job) => job.id);
-}
-
-export function toggleAllBacktests(
-  selected: ReadonlySet<string>,
-  deletableIds: readonly string[],
-): ReadonlySet<string> {
-  const allSelected =
-    deletableIds.length > 0 && deletableIds.every((id) => selected.has(id));
-  return allSelected ? new Set() : new Set(deletableIds);
 }
 
 export function BacktestJobCard({
@@ -197,9 +189,7 @@ export function BacktestsPage() {
   const tablePreferences = useHistoryTablePreferences();
   const columns = tablePreferences.visibleColumns.map((column) => column.id);
   const strategies = useStrategies();
-  const [editing, setEditing] = useState(false);
-  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  const clear = () => setSelected(new Set());
+  const edit = useHistoryEditing();
   const groups = useQuery({
     queryKey: ["backtests", "groups"],
     queryFn: () => api<{ groups: HistoryGroup[] }>("/backtests/groups"),
@@ -233,9 +223,6 @@ export function BacktestsPage() {
       ? []
       : (query.data?.jobs ?? []),
   );
-  const displayedJobs = pages.flatMap((query, index) =>
-    controls.collapsed(groups.data?.groups[index]?.strategyId ?? "") ? [] : (query.data?.jobs ?? []),
-  );
   const sourceIds = visibleJobs.map((job) => job.id).sort();
   const extrasQuery = useBacktestHistoryExtras(sourceIds);
   const extrasBySource = new Map(extrasQuery.data?.summaries.map((item) => [item.jobId, item]) ?? []);
@@ -246,10 +233,6 @@ export function BacktestsPage() {
         return extras !== undefined && extras.seed.activeCount === 0 && extras.validation.experimentCount === 0;
       })
     : [];
-  const selectedIds = displayedJobs.filter((job) => selected.has(job.id)).map((job) => job.id);
-  const selectionTotal = new Set([...deletableIds, ...selectedIds]).size;
-  const selectionDisabled = extrasQuery.isError || (sourceIds.length > 0 && !extrasQuery.data) ||
-    pages.some((query) => query.isPlaceholderData) || selectedIds.some((id) => !deletableIds.includes(id));
   const corrections = (groups.data?.groups ?? []).flatMap((group, index) => {
     const query = pages[index];
     if (
@@ -278,53 +261,24 @@ export function BacktestsPage() {
     void client.invalidateQueries({ queryKey: ["backtest-experiments"] });
   };
   const remove = useMutation({
-    mutationFn: (ids: string[]) =>
+    mutationFn: ({ ids }: { strategyId: string; ids: string[] }) =>
       Promise.all(
         ids.map((id) => api(`/backtests/${id}`, { method: "DELETE" })),
       ),
-    onSuccess: (_result, ids) => {
+    onSuccess: (_result, { strategyId, ids }) => {
       toast.success(`백테스트 ${ids.length}개를 삭제했습니다`);
-      clear();
-      setEditing(false);
+      edit.setEditing(strategyId, false);
     },
     onError: (error: Error) => toast.error(error.message),
     onSettled: invalidate,
   });
-  const toggleOne = (id: string) =>
-    setSelected((previous) => {
-      const next = new Set(previous);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   return (
     <div className="isolate space-y-4">
       <BacktestHeader
         mode="daily"
         actions={<NewBacktestButton mode="daily" />}
       />
-      <HistoryToolbar
-        controls={controls}
-        onChange={clear}
-        editing={editing}
-        onEditingChange={visibleJobs.length > 0 || editing ? (value) => {
-          setEditing(value);
-          clear();
-        } : undefined}
-      />
-      {editing ? (
-        <HistorySelectionActions
-          total={selectionTotal}
-          selected={selectedIds.length}
-          pending={remove.isPending || selectionDisabled}
-          onToggleAll={() => setSelected(toggleAllBacktests(selected, deletableIds))}
-          onRemoveSelected={() => remove.mutate(selectedIds)}
-          onRemoveAll={() => remove.mutate(deletableIds)}
-        />
-      ) : null}
-      {editing && [...extrasBySource.values()].some((item) => item.validation.experimentCount > 0) ? (
-        <p className="text-sm text-muted-foreground">기간검증이 연결된 기록은 검증 실험을 먼저 삭제해야 선택할 수 있습니다.</p>
-      ) : null}
+      <HistoryToolbar controls={controls} onChange={() => edit.clear()} />
       {extrasQuery.isError ? (
         <p role="alert" className="text-sm text-destructive">
           실험 정보를 불러오지 못해 원본 삭제가 비활성화되었습니다.
@@ -346,6 +300,13 @@ export function BacktestsPage() {
             (s) => s.id === group.strategyId,
           );
           const name = strategy?.name ?? group.strategyId;
+          const { editing, selected } = edit.state(group.strategyId);
+          const jobs = query?.data?.jobs ?? [];
+          const groupDeletableIds = jobs.filter((job) => deletableIds.includes(job.id)).map((job) => job.id);
+          const selectedIds = jobs.filter((job) => selected.has(job.id)).map((job) => job.id);
+          const selectionTotal = new Set([...groupDeletableIds, ...selectedIds]).size;
+          const selectionDisabled = extrasQuery.isError || (sourceIds.length > 0 && !extrasQuery.data) ||
+            query?.isPlaceholderData || selectedIds.some((id) => !groupDeletableIds.includes(id));
           return (
             <HistoryStrategyGroup
               key={group.strategyId}
@@ -355,9 +316,25 @@ export function BacktestsPage() {
               collapsed={controls.collapsed(group.strategyId)}
               onToggle={() => {
                 controls.toggle(group.strategyId);
-                clear();
+                edit.setEditing(group.strategyId, false);
               }}
+              actions={<HistoryEditActions
+                editing={editing}
+                onEditingChange={(value) => {
+                  if (value && controls.collapsed(group.strategyId)) controls.toggle(group.strategyId);
+                  edit.setEditing(group.strategyId, value);
+                }}
+                total={selectionTotal}
+                selected={selectedIds.length}
+                pending={remove.isPending}
+                selectionDisabled={selectionDisabled}
+                onToggleAll={() => edit.toggleAll(group.strategyId, groupDeletableIds)}
+                onRemoveSelected={() => remove.mutate({ strategyId: group.strategyId, ids: selectedIds })}
+              />}
             >
+              {editing && jobs.some((job) => (extrasBySource.get(job.id)?.validation.experimentCount ?? 0) > 0) ? (
+                <p className="text-sm text-muted-foreground">기간검증이 연결된 기록은 검증 실험을 먼저 삭제해야 선택할 수 있습니다.</p>
+              ) : null}
               {query?.isError ? (
                 <p role="alert" className="text-destructive">
                   이력을 불러오지 못했습니다.
@@ -376,7 +353,7 @@ export function BacktestsPage() {
                         selected={selected.has(job.id)}
                         deletable={deletableIds.includes(job.id) || selected.has(job.id)}
                         selectionDisabled={!selected.has(job.id) && selectionDisabled}
-                        onToggle={() => toggleOne(job.id)}
+                        onToggle={() => edit.toggleOne(group.strategyId, job.id)}
                       />
                     </div>
                   ))}
@@ -391,7 +368,7 @@ export function BacktestsPage() {
                                 <Checkbox
                                   checked={selected.has(job.id)}
                                   disabled={!selected.has(job.id) && selectionDisabled}
-                                  onCheckedChange={() => toggleOne(job.id)}
+                                  onCheckedChange={() => edit.toggleOne(group.strategyId, job.id)}
                                   aria-label={`${formatDateTime(job.createdAtMs)} 백테스트 선택`}
                                 />
                               ) : null}
@@ -471,7 +448,7 @@ export function BacktestsPage() {
                   pending={query.isPlaceholderData}
                   onPage={(page) => {
                     controls.setPage(group.strategyId, page);
-                    clear();
+                    edit.clear(group.strategyId);
                   }}
                 />
               ) : null}
