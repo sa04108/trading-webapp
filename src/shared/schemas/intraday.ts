@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 export const INTRADAY_STRATEGY_ID = "intraday-ema";
-export const INTRADAY_STRATEGY_VERSION = "1.0.0";
+export const INTRADAY_STRATEGY_VERSION = "2.0.0";
 export const INTRADAY_RETENTION_DAYS = 365;
 export const MINUTE_MS = 60_000;
 export const intradaySymbolSchema = z
@@ -52,6 +52,10 @@ const riskParameters = {
   allocationPct: z.number().min(1).max(100),
   stopLossPct: z.number().min(0.1).max(50),
   takeProfitPct: z.number().min(0.1).max(100),
+  // 이전 결과의 요청도 읽을 수 있도록 새 제어값은 선택 항목으로 보존한다.
+  maxDailyEntries: z.number().int().min(1).max(10).optional(),
+  cooldownMinutes: z.number().int().min(0).max(180).optional(),
+  maxHoldingMinutes: z.number().int().min(5).max(380).optional(),
 };
 const requestBase = z
   .object({
@@ -82,6 +86,8 @@ export const intradayRequestSchema = z
           ...riskParameters,
           fast: z.number().int().min(2).max(119),
           slow: z.number().int().min(3).max(120),
+          volumePeriod: z.number().int().min(2).max(60).optional(),
+          volumeMultiplier: z.number().min(1).max(5).optional(),
         })
         .strict()
         .refine(
@@ -125,6 +131,7 @@ export const intradayRequestSchema = z
           bandStdDev: z.number().min(1).max(3),
           rsiPeriod: z.number().int().min(2).max(60),
           oversold: z.number().min(5).max(45),
+          recoveryBars: z.number().int().min(1).max(6).optional(),
         })
         .strict(),
     }),
@@ -133,7 +140,7 @@ export const intradayRequestSchema = z
     const minutes = Number.parseInt(r.timeframe, 10);
     const warmup =
       r.strategyId === "intraday-ema"
-        ? r.parameters.slow
+        ? Math.max(r.parameters.slow, (r.parameters.volumePeriod ?? 4) + 1)
         : r.strategyId === "intraday-vwap-reclaim"
           ? Math.max(r.parameters.trendPeriod, r.parameters.volumePeriod + 1)
           : r.strategyId === "intraday-bollinger-rsi"
@@ -212,7 +219,8 @@ export interface IntradaySignal {
     | "BOLLINGER_RSI"
     | "STOP_LOSS"
     | "TAKE_PROFIT"
-    | "DAY_EXIT";
+    | "DAY_EXIT"
+    | "MAX_HOLD";
 }
 export interface IntradayFill {
   orderId: string;

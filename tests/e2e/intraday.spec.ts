@@ -98,7 +98,7 @@ test.beforeEach(async ({ page }) => {
 // 정적 마크업 검사는 구간 전환 중 이전 성과가 남거나 모든 분봉 본문을 요청하는 회귀를 잡지 못한다.
 test("분봉 일별 검증은 선택한 OOS만 조회하고 조기 종료를 별도로 표시한다", async ({ page }) => {
   await login(page);
-  const sourceRequest = intradayRequestSchema.parse({ ...request, period: { from: "2026-04-01", to: "2026-08-31" } });
+  const sourceRequest = intradayRequestSchema.parse({ ...request, timeframe: "15m", parameters: { ...request.parameters, fast: 4, slow: 10 }, period: { from: "2026-04-01", to: "2026-08-31" } });
   function report(dates: string[], early: boolean) {
     const equity: IntradayResult["equity"] = [];
     let cash = sourceRequest.initialCash;
@@ -469,18 +469,27 @@ test("새 분봉 전략의 설정을 실행하고 복제한다", async ({ page }
   const strategies = [
     {
       name: "시초가 범위 돌파", id: "intraday-orb", field: "시초 범위 (분)", value: "20",
-      parameters: { openingMinutes: 20, entryWindowMinutes: 90, breakoutBps: 10, volumeMultiplier: 1.5, allocationPct: 95, stopLossPct: 1.5, takeProfitPct: 3 },
+      parameters: { maxDailyEntries: 1, cooldownMinutes: 30, maxHoldingMinutes: 120, openingMinutes: 20, entryWindowMinutes: 150, breakoutBps: 5, volumeMultiplier: 1, allocationPct: 50, stopLossPct: 1.5, takeProfitPct: 3 },
+      timeframe: "5분",
       fields: ["개장 후 진입 제한 (분)", "돌파 여유 (bps)", "시초 평균 대비 거래량 (배)"],
     },
     {
-      name: "VWAP 회복", id: "intraday-vwap-reclaim", field: "추세 EMA (봉)", value: "25",
-      parameters: { trendPeriod: 25, volumePeriod: 10, volumeMultiplier: 1.2, allocationPct: 95, stopLossPct: 1.5, takeProfitPct: 3 },
+      name: "VWAP 회복", id: "intraday-vwap-reclaim", field: "추세 EMA (봉)", value: "10",
+      parameters: { maxDailyEntries: 2, cooldownMinutes: 30, maxHoldingMinutes: 120, trendPeriod: 10, volumePeriod: 4, volumeMultiplier: 1.3, allocationPct: 50, stopLossPct: 1.5, takeProfitPct: 3 },
+      timeframe: "15분",
       fields: ["평균 거래량 (봉)", "평균 대비 거래량 (배)"],
     },
     {
       name: "볼린저·RSI 되돌림", id: "intraday-bollinger-rsi", field: "볼린저 기간 (봉)", value: "25",
-      parameters: { bandPeriod: 25, bandStdDev: 2, rsiPeriod: 14, oversold: 30, allocationPct: 95, stopLossPct: 1, takeProfitPct: 2 },
-      fields: ["표준편차 배수", "RSI 기간 (봉)", "과매도 RSI"],
+      parameters: { maxDailyEntries: 2, cooldownMinutes: 30, maxHoldingMinutes: 60, bandPeriod: 25, bandStdDev: 1.8, rsiPeriod: 7, oversold: 35, recoveryBars: 3, allocationPct: 40, stopLossPct: 1, takeProfitPct: 2 },
+      timeframe: "5분",
+      fields: ["표준편차 배수", "RSI 기간 (봉)", "과매도 RSI", "회복 대기 (봉)"],
+    },
+    {
+      name: "EMA 교차", id: "intraday-ema", field: "단기 EMA", value: "5",
+      parameters: { maxDailyEntries: 2, cooldownMinutes: 30, maxHoldingMinutes: 120, fast: 5, slow: 10, volumePeriod: 4, volumeMultiplier: 1.3, allocationPct: 50, stopLossPct: 1.5, takeProfitPct: 3 },
+      timeframe: "15분",
+      fields: ["장기 EMA", "평균 거래량 (봉)", "평균 대비 거래량 (배)"],
     },
   ];
   for (const strategy of strategies) {
@@ -489,7 +498,13 @@ test("새 분봉 전략의 설정을 실행하고 복제한다", async ({ page }
     await page.getByText("분봉 전략 소개").click();
     await page.getByRole("link", { name: `${strategy.name} 백테스트` }).click();
     await expect(page.getByRole("combobox", { name: "분봉 전략" })).toContainText(strategy.name);
-    for (const field of strategy.fields) await expect(page.getByLabel(field, { exact: true })).toBeVisible();
+    await expect(page.getByRole("combobox", { name: "봉 주기" })).toContainText(strategy.timeframe);
+    for (const field of [...strategy.fields, "하루 최대 진입 (회)", "청산 후 재진입 대기 (분)", "최대 보유 (분)"]) await expect(page.getByLabel(field, { exact: true })).toBeVisible();
+    if (strategy.timeframe === "15분") {
+      await page.getByRole("combobox", { name: "봉 주기" }).click();
+      await expect(page.getByRole("option", { name: "5분", exact: true })).toHaveCount(0);
+      await page.keyboard.press("Escape");
+    }
     await page.getByLabel(strategy.field, { exact: true }).fill(strategy.value);
     await page.getByLabel("종목 검색 (이름 또는 6자리 코드)").fill("005930");
     await page.getByRole("button", { name: "백테스트 실행" }).click();
@@ -500,6 +515,22 @@ test("새 분봉 전략의 설정을 실행하고 복제한다", async ({ page }
     await expect(page.getByRole("combobox", { name: "분봉 전략" })).toContainText(strategy.name);
     await expect(page.getByLabel(strategy.field, { exact: true })).toHaveValue(strategy.value);
   }
+});
+
+
+test("이전 EMA 복제는 기존 봉 주기를 보여주고 새 실행 전에 변경을 요구한다", async ({ page }) => {
+  await login(page);
+  await page.route("**/api/v1/intraday/runs/done", (route) => route.fulfill({ json: completed }));
+  await page.route("**/api/v1/intraday/symbols?**", (route) => route.fulfill({ json: { symbols: [] } }));
+  await page.goto("/backtests/intraday/new?clone=done");
+  const timeframe = page.getByRole("combobox", { name: "봉 주기" });
+  await expect(timeframe).toContainText("5분 (기존 설정 · 변경 필요)");
+  await expect(page.getByLabel("장기 EMA", { exact: true })).toHaveValue("26");
+  await page.getByRole("button", { name: "백테스트 실행" }).click();
+  await expect(page.getByRole("alert")).toContainText("15분봉");
+  await timeframe.click();
+  await page.getByRole("option", { name: "15분", exact: true }).click();
+  await expect(page.getByLabel("장기 EMA", { exact: true })).toHaveValue("26");
 });
 
 
@@ -557,7 +588,7 @@ test("분봉 편집은 현재 페이지의 종료된 이력만 삭제한다", as
 // 일봉 전용 API로 잘못 연결되는 회귀는 공통 검증 폼 테스트만으로 발견할 수 없다.
 test("분봉 실험 페이지를 재사용하고 검증 하위 결과와 일반 복제를 구분한다", async ({ page }) => {
   await login(page);
-  const sourceRequest = intradayRequestSchema.parse({ ...request, period: { from: "2026-01-05", to: "2026-10-30" } });
+  const sourceRequest = intradayRequestSchema.parse({ ...request, timeframe: "15m", parameters: { ...request.parameters, fast: 4, slow: 10 }, period: { from: "2026-01-05", to: "2026-10-30" } });
   const childRequest = { ...sourceRequest, period: { from: "2026-07-01", to: "2026-10-30" } };
   const source = { ...completed, request: sourceRequest, result: { ...result, request: sourceRequest } };
   let experiment: PeriodValidationDto | null = null;

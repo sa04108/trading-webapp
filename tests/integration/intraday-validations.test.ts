@@ -13,7 +13,7 @@ import { intradayValidationTrials } from "../../src/server/shared/db/intraday-va
 import { runIntradayBacktest } from "../../src/runtime/modules/intraday/domain/engine.js";
 import type { IntradayRequest } from "../../src/shared/schemas/intraday.js";
 
-const request: IntradayRequest = { mode: "intraday", strategyId: "intraday-ema", symbol: "005930", period: { from: "2026-10-01", to: "2026-10-10" }, timeframe: "1m", initialCash: 100_000, parameters: { fast: 2, slow: 5, allocationPct: 95, stopLossPct: 3, takeProfitPct: 6 }, execution: { holdingPolicy: "DAY_ONLY", commissionBps: 1, taxBps: 1, slippageBps: 1, latencyMs: 1000, orderExpiryMinutes: 3, maxParticipationPct: 10 } };
+const request: IntradayRequest = { mode: "intraday", strategyId: "intraday-ema", symbol: "005930", period: { from: "2026-10-01", to: "2026-10-10" }, timeframe: "15m", initialCash: 100_000, parameters: { fast: 2, slow: 5, volumePeriod: 4, volumeMultiplier: 1.3, maxDailyEntries: 2, cooldownMinutes: 30, maxHoldingMinutes: 120, allocationPct: 95, stopLossPct: 3, takeProfitPct: 6 }, execution: { holdingPolicy: "DAY_ONLY", commissionBps: 1, taxBps: 1, slippageBps: 1, latencyMs: 1000, orderExpiryMinutes: 3, maxParticipationPct: 10 } };
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanups.splice(0)) await close(); });
 function fixture(synthetic = false, block?: Promise<void>, source = request) {

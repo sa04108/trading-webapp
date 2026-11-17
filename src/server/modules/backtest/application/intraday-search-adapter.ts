@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
 import { intradayRequestSchema } from "../../../../shared/schemas/intraday.js";
-import { getIntradayStrategy } from "../../../../shared/schemas/intraday-strategies.js";
+import { getIntradayStrategy, intradayRunRequestSchema } from "../../../../shared/schemas/intraday-strategies.js";
 import type { StrategyRegistry } from "../../../../runtime/modules/strategy/application/strategy-registry.js";
 import type { IntradayService } from "../../intraday/application/intraday-service.js";
 import { IntradayError } from "../../intraday/application/intraday-service.js";
@@ -18,12 +18,13 @@ export function createIntradaySearchAdapter(database: DatabaseHandle, runs: Intr
     source: (owner, id) => {
       const source = runs.getRunRequest(owner, id);
       if (!["COMPLETED", "FAILED", "CANCELLED"].includes(source.status)) throw new ConfigurationSearchError("종료된 백테스트에서 설정 탐색을 시작하세요.", 409);
-      return { request: source.request, catalog: intradaySearchCatalog(id, source.request), runtimeIdentity: identity(source.request) };
+      const request = intradayRunRequestSchema.parse(source.request);
+      return { request, catalog: intradaySearchCatalog(id, request), runtimeIdentity: identity(request) };
     },
     sample: (source, config) => sampleConfigurations(source.request, source.catalog, config, strategies),
     runtimeIdentity: identity,
     buildSubmission: async (owner, raw) => {
-      const request = intradayRequestSchema.parse(raw);
+      const request = intradayRunRequestSchema.parse(raw);
       return () => {
         try { const id = randomUUID(); runs.createInternalRun(owner, request, id); return id; }
         catch (error) { if (error instanceof IntradayError && error.statusCode === 429) return null; throw error; }

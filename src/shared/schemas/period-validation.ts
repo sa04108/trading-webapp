@@ -1,3 +1,4 @@
+import { intradayRunRequestSchema } from "./intraday-strategies.js";
 import { z } from "zod";
 import {
   backtestRequestSchema,
@@ -5,7 +6,7 @@ import {
   type BacktestPeriod,
   type BacktestRequest,
 } from "./backtest-request.js";
-import { intradayRequestSchema, type IntradayRequest } from "./intraday.js";
+import type { IntradayRequest } from "./intraday.js";
 
 export const MAX_VALIDATION_RUNS = 300;
 export const MAX_VALIDATION_CANDIDATES = 50;
@@ -191,7 +192,7 @@ export function buildPeriodValidationPlan(
       if (period.from >= period.to)
         throw new Error("각 IS/OOS 구간에는 최소 2일이 필요합니다.");
       for (const parameters of [...candidates, source.parameters]) {
-        const parsed = (intraday ? intradayRequestSchema : backtestRequestSchema).safeParse({
+        const parsed = (intraday ? intradayRunRequestSchema : backtestRequestSchema).safeParse({
           ...source,
           period,
           parameters,

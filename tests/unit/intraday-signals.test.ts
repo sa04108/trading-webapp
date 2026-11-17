@@ -49,7 +49,7 @@ const run = (r: IntradayRequest, bars: IntradayBar[]) => {
 
 describe("intraday signal models", () => {
   it("retains EMA warmup, crossing and daily reset", () => {
-    const r = request("intraday-ema", { fast: 2, slow: 3 });
+    const r = request("intraday-ema", { fast: 2, slow: 3, volumePeriod: 2, volumeMultiplier: 1 });
     const bars = [
       bar(1, 100),
       bar(2, 90),
@@ -64,6 +64,12 @@ describe("intraday signal models", () => {
       { entry: null, exit: "EMA" },
       { entry: null, exit: null },
     ]);
+  });
+  it("requires a positive volume confirmation against prior signal bars for EMA entry", () => {
+    const r = request("intraday-ema", { fast: 2, slow: 3, volumePeriod: 2, volumeMultiplier: 1.3 });
+    const history = [bar(1, 100), bar(2, 90)];
+    expect(run(r, [...history, bar(3, 110, 12)])[2]!.entry).toBeNull();
+    expect(run(r, [...history, bar(3, 110, 13)])[2]!.entry).toBe("EMA");
   });
   it("uses the completed opening range and allows only one breakout per day", () => {
     const r = request("intraday-orb", {
@@ -125,6 +131,16 @@ describe("intraday signal models", () => {
     expect(
       run(r, [...bars.slice(0, 3), bar(1, 100, 10, "2024-01-03")])[3]!.entry,
     ).toBeNull();
+  });
+  it("allows a delayed oversold recovery only within its daily expiry", () => {
+    const params = { bandPeriod: 4, bandStdDev: 1, rsiPeriod: 2, oversold: 30 };
+    const bars = [bar(1, 100), bar(2, 100), bar(3, 100), bar(4, 80), bar(5, 81, 0), bar(6, 82)];
+    const active = request("intraday-bollinger-rsi", { ...params, recoveryBars: 2 });
+    const expired = request("intraday-bollinger-rsi", { ...params, recoveryBars: 1 });
+    expect(run(active, bars)[5]!.entry).toBe("BOLLINGER_RSI");
+    expect(run(expired, bars)[5]!.entry).toBeNull();
+    const nextDay = bars.slice(0, 5).concat(bar(1, 82, 10, "2024-01-03"));
+    expect(run(active, nextDay)[5]!.entry).toBeNull();
   });
   it("confirms recovery using the previous population band and Wilder RSI", () => {
     const r = request("intraday-bollinger-rsi", {
