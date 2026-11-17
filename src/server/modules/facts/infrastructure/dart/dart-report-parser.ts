@@ -219,6 +219,12 @@ function combineBalancePoints(
   let conflict = false;
   for (const group of groups.values()) {
     const base = group[0]!;
+    const selected = sections.reconcileWithinSection(group.map(point => point.row), field);
+    if (selected !== null) {
+      // 원문에서 확인한 총액·상세 산식만 선택하며 원본 행과 기존 오류는 보존한다.
+      sum += group.filter(point => selected.includes(point.row)).reduce((total, point) => total + point.value, 0);
+      continue;
+    }
     if (sections.canAddWithinSection(group.map(point => point.row), field)) {
       sum += group.reduce((total, point) => total + point.value, 0);
       continue;
@@ -236,7 +242,7 @@ function combineBalancePoints(
         `${row.account_nm} [${row.account_id}, ord=${row.ord ?? "없음"}, 구간=${sections.label(row) ?? "미확인"}]`;
       gaps.push({
         symbol, periodKey, field, asOfTsMs: point.asOfTsMs,
-        reason: `같은 보고서 안에서 ${field} 값이 서로 다릅니다 (${base.value} vs ${point.value}); 합산 근거 미확인: ${describe(base.row)} / ${describe(point.row)}`,
+        reason: `같은 보고서 안에서 ${field} ${base.value === point.value ? "동일 금액의 중복 범위를 확인할 수 없습니다" : "값이 서로 다릅니다"} (${base.value} vs ${point.value}); 합산 근거 미확인: ${describe(base.row)} / ${describe(point.row)}`,
         severity: "BLOCKING", kind: "CONFLICT",
       });
       conflict = true;
