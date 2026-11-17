@@ -265,7 +265,7 @@ describe('symbol-master routes', () => {
     expect(body.lastSyncedAtMs).toBeNull();
   });
 
-  it('events 는 최대 500행·effectiveDate 내림차순으로 변경 이력을 반환한다', async ({ krxApps }) => {
+  it('events는 수집한 상장주식수 변경 이력을 반환한다', async ({ krxApps }) => {
     const { app, fake, cookie } = await setup(krxApps);
     seedTradingDay(fake, '2025-01-06');
     await app.app.inject({

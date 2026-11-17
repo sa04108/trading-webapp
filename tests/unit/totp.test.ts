@@ -3,6 +3,8 @@ import * as OTPAuth from 'otpauth';
 import { otpauthTotpService } from '../../src/server/modules/auth/infrastructure/otpauth-totp.js';
 
 const PERIOD_MS = 30_000;
+// RFC 6238 Appendix B의 SHA-1 비밀값(ASCII 12345678901234567890).
+const SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
 
 /**
  * 스텝 경계에 딱 붙지 않는 고정 시각을 쓴다. 실제 시계를 읽으면 테스트가 토큰을
@@ -21,36 +23,39 @@ function tokenAt(secret: string, timestamp: number): string {
 }
 
 describe('otpauthTotpService.verify (window ±1 step, 스펙 §3.5)', () => {
+  it('RFC 6238 SHA-1 예제의 6자리 값을 검증한다', () => {
+    expect(otpauthTotpService.verify(SECRET, '287082', 59_000)).toBe(1);
+  });
   it('accepts the current-step token and returns its step', () => {
-    const secret = otpauthTotpService.generateSecret();
+    const secret = SECRET;
     const step = otpauthTotpService.verify(secret, tokenAt(secret, NOW), NOW);
     expect(step).toBe(Math.floor(NOW / 1000 / 30));
   });
 
   it('accepts a token from one step in the future (+30s)', () => {
-    const secret = otpauthTotpService.generateSecret();
+    const secret = SECRET;
     const step = otpauthTotpService.verify(secret, tokenAt(secret, NOW + PERIOD_MS), NOW);
     expect(step).toBe(Math.floor(NOW / 1000 / 30) + 1);
   });
 
   it('accepts a token from one step in the past (-30s)', () => {
-    const secret = otpauthTotpService.generateSecret();
+    const secret = SECRET;
     const step = otpauthTotpService.verify(secret, tokenAt(secret, NOW - PERIOD_MS), NOW);
     expect(step).toBe(Math.floor(NOW / 1000 / 30) - 1);
   });
 
   it('rejects a token from two steps in the future (+60s)', () => {
-    const secret = otpauthTotpService.generateSecret();
+    const secret = SECRET;
     expect(otpauthTotpService.verify(secret, tokenAt(secret, NOW + 2 * PERIOD_MS), NOW)).toBeNull();
   });
 
   it('rejects a token from two steps in the past (-60s)', () => {
-    const secret = otpauthTotpService.generateSecret();
+    const secret = SECRET;
     expect(otpauthTotpService.verify(secret, tokenAt(secret, NOW - 2 * PERIOD_MS), NOW)).toBeNull();
   });
 
   it('gives distinct steps to adjacent time windows — 재사용 차단의 전제', () => {
-    const secret = otpauthTotpService.generateSecret();
+    const secret = SECRET;
     const first = otpauthTotpService.verify(secret, tokenAt(secret, NOW), NOW);
     const next = otpauthTotpService.verify(
       secret,
@@ -62,7 +67,7 @@ describe('otpauthTotpService.verify (window ±1 step, 스펙 §3.5)', () => {
   });
 
   it('rejects input that is not exactly 6 digits, without needing a valid secret', () => {
-    const secret = otpauthTotpService.generateSecret();
+    const secret = SECRET;
     expect(otpauthTotpService.verify(secret, '12345')).toBeNull();
     expect(otpauthTotpService.verify(secret, 'abcdef')).toBeNull();
     expect(otpauthTotpService.verify(secret, '1234567')).toBeNull();

@@ -244,7 +244,8 @@ describe('독립 구간 검증 실행', () => {
       const detail = service.get(experiment.id)!;
       expect(detail.status).toBe('COMPLETED');
       expect(detail.trials.filter((trial) => trial.role === 'OOS').map((trial) => trial.status)).toEqual(['NOT_EVALUATED', 'COMPLETED', 'COMPLETED']);
-      expect(detail.trials.filter((trial) => trial.role === 'BASELINE').every((trial) => trial.status === 'COMPLETED')).toBe(true);
+      expect(detail.trials.filter((trial) => trial.role === 'BASELINE').map((trial) => trial.status))
+        .toEqual(['COMPLETED', 'COMPLETED', 'COMPLETED']);
       expect(detail.trials.find((trial) => trial.fold === 0 && trial.role === 'OOS')).toMatchObject({ jobId: null, metrics: null, skipReason: 'NO_ELIGIBLE_CANDIDATE' });
       const skipRow = database.sqlite.prepare("SELECT preparation_job_id, job_id FROM backtest_validation_trials WHERE id=?").get(skipped.id);
       expect(skipRow).toEqual({ preparation_job_id: null, job_id: null });
@@ -269,7 +270,10 @@ describe('독립 구간 검증 실행', () => {
     const detail = service.get(experiment.id)!;
     expect(detail.status).toBe('COMPLETED');
     expect(detail.error).toBeNull();
-    expect(detail.trials.filter((trial) => trial.role === 'OOS')).toHaveLength(detail.plan.folds.length);
+    const foldCount = config.mode === 'HOLDOUT' ? 1 : 3;
+    expect(detail.plan.folds).toHaveLength(foldCount);
+    expect(detail.trials.filter((trial) => trial.role === 'OOS')).toHaveLength(foldCount);
+    expect(detail.trials.filter((trial) => trial.role === 'BASELINE')).toHaveLength(foldCount);
     expect(detail.trials.filter((trial) => trial.role === 'OOS').every((trial) => trial.status === 'NOT_EVALUATED' && trial.skipReason === 'NO_ELIGIBLE_CANDIDATE' && trial.jobId === null && trial.metrics === null)).toBe(true);
     expect(detail.trials.filter((trial) => trial.role === 'BASELINE').every((trial) => trial.status === 'COMPLETED' && trial.metrics !== null)).toBe(true);
   });
@@ -284,13 +288,16 @@ describe('독립 구간 검증 실행', () => {
     expect(service.get(experiment.id)!.trials.filter((trial) => trial.jobId)).toHaveLength(1);
   });
 
-  it.each(['FAILED', 'INTERRUPTED'] as const)('하위 작업이 %s이거나 실행 버전이 달라지면 실패한다', async (status) => {
+  it.each(['FAILED', 'INTERRUPTED'] as const)('하위 작업이 %s이면 실험이 실패한다', async (status) => {
     const experiment = service.create(sourceId, optimized);
     await until(() => service.get(experiment.id)!.trials.some((trial) => trial.jobId));
     const jobId = service.get(experiment.id)!.trials.find((trial) => trial.jobId)!.jobId!;
     queue.setStatus(jobId, status);
     await service.pump();
     expect(service.get(experiment.id)!.status).toBe('FAILED');
+  });
+
+  it('실험의 실행 버전이 달라지면 비교를 중단한다', async () => {
     const another = service.create(sourceId, optimized);
     database.db.update(backtestValidations).set({ engineVersion: 'old' }).where(eq(backtestValidations.id, another.id)).run();
     await service.pump();

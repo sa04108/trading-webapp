@@ -90,6 +90,7 @@ describe('방향 무지 — 전략은 어느 종목이 인버스인지 모른다
       signature.startsWith('AAA:')
         ? signature.replace(/^AAA:/, 'BBB:')
         : signature.replace(/^BBB:/, 'AAA:');
+    expect(original.fills.some((fill) => fill.side === 'BUY')).toBe(true);
     expect(fillSignature(swapped.fills)).toEqual(fillSignature(original.fills).map(relabel));
   });
 });

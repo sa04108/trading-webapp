@@ -100,9 +100,9 @@ describe('sortOpenRows', () => {
   }
 
   const rows = [
-    row('000660', { quantity: 5, entryTsMs: 3_000, unrealizedPnl: -50, returnPct: -5 }),
-    row('005930', { quantity: 30, entryTsMs: 1_000, unrealizedPnl: 900, returnPct: 12 }),
-    row('035720', { quantity: 12, entryTsMs: 2_000, unrealizedPnl: 40, returnPct: 1 }),
+    row('000660', { quantity: 5, entryTsMs: 3_000, unrealizedPnl: -50, returnPct: -5, holdingTimeMs: 1_000 }),
+    row('005930', { quantity: 30, entryTsMs: 1_000, unrealizedPnl: 900, returnPct: 12, holdingTimeMs: 3_000 }),
+    row('035720', { quantity: 12, entryTsMs: 2_000, unrealizedPnl: 40, returnPct: 1, holdingTimeMs: 2_000 }),
   ];
   const codes = (result: readonly OpenPositionRow[]): string[] => result.map((r) => r.symbol);
 
@@ -123,6 +123,9 @@ describe('sortOpenRows', () => {
       '035720',
       '005930',
     ]);
+    expect(codes(sortOpenRows(rows, { key: 'HOLDING_TIME', direction: 'ASC' }))).toEqual(['000660', '035720', '005930']);
+    expect(codes(sortOpenRows(rows, { key: 'HOLDING_TIME', direction: 'DESC' }))).toEqual(['005930', '035720', '000660']);
+    expect(codes(sortOpenRows(rows, { key: 'RETURN_PCT', direction: 'ASC' }))).toEqual(['000660', '035720', '005930']);
     expect(codes(sortOpenRows(rows, { key: 'RETURN_PCT', direction: 'DESC' }))).toEqual([
       '005930',
       '035720',

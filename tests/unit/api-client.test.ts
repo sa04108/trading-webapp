@@ -72,6 +72,22 @@ describe('postJsonWithStatus', () => {
     });
   });
 
+  it('미리보기 요청의 경로와 JSON 본문을 전송한다', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ready: true }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await postJsonWithStatus('/backtests/universe-preview', { strategyId: 'test' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/backtests/universe-preview', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ strategyId: 'test' }),
+    });
+  });
+
+  it('JSON이 아닌 오류 응답은 상태 문구를 보존한다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('unavailable', { status: 503, statusText: 'Unavailable' })));
+    await expect(postJsonWithStatus('/backtests/universe-preview', {})).rejects.toMatchObject({ status: 503, message: 'Unavailable' });
+  });
+
   it('실패 응답은 api() 와 같은 ApiError 를 던진다', async () => {
     vi.stubGlobal(
       'fetch',

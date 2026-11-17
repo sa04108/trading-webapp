@@ -8,15 +8,33 @@ describe('백테스트 경고 표시 요약', () => {
     expect(summarizeBacktestWarnings(warnings)).toEqual(warnings);
   });
 
-  it.each([999, 1000, 1001, 1093, 2001])('경고 %i개의 앞뒤와 축약 안내를 한도 안에 담는다', (count) => {
-    const warnings = Array.from({ length: count }, (_, index) => `${index}: ${'가'.repeat(4162)}`);
+  it.each([999, 1000, 1001, 1093, 2001])('경고 %i개의 앞뒤를 한도 안에 담는다', (count) => {
+    const warnings = Array.from({ length: count }, (_, index) => `${index}: 경고`);
     const summaries = summarizeBacktestWarnings(warnings.values());
     expect(summaries.length).toBeLessThanOrEqual(1000);
-    expect(summaries.every(warning => warning.length <= 4000)).toBe(true);
+    if (count <= 1000) {
+      expect(summaries).toEqual(warnings);
+    } else {
+      expect(summaries[0]).toContain(`경고 ${count}개`);
+      expect(summaries[1]).toBe('0: 경고');
+      expect(summaries.at(-1)).toBe(`${count - 1}: 경고`);
+    }
+  });
+
+  it.each([999, 1000, 1001, 1093, 2001])('긴 앞뒤 경고를 포함한 %i개를 축약한다', (count) => {
+    const warnings = Array.from({ length: count }, (_, index) =>
+      index === 0 ? `0: ${'가'.repeat(4162)}`
+        : index === count - 1 ? `${index}: ${'나'.repeat(4162)}`
+          : `${index}: 경고`,
+    );
+    const summaries = summarizeBacktestWarnings(warnings.values());
+    expect(summaries.length).toBeLessThanOrEqual(1000);
+    expect(summaries.every((warning) => warning.length <= 4000)).toBe(true);
     expect(summaries[0]).toContain(`경고 ${count}개`);
     expect(summaries[1]).toMatch(/^0:/);
     expect(summaries.at(-1)).toMatch(new RegExp(`^${count - 1}:`));
-    expect(warnings[0]!.length).toBeGreaterThan(4000);
+    expect(summaries[1]).toContain('전체 경고 원문에서 확인');
+    expect(summaries.at(-1)).toContain('전체 경고 원문에서 확인');
   });
 
   it('긴 문자열을 줄일 때 유니코드 문자 쌍을 보존한다', () => {

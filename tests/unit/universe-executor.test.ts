@@ -112,14 +112,21 @@ describe('UniverseExecutor', () => {
     const { executor, part } = setup(async (task) => ++calls === 1 ? completed(task) : { status: 'UNAVAILABLE' });
     let active = 0;
     let maxActive = 0;
+    const gate = deferred<void>();
     part.mockImplementation(async (_rule, _period, selected) => {
       active += 1;
       maxActive = Math.max(maxActive, active);
-      await new Promise((resolve) => setTimeout(resolve, 1));
-      active -= 1;
+      try { await gate.promise; } finally { active -= 1; }
       return ready(selected);
     });
-    expect(await executor.resolve(rule, period)).toEqual(ready(dates));
+    const execution = executor.resolve(rule, period);
+    try {
+      await vi.waitFor(() => expect(part).toHaveBeenCalledTimes(1));
+      expect(active).toBe(1);
+    } finally {
+      gate.resolve();
+    }
+    expect(await execution).toEqual(ready(dates));
     expect(part).toHaveBeenCalledTimes(5);
     expect(maxActive).toBe(1);
   });

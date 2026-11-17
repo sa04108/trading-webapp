@@ -110,26 +110,32 @@ describe("registerRequestObservability", () => {
       Object.assign(request.log, log);
       done();
     });
+    let entered = false;
+    let release!: () => void;
+    const responseGate = new Promise<void>((resolve) => { release = resolve; });
     app.get("/delayed", async () => {
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      entered = true;
+      await responseGate;
       return { ok: true };
     });
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
-    const abortLogged = new Promise<void>((resolve) => {
-      log.warn.mockImplementation((fields: { event?: string }) => {
-        if (fields.event === "http.request.aborted") resolve();
-      });
-    });
     const request = http.get(`${address}/delayed`);
     request.on("error", () => undefined);
-    setTimeout(() => request.destroy(), 20).unref();
-
-    await abortLogged;
-    const aborted = log.warn.mock.calls.filter(
-      ([fields]) => (fields as { event?: string }).event === "http.request.aborted",
-    );
-    expect(aborted).toHaveLength(1);
-    expect(aborted[0]?.[0]).toMatchObject({ route: "/delayed", method: "GET" });
-    await app.close();
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true));
+      request.destroy();
+      await vi.waitFor(() => expect(log.warn.mock.calls.some(
+        ([fields]) => (fields as { event?: string }).event === "http.request.aborted",
+      )).toBe(true));
+      const aborted = log.warn.mock.calls.filter(
+        ([fields]) => (fields as { event?: string }).event === "http.request.aborted",
+      );
+      expect(aborted).toHaveLength(1);
+      expect(aborted[0]?.[0]).toMatchObject({ route: "/delayed", method: "GET" });
+    } finally {
+      request.destroy();
+      release();
+      await app.close();
+    }
   });
 });

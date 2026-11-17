@@ -137,6 +137,7 @@ function rateLimitedSource() {
       waiting();
     }),
   });
+  cleanups.unshift(async () => { client.close(); });
   const source = new TossIntradaySource(client, () => now);
   return { fetch: source.fetch.bind(source), fetchImpl, entered, release: () => release(), client };
 }
@@ -608,15 +609,17 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
       id: "cancel-child", ownerId: "owner", parentRunId: "cancel-parent", symbol: "005930",
       periodJson: JSON.stringify(request.period), status: "QUEUED", createdAtMs: now, updatedAtMs: now,
     }).run();
-    service.recover();
-    await vi.waitFor(() => expect(validateSymbol).toHaveBeenCalled());
-    service.cancelRun("owner", "cancel-parent");
-    expect(service.getCollection("owner", "cancel-child").status).toBe("CANCELLED");
-    release({ listDate: "2000-01-01", isinCode: "KR0000000000" });
-    await service.close();
-    expect(service.getRun("owner", "cancel-parent").status).toBe("CANCELLED");
-    expect(service.getCollection("owner", "cancel-child").status).toBe("CANCELLED");
-    expect(fetch).not.toHaveBeenCalled();
+    try {
+      service.recover();
+      await vi.waitFor(() => expect(validateSymbol).toHaveBeenCalled());
+      service.cancelRun("owner", "cancel-parent");
+      expect(service.getCollection("owner", "cancel-child").status).toBe("CANCELLED");
+      release({ listDate: "2000-01-01", isinCode: "KR0000000000" });
+      await service.close();
+      expect(service.getRun("owner", "cancel-parent").status).toBe("CANCELLED");
+      expect(service.getCollection("owner", "cancel-child").status).toBe("CANCELLED");
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { release({ listDate: "2000-01-01", isinCode: "KR0000000000" }); }
   });
 
   it("백테스트는 누락된 하루만 수집하고 병합된 전체 분봉으로 실행한다", async () => {
@@ -699,7 +702,7 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
   });
   it("수집 실패를 실행 실패로 종료하고 같은 결과 조회에 원인을 전달한다", async () => {
     const { service, app, terminalEvents } = await fixture(async () => {
-      throw new Error("토스 요청 실패 (429)");
+      throw new Error("토스 요청 실패 (502)");
     });
     const run = service.submit("owner", request);
     await vi.waitFor(() =>
@@ -711,13 +714,13 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
     });
     expect(response.json()).toMatchObject({
       status: "FAILED",
-      error: "토스 요청 실패 (429)",
+      error: "토스 요청 실패 (502)",
     });
     expect((await service.overview("owner")).collections[0]).toMatchObject({
       status: "FAILED",
-      error: "토스 요청 실패 (429)",
+      error: "토스 요청 실패 (502)",
     });
-    expect(terminalEvents).toEqual([expect.objectContaining({ kind: "run", id: run.id, status: "FAILED", error: "토스 요청 실패 (429)" })]);
+    expect(terminalEvents).toEqual([expect.objectContaining({ kind: "run", id: run.id, status: "FAILED", error: "토스 요청 실패 (502)" })]);
   });
   it("준비 취소 뒤 도착한 데이터는 실행하지 않으며 만료 기간은 거부한다", async () => {
     let release!: (value: IntradayBar[]) => void;
@@ -740,24 +743,24 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
         period: { from: "2025-11-14", to: date },
       }),
     ).toThrow("하루 전체");
-    const run = service.submit("owner", request);
-    await vi.waitFor(() => expect(source).toHaveBeenCalledOnce());
-    const child = database.db.select().from(intradayCollections).all()[0]!;
-    expect(child.parentRunId).toBe(run.id);
-    const cancel = await app.inject({ method: "DELETE", url: `/intraday/runs/${run.id}`, headers });
-    expect(cancel.statusCode).toBe(200);
-    expect(cancel.json().status).toBe("CANCELLED");
-    expect(service.getCollection("owner", child.id).status).toBe("CANCELLED");
-    expect(service.pendingCancellationIds()).toEqual(expect.arrayContaining([run.id, child.id]));
-    expect((await app.inject({ method: "DELETE", url: `/intraday/history/${run.id}`, headers })).statusCode).toBe(409);
-    release(bars);
-    await service.close();
-    expect(service.pendingCancellationIds()).toEqual([]);
-    expect(service.getRun("owner", run.id)).toMatchObject({
-      status: "CANCELLED",
-    });
-    expect(service.getRun("owner", run.id).result).toBeUndefined();
-    expect((await app.inject({ method: "DELETE", url: `/intraday/history/${run.id}`, headers })).statusCode).toBe(204);
+    try {
+      const run = service.submit("owner", request);
+      await vi.waitFor(() => expect(source).toHaveBeenCalledOnce());
+      const child = database.db.select().from(intradayCollections).all()[0]!;
+      expect(child.parentRunId).toBe(run.id);
+      const cancel = await app.inject({ method: "DELETE", url: `/intraday/runs/${run.id}`, headers });
+      expect(cancel.statusCode).toBe(200);
+      expect(cancel.json().status).toBe("CANCELLED");
+      expect(service.getCollection("owner", child.id).status).toBe("CANCELLED");
+      expect(service.pendingCancellationIds()).toEqual(expect.arrayContaining([run.id, child.id]));
+      expect((await app.inject({ method: "DELETE", url: `/intraday/history/${run.id}`, headers })).statusCode).toBe(409);
+      release(bars);
+      await service.close();
+      expect(service.pendingCancellationIds()).toEqual([]);
+      expect(service.getRun("owner", run.id)).toMatchObject({ status: "CANCELLED" });
+      expect(service.getRun("owner", run.id).result).toBeUndefined();
+      expect((await app.inject({ method: "DELETE", url: `/intraday/history/${run.id}`, headers })).statusCode).toBe(204);
+    } finally { release?.(bars); }
   });
   it("가득 찬 실행 대기열도 내부 수집을 허용하고 취소한 대기 슬롯을 반환한다", async () => {
     let release!: (value: IntradayBar[]) => void;
@@ -768,17 +771,19 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
         }),
     );
     const { service } = await fixture(source);
-    const runs = Array.from({ length: 20 }, () =>
-      service.submit("owner", request),
-    );
-    await vi.waitFor(() => expect(source).toHaveBeenCalledOnce());
-    expect(service.getRun("owner", runs[0]!.id).status).toBe("PREPARING");
-    for (const run of runs.slice(1)) service.cancelRun("owner", run.id);
-    const replacement = service.submit("owner", request);
-    expect(replacement.status).toBe("QUEUED");
-    service.cancelRun("owner", replacement.id);
-    service.cancelRun("owner", runs[0]!.id);
-    release(bars);
-    await service.close();
+    try {
+      const runs = Array.from({ length: 20 }, () =>
+        service.submit("owner", request),
+      );
+      await vi.waitFor(() => expect(source).toHaveBeenCalledOnce());
+      expect(service.getRun("owner", runs[0]!.id).status).toBe("PREPARING");
+      for (const run of runs.slice(1)) service.cancelRun("owner", run.id);
+      const replacement = service.submit("owner", request);
+      expect(replacement.status).toBe("QUEUED");
+      service.cancelRun("owner", replacement.id);
+      service.cancelRun("owner", runs[0]!.id);
+      release(bars);
+      await service.close();
+    } finally { release?.(bars); }
   });
 });

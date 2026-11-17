@@ -14,7 +14,9 @@ it("설정은 화면·API·Agent·서버 설정을 제공하고 별도 수집 �
     expect(html).toContain("Windows CMD 받기");
     expect(html).not.toContain("Linux x64 다운로드");
     for (const label of ["외부 데이터", "수집 승인", "수집 현황", "미확인 공시"]) expect(html).not.toContain(label);
-    expect(client.getQueryCache().getAll().map((query) => query.queryKey)).toEqual([["system", "info"], ["openapi-tokens"], ["agents"]]);
+    const keys = client.getQueryCache().getAll().map((query) => query.queryKey);
+    expect(keys).toEqual(expect.arrayContaining([["system", "info"], ["openapi-tokens"], ["agents"]]));
+    expect(keys.some((key) => key.some((part) => typeof part === "string" && part.includes("collection")))).toBe(false);
   } finally { client.clear(); }
 });
 

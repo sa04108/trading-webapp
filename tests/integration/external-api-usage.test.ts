@@ -9,8 +9,10 @@ import { SqliteExternalApiUsage } from '../../src/server/shared/db/external-api-
 
 describe('SqliteExternalApiUsage', () => {
   const dirs: string[] = [];
+  const handles: DatabaseHandle[] = [];
 
   afterEach(() => {
+    for (const handle of handles.splice(0)) if (handle.sqlite.open) handle.close();
     for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -38,6 +40,7 @@ describe('SqliteExternalApiUsage', () => {
     };
 
     const firstDatabase = openDatabase(databasePath);
+    handles.push(firstDatabase);
     const first = createUsage(firstDatabase);
     expect(first.usage.recordCall('KRX', '/kospi/daily')).toBe(1);
     expect(first.usage.recordCall('KRX', '/kospi/daily')).toBe(2);
@@ -52,6 +55,7 @@ describe('SqliteExternalApiUsage', () => {
 
     // 같은 SQLite 파일을 다시 열어 서버 재부팅을 재현한다.
     const secondDatabase = openDatabase(databasePath);
+    handles.push(secondDatabase);
     const second = createUsage(secondDatabase);
     expect(second.usage.callsUsed('KRX', '/kospi/daily')).toBe(2);
     expect(second.usage.maxCallsUsed('KRX')).toBe(2);

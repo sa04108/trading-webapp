@@ -137,12 +137,6 @@ describe('SqliteFactRepository', () => {
     expect(changes()).not.toEqual(before);
   });
 
-  it('저장한 팩트를 그대로 읽는다', async () => {
-    await repository.saveFacts([fact()]);
-    const rows = await repository.getFacts({ scope: 'SYMBOL' });
-    expect(rows).toEqual([fact()]);
-  });
-
   it('자본변동 사건 직전·직후 절대 주식수를 함께 저장하고 읽는다', async () => {
     const action = fact({
       field: 'SPLIT_RATIO',
@@ -180,8 +174,12 @@ describe('SqliteFactRepository', () => {
   });
 
   it('빈 배열 저장은 아무 일도 하지 않는다', async () => {
+    await repository.saveFacts([fact()]);
+    expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([fact()]);
+    const revision = datasetIdentity(database.sqlite).revision;
     await repository.saveFacts([]);
-    expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([]);
+    expect(await repository.getFacts({ scope: 'SYMBOL' })).toEqual([fact()]);
+    expect(datasetIdentity(database.sqlite).revision).toBe(revision);
   });
 
   it('asOfMaxTsMs 로 미래 공시를 잘라낸다', async () => {
@@ -226,7 +224,7 @@ describe('SqliteFactRepository', () => {
       fact({ asOfTsMs: 2_000, value: 90 }),
     ]);
     const rows = await repository.getFacts({ scope: 'SYMBOL' });
-    expect(rows).toHaveLength(2);
+    expect(rows).toEqual([fact({ asOfTsMs: 1_000, value: 100 }), fact({ asOfTsMs: 2_000, value: 90 })]);
   });
 
   it('두 번에 걸쳐 저장해도 앞서 저장한 것이 남는다 (병합 저장)', async () => {

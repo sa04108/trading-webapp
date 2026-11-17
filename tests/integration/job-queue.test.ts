@@ -1135,7 +1135,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(message).not.toMatch(/Too small|Invalid|expected/i);
   });
 
-  it('기간에 봉이 전혀 없는 종목은 준비에서 제외하고 대체 후보가 없으면 완료하지 않는다', async ({ scenario }) => {
+  it('가격 봉이 없는 기간의 신규 제출도 미리보기 완료를 요구한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     // 종목 마스터는 이 날짜를 커버하지만(coverage 는 넓은 고정 구간) 가격 데이터는
     // 2026-01-05 부터다 — 그보다 훨씬 앞선 구간은 확실히 0봉이다
@@ -1223,7 +1223,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
   });
 
-  it('복제 준비도 봉 없는 종목을 제외한다 — 대체 후보까지 없으면 준비가 필요하다', async ({ scenario }) => {
+  it('가격 봉이 없는 기간의 복제는 미리보기 완료를 요구한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(),
@@ -1239,7 +1239,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((cloned.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
   });
 
-  it('복제 준비도 재무가 없는 종목을 제외한다 — 대체 후보까지 없으면 준비가 필요하다', async ({ scenario }) => {
+  it('재무 전략의 미준비 복제는 미리보기 완료를 요구한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     const job = ctx.container.jobQueue.enqueue({
       ...buildRequest(),
@@ -1891,12 +1891,12 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
       cookies: { session: cookie },
-      payload: { count: 100 },
+      payload: { count: 21 },
     });
     expect(response.statusCode).toBe(201);
     const batchId = response.json().batch.id as string;
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
     const beforeJobCount = readBacktestJobs(ctx.container.database).length;
 
@@ -1919,7 +1919,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const failed = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(failed.batch.status).toBe('FAILED');
     expect(failed.batch.error).toMatch(/단축코드 005930.*여러 표준코드/);
-    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
@@ -1940,12 +1940,12 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
       cookies: { session: cookie },
-      payload: { count: 100 },
+      payload: { count: 21 },
     });
     expect(response.statusCode).toBe(201);
     const batchId = response.json().batch.id as string;
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
     const beforeJobCount = readBacktestJobs(ctx.container.database).length;
 
@@ -1965,7 +1965,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const failed = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(failed.batch.status).toBe('FAILED');
     expect(failed.batch.error).toContain('기간 전체');
-    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
@@ -1991,12 +1991,12 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
       cookies: { session: cookie },
-      payload: { count: 100 },
+      payload: { count: 21 },
     });
     expect(response.statusCode).toBe(201);
     const batchId = response.json().batch.id as string;
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
     const beforeJobCount = readBacktestJobs(ctx.container.database).length;
 
@@ -2010,7 +2010,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const failed = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(failed.batch.status).toBe('FAILED');
     expect(failed.batch.error).toMatch(/coverage.*2025~2026년.*005930/);
-    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
@@ -2048,12 +2048,12 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
       cookies: { session: cookie },
-      payload: { count: 100 },
+      payload: { count: 21 },
     });
     expect(response.statusCode).toBe(201);
     const batchId = response.json().batch.id as string;
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
     const beforeJobCount = readBacktestJobs(ctx.container.database).length;
 
@@ -2072,7 +2072,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const failed = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(failed.batch.status).toBe('FAILED');
     expect(failed.batch.error).toMatch(/000660.*일봉|일봉.*000660/);
-    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
@@ -2154,7 +2154,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       method: 'POST',
       url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
       cookies: { session: cookie },
-      payload: { count: 100 },
+      payload: { count: 21 },
     });
     expect(response.statusCode).toBe(201);
     const batchId = response.json().batch.id as string;
@@ -2172,7 +2172,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const failed = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(failed.batch.status).toBe('FAILED');
     expect(failed.batch.error).toMatch(/coverage.*005930/);
-    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(80);
+    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
   });
 
@@ -2271,6 +2271,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const childIds = ctx.container.seedCloneBatchService.get(batchId)!.items
       .flatMap(({ job }) => job === null ? [] : [job.id]);
 
+    expect(childIds).toHaveLength(2);
     const activeBatchDelete = await ctx.app.inject({
       method: 'DELETE',
       url: `/api/v1/backtest-clone-batches/${batchId}`,
@@ -2328,6 +2329,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const childIds = batchIds.flatMap((batchId) =>
       ctx.container.seedCloneBatchService.get(batchId)!.items
         .flatMap(({ job }) => job === null ? [] : [job.id]));
+    expect(childIds).toHaveLength(5);
     for (const childId of childIds) {
       expect(ctx.container.jobQueue.setStatus(childId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
     }

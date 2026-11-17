@@ -82,7 +82,8 @@ describe("분봉 기간 검증", () => {
     expect(result.status).toBe("COMPLETED");
     expect(result.config).toEqual(config);
     expect(result.plan.folds).toHaveLength(2);
-    expect(result.trials.filter(t => t.role === "TRAIN").every(t => t.metrics?.tradeCount === 0)).toBe(true);
+    expect(result.trials.filter(t => t.role === "TRAIN").map(t => t.metrics?.tradeCount))
+      .toEqual(optimize ? [0, 0, 0, 0] : [0, 0]);
     const oos = result.trials.filter(t => t.role === "OOS");
     expect(oos).toHaveLength(2);
     if (optimize) {
@@ -104,16 +105,18 @@ describe("분봉 기간 검증", () => {
     let release!: () => void;
     const block = new Promise<void>(resolve => { release = resolve; });
     const f = fixture(false, block);
-    const created = await f.validations.create("owner", "source", { mode: "HOLDOUT", splitDate: "2026-10-06" });
-    for (let i = 0; i < 50 && !f.captured.length; i++) { await f.validations.pump(); await new Promise(resolve => setImmediate(resolve)); }
-    expect(f.captured).toHaveLength(1);
-    f.validations.cancel("owner", created.id);
-    await f.validations.pump();
-    expect(f.validations.get("owner", created.id)?.status).toBe("CANCELLING");
-    expect(() => f.validations.delete("owner", created.id)).toThrow();
-    release();
-    expect((await settle(f, created.id)).status).toBe("CANCELLED");
-    expect(f.validations.delete("owner", created.id)).toBe(true);
+    try {
+      const created = await f.validations.create("owner", "source", { mode: "HOLDOUT", splitDate: "2026-10-06" });
+      for (let i = 0; i < 50 && !f.captured.length; i++) { await f.validations.pump(); await new Promise(resolve => setImmediate(resolve)); }
+      expect(f.captured).toHaveLength(1);
+      f.validations.cancel("owner", created.id);
+      await f.validations.pump();
+      expect(f.validations.get("owner", created.id)?.status).toBe("CANCELLING");
+      expect(() => f.validations.delete("owner", created.id)).toThrow();
+      release();
+      expect((await settle(f, created.id)).status).toBe("CANCELLED");
+      expect(f.validations.delete("owner", created.id)).toBe(true);
+    } finally { release(); }
   });
   it("완료 직후 취소해도 하위 성과를 한 번만 저장한다", async () => {
     const f = fixture();
@@ -162,14 +165,16 @@ describe("분봉 기간 검증", () => {
     const f = fixture(true, block);
     const submit = vi.spyOn(f.runs, "createInternalRun");
     submit.mockImplementationOnce(() => { throw new IntradayError("용량 부족", 429); });
-    const created = await f.validations.create("owner", "source", { mode: "HOLDOUT", splitDate: "2026-10-06", optimization: { axes: [{ key: "fast", values: [2, 3] }], objective: "sharpe", minTrades: 1, maxDrawdownPct: 30 } });
-    for (let i = 0; i < 50 && !f.captured.length; i++) { await f.validations.pump(); await new Promise(resolve => setImmediate(resolve)); }
-    expect(f.captured).toHaveLength(1);
-    for (let i = 0; i < 10; i++) await f.validations.pump();
-    expect(f.database.db.select().from(intradayValidationTrials).all().filter(t => t.runId)).toHaveLength(1);
-    expect(f.validations.get("owner", created.id)?.status).toBe("ACTIVE");
-    release();
-    expect((await settle(f, created.id)).status).toBe("COMPLETED");
+    try {
+      const created = await f.validations.create("owner", "source", { mode: "HOLDOUT", splitDate: "2026-10-06", optimization: { axes: [{ key: "fast", values: [2, 3] }], objective: "sharpe", minTrades: 1, maxDrawdownPct: 30 } });
+      for (let i = 0; i < 50 && !f.captured.length; i++) { await f.validations.pump(); await new Promise(resolve => setImmediate(resolve)); }
+      expect(f.captured).toHaveLength(1);
+      for (let i = 0; i < 10; i++) await f.validations.pump();
+      expect(f.database.db.select().from(intradayValidationTrials).all().filter(t => t.runId)).toHaveLength(1);
+      expect(f.validations.get("owner", created.id)?.status).toBe("ACTIVE");
+      release();
+      expect((await settle(f, created.id)).status).toBe("COMPLETED");
+    } finally { release(); }
   });
   it("중첩 검증 계보를 소유자별로 추적하고 순환을 불완전하게 표시한다", async () => {
     const f = fixture();

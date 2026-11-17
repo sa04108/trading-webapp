@@ -17,12 +17,6 @@ import {
   symbolMasterTradingDays,
   symbolMasterVersions,
 } from '../../src/runtime/shared/db/schema.js';
-import {
-  getCostProfile,
-  getKrxExecutionRules,
-  getSlippageProfile,
-} from '../../src/runtime/modules/backtest/domain/cost-profiles.js';
-import { simulateFill } from '../../src/runtime/modules/backtest/domain/execution.js';
 import type { TestApp } from '../helpers/test-app.js';
 import { authenticatedTest as base } from '../helpers/test-fixtures.js';
 import { prepareSubmission } from '../helpers/backtest-preparation.js';
@@ -399,7 +393,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(ctx.container.resultsService.getRun(jobId)).toBeNull();
   });
 
-  it('마지막 실행 봉 뒤 공시만 있는 종목은 준비에서 제외한다', async ({ scenario }) => {
+  it('미래 공시 행이 있어도 미리보기 없는 제출은 준비를 요구한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     await ctx.container.factRepository.saveFacts([{
       scope: 'SYMBOL', key: '005930', field: 'NET_INCOME', periodKey: '2025Q3',
@@ -538,7 +532,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(error).toContain('전략 topN은 동시 보유 상한 이하여야 합니다');
   });
 
-  it('topN === maxPositions 는 통과한다 — 게이트가 전부를 막지 않는다', async ({ scenario }) => {
+  it('topN === maxPositions인 가격 전략은 재무 없이도 제출된다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     const payload = momentumPayload(1, 1) as BacktestRequest;
     await scenario.prepare(payload);
@@ -551,40 +545,7 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
     expect(response.statusCode).toBe(201);
   });
 
-  it('봉만 쓰는 전략은 재무 없이도 제출된다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    const payload: BacktestRequest = {
-      strategyId: 'cross-sectional-momentum',
-      parameters: {
-        ...UNFILTERED_RANK_CONTROLS,
-        formationDays: 20,
-        skipDays: 0,
-        topN: 1,
-        rebalanceMonths: 1,
-        absoluteMomentumFilter: true,
-      },
-      universeRule: universeRule(1),
-      timeframe: '1d',
-      period: { from: '2025-08-01', to: '2025-10-31' },
-      capital: { initialCash: 10_000_000, currency: 'KRW' },
-      execution: {
-        fillTiming: 'NEXT_BAR_OPEN',
-        commissionProfileId: 'kr-equity-default',
-        slippageProfileId: 'fixed-5bps',
-      },
-      risk: { maxPositions: 20 },
-      randomSeed: 42,
-    };
-    await scenario.prepare(payload);
-    const response = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/backtests',
-      cookies: { session: cookie },
-      payload,
-    });
 
-    expect(response.statusCode).toBeLessThan(400);
-  });
 });
 
 /**
@@ -1034,28 +995,11 @@ describe('상장폐지 종목 청산 (Task 10 워커 배선)', () => {
       );
       expect(delistingTrade).toBeDefined();
 
-      // 체결가는 마지막 봉의 **종가** 를 기준으로 슬리피지를 적용한 값이어야 한다 —
-      // buildRequest 가 쓰는 실행 프로필(fixed-5bps)은 슬리피지가 0이 아니므로 종가와
-      // 정확히 같지는 않다. 시가를 기준으로 계산한 값과 달라야 "종가로 나갔다"를 증명한다.
-      const executionProfile = {
-        cost: getCostProfile('kr-equity-default')!,
-        slippage: getSlippageProfile('fixed-5bps')!,
-        rules: getKrxExecutionRules('KOSPI'),
-      };
-      const expectedFromClose = simulateFill(
-        { symbol: '000660', side: 'SELL', quantity: 1, reason: 'DELISTED' },
-        lastDoomed.close,
-        delistedTsMs,
-        executionProfile,
-      );
-      const expectedFromOpen = simulateFill(
-        { symbol: '000660', side: 'SELL', quantity: 1, reason: 'DELISTED' },
-        lastDoomed.open,
-        delistedTsMs,
-        executionProfile,
-      );
-      expect(delistingTrade?.exitPrice).toBe(expectedFromClose.price);
-      expect(delistingTrade?.exitPrice).not.toBe(expectedFromOpen.price);
+      // 130번째 봉의 종가 63,900원에 매도 5bps를 빼면 63,868.05원이다.
+      // KOSPI 100원 호가로 내리면 63,800원이며 시가 63,600원 기준과 다르다.
+      expect(lastDoomed.close).toBe(63_900);
+      expect(lastDoomed.open).toBe(63_600);
+      expect(delistingTrade?.exitPrice).toBe(63_800);
       expect(delistingTrade?.exitTsMs).toBe(delistedTsMs);
 
       // 청산했으므로 기간 종료 시점 미청산 포지션으로 남지 않는다
@@ -1492,6 +1436,7 @@ describe('유니버스 준비 파이프라인 전체 회귀 — preview→prepar
       });
       expect(preview.unionSymbols.slice().sort()).toEqual(['A', 'B', 'C']);
       expect(preview.warnings.some((warning) => warning.includes('DART 재무'))).toBe(false);
+      expect(preview.diagnostics).toHaveLength(2);
       for (const entry of preview.diagnostics) {
         const [marketCap, per, decline] = entry.stages;
         expect(marketCap).toMatchObject({ criterion: 'MARKET_CAP', direction: 'HIGH', inputCount: 7, selectedCount: 5, excludedMissingCount: 0 });

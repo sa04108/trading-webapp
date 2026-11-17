@@ -194,6 +194,7 @@ describe('stepBlocker — 재무 무자료 허용 (단계 2)', () => {
 
 describe('단계 slug', () => {
   it('라벨과 개수가 같다 — 어긋나면 URL 이 다른 단계를 가리킨다', () => {
+    expect(WIZARD_STEP_SLUGS).toEqual(['strategy', 'period', 'universe', 'capital', 'review', 'run']);
     expect(WIZARD_STEP_SLUGS).toHaveLength(WIZARD_STEPS.length);
   });
 

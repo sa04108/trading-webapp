@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Worker } from 'node:worker_threads';
 import { eq } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
 import { backtestPreparationJobs } from '../../src/runtime/shared/db/schema.js';
 import {
@@ -19,6 +19,24 @@ import type { SymbolMasterEntry } from '../../src/runtime/modules/market-data/do
 
 import { SqliteExternalApiUsage } from '../../src/server/shared/db/external-api-usage.js';
 import { kstDateOf } from '../../src/runtime/modules/market-data/domain/kst-date.js';
+
+const activeOrchestrators: Array<{ orchestrator: BacktestPreparationOrchestrator; database: ReturnType<typeof openDatabase> }> = [];
+const allocatedDatabases: ReturnType<typeof openDatabase>[] = [];
+function trackedOrchestrator(deps: ConstructorParameters<typeof BacktestPreparationOrchestrator>[0]): BacktestPreparationOrchestrator {
+  const orchestrator = new BacktestPreparationOrchestrator(deps);
+  activeOrchestrators.push({ orchestrator, database: deps.database });
+  return orchestrator;
+}
+afterEach(async () => {
+  try {
+    const active = activeOrchestrators.splice(0).filter(({ database }) => database.sqlite.open);
+    const results = await Promise.allSettled(active.map(({ orchestrator }) => orchestrator.stop()));
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failures.length) throw new AggregateError(failures.map((result) => result.reason));
+  } finally {
+    for (const database of allocatedDatabases.splice(0)) if (database.sqlite.open) database.close();
+  }
+});
 
 const LOGGER = { debug() {}, info() {}, warn() {}, error() {} } as never;
 
@@ -85,6 +103,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 
 function makeDeps(overrides: Record<string, unknown> = {}) {
   const handle = openDatabase(':memory:');
+  allocatedDatabases.push(handle);
   let nowMs = Date.parse('2026-01-05T00:00:00Z');
   const deps = {
     database: handle,
@@ -177,7 +196,7 @@ describe('BacktestPreparationOrchestrator NEEDS_DATA DART gate', () => {
       strategies: new StrategyRegistry(),
       factSync: dartPlanningDeps(),
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const required = await orchestrator.needsDart({ ...INPUT, strategyId: 'value-quality-rank' });
 
@@ -199,7 +218,7 @@ describe('BacktestPreparationOrchestrator NEEDS_DATA DART gate', () => {
       strategies: new StrategyRegistry(),
       factSync: dartPlanningDeps(),
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const required = await orchestrator.needsDart({ ...INPUT, strategyId: 'value-quality-rank' });
 
@@ -217,7 +236,7 @@ describe('BacktestPreparationOrchestrator NEEDS_DATA DART gate', () => {
       strategies: new StrategyRegistry(),
       factSync: dartPlanningDeps(),
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const required = await orchestrator.needsDart({ ...INPUT, strategyId: 'value-quality-rank' });
 
@@ -247,7 +266,7 @@ describe('BacktestPreparationOrchestrator NEEDS_DATA DART gate', () => {
       },
       factSync: dartPlanningDeps(),
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const required = await orchestrator.needsDart({
       ...INPUT,
@@ -271,7 +290,7 @@ describe('BacktestPreparationOrchestrator NEEDS_DATA DART gate', () => {
       },
       factSync: dartPlanningDeps(),
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const required = await orchestrator.needsDart(INPUT);
 
@@ -305,7 +324,7 @@ describe('BacktestPreparationOrchestrator MARKET_DATA 진행 표시', () => {
         isPeriodCovered: () => true,
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const progress: { done: number; total: number }[] = [];
     const overall: BacktestPreparationJobDto[] = [];
@@ -369,7 +388,7 @@ describe('BacktestPreparationOrchestrator RESOLVING_STAGES 진행 표시', () =>
         isPeriodCovered: () => true,
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
     const progress: Array<{ done: number; total: number }> = [];
 
     const job = orchestrator.start(INPUT);
@@ -411,7 +430,7 @@ describe('BacktestPreparationOrchestrator RESOLVING_STAGES 진행 표시', () =>
         isPeriodCovered: () => true,
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
     const progress: Array<{ done: number; total: number }> = [];
 
     const job = orchestrator.start(INPUT);
@@ -467,7 +486,7 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
         getGapYears: () => new Map<string, readonly number[]>(),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
     await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
@@ -522,7 +541,7 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
     ctx.deps.symbolMaster.sharesChangesBetween = () => [
       { shortCode: '000660', effectiveDate: '2026-01-05', ratio: 2 },
     ];
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
     await waitFor(() => ['COMPLETED', 'FAILED'].includes(orchestrator.get(job.id)?.status ?? ''));
@@ -580,7 +599,7 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
         ),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
     await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
@@ -642,7 +661,7 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
         getGapYears: () => new Map(),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
     await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
@@ -663,7 +682,7 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
         isPeriodCovered: () => true,
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
     await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
@@ -721,7 +740,7 @@ describe('BacktestPreparationOrchestrator 종목별 외부 데이터 결손 제�
         ),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start({
       ...INPUT,
@@ -769,7 +788,7 @@ describe('BacktestPreparationOrchestrator 종목별 외부 데이터 결손 제�
         ),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
     await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
@@ -815,7 +834,7 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
         }]]),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(valueInput);
     await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
@@ -841,7 +860,7 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
         ),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(valueInput);
     await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
@@ -868,7 +887,7 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
         ),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
     const job = orchestrator.start(valueInput);
     await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
 
@@ -947,7 +966,7 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
         ),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(valueInput);
     await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
@@ -993,7 +1012,7 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
     ctx.deps.symbolMaster.sharesChangesBetween = () => [
       { shortCode: '005930', effectiveDate: '2026-01-05', ratio: 2 },
     ];
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(valueInput);
     await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
@@ -1055,7 +1074,7 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
     ctx.deps.symbolMaster.sharesChangesBetween = () => [
       { shortCode: '005930', effectiveDate: '2026-01-05', ratio: 2 },
     ];
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(valueInput);
     await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
@@ -1090,7 +1109,7 @@ describe('BacktestPreparationOrchestrator durable preview validation', () => {
       }
       return result;
     };
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
     try {
       const job = orchestrator.start(INPUT);
       await waitFor(() => ['COMPLETED', 'FAILED'].includes(orchestrator.get(job.id)?.status ?? ''));
@@ -1113,7 +1132,7 @@ describe('BacktestPreparationOrchestrator durable preview validation', () => {
       ctx.handle.sqlite.exec("INSERT OR REPLACE INTO symbol_master_trading_days VALUES ('2026-01-06')");
       return ready();
     };
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
     try {
       const job = orchestrator.start(INPUT);
       await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
@@ -1131,7 +1150,7 @@ describe('BacktestPreparationOrchestrator durable preview validation', () => {
     let calls = 0;
     const ctx = makeDeps();
     ctx.deps.resolver.resolveOrDescribeNeeds = () => ++calls === 3 ? gate.promise : Promise.resolve(ready());
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
     try {
       const job = orchestrator.start(INPUT);
       await waitFor(() => calls === 3);
@@ -1159,8 +1178,8 @@ describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () =>
     firstCtx.handle.close();
     const secondCtx = makeDeps({ database: secondHandle });
     secondCtx.handle.close();
-    const first = new BacktestPreparationOrchestrator(firstCtx.deps as never);
-    const second = new BacktestPreparationOrchestrator(secondCtx.deps as never);
+    const first = trackedOrchestrator(firstCtx.deps as never);
+    const second = trackedOrchestrator(secondCtx.deps as never);
     const requestHash = backtestPreparationRequestHash(INPUT, {
       version: '1.0.0',
     } as never);
@@ -1187,27 +1206,35 @@ describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () =>
       eval: true,
       workerData: { databasePath, id: competitorId, requestHash, requestJson: JSON.stringify(INPUT), runtimeVersionsJson: preparationRuntimeVersionsJson() },
     });
-    await new Promise<void>((resolve, reject) => {
-      worker.once('message', (message) => message === 'LOCKED' && resolve());
-      worker.once('error', reject);
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        worker.once('message', (message) => message === 'LOCKED' && resolve());
+        worker.once('error', reject);
+      });
 
-    const raced = first.start(INPUT);
-    await new Promise<void>((resolve, reject) => {
-      worker.once('message', (message) => message === 'COMMITTED' && resolve());
-      worker.once('error', reject);
-    });
-    const fromSecondInstance = second.start(INPUT);
+      const raced = first.start(INPUT);
+      await new Promise<void>((resolve, reject) => {
+        worker.once('message', (message) => message === 'COMMITTED' && resolve());
+        worker.once('error', reject);
+      });
+      const fromSecondInstance = second.start(INPUT);
 
-    expect(raced.id).toBe(competitorId);
-    expect(fromSecondInstance.id).toBe(competitorId);
-    expect(firstHandle.db.select().from(backtestPreparationJobs).all()).toHaveLength(1);
+      expect(raced.id).toBe(competitorId);
+      expect(fromSecondInstance.id).toBe(competitorId);
+      expect(firstHandle.db.select().from(backtestPreparationJobs).all()).toHaveLength(1);
 
-    await first.stop();
-    await second.stop();
-    firstHandle.close();
-    secondHandle.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+    } finally {
+      try {
+        const cleanup = [worker.terminate(), first.stop(), second.stop()];
+        // 모든 정리가 끝난 뒤 실패를 전달해 DB를 사용하는 작업이 남지 않게 한다.
+        await Promise.allSettled(cleanup);
+        await Promise.all(cleanup);
+      } finally {
+        firstHandle.close();
+        secondHandle.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
   });
 
   it('같은 hash는 같은 active id를 돌려주고 다른 hash는 한 runner 뒤 QUEUED로 남긴다', async () => {
@@ -1223,41 +1250,49 @@ describe('BacktestPreparationOrchestrator single-flight와 직렬 실행', () =>
         isPeriodCovered: () => true,
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
-    const first = orchestrator.start(INPUT);
-    const duplicate = orchestrator.start(INPUT);
-    const second = orchestrator.start({ ...INPUT, parameters: { variant: 2 } });
+    try {
+      const first = orchestrator.start(INPUT);
+      const duplicate = orchestrator.start(INPUT);
+      const second = orchestrator.start({ ...INPUT, parameters: { variant: 2 } });
 
-    expect(duplicate.id).toBe(first.id);
-    await waitFor(() => orchestrator.get(first.id)?.status === 'RUNNING');
-    expect(orchestrator.get(second.id)?.status).toBe('QUEUED');
+      expect(duplicate.id).toBe(first.id);
+      await waitFor(() => orchestrator.get(first.id)?.status === 'RUNNING');
+      expect(orchestrator.get(second.id)?.status).toBe('QUEUED');
 
-    firstResolve.resolve(ready());
-    await waitFor(() => orchestrator.get(first.id)?.status === 'COMPLETED');
-    await waitFor(() => orchestrator.get(second.id)?.status === 'COMPLETED');
-    await orchestrator.stop();
-    ctx.handle.close();
+      firstResolve.resolve(ready());
+      await waitFor(() => orchestrator.get(first.id)?.status === 'COMPLETED');
+      await waitFor(() => orchestrator.get(second.id)?.status === 'COMPLETED');
+    } finally {
+      firstResolve.resolve(ready());
+      await orchestrator.stop();
+      ctx.handle.close();
+    }
   });
 
   it('구독 snapshot의 모든 status 변경은 허용된 transition만 따른다', async () => {
     const gate = deferred<ReturnType<typeof ready>>();
     const ctx = makeDeps({ resolver: { resolveOrDescribeNeeds: () => gate.promise, isPeriodCovered: () => true } });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
-    const job = orchestrator.start(INPUT);
-    const statuses: string[] = [];
-    const unsubscribe = orchestrator.subscribe(job.id, (snapshot) => statuses.push(snapshot.status));
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
+    try {
+      const job = orchestrator.start(INPUT);
+      const statuses: string[] = [];
+      const unsubscribe = orchestrator.subscribe(job.id, (snapshot) => statuses.push(snapshot.status));
 
-    await waitFor(() => orchestrator.get(job.id)?.status === 'RUNNING');
-    gate.resolve(ready());
-    await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
+      await waitFor(() => orchestrator.get(job.id)?.status === 'RUNNING');
+      gate.resolve(ready());
+      await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
 
-    expect(statuses.filter((status, index) => status !== statuses[index - 1])).toEqual([
-      'QUEUED', 'RUNNING', 'COMPLETED',
-    ]);
-    unsubscribe();
-    await orchestrator.stop();
-    ctx.handle.close();
+      expect(statuses.filter((status, index) => status !== statuses[index - 1])).toEqual([
+        'QUEUED', 'RUNNING', 'COMPLETED',
+      ]);
+      unsubscribe();
+    } finally {
+      gate.resolve(ready());
+      await orchestrator.stop();
+      ctx.handle.close();
+    }
   });
 });
 
@@ -1272,7 +1307,7 @@ describe('BacktestPreparationOrchestrator 기존 종목 정체성 검증', () =>
         addSymbol: () => { addCalls += 1; },
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
     await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
@@ -1292,7 +1327,7 @@ describe('BacktestPreparationOrchestrator 기존 종목 정체성 검증', () =>
         addSymbol: () => undefined,
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
     await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
@@ -1317,7 +1352,7 @@ describe('BacktestPreparationOrchestrator 기존 종목 정체성 검증', () =>
         addSymbol: () => { addCalls += 1; },
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
     await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
@@ -1340,7 +1375,7 @@ describe('BacktestPreparationOrchestrator 기존 종목 정체성 검증', () =>
         addSymbol: () => { addCalls += 1; },
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
     await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
@@ -1359,7 +1394,7 @@ describe('BacktestPreparationOrchestrator 기존 종목 정체성 검증', () =>
         isPeriodCovered: () => true,
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
     await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
@@ -1412,7 +1447,7 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
       createdAtMs: 1,
       updatedAtMs: 1,
     }).run();
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     orchestrator.recoverOrphaned();
 
@@ -1468,30 +1503,36 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
         syncCorporateActions: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
-    const job = orchestrator.start(INPUT);
-    await symbolStarted.promise;
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
+    try {
+      const job = orchestrator.start(INPUT);
+      await symbolStarted.promise;
 
-    let stopResolved = false;
-    const stopping = Promise.resolve(orchestrator.stop()).then(() => {
-      stopResolved = true;
-      events.push('stop-resolved');
-    });
-    await Promise.resolve();
-    const resolvedBeforeSymbolBoundary = stopResolved;
-    finishSymbol.resolve();
-    await stopping;
-    await waitFor(() => events.includes('symbol-saved'));
+      let stopResolved = false;
+      const stopping = Promise.resolve(orchestrator.stop()).then(() => {
+        stopResolved = true;
+        events.push('stop-resolved');
+      });
+      await Promise.resolve();
+      const resolvedBeforeSymbolBoundary = stopResolved;
+      finishSymbol.resolve();
+      await stopping;
+      await waitFor(() => events.includes('symbol-saved'));
 
-    expect(resolvedBeforeSymbolBoundary).toBe(false);
-    expect(events).toEqual(['symbol-saved', 'stop-resolved']);
-    expect(orchestrator.get(job.id)?.status).toBe('RUNNING');
-    expect(orchestrator.get(job.id)?.doneSymbols).toBe(1);
+      expect(resolvedBeforeSymbolBoundary).toBe(false);
+      expect(events).toEqual(['symbol-saved', 'stop-resolved']);
+      expect(orchestrator.get(job.id)?.status).toBe('RUNNING');
+      expect(orchestrator.get(job.id)?.doneSymbols).toBe(1);
 
-    ctx.handle.close();
-    events.push('db-closed');
-    await Promise.resolve();
-    expect(events).toEqual(['symbol-saved', 'stop-resolved', 'db-closed']);
+      ctx.handle.close();
+      events.push('db-closed');
+      await Promise.resolve();
+      expect(events).toEqual(['symbol-saved', 'stop-resolved', 'db-closed']);
+    } finally {
+      finishSymbol.resolve();
+      await orchestrator.stop();
+      if (ctx.handle.sqlite.open) ctx.handle.close();
+    }
   });
 
   it('RUNNING은 QUEUED로 회수하고 미래 quota wait는 그대로 두며 만기 wait만 QUEUED로 회수한다', async () => {
@@ -1507,7 +1548,7 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
       { ...base, id: 'prep_due', requestHash: 'due', status: 'WAITING_DAILY_QUOTA', nextResumeAtMs: now },
       { ...base, id: 'prep_future', requestHash: 'future', status: 'WAITING_DAILY_QUOTA', nextResumeAtMs: now + 60_000 },
     ]).run();
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     orchestrator.recoverOrphaned();
 
@@ -1548,18 +1589,22 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
         syncCorporateActions: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
-    const job = orchestrator.start(INPUT);
-    await savedOne.promise;
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
+    try {
+      const job = orchestrator.start(INPUT);
+      await savedOne.promise;
 
-    expect(orchestrator.cancel(job.id)).toBe(true);
-    expect(orchestrator.get(job.id)?.status).toBe('RUNNING');
-    continueAfterCancel.resolve();
-    await waitFor(() => orchestrator.get(job.id)?.status === 'CANCELLED');
-    expect(orchestrator.get(job.id)?.doneSymbols).toBe(1);
-    expect(orchestrator.cancel(job.id)).toBe(true);
-    await orchestrator.stop();
-    ctx.handle.close();
+      expect(orchestrator.cancel(job.id)).toBe(true);
+      expect(orchestrator.get(job.id)?.status).toBe('RUNNING');
+      continueAfterCancel.resolve();
+      await waitFor(() => orchestrator.get(job.id)?.status === 'CANCELLED');
+      expect(orchestrator.get(job.id)?.doneSymbols).toBe(1);
+      expect(orchestrator.cancel(job.id)).toBe(true);
+    } finally {
+      continueAfterCancel.resolve();
+      await orchestrator.stop();
+      ctx.handle.close();
+    }
   });
 });
 
@@ -1604,7 +1649,7 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
         ingestDate: async () => ({ kind: 'ALREADY_COVERED' as const }),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
     const job = orchestrator.start(INPUT);
     const overall: number[] = [];
     const unsubscribe = orchestrator.subscribe(job.id, (snapshot) => overall.push(snapshot.overallProgress));
@@ -1650,22 +1695,26 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
         ingestDate: async () => ({ kind: 'ALREADY_COVERED' as const }),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
-    const job = orchestrator.start(INPUT);
-    await requestStarted.promise;
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
+    try {
+      const job = orchestrator.start(INPUT);
+      await requestStarted.promise;
 
-    expect(orchestrator.cancel(job.id)).toBe(true);
-    expect(orchestrator.get(job.id)?.status).toBe('RUNNING');
-    finishRequest.resolve();
-    await waitFor(() => orchestrator.get(job.id)?.status === 'CANCELLED');
+      expect(orchestrator.cancel(job.id)).toBe(true);
+      expect(orchestrator.get(job.id)?.status).toBe('RUNNING');
+      finishRequest.resolve();
+      await waitFor(() => orchestrator.get(job.id)?.status === 'CANCELLED');
 
-    expect(orchestrator.get(job.id)).toMatchObject({
-      status: 'CANCELLED',
-      nextResumeAtMs: null,
-      error: '사용자가 준비 작업을 취소했습니다.',
-    });
-    await orchestrator.stop();
-    ctx.handle.close();
+      expect(orchestrator.get(job.id)).toMatchObject({
+        status: 'CANCELLED',
+        nextResumeAtMs: null,
+        error: '사용자가 준비 작업을 취소했습니다.',
+      });
+    } finally {
+      finishRequest.resolve();
+      await orchestrator.stop();
+      ctx.handle.close();
+    }
   });
 
   it('DART 공급자가 먼저 한도 초과를 반환해도 WAITING 상태와 영속 알림 신호를 남긴다', async () => {
@@ -1708,7 +1757,7 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
         },
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
     const job = orchestrator.start(INPUT);
 
     await waitFor(() => orchestrator.get(job.id)?.status === 'WAITING_DAILY_QUOTA');
@@ -1768,7 +1817,7 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
         syncCorporateActions: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
     const job = orchestrator.start(INPUT);
 
     await waitFor(() => orchestrator.get(job.id)?.status === 'WAITING_DAILY_QUOTA');
@@ -1788,7 +1837,7 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
   it('모든 rebalance entry가 비면 한국어 원인으로 FAILED에 수렴한다', async () => {
     const ctx = makeDeps({ resolver: { resolveOrDescribeNeeds: async () => ready([]), isPeriodCovered: () => true } });
 
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
     const job = orchestrator.start(INPUT);
 
     await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
@@ -1800,27 +1849,35 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
 
   it('공시 확인 중 서버가 재시작되면 같은 준비 작업을 확인 완료 뒤 이어간다', async () => {
     const ctx = makeDeps();
-    const first = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const first = trackedOrchestrator(ctx.deps as never);
     const beforeShutdown = deferred<void>();
-    const job = first.start(INPUT, undefined, () => beforeShutdown.promise);
-    await Promise.resolve();
-    const closing = first.stop();
-    beforeShutdown.resolve();
-    await closing;
-    expect(first.get(job.id)).toMatchObject({ status: 'WAITING_DATA', phase: 'FILING_DISCOVERY' });
-    const restarted = new BacktestPreparationOrchestrator(ctx.deps as never);
     const afterRestart = deferred<void>();
-    let checks = 0;
-    const check = async () => { checks++; await afterRestart.promise; };
-    restarted.recoverOrphaned(check);
-    restarted.recoverOrphaned(check);
-    await Promise.resolve();
-    expect(checks).toBe(1);
-    expect(restarted.get(job.id)?.status).toBe('WAITING_DATA');
-    afterRestart.resolve();
-    await waitFor(() => restarted.get(job.id)?.status === 'COMPLETED');
-    await restarted.stop();
-    ctx.handle.close();
+    let restarted: BacktestPreparationOrchestrator | undefined;
+    try {
+      const job = first.start(INPUT, undefined, () => beforeShutdown.promise);
+      await Promise.resolve();
+      const closing = first.stop();
+      beforeShutdown.resolve();
+      await closing;
+      expect(first.get(job.id)).toMatchObject({ status: 'WAITING_DATA', phase: 'FILING_DISCOVERY' });
+      restarted = trackedOrchestrator(ctx.deps as never);
+      let checks = 0;
+      const check = async () => { checks++; await afterRestart.promise; };
+      restarted.recoverOrphaned(check);
+      restarted.recoverOrphaned(check);
+      await Promise.resolve();
+      expect(checks).toBe(1);
+      expect(restarted.get(job.id)?.status).toBe('WAITING_DATA');
+      afterRestart.resolve();
+      await waitFor(() => restarted?.get(job.id)?.status === 'COMPLETED');
+      await restarted.stop();
+    } finally {
+      beforeShutdown.resolve();
+      afterRestart.resolve();
+      await first.stop();
+      await restarted?.stop();
+      ctx.handle.close();
+    }
   });
 
   it('공시 목록 실패로 FactSync가 ERROR를 반환하면 준비 잡도 FAILED가 된다', async () => {
@@ -1852,7 +1909,7 @@ describe('BacktestPreparationOrchestrator quota resume와 terminal 결과', () =
         syncCorporateActions: async () => ({ savedFacts: 0, gapCount: 0, gaps: [], stoppedAtSymbol: null, stopReason: null, failureMessage: null }),
       },
     });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
     const job = orchestrator.start(INPUT);
 
     await waitFor(() => orchestrator.get(job.id)?.status === 'FAILED');
@@ -1877,7 +1934,7 @@ describe('미리보기 종료 알림 경계', () => {
           },
         } : {}),
       });
-      const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+      const orchestrator = trackedOrchestrator(ctx.deps as never);
       try {
         const job = orchestrator.start(INPUT);
         if (status === 'CANCELLED') orchestrator.cancel(job.id);
@@ -1899,7 +1956,7 @@ describe('미리보기 종료 알림 경계', () => {
 
   it('알림 전달이 실패해도 결과 저장과 구독자 완료 통지는 유지한다', async () => {
     const ctx = makeDeps({ onJobFinished: () => { throw new Error('알림 저장 실패'); } });
-    const orchestrator = new BacktestPreparationOrchestrator(ctx.deps as never);
+    const orchestrator = trackedOrchestrator(ctx.deps as never);
     try {
       const job = orchestrator.start(INPUT);
       const received: string[] = [];

@@ -128,6 +128,7 @@ describe('POST /backtests/universe-preview', () => {
     });
 
     expect(res.statusCode).toBe(200);
+    expect(res.json().schedule).toHaveLength(1);
     expect(res.json()).toMatchObject({
       schedule: [{
         rebalanceDate: '2026-01-05',
@@ -686,24 +687,6 @@ describe('POST /backtests/universe-preview', () => {
     expect(res.statusCode).toBe(200);
     const body = res.json() as { missingCandleSymbols: string[] };
     expect(body.missingCandleSymbols).toEqual(['005930']);
-  });
-
-  it('rule의 shared interval로 단일 리밸런스 일정을 만든다', async ({ ctx, cookie, preparedPreview }) => {
-    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [
-      { standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '500000000000000' },
-    ]);
-    const res = await preparedPreview(ctx, {
-      method: 'POST',
-      url: '/api/v1/backtests/universe-preview',
-      cookies: { session: cookie },
-      payload: {
-        universeRule: marketCapRule(),
-        period: { from: '2026-01-05', to: '2026-01-05' },
-      },
-    });
-    expect(res.statusCode).toBe(200);
-    const body = res.json() as { schedule: unknown[] };
-    expect(body.schedule).toHaveLength(1);
   });
 
   it('기간이 뒤집히면 400 이다', async ({ ctx, cookie, preparedPreview }) => {

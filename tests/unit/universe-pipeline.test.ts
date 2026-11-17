@@ -81,7 +81,7 @@ describe('addStage', () => {
     expect(() => addStage([{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 100 }], 'MARKET_CAP')).toThrow();
   });
 
-  it('6번째 단계 추가는 거부한다', () => {
+  it('다섯 단계에서도 이미 쓰인 criterion은 거부한다', () => {
     const fiveStages = [
       { criterion: 'MARKET_CAP' as const, direction: 'HIGH' as const, limit: 100 },
       { criterion: 'VOLUME' as const, direction: 'HIGH' as const, limit: 90 },

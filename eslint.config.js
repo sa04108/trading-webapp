@@ -7,6 +7,8 @@ export default tseslint.config(
       'dist/**',
       'node_modules/**',
       'data/**',
+      // E2E 서버가 생성한 DB와 전략 번들은 소스 검사 대상이 아니다.
+      '.e2e-data/**',
       'migrations/**',
       'playwright-report/**',
       'test-results/**',

@@ -333,7 +333,7 @@ describe('backtest preparation HTTP/SSE', () => {
     expect(response.body).toContain('"status":"COMPLETED"');
   });
 
-  test('app.close는 active preparation SSE heartbeat와 구독을 먼저 정리한다', async ({ apps }) => {
+  test('app.close는 active preparation SSE heartbeat와 구독을 먼저 정리한다', async ({ apps, signal }) => {
     let unsubscribedBeforeServerClose: boolean | null = null;
     let subscriptionClosed = false;
     const ctx = await apps.create({
@@ -356,50 +356,50 @@ describe('backtest preparation HTTP/SSE', () => {
       return originalResolve(...args);
     };
     const orchestrator = ctx.container.backtestPreparationOrchestrator;
-    const id = orchestrator.start(previewInput()).id;
-    await waitFor(() => orchestrator.get(id), (job) => job?.status === 'RUNNING');
-
-    let subscribed!: () => void;
-    const subscribedPromise = new Promise<void>((resolve) => { subscribed = resolve; });
-    const originalSubscribe = orchestrator.subscribe.bind(orchestrator);
-    orchestrator.subscribe = ((...args: Parameters<typeof orchestrator.subscribe>) => {
-      const unsubscribe = originalSubscribe(...args);
-      subscribed();
-      return () => {
-        subscriptionClosed = true;
-        unsubscribe();
-      };
-    }) as typeof orchestrator.subscribe;
-    const address = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
-    const responsePromise = new Promise<IncomingMessage>((resolve, reject) => {
-      const request = httpGet(`${address}/api/v1/backtests/preparation-jobs/${id}/events`, {
-        headers: { cookie: `session=${cookie}` },
-      }, resolve);
-      request.once('error', reject);
-    });
-    const response = await responsePromise;
+    let response: IncomingMessage | undefined;
+    const disconnect = () => response?.destroy();
+    signal.addEventListener('abort', disconnect, { once: true });
     try {
-      const firstEvent = new Promise<string>((resolve) => {
-        response.once('data', (chunk) => resolve(String(chunk)));
+      const id = orchestrator.start(previewInput()).id;
+      await waitFor(() => orchestrator.get(id), (job) => job?.status === 'RUNNING');
+      let subscribed!: () => void;
+      const subscribedPromise = new Promise<void>((resolve) => { subscribed = resolve; });
+      const originalSubscribe = orchestrator.subscribe.bind(orchestrator);
+      orchestrator.subscribe = (...args) => {
+        const unsubscribe = originalSubscribe(...args);
+        subscribed();
+        return () => { subscriptionClosed = true; unsubscribe(); };
+      };
+      const address = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
+      response = await new Promise<IncomingMessage>((resolve, reject) => {
+        const request = httpGet(`${address}/api/v1/backtests/preparation-jobs/${id}/events`, {
+          headers: { cookie: `session=${cookie}` }, signal,
+        }, resolve);
+        request.once('error', reject);
+      });
+      const stream = response;
+      const firstEvent = new Promise<string>((resolve, reject) => {
+        let body = '';
+        const onData = (chunk: Buffer) => {
+          body += chunk.toString();
+          if (body.includes('\n\n')) { stream.off('data', onData); resolve(body); }
+        };
+        stream.on('data', onData);
+        stream.once('error', reject);
+        stream.once('end', () => reject(new Error('첫 SSE 프레임 전에 연결이 종료됐습니다.')));
       });
       await subscribedPromise;
       const body = await firstEvent;
-
-      const closePromise = ctx.app.close();
-      const closedBeforeForcedClientDisconnect = await Promise.race([
-        closePromise.then(() => true),
-        new Promise<false>((resolve) => setTimeout(() => resolve(false), 100)),
-      ]);
-      if (!closedBeforeForcedClientDisconnect) response.destroy();
-      releaseResolver();
-      await closePromise;
-
-      expect(closedBeforeForcedClientDisconnect).toBe(true);
-      expect(unsubscribedBeforeServerClose).toBe(true);
       expect(body).toContain('"status":"RUNNING"');
+
+      // 서버 종료 완료를 직접 관찰한다. 실패 시 테스트의 abort가 연결을 정리한다.
+      await ctx.app.close();
+      signal.throwIfAborted();
+      expect(unsubscribedBeforeServerClose).toBe(true);
     } finally {
       releaseResolver();
-      response.destroy();
+      disconnect();
+      signal.removeEventListener('abort', disconnect);
     }
   });
 
@@ -412,27 +412,29 @@ describe('backtest preparation HTTP/SSE', () => {
       await gate;
       return original(...args);
     };
-    const id = ctx.container.backtestPreparationOrchestrator.start(previewInput()).id;
-    await waitFor(
-      () => ctx.container.backtestPreparationOrchestrator.get(id),
-      (job) => job?.status === 'RUNNING',
-    );
+    try {
+      const id = ctx.container.backtestPreparationOrchestrator.start(previewInput()).id;
+      await waitFor(
+        () => ctx.container.backtestPreparationOrchestrator.get(id),
+        (job) => job?.status === 'RUNNING',
+      );
 
-    const first = await ctx.app.inject({
-      method: 'POST', url: `/api/v1/backtests/preparation-jobs/${id}/cancel`,
-      cookies: { session: cookie },
-    });
-    const second = await ctx.app.inject({
-      method: 'POST', url: `/api/v1/backtests/preparation-jobs/${id}/cancel`,
-      cookies: { session: cookie },
-    });
-    expect(first.statusCode).toBe(200);
-    expect(second.statusCode).toBe(200);
-    release();
-    await waitFor(
-      () => ctx.container.backtestPreparationOrchestrator.get(id),
-      (job) => job?.status === 'CANCELLED',
-    );
+      const first = await ctx.app.inject({
+        method: 'POST', url: `/api/v1/backtests/preparation-jobs/${id}/cancel`,
+        cookies: { session: cookie },
+      });
+      const second = await ctx.app.inject({
+        method: 'POST', url: `/api/v1/backtests/preparation-jobs/${id}/cancel`,
+        cookies: { session: cookie },
+      });
+      expect(first.statusCode).toBe(200);
+      expect(second.statusCode).toBe(200);
+      release();
+      await waitFor(
+        () => ctx.container.backtestPreparationOrchestrator.get(id),
+        (job) => job?.status === 'CANCELLED',
+      );
+    } finally { release(); }
   });
 
   it('DART key가 없으면 PER 후보 재무 동기화가 필요한 요청만 503이다', async ({ ctx, cookie }) => {

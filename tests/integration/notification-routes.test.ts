@@ -52,20 +52,28 @@ describe('notification routes', () => {
   it('SSE 연결 직후 최초 REST 조회와의 경합을 닫는 sync 이벤트를 보낸다', async ({ ctx, cookie }) => {
     const address = await ctx.app.listen({ host: '127.0.0.1', port: 0 });
     const controller = new AbortController();
-    const response = await fetch(`${address}/api/v1/notifications/events`, {
-      headers: { cookie: `session=${cookie}` },
-      signal: controller.signal,
-    });
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get('content-type')).toContain('text/event-stream');
-    const reader = response.body!.getReader();
-    const first = new TextDecoder().decode((await reader.read()).value);
-    expect(first).toContain('event: sync');
-    expect(first).toContain('data: {}');
-
-    await reader.cancel();
-    controller.abort();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try {
+      const response = await fetch(`${address}/api/v1/notifications/events`, {
+        headers: { cookie: `session=${cookie}` },
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5_000)]),
+      });
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toContain('text/event-stream');
+      reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let frame = '';
+      while (!/\r?\n\r?\n/.test(frame)) {
+        const chunk = await reader.read();
+        if (chunk.done) throw new Error('SSE 연결이 이벤트 전에 종료되었습니다');
+        frame += decoder.decode(chunk.value, { stream: true });
+      }
+      expect(frame).toContain('event: sync');
+      expect(frame).toContain('data: {}');
+    } finally {
+      controller.abort();
+      if (reader) await reader.cancel().catch(() => undefined);
+    }
   });
 
   it('marks all read', async ({ ctx, cookie }) => {
