@@ -6,10 +6,11 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useListSelection, type ListSelectionRequest } from "@/components/use-list-selection";
 import { api } from "@/lib/api-client";
 import { formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useNotifications } from "./api";
+import { notificationsQueryOptions, useNotifications } from "./api";
 import { targetApiPath } from "./link-target";
 import {
   clearTargetMissing,
@@ -86,12 +87,13 @@ export function NotificationsPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [filter, setFilter] = useState<"all" | "error">("all");
-  const { data, isLoading } = useNotifications(filter === "error" ? "error" : undefined);
+  const selection = useListSelection();
+  const { data, isLoading, isPlaceholderData } = useNotifications(filter === "error" ? "error" : undefined, selection.excludeIds);
   const notifications = data?.notifications ?? [];
   const missingTargets = useMissingTargets();
 
   const [editing, setEditing] = useState(false);
-  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const selected = selection.forList(notifications, data?.total ?? 0, data?.selectionCount ?? 0);
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [checking, setChecking] = useState<string | null>(null);
 
@@ -108,35 +110,19 @@ export function NotificationsPage() {
   }, [queryClient]);
 
   const remove = useMutation({
-    mutationFn: (ids: string[]) =>
+    mutationFn: (request: ListSelectionRequest) =>
       api("/notifications", {
         method: "DELETE",
-        body: JSON.stringify({ ids }),
+        body: JSON.stringify("all" in request && filter === "error" ? { ...request, severity: "error" } : request),
       }),
-    onSuccess: () => {
-      setSelected(new Set());
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      if (selection.excludeIds.length) await queryClient.fetchQuery(notificationsQueryOptions(filter === "error" ? "error" : undefined));
+      selection.clear();
       setEditing(false);
-      void queryClient.invalidateQueries({ queryKey: ["notifications"] });
     },
     onError: (error) => toast.error(error.message),
   });
-
-  const selectedIds = notifications.filter(item => selected.has(item.id)).map(item => item.id);
-  const allSelected =
-    notifications.length > 0 && selectedIds.length === notifications.length;
-
-  const toggleAll = (checked: boolean | "indeterminate") =>
-    setSelected(
-      checked === true ? new Set(notifications.map((n) => n.id)) : new Set(),
-    );
-
-  const toggleOne = (id: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
 
   const toggleExpanded = (id: string) =>
     setExpanded((prev) => {
@@ -187,8 +173,9 @@ export function NotificationsPage() {
               <>
                 <label className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Checkbox
-                    checked={allSelected ? true : selectedIds.length > 0 ? "indeterminate" : false}
-                    onCheckedChange={toggleAll}
+                    checked={selected.checked}
+                    onCheckedChange={selection.toggleAll}
+                    disabled={remove.isPending || isPlaceholderData}
                     aria-label="전체 선택"
                   />
                   전체 선택
@@ -196,10 +183,10 @@ export function NotificationsPage() {
                 <Button
                   variant="destructive"
                   size="sm"
-                  disabled={selectedIds.length === 0 || remove.isPending}
-                  onClick={() => remove.mutate(selectedIds)}
+                  disabled={selected.count === 0 || remove.isPending || isPlaceholderData}
+                  onClick={() => remove.mutate(selected.request())}
                 >
-                  삭제 ({selectedIds.length})
+                  삭제 ({selected.count})
                 </Button>
               </>
             )}
@@ -207,9 +194,10 @@ export function NotificationsPage() {
               <Button
                 variant="outline"
                 size="sm"
+                disabled={remove.isPending || isPlaceholderData}
                 onClick={() => {
                   setEditing((prev) => !prev);
-                  setSelected(new Set());
+                  selection.clear();
                 }}
               >
                 {editing ? "완료" : "편집"}
@@ -228,10 +216,10 @@ export function NotificationsPage() {
                 filter === value && "bg-destructive/10 hover:bg-destructive/20",
               ) : undefined}
               aria-pressed={filter === value}
-              disabled={remove.isPending}
+              disabled={remove.isPending || isPlaceholderData}
               onClick={() => {
                 setFilter(value);
-                setSelected(new Set());
+                selection.clear();
                 setEditing(false);
               }}
             >
@@ -265,8 +253,9 @@ export function NotificationsPage() {
                   >
                     {editing && (
                       <Checkbox
-                        checked={selected.has(item.id)}
-                        onCheckedChange={() => toggleOne(item.id)}
+                        checked={selection.isSelected(item.id)}
+                        onCheckedChange={(checked) => selection.toggle(item.id, checked)}
+                        disabled={remove.isPending || isPlaceholderData}
                         aria-label={`${item.title} 선택`}
                         className="mt-0.5"
                       />

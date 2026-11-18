@@ -1,15 +1,23 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api-client";
 import type { NotificationItem, NotificationSeverity } from "./types";
 
-export function useNotifications(severity?: NotificationSeverity) {
-  return useQuery({
-    queryKey: ["notifications", "list", severity ?? "all"],
-    queryFn: () => api<{ notifications: NotificationItem[] }>(
-      severity ? `/notifications?severity=${severity}` : "/notifications",
+type NotificationsResponse = { notifications: NotificationItem[]; total: number; selectionCount: number };
+
+export function notificationsQueryOptions(severity?: NotificationSeverity, excludeIds: readonly string[] = []) {
+  return queryOptions<NotificationsResponse>({
+    queryKey: ["notifications", "list", severity ?? "all", excludeIds],
+    placeholderData: (previous, previousQuery) => previousQuery?.queryKey[2] === (severity ?? "all") ? previous : undefined,
+    queryFn: ({ signal }) => api<NotificationsResponse>(
+      excludeIds.length ? "/notifications/list" : severity ? `/notifications?severity=${severity}` : "/notifications",
+      excludeIds.length ? { signal, method: "POST", body: JSON.stringify({ severity, excludeIds }) } : { signal },
     ),
   });
+}
+
+export function useNotifications(severity?: NotificationSeverity, excludeIds: readonly string[] = []) {
+  return useQuery(notificationsQueryOptions(severity, excludeIds));
 }
 
 export function useUnreadCount(pollingFallback: boolean) {

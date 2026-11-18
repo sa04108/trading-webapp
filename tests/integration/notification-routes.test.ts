@@ -1,4 +1,5 @@
 import { describe, expect } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { notifications } from '../../src/server/shared/db/operations-schema.js';
 import { authenticatedTest as it } from '../helpers/test-fixtures.js';
 
@@ -86,6 +87,45 @@ describe('notification routes', () => {
     });
     expect(res.statusCode).toBe(204);
     expect(ctx.container.notificationService.unreadCount()).toBe(0);
+  });
+
+  it('deletes the full filtered list with exclusions and rejects malformed bulk requests', async ({ ctx, cookie }) => {
+    const db = ctx.container.database.db;
+    const now = Date.now();
+    db.insert(notifications).values(Array.from({ length: 205 }, (_, i) => ({ id: `bulk-${i}`, type: 'backtest', severity: 'error', title: `error-${i}`, read: false, createdAtMs: now + i }))).run();
+    db.insert(notifications).values({ id: 'info', type: 'backtest', severity: 'info', title: 'info', read: false, createdAtMs: now }).run();
+    const get = () => ctx.app.inject({ method: 'GET', url: '/api/v1/notifications?severity=error', cookies: { session: cookie } });
+    const remove = (payload: object) => ctx.app.inject({ method: 'DELETE', url: '/api/v1/notifications', cookies: { session: cookie }, payload });
+    const before = (await get()).json();
+    expect(before.total).toBe(205);
+    expect(before.notifications).toHaveLength(200);
+    for (const payload of [{ all: true, severity: 'errror' }, { all: 'true' }, { all: true, excludeIds: [42] }]) expect((await remove(payload)).statusCode).toBe(400);
+    expect((await get()).json().total).toBe(205);
+    expect((await remove({ all: true, severity: 'error', excludeIds: ['bulk-0'] })).statusCode).toBe(204);
+    expect((await get()).json()).toMatchObject({ total: 1, notifications: [{ id: 'bulk-0' }] });
+    expect(db.select().from(notifications).all().map((row) => row.id).sort()).toEqual(['bulk-0', 'info']);
+    expect((await remove({ all: true, severity: 'error', excludeIds: ['bulk-0'] })).statusCode).toBe(204);
+    expect((await remove({ ids: ['bulk-0'] })).statusCode).toBe(204);
+    expect((await remove({ ids: ['info'] })).statusCode).toBe(204);
+    expect(db.select().from(notifications).all()).toEqual([]);
+  });
+
+  it('counts only matching existing exclusions when the list changes', async ({ ctx, cookie }) => {
+    const db = ctx.container.database.db;
+    const now = Date.now();
+    db.insert(notifications).values([
+      { id: 'selection-a', type: 'backtest', severity: 'error', title: 'a', read: false, createdAtMs: now },
+      { id: 'selection-b', type: 'backtest', severity: 'error', title: 'b', read: false, createdAtMs: now },
+      { id: 'selection-info', type: 'backtest', severity: 'info', title: 'info', read: false, createdAtMs: now },
+    ]).run();
+    const list = (payload: object, authenticated = true) => ctx.app.inject({ method: 'POST', url: '/api/v1/notifications/list', ...(authenticated ? { cookies: { session: cookie } } : {}), payload });
+    const payload = { severity: 'error', excludeIds: ['selection-a', 'selection-a', 'selection-info', 'missing'] };
+    expect((await list(payload, false)).statusCode).toBe(401);
+    expect((await list({ ...payload, unexpected: true })).statusCode).toBe(400);
+    expect((await list(payload)).json()).toMatchObject({ total: 2, selectionCount: 1 });
+    expect((await ctx.app.inject({ method: 'GET', url: '/api/v1/notifications?severity=error', cookies: { session: cookie } })).json()).toMatchObject({ total: 2, selectionCount: 2 });
+    db.delete(notifications).where(eq(notifications.id, 'selection-a')).run();
+    expect((await list(payload)).json()).toMatchObject({ total: 1, selectionCount: 1 });
   });
 
   it('deletes by ids, deletes all, rejects empty selection', async ({ ctx, cookie }) => {

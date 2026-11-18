@@ -39,6 +39,8 @@ export interface JobsResponse {
   readonly jobs: JobItem[];
   readonly total: number;
   readonly activeCount: number;
+  readonly finishedCount: number;
+  readonly selectionCount: number;
   readonly retentionDays: number;
   readonly limit: number;
   readonly offset: number;

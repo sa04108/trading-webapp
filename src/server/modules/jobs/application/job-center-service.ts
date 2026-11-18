@@ -78,12 +78,16 @@ export class JobCenterService {
     return { owner, cutoff: days > 0 ? this.container.clock.now() - days * 86_400_000 : 0, draining: JSON.stringify(this.container.intradayService.pendingCancellationIds()) };
   }
 
-  list(owner: string, filter: JobFilter, limit: number, requestedOffset: number): JobsResponse {
+  list(owner: string, filter: JobFilter, limit: number, requestedOffset: number, excludeIds: readonly string[] = []): JobsResponse {
     this.container.backtestWizardService.sync(owner);
     const db = this.container.database.sqlite;
     const bindings = { ...this.bindings(owner), filter };
     const counts = db.prepare(`${jobsCte} SELECT coalesce(sum(CASE WHEN ${filterSql} THEN 1 ELSE 0 END),0) AS total,
-      coalesce(sum(CASE WHEN status IN ${active} THEN 1 ELSE 0 END),0) AS activeCount FROM visible`).get(bindings) as { total: number; activeCount: number };
+      coalesce(sum(CASE WHEN status IN ${active} THEN 1 ELSE 0 END),0) AS activeCount,
+      coalesce(sum(CASE WHEN ${filterSql} AND status IN ${terminal} THEN 1 ELSE 0 END),0) AS finishedCount,
+      coalesce(sum(CASE WHEN ${filterSql} AND status IN ${terminal} AND NOT EXISTS
+        (SELECT 1 FROM json_each(@excludeIds) excluded WHERE excluded.value = visible.id) THEN 1 ELSE 0 END),0) AS selectionCount
+      FROM visible`).get({ ...bindings, excludeIds: JSON.stringify(excludeIds) }) as { total: number; activeCount: number; finishedCount: number; selectionCount: number };
     const offset = Math.min(requestedOffset, Math.max(0, Math.floor((counts.total - 1) / limit) * limit));
     const rows = db.prepare(`${jobsCte} SELECT * FROM visible WHERE ${filterSql}
       ORDER BY CASE WHEN status IN ${active} THEN 0 ELSE 1 END, coalesce(finishedAtMs,createdAtMs) DESC, id DESC LIMIT @limit OFFSET @offset`)
@@ -293,6 +297,20 @@ export class JobCenterService {
     }
     this.container.auditLog.record(actor, "job.cancel-requested", { id });
     return this.get(owner, id);
+  }
+
+  removeAll(owner: string, actor: string, filter: JobFilter, excludeIds: readonly string[]): void {
+    this.container.database.sqlite.transaction(() => {
+      this.container.backtestWizardService.sync(owner);
+      const result = this.container.database.sqlite.prepare(`${jobsCte}
+        INSERT INTO job_dismissals (user_id, job_id, finished_at_ms)
+        SELECT @owner, id, coalesce(finishedAtMs, updatedAtMs) FROM visible
+        WHERE ${filterSql} AND status IN ${terminal}
+          AND NOT EXISTS (SELECT 1 FROM json_each(@excludeIds) excluded WHERE excluded.value = visible.id)
+        ON CONFLICT(user_id, job_id) DO UPDATE SET finished_at_ms=excluded.finished_at_ms`)
+        .run({ ...this.bindings(owner), filter, excludeIds: JSON.stringify(excludeIds) });
+      this.container.auditLog.record(actor, "job.history-dismissed", { count: result.changes, filter, excludeIds });
+    })();
   }
 
   remove(owner: string, actor: string, ids: readonly string[]): void {

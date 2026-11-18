@@ -6,7 +6,7 @@ async function mockJobs(page: Page) {
     jobs: [{ id: "backtest:done", kind: "backtest", title: "선택한 작업", status: "COMPLETED",
       phase: null, description: null, progress: null, error: null, createdAtMs: 1, updatedAtMs: 1,
       finishedAtMs: 1, cancellable: false, link: null }],
-    total: 1, activeCount: 0, retentionDays: 7, limit: 50, offset: 0,
+    total: 1, activeCount: 0, finishedCount: 1, selectionCount: 1, retentionDays: 7, limit: 50, offset: 0,
   } }));
 }
 

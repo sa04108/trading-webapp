@@ -13,7 +13,18 @@ const querySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
 });
+const listBodySchema = z.object({
+  status: z.enum(["all", "active", "finished", "error"]).default("all"),
+  limit: z.number().int().min(1).max(100).default(50),
+  offset: z.number().int().min(0).max(1_000_000).default(0),
+  excludeIds: z.array(z.string().min(1).max(200)).max(10_000).default([]),
+}).strict();
 const idsSchema = z.object({ ids: z.array(z.string().min(1).max(200)).min(1).max(100) });
+const bulkSchema = z.object({
+  all: z.literal(true),
+  status: z.enum(["all", "active", "finished", "error"]).default("all"),
+  excludeIds: z.array(z.string().min(1).max(200)).max(10_000).default([]),
+}).strict();
 
 export function registerJobCenterRoutes(
   app: FastifyInstance,
@@ -53,6 +64,10 @@ export function registerJobCenterRoutes(
     const query = querySchema.parse(request.query);
     return service.list(request.authUser!.id, query.status, query.limit, query.offset);
   }));
+  app.post("/jobs/list", { preHandler: requireAuth }, (request, reply) => handle(request, reply, () => {
+    const { status, limit, offset, excludeIds } = listBodySchema.parse(request.body);
+    return service.list(request.authUser!.id, status, limit, offset, excludeIds);
+  }));
   app.get("/jobs/:id", { preHandler: requireAuth }, (request, reply) => handle(request, reply, () => ({
     job: service.get(request.authUser!.id, (request.params as { id: string }).id),
   })));
@@ -60,8 +75,13 @@ export function registerJobCenterRoutes(
     job: service.cancel(request.authUser!.id, request.authUser!.username, (request.params as { id: string }).id),
   })));
   app.delete("/jobs", { preHandler: requireAuth }, (request, reply) => handle(request, reply, () => {
-    const { ids } = idsSchema.parse(request.body);
-    service.remove(request.authUser!.id, request.authUser!.username, [...new Set(ids)]);
+    if (request.body && typeof request.body === "object" && "all" in request.body) {
+      const { status, excludeIds } = bulkSchema.parse(request.body);
+      service.removeAll(request.authUser!.id, request.authUser!.username, status, excludeIds);
+    } else {
+      const { ids } = idsSchema.parse(request.body);
+      service.remove(request.authUser!.id, request.authUser!.username, [...new Set(ids)]);
+    }
     return reply.code(204).send();
   }));
 }

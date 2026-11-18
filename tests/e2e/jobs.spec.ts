@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import type { JobItem } from "../../src/shared/schemas/jobs";
+import { isFinishedJob, type JobItem } from "../../src/shared/schemas/jobs";
 import { login } from "./login";
 
 const createdAtMs = Date.UTC(2026, 0, 1);
@@ -14,7 +14,7 @@ const finished: JobItem = {
 };
 
 function list(jobs: JobItem[]) {
-  return { jobs, total: jobs.length, activeCount: jobs.filter((job) => job.status === "RUNNING" || job.status === "CANCELLING").length, retentionDays: 7, limit: 50, offset: 0 };
+  return { jobs, total: jobs.length, selectionCount: jobs.filter((job) => isFinishedJob(job.status)).length, finishedCount: jobs.filter((job) => isFinishedJob(job.status)).length, activeCount: jobs.filter((job) => job.status === "RUNNING" || job.status === "CANCELLING").length, retentionDays: 7, limit: 50, offset: 0 };
 }
 
 // 고정 목록의 삭제 검증과 달리 완료 상태 전환은 선택 가능한 항목 수 자체를 바꾼다.
@@ -30,7 +30,7 @@ test("갱신으로 종료 작업이 늘면 기존 선택을 유지하고 일부 
   await page.goto("/jobs");
   await page.getByRole("button", { name: "편집", exact: true }).click();
   const all = page.getByRole("checkbox", { name: "종료된 작업 전체 선택", exact: true });
-  await all.check();
+  await page.getByRole("checkbox", { name: "종료 작업 선택", exact: true }).check();
   const before = reads;
   await page.clock.runFor(5_100);
   await expect.poll(() => reads).toBeGreaterThan(before);
@@ -41,8 +41,7 @@ test("갱신으로 종료 작업이 늘면 기존 선택을 유지하고 일부 
   await expect(page.getByRole("checkbox", { name: "종료 작업 선택", exact: true })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: "진행 작업 선택", exact: true })).not.toBeChecked();
   await expect(page.getByRole("button", { name: "삭제 (1)", exact: true })).toBeEnabled();
-  await all.focus();
-  await page.keyboard.press("Space");
+  await all.click();
   await expect(all).toBeChecked();
   await expect(page.getByRole("button", { name: "삭제 (2)", exact: true })).toBeEnabled();
 });
@@ -85,7 +84,7 @@ test("작업 목록에서 종료된 기록만 삭제하고 상세를 연다", as
   await expect(page.getByRole("alert")).toContainText("취소할 수 없습니다");
   await page.getByRole("button", { name: "편집" }).click();
   await expect(page.getByRole("checkbox", { name: "진행 작업 선택" })).toHaveCount(0);
-  await page.getByRole("checkbox", { name: "종료된 작업 전체 선택" }).check();
+  await page.getByRole("checkbox", { name: "종료 작업 선택", exact: true }).check();
   await page.getByRole("button", { name: "삭제 (1)" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "삭제할 수 없습니다" })).toBeVisible();
   expect(deleted).toEqual([finished.id]);
@@ -137,4 +136,91 @@ test("작업 상세가 진행과 취소 상태를 갱신하고 종료 후 조회
   await page.getByRole("link", { name: "작업", exact: true }).click();
   await page.clock.runFor(10_000);
   expect(reads).toBe(terminalReads);
+});
+
+// 전체 선택의 범위는 페이지 ID가 아니라 필터에 맞는 모든 종료 이력이다.
+test("전체 선택은 페이지와 갱신을 넘어 유지되고 제외한 오류 이력만 남긴다", async ({ page }) => {
+  await login(page);
+  await page.clock.install();
+  let jobs: JobItem[] = Array.from({ length: 120 }, (_, index) => ({ ...finished, id: `backtest:failed-${index}`, title: `실패 ${index}`, status: "FAILED" }));
+  jobs.push(active, finished);
+  let reads = 0;
+  let deleted: unknown;
+  await page.route(/\/api\/v1\/jobs(?:\/list)?(?:\?.*)?$/, (route) => {
+    const request = route.request();
+    if (request.method() === "DELETE") {
+      const body = request.postDataJSON() as { all: true; status: string; excludeIds: string[] };
+      deleted = body;
+      jobs = jobs.filter((job) => job.status !== "FAILED" || body.excludeIds.includes(job.id));
+      return route.fulfill({ status: 204 });
+    }
+    reads++;
+    const url = new URL(request.url());
+    const params = request.method() === "POST" ? request.postDataJSON() as { status: string; offset: number; excludeIds: string[] } : { status: url.searchParams.get("status"), offset: Number(url.searchParams.get("offset")), excludeIds: [] };
+    const filtered = params.status === "error" ? jobs.filter((job) => job.status === "FAILED") : jobs;
+    const selectionCount = filtered.filter((job) => isFinishedJob(job.status) && !params.excludeIds.includes(job.id)).length;
+    const offset = Math.min(params.offset, Math.max(0, Math.floor((filtered.length - 1) / 50) * 50));
+    return route.fulfill({ json: { ...list(filtered), selectionCount, jobs: filtered.slice(offset, offset + 50), offset } });
+  });
+  await page.goto("/jobs");
+  await page.getByRole("button", { name: "오류", exact: true }).click();
+  await page.getByRole("button", { name: "편집", exact: true }).click();
+  const all = page.getByRole("checkbox", { name: "종료된 작업 전체 선택", exact: true });
+  await page.getByText("전체 선택", { exact: true }).click();
+  await expect(all).toBeChecked();
+  // 같은 페이지의 항목이 모두 바뀌어도 전체 선택이 해제되면 안 된다.
+  jobs = [...jobs.slice(50, 120), ...jobs.slice(0, 50), active, finished];
+  const before = reads;
+  await page.clock.runFor(30_100);
+  await expect.poll(() => reads).toBeGreaterThan(before);
+  await expect(page.getByRole("checkbox", { name: "실패 50 선택", exact: true })).toBeVisible();
+  await expect(all).toBeChecked();
+  await expect(page.getByRole("button", { name: "삭제 (120)", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "다음", exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: "실패 100 선택", exact: true })).toBeChecked();
+  await page.getByRole("checkbox", { name: "실패 100 선택", exact: true }).uncheck();
+  await expect(all).toHaveAttribute("aria-checked", "mixed");
+  await page.getByRole("button", { name: "삭제 (119)", exact: true }).click();
+  await expect(page.getByRole("button", { name: "편집", exact: true })).toBeEnabled();
+  expect(deleted).toEqual({ all: true, status: "error", excludeIds: ["backtest:failed-100"] });
+  expect(jobs.map((job) => job.id)).toEqual(["backtest:failed-100", active.id, finished.id]);
+  await expect(page.getByText("실패 100", { exact: true })).toBeVisible();
+});
+
+test("삭제 후 재조회가 끝나기 전에는 재선택을 막고 이어서 다른 기록을 삭제한다", async ({ page }) => {
+  await login(page);
+  const second = { ...finished, id: "preparation:done-2", title: "다음 종료 작업" };
+  let jobs = [finished, second];
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const deleted: string[][] = [];
+  let refreshing = false;
+  await page.route(/\/api\/v1\/jobs(?:\?.*)?$/, async (route) => {
+    if (route.request().method() === "DELETE") {
+      const ids = (route.request().postDataJSON() as { ids: string[] }).ids;
+      deleted.push(ids);
+      jobs = jobs.filter((job) => !ids.includes(job.id));
+      return route.fulfill({ status: 204 });
+    }
+    if (deleted.length === 1) { refreshing = true; await gate; }
+    return route.fulfill({ json: list(jobs) });
+  });
+  try {
+    await page.goto("/jobs");
+    await page.getByRole("button", { name: "편집", exact: true }).click();
+    await page.getByRole("checkbox", { name: "종료 작업 선택", exact: true }).check();
+    await page.getByRole("button", { name: "삭제 (1)", exact: true }).click();
+    await expect.poll(() => refreshing).toBe(true);
+    await expect(page.getByRole("button", { name: "완료", exact: true })).toBeDisabled();
+    await expect(page.getByRole("checkbox", { name: "종료된 작업 전체 선택", exact: true })).toBeDisabled();
+    expect(deleted).toEqual([[finished.id]]);
+    release();
+    await expect(page.getByRole("button", { name: "편집", exact: true })).toBeEnabled();
+    await expect(page.getByText("종료 작업", { exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "편집", exact: true }).click();
+    await page.getByRole("checkbox", { name: "다음 종료 작업 선택", exact: true }).check();
+    await page.getByRole("button", { name: "삭제 (1)", exact: true }).click();
+    await expect(page.getByText("작업이 없습니다.", { exact: true })).toBeVisible();
+    expect(deleted).toEqual([[finished.id], [second.id]]);
+  } finally { release(); }
 });
