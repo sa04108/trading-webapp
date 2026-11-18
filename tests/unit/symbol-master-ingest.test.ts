@@ -1,5 +1,5 @@
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import {
   SymbolMasterService,
@@ -9,6 +9,7 @@ import {
   symbolMasterCoverage,
   symbolMasterTradingDays,
   symbolMasterVersions,
+  krxDailyBars,
 } from '../../src/runtime/shared/db/schema.js';
 import type { TestApp } from '../helpers/test-app.js';
 import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
@@ -46,6 +47,76 @@ async function setup(krxApps: KrxTestFactory): Promise<Ctx> {
 }
 
 describe('SymbolMasterService.ingestDate', () => {
+  it('공식 개장일 복구 중 보통주 거래 원문이 급감하면 커버를 거래일로 확정하지 않는다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
+    const db = ctx.t.container.database.db;
+    db.insert(symbolMasterCoverage).values({ startDate: '2023-01-03', endDate: '2023-01-03', collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.t.container.clock.now() }).run();
+    const entries = Array.from({ length: 20 }, (_, i) => {
+      const code = String(i + 1).padStart(6, '0');
+      return baseInfoFixture({ ISU_CD: `KR7${code}0000`, ISU_SRT_CD: code });
+    });
+    ctx.fake.setResponse('stk_isu_base_info', '20230103', { body: krxEnvelope(entries) });
+    ctx.fake.setResponse('stk_bydd_trd', '20230103', { body: krxEnvelope(Array(20).fill(dailyFixture({ ISU_CD: '000001' }))) });
+    ctx.fake.setResponse('ksq_isu_base_info', '20230103', { body: krxEnvelope([baseInfoFixture({ ISU_CD: 'KR7000660001', ISU_SRT_CD: '000660', MKT_TP_NM: 'KOSDAQ' })]) });
+    ctx.fake.setResponse('ksq_bydd_trd', '20230103', { body: krxEnvelope([dailyFixture({ ISU_CD: '000660' })]) });
+    const source = createKrxHistoricalUniverseSource({ baseUrl: ctx.fake.baseUrl, apiKey: API_KEY, approvalExpiry: null }, ctx.t.container.clock, ctx.t.container.logger, { sleep: NOOP_SLEEP });
+    const svc = new SymbolMasterService({ db, clock: ctx.t.container.clock, logger: ctx.t.container.logger, source: {
+      ...source, isOfficialTradingDay: () => true,
+      fetchDailyTrades: (market, date) => source.fetchDailyTrades(market, date),
+      fetchIssueBaseInfo: (market, date) => source.fetchIssueBaseInfo(market, date),
+    } });
+    await expect(svc.ingestDate('2023-01-03')).rejects.toThrow('거래 원문이 급감');
+    expect(db.select().from(symbolMasterTradingDays).all()).toHaveLength(0);
+    expect(db.select().from(krxDailyBars).all()).toHaveLength(0);
+  });
+
+  for (const state of ['미확인', '달력 오류', '빈 시장']) it(`기존 빈 커버의 ${state}는 거래일로 기록하지 않는다`, async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
+    const db = ctx.t.container.database.db;
+    db.insert(symbolMasterCoverage).values({ startDate: '2023-01-03', endDate: '2023-01-03', collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.t.container.clock.now() }).run();
+    const fetchDailyTrades = vi.fn(async () => []);
+    const svc = new SymbolMasterService({ db, clock: ctx.t.container.clock, logger: ctx.t.container.logger, source: {
+      isOfficialTradingDay: () => { if (state === '달력 오류') throw new Error('달력 오류'); return state === '빈 시장'; },
+      fetchDailyTrades, fetchIssueBaseInfo: async () => [], todayMaxEndpointCallCount: () => 0,
+    } });
+    if (state === '빈 시장') await expect(svc.ingestDate('2023-01-03')).rejects.toThrow('거래 원문이 비어');
+    else {
+      expect(await svc.ingestDate('2023-01-03')).toEqual({ kind: 'ALREADY_COVERED' });
+      expect(fetchDailyTrades).not.toHaveBeenCalled();
+    }
+    expect(db.select().from(symbolMasterTradingDays).all()).toHaveLength(0);
+  });
+
+  it('공식 개장일로 확인된 기존 빈 커버를 원문 정책으로 복구하고 이후 상태를 보존한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
+    for (const [date, shares] of [['20230102', '1,000,000'], ['20230105', '2,000,000']] as const) {
+      ctx.fake.setResponse('stk_bydd_trd', date, { body: krxEnvelope([dailyFixture()]) });
+      ctx.fake.setResponse('stk_isu_base_info', date, { body: krxEnvelope([baseInfoFixture({ LIST_SHRS: shares })]) });
+      await ctx.svc.ingestDate(`${date.slice(0, 4)}-${date.slice(4, 6)}-${date.slice(6)}`);
+    }
+    const db = ctx.t.container.database.db;
+    db.insert(symbolMasterCoverage).values({ startDate: '2023-01-03', endDate: '2023-01-03', collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.t.container.clock.now() }).run();
+    ctx.fake.setResponse('stk_bydd_trd', '20230103', { body: krxEnvelope([dailyFixture()]) });
+    ctx.fake.setResponse('stk_isu_base_info', '20230103', { body: krxEnvelope([baseInfoFixture({ LIST_SHRS: '1,500,000' })]) });
+    ctx.fake.setResponse('ksq_bydd_trd', '20230103', { body: krxEnvelope([dailyFixture({ ISU_CD: '000660' })]) });
+    ctx.fake.setResponse('ksq_isu_base_info', '20230103', { body: krxEnvelope([baseInfoFixture({ ISU_CD: 'KR7000660001', ISU_SRT_CD: '000660', MKT_TP_NM: 'KOSDAQ' })]) });
+    const source = createKrxHistoricalUniverseSource({ baseUrl: ctx.fake.baseUrl, apiKey: API_KEY, approvalExpiry: null }, ctx.t.container.clock, ctx.t.container.logger, { sleep: NOOP_SLEEP });
+    const trades = vi.fn((market: 'KOSPI' | 'KOSDAQ', date: string, _options?: { readonly requireExisting?: boolean }) => source.fetchDailyTrades(market, date));
+    const base = vi.fn((market: 'KOSPI' | 'KOSDAQ', date: string, _options?: { readonly requireExisting?: boolean }) => source.fetchIssueBaseInfo(market, date));
+    const deps = { db, clock: ctx.t.container.clock, logger: ctx.t.container.logger, source: { ...source, isOfficialTradingDay: () => true, fetchDailyTrades: trades, fetchIssueBaseInfo: base } };
+    const svc = new SymbolMasterService(deps);
+    const competing = new SymbolMasterService(deps);
+    expect((await Promise.all([svc.ingestDate('2023-01-03'), competing.ingestDate('2023-01-03')])).map(result => result.kind).sort()).toEqual(['ALREADY_COVERED', 'TRADING_DAY']);
+    expect(trades.mock.calls.map(call => call[2])).toEqual(Array(4).fill({ requireExisting: true }));
+    expect(base.mock.calls.map(call => call[2])).toEqual(Array(4).fill({ requireExisting: true }));
+    expect(db.select().from(krxDailyBars).all().filter(row => row.date === '2023-01-03')).toHaveLength(2);
+    expect(db.select().from(symbolMasterTradingDays).all().map(row => row.date)).toContain('2023-01-03');
+    expect(svc.getUniverseAsOf('2023-01-03').get('KR7005930003')?.sharesOutstanding).toBe('1500000');
+    expect(svc.getUniverseAsOf('2023-01-05').get('KR7005930003')?.sharesOutstanding).toBe('2000000');
+    expect(await svc.ingestDate('2023-01-03')).toEqual({ kind: 'ALREADY_COVERED' });
+    expect(trades).toHaveBeenCalledTimes(4);
+  });
+
   it('한 시장이 실패해도 다른 시장 수집 종료를 기다리고 커버리지를 남기지 않는다', async ({ krxApps }) => {
     const ctx = await setup(krxApps);
     let finish!: (rows: never[]) => void;
