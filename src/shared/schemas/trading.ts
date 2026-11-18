@@ -25,6 +25,8 @@ export const tradingSetupSchema = z.object({
   maxSlippageBps: z.number().int().min(0).max(500),
   randomSeed: z.number().int().min(0).max(4_294_967_295),
   sourceJobId: z.string().max(100).nullable().default(null),
+  paperCommissionProfileId: z.enum(["kr-equity-default", "zero-cost"]).optional(),
+  paperSlippageProfileId: z.enum(["fixed-5bps", "zero-slippage"]).optional(),
 }).strict();
 
 export type TradingSetup = z.infer<typeof tradingSetupSchema>;

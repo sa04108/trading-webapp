@@ -62,7 +62,10 @@ export interface KrxHistoricalUniverseSource {
   fetchIssueBaseInfo(
     market: KrxMarket,
     isoDate: string,
+    options?: { readonly requireExisting?: boolean },
   ): Promise<readonly KrxIssueBaseInfoRow[]>;
+  /** 두 시장 모두 공식 개장일로 확인된 경우에만 참이다. */
+  isOfficialTradingDay?(isoDate: string): boolean;
   fetchDailyTrades(
     market: KrxMarket,
     isoDate: string,

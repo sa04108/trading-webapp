@@ -337,6 +337,7 @@ export class SymbolMasterService {
   }
 
   private async ingestDateUnguarded(date: string): Promise<IngestResult> {
+    let recoverTradingDay = false;
     if (this.isCovered(date)) {
       if (this.hasStoredTradingDay(date)) {
         const universe = this.getUniverseAsOf(date);
@@ -350,16 +351,20 @@ export class SymbolMasterService {
         if (targets.some((entry) => !valid.has(entry.shortCode) && !nonTrading.has(entry.shortCode))) {
           await this.replayNormalizedDate(date, universe);
         }
+      } else {
+        try { recoverTradingDay = this.deps.source.isOfficialTradingDay?.(date) === true; }
+        catch { recoverTradingDay = false; }
       }
-      return { kind: "ALREADY_COVERED" };
+      if (!recoverTradingDay) return { kind: "ALREADY_COVERED" };
     }
 
     // 두 시장 모두 거래가 없으면 휴장이다. 기본정보는 휴장에도 조회되는 정적 데이터라
     // 거래 유무로만 거래일 여부를 가른다.
     const [kospiTrades, kosdaqTrades] = await settleMarketPair(
-      this.deps.source.fetchDailyTrades("KOSPI", date),
-      this.deps.source.fetchDailyTrades("KOSDAQ", date),
+      this.deps.source.fetchDailyTrades("KOSPI", date, recoverTradingDay ? { requireExisting: true } : undefined),
+      this.deps.source.fetchDailyTrades("KOSDAQ", date, recoverTradingDay ? { requireExisting: true } : undefined),
     );
+    if (recoverTradingDay && (!kospiTrades.length || !kosdaqTrades.length)) throw new Error(`공식 거래일의 시장별 거래 원문이 비어 있습니다: ${date}`);
     if (kospiTrades.length === 0 && kosdaqTrades.length === 0) {
       return this.deps.db.transaction((tx) => {
         // 다른 서비스 인스턴스가 fetch 사이에 같은 휴장일을 커밋했을 수 있다.
@@ -374,8 +379,8 @@ export class SymbolMasterService {
     }
 
     const [kospiBaseInfo, kosdaqBaseInfo] = await settleMarketPair(
-      this.deps.source.fetchIssueBaseInfo("KOSPI", date),
-      this.deps.source.fetchIssueBaseInfo("KOSDAQ", date),
+      this.deps.source.fetchIssueBaseInfo("KOSPI", date, recoverTradingDay ? { requireExisting: true } : undefined),
+      this.deps.source.fetchIssueBaseInfo("KOSDAQ", date, recoverTradingDay ? { requireExisting: true } : undefined),
     );
     const modeledBeforeWrite = this.readUniverseAsOfInternal(date);
     this.assertBaseInfoPresent(
@@ -400,6 +405,17 @@ export class SymbolMasterService {
     for (const row of kosdaqBaseInfo) {
       this.putEntry(fetched, row, "KOSDAQ");
     }
+    if (recoverTradingDay) {
+      for (const [market, trades] of [["KOSPI", kospiTrades], ["KOSDAQ", kosdaqTrades]] as const) {
+        const expected = new Set([...fetched.values()]
+          .filter(entry => entry.market === market && entry.instrumentType === "COMMON_STOCK")
+          .map(entry => entry.shortCode));
+        const observed = new Set(trades.map(trade => trade.shortCode).filter(code => expected.has(code)));
+        if (expected.size >= 20 && observed.size < expected.size * 0.8) {
+          throw new Error(`KRX ${market} 거래 원문이 급감했다(${date}): ${expected.size} → ${observed.size}`);
+        }
+      }
+    }
     this.preserveMissingBaseInfoEntries(
       date,
       fetched,
@@ -417,7 +433,7 @@ export class SymbolMasterService {
       kosdaqBaseInfo,
     );
 
-    return this.persistTradingDay(date, fetched, kospiTrades, kosdaqTrades);
+    return this.persistTradingDay(date, fetched, kospiTrades, kosdaqTrades, recoverTradingDay);
   }
 
   /**
@@ -429,10 +445,11 @@ export class SymbolMasterService {
     fetched: UniverseState,
     kospiTrades: readonly KrxDailyTradeRow[],
     kosdaqTrades: readonly KrxDailyTradeRow[],
+    recoverTradingDay = false,
   ): IngestResult {
     return this.deps.db.transaction((tx) => {
       // fetch 중 같은 날짜의 다른 요청이 먼저 커밋했을 수 있다.
-      if (this.isCoveredIn(tx, date))
+      if (this.isCoveredIn(tx, date) && (!recoverTradingDay || this.hasStoredTradingDay(date, tx)))
         return { kind: "ALREADY_COVERED" } as const;
 
       const nextTradingDate = this.nextTradingDate(date, tx);
@@ -1200,8 +1217,8 @@ export class SymbolMasterService {
     return undefined;
   }
 
-  private hasStoredTradingDay(date: string): boolean {
-    return this.deps.db.select().from(symbolMasterTradingDays)
+  private hasStoredTradingDay(date: string, db: AppDatabase = this.deps.db): boolean {
+    return db.select().from(symbolMasterTradingDays)
       .where(eq(symbolMasterTradingDays.date, date)).get() !== undefined;
   }
 

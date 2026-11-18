@@ -36,22 +36,22 @@ describe("daily decision worker integration", () => {
       let now = Date.parse("2026-11-16T00:01:00Z");
       engine = new DailyTradingEngine({ databasePath, dataPath: database.dataPath, artifacts, now: () => now });
       const deployment = { strategyId: artifact.strategyId, artifactHash: artifact.artifactHash, version: artifact.version, parameters: { ...UNFILTERED_BREAKOUT_CONTROLS, lookbackBars: 2, atrPeriod: 2 }, createdAtMs: Date.parse("2026-11-13T00:00:00Z"), activatedAtMs: null, budgetKrw: 100000, randomSeed: 1, universeRule: { markets: ["KOSPI"], stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 1 }], rebalanceInterval: { unit: "NONE", value: 1 } } };
-      const warm = await engine.evaluate({ deployment, portfolio: {}, checkpoint: null, warmupOnly: true } as never);
+      const warm = await engine.evaluate({ deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint: null, warmupOnly: true } as never);
       expect(warm.orders).toEqual([]);
       now = Date.parse("2026-11-17T00:01:00Z");
-      const decision = await engine.evaluate({ deployment: { ...deployment, activatedAtMs: deployment.createdAtMs }, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: false } as never);
+      const decision = await engine.evaluate({ deployment: { ...deployment, activatedAtMs: deployment.createdAtMs }, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: false } as never);
       expect(decision.orders).toMatchObject([{ symbol: "005930", side: "BUY" }]);
       const coverage = new SqliteCorporateActionCoverageStore(database.db, { collectionVersion });
       coverage.addCoverageResult("005930", [2026], [2026], Date.now());
-      await expect(engine.evaluate({ deployment, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: true } as never)).rejects.toMatchObject({
+      await expect(engine.evaluate({ deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: true } as never)).rejects.toMatchObject({
         constructor: TradingDataRequired,
         need: { repairs: [{ kind: "CORPORATE_ACTION", symbol: "005930", year: 2026 }], priceRange: null },
       });
       coverage.addCoverageResult("005930", [2026], [], Date.now());
       database.db.delete(krxDailyBars).where(eq(krxDailyBars.date, "2026-11-16")).run();
-      await expect(engine.evaluate({ deployment: { ...deployment, activatedAtMs: deployment.createdAtMs }, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: false } as never)).rejects.toMatchObject({
+      await expect(engine.evaluate({ deployment: { ...deployment, activatedAtMs: deployment.createdAtMs }, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: false } as never)).rejects.toMatchObject({
         constructor: TradingDataRequired,
-        need: { masterDates: ["2026-11-13"], priceRange: { to: "2026-11-16" }, actions: { symbols: ["005930"] } },
+        need: { masterDates: [], priceRange: { to: "2026-11-16" }, financial: null, actions: null },
       });
     } finally { await engine?.close(); database.close(); rmSync(root, { recursive: true, force: true }); }
   }, 90_000);

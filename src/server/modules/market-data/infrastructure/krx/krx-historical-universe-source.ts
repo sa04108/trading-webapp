@@ -349,11 +349,15 @@ export function createKrxHistoricalUniverseSource(
   }
 
   return {
+    isOfficialTradingDay: (date) => options.tradingCalendar !== undefined &&
+      options.tradingCalendar.classify(date, "KOSPI").state === "OPEN" &&
+      options.tradingCalendar.classify(date, "KOSDAQ").state === "OPEN",
     fetchIssueBaseInfo: (
       market: KrxMarket,
       isoDate: string,
+      requestOptions?: { readonly requireExisting?: boolean },
     ): Promise<readonly KrxIssueBaseInfoRow[]> =>
-      fetchRows(market, isoDate, PATHS[market].base, parseBaseInfoRows),
+      fetchRows(market, isoDate, PATHS[market].base, parseBaseInfoRows, requestOptions?.requireExisting),
     fetchDailyTrades: (
       market: KrxMarket,
       isoDate: string,

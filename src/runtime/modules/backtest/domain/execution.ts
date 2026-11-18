@@ -80,3 +80,16 @@ export function roundToTick(
     direction === "up" ? Math.ceil(ticks - 1e-9) : Math.floor(ticks + 1e-9);
   return rounded * tickSize;
 }
+
+/** 수수료와 호가 반올림으로 감소할 평가액까지 반영해 종목당 상한 안에서 살 수 있는 수량을 구한다. */
+export function weightLimitedBuyQuantity(equity: number, heldValue: number, basePrice: number,
+  fillPrice: number, buyCostFactor: number, weight: number): number {
+  const targetValue = equity * weight;
+  const valuePerShare = basePrice + weight * (fillPrice * buyCostFactor - basePrice);
+  const rawQuantity = (targetValue - heldValue) / valuePerShare;
+  // 정확히 한도인 한 주가 부동소수점 상쇄 오차로 탈락하지 않게 한다.
+  const tolerance = 4 * Number.EPSILON * (
+    (Math.abs(targetValue) + Math.abs(heldValue)) / valuePerShare + Math.abs(rawQuantity)
+  );
+  return Math.max(0, Math.floor(rawQuantity + tolerance));
+}

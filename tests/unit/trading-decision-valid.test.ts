@@ -22,7 +22,7 @@ const runtime = {
 const strategy = { id: "test", version: "1", parameterSchema: z.object({}), dataRequirements: { priceWarmupBars: () => 2 }, initialize: () => ({ seen: 0 }), onBars: (ctx: { tsMs: number; getHistory: (symbol: string) => { tsMs: number }[] }, state: { seen: number }) => { expect(ctx.getHistory("005930").every((bar) => bar.tsMs <= ctx.tsMs)).toBe(true); state.seen++; return { orders: [{ symbol: "005930", side: "BUY", quantity: 1 }] }; } };
 const bundle = { formatVersion: 1, nodeMajor: 24, lifecycleAbi: 1, getStrategy: () => strategy, reconcileState: () => {} };
 const deployment = { strategyId: "test", artifactHash: "a".repeat(64), version: "1", parameters: {}, createdAtMs: ts, activatedAtMs: null, budgetKrw: 100000, randomSeed: 1, universeRule: { stages: [], rebalanceInterval: { unit: "NONE", value: 1 } } };
-const run = (checkpoint: string | null, warmupOnly: boolean, currentDate = date) => calculate({ input: { deployment, portfolio: {}, checkpoint, warmupOnly }, date: currentDate, bundlePath: "" } as never, {} as never, bundle as never, runtime as never);
+const run = (checkpoint: string | null, warmupOnly: boolean, currentDate = date) => calculate({ input: { deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint, warmupOnly }, date: currentDate, bundlePath: "" } as never, {} as never, bundle as never, runtime as never);
 describe("daily decision", () => {
   it("replays only index history available on each bar and requests missing index data", async () => {
     const database = openDatabase(":memory:");
@@ -34,7 +34,7 @@ describe("daily decision", () => {
       const indexStrategy = { ...strategy, dataRequirements: { ...strategy.dataRequirements, marketIndexBars: () => 1 }, onBars: (ctx: { getMarketIndexHistory: () => readonly { close: number }[] }) => { seen.push(ctx.getMarketIndexHistory().map((point) => point.close)); return { orders: [] }; } };
       const indexBundle = { ...bundle, getStrategy: () => indexStrategy };
       const indexRuntime = { ...runtime, symbolMaster: { isRangeCovered: () => true } };
-      const message = { input: { deployment, portfolio: {}, checkpoint: null, warmupOnly: true }, date, bundlePath: "" };
+      const message = { input: { deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint: null, warmupOnly: true }, date, bundlePath: "" };
       await calculate(message as never, database, indexBundle as never, indexRuntime as never);
       expect(seen).toEqual([[100, 101], [100, 101, 102]]);
       database.sqlite.prepare("DELETE FROM benchmark_daily_values WHERE date = ? AND benchmark_id = 'KOSPI'").run(date);
@@ -50,13 +50,48 @@ describe("daily decision", () => {
     bars.push({ ...bars.at(-1)!, tsMs: ts + 86_400_000 });
     try { expect((await run(warm.checkpoint, false, next)).orders).toHaveLength(1); } finally { bars.pop(); }
   });
-  it("refuses missing latest data", async () => { await expect(run(null, true, "2026-11-14")).rejects.toThrow(/일봉/); });
+  it("최근 확정 봉이 빠지면 가격 자료만 수집한다", async () => {
+    await expect(run(null, true, "2026-11-14")).rejects.toMatchObject({
+      message: expect.stringContaining("005930"), need: { priceRange: { to: "2026-11-14" }, financial: null, actions: null },
+    });
+  });
+  it("200봉 미만인 신규 상장주만 매수를 보류하고 보유분은 매도할 수 있다", async () => {
+    const calendar = createOfficialKrxTradingCalendar();
+    const peer = "000660", ipo = "005930";
+    const sessions: number[] = [];
+    for (let day = ts; sessions.length < 201; day -= 86_400_000) {
+      if (calendar.classify(new Date(day).toISOString().slice(0, 10), "KOSPI").state === "OPEN") sessions.unshift(day);
+    }
+    const history = sessions.flatMap((time, i) => (i >= 199 ? [peer, ipo] : [peer])
+      .map(symbol => ({ ...bars[0]!, symbol, tsMs: time })));
+    const entry = { shortCode: ipo, name: "신규상장주", market: "KOSPI", listedDate: "2026-11-12" };
+    const recent = { ...runtime, candles: { getCandlesArray: async ({ toTsMs }: { toTsMs: number }) => history.filter(bar => bar.tsMs <= toTsMs) },
+      actionCoverage: { ...runtime.actionCoverage, getCoveredYears: () => new Map([[peer, years], [ipo, years]]) },
+      resolver: { resolveOrDescribeNeeds: async () => ({ kind: "READY", dataExclusions: [], corporateActionExclusions: [], unionEntries: new Map([[ipo, entry]]),
+        schedule: [{ rebalanceDate: entry.listedDate, members: [peer, ipo].map(symbol => ({ symbol })) }] }) } };
+    const probe = { ...strategy, dataRequirements: { priceWarmupBars: () => 200 },
+      onBars: (ctx: import("../../src/runtime/modules/strategy/domain/strategy.js").StrategyBarContext) => ({ orders: [
+        ...[...ctx.tradableSymbols!].map(symbol => ({ symbol, side: "BUY", quantity: 3 })),
+        ...(ctx.portfolio.positions.has(ipo) ? [{ symbol: ipo, side: "SELL", quantity: 2 }] : []),
+      ] }) };
+    const execute = (day: string, checkpoint: string | null, portfolio = {}) => calculate({ input: {
+      deployment, cashKrw: 100000, portfolio, checkpoint, warmupOnly: checkpoint === null }, date: day, bundlePath: "" } as never,
+      {} as never, { ...bundle, getStrategy: () => probe } as never, recent as never);
+    const warm = await execute(entry.listedDate, null);
+    const next = await execute(date, warm.checkpoint);
+    expect(next.orders).toEqual([{ symbol: peer, side: "BUY", quantity: 3 }]);
+    expect(next.entryHolds).toEqual([{ symbol: ipo, bars: 2, requiredBars: 200 }]);
+    expect((await execute(date, warm.checkpoint, { [ipo]: { quantity: 2, cost: 200, enteredAtMs: sessions[199] } })).orders)
+      .toContainEqual({ symbol: ipo, side: "SELL", quantity: 2 });
+    history.splice(history.findIndex(bar => bar.symbol === ipo), 1);
+    await expect(execute(date, warm.checkpoint)).rejects.toMatchObject({ need: { priceRange: { to: date }, financial: null, actions: null } });
+  });
   it("이미 수집한 자본변동 결손은 해당 종목·연도만 복구 요청하며 같은 봉의 재활성화도 검사한다", async () => {
     const warm = await run(null, true);
     const incomplete = { ...runtime, actionCoverage: { ...runtime.actionCoverage, getGapYears: () => new Map([["005930", [2025, 2026]]]) } };
     for (const checkpoint of [null, warm.checkpoint]) {
       await expect(calculate(
-        { input: { deployment, portfolio: {}, checkpoint, warmupOnly: true }, date, bundlePath: "" } as never,
+        { input: { deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint, warmupOnly: true }, date, bundlePath: "" } as never,
         {} as never, bundle as never, incomplete as never,
       )).rejects.toMatchObject({
         message: expect.stringContaining("005930 2026년 자본변동"),
@@ -71,7 +106,7 @@ describe("daily decision", () => {
       factCoverage: { getCoverageState: () => new Map([["005930", { verifiedYears: [2025, 2026], blockingGapYears: [2026] }]]) },
     };
     await expect(calculate(
-      { input: { deployment, portfolio: {}, checkpoint: null, warmupOnly: true }, date, bundlePath: "" } as never,
+      { input: { deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint: null, warmupOnly: true }, date, bundlePath: "" } as never,
       {} as never, { ...bundle, getStrategy: () => financialStrategy } as never, incomplete as never,
     )).rejects.toMatchObject({ need: { repairs: [
       { kind: "CORPORATE_ACTION", symbol: "005930", year: 2026 },
@@ -85,7 +120,7 @@ describe("daily decision", () => {
       dataExclusions: [{ symbol: "005930", category: "DART_CORPORATE_ACTION", periodKey: "2026년/2026-03-01", reason: "발행주식수 누락" }],
     }) } };
     await expect(calculate(
-      { input: { deployment, portfolio: {}, checkpoint: null, warmupOnly: true }, date, bundlePath: "" } as never,
+      { input: { deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint: null, warmupOnly: true }, date, bundlePath: "" } as never,
       {} as never, bundle as never, incomplete as never,
     )).rejects.toMatchObject({ message: expect.stringContaining("발행주식수 누락"), need: {
       priceRange: null,
@@ -95,17 +130,17 @@ describe("daily decision", () => {
   it("워밍업 구간 중간의 거래 봉이 없으면 데이터 준비를 요구한다", async () => {
     const incomplete = { ...runtime, candles: { getCandlesArray: async () => [bars[0]!, bars[2]!] } };
     await expect(calculate(
-      { input: { deployment, portfolio: {}, checkpoint: null, warmupOnly: true }, date, bundlePath: "" } as never,
+      { input: { deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint: null, warmupOnly: true }, date, bundlePath: "" } as never,
       {} as never, bundle as never, incomplete as never,
     )).rejects.toMatchObject({
       message: expect.stringContaining("준비 구간의 종목 거래 봉이 누락"),
-      need: { priceRange: { to: date }, actions: { symbols: ["005930"] } },
+      need: { priceRange: { to: date }, actions: null, financial: null },
     });
   });
   it("clears suppressed exit intents on missed bars for an actual held position", async () => {
     const actualDeployment = { ...deployment, strategyId: rangeBreakoutStrategy.id, version: rangeBreakoutStrategy.version, budgetKrw: 80, parameters: { lookbackBars: 2, atrPeriod: 2, stopAtrMultiplier: 0.1, trendSmaBars: 0, minAverageTradingValueKrw: 0 } };
     const actualBundle = { ...bundle, getStrategy: () => rangeBreakoutStrategy, reconcileState };
-    const actualRun = (checkpoint: string | null, warmupOnly: boolean, day: string, portfolio: unknown) => calculate({ input: { deployment: actualDeployment, portfolio, checkpoint, warmupOnly }, date: day, bundlePath: "" } as never, {} as never, actualBundle as never, runtime as never);
+    const actualRun = (checkpoint: string | null, warmupOnly: boolean, day: string, portfolio: unknown) => calculate({ input: { deployment: actualDeployment, cashKrw: 0, portfolio, checkpoint, warmupOnly }, date: day, bundlePath: "" } as never, {} as never, actualBundle as never, runtime as never);
     const warm = await actualRun(null, true, date, { "005930": { quantity: 1, cost: 100, enteredAtMs: ts - 1000 } });
     expect(warm.orders).toEqual([]);
     bars.push({ ...bars.at(-1)!, tsMs: ts + 86_400_000, open: 90, high: 95, low: 85, close: 90 });
@@ -126,7 +161,7 @@ describe("daily decision", () => {
     }
     const requested: number[] = [];
     const customRuntime = { ...runtime, candles: { getCandlesArray: async (query: { fromTsMs: number; toTsMs: number }) => { requested.push(query.fromTsMs); return allBars.filter((bar) => bar.tsMs >= query.fromTsMs && bar.tsMs <= query.toTsMs); } } };
-    const execute = (checkpoint: string | null, day: string, warmupOnly: boolean) => calculate({ input: { deployment, portfolio: {}, checkpoint, warmupOnly }, date: day, bundlePath: "" } as never, {} as never, bundle as never, customRuntime as never);
+    const execute = (checkpoint: string | null, day: string, warmupOnly: boolean) => calculate({ input: { deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint, warmupOnly }, date: day, bundlePath: "" } as never, {} as never, bundle as never, customRuntime as never);
     const initial = await execute(null, firstDate, true);
     const resumed = await execute(initial.checkpoint, finalDate, false);
     expect(requested.at(-1)).toBeLessThanOrEqual(Date.parse(`${firstDate}T00:00:00Z`));

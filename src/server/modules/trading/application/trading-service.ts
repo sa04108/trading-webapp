@@ -1,7 +1,11 @@
+import { weightLimitedBuyQuantity } from "../../../../runtime/modules/backtest/domain/execution.js";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
+import { priorVolumeCapacity } from "../../../../runtime/modules/strategy/domain/daily-decision.js";
 import type { AnyTradingStrategy } from "../../../../runtime/modules/strategy/domain/strategy.js";
+import { paperFillPrice, paperTradingCostProfile } from "./paper-trading-cost.js";
+import { getCostProfile, getKrxExecutionRules, getSlippageProfile, sellTaxAmount } from "../../../../runtime/modules/backtest/domain/cost-profiles.js";
 import type { OrderIntent } from "../../../../runtime/modules/backtest/domain/types.js";
 import { backtestJobs } from "../../../../runtime/shared/db/operations-schema.js";
 import { backtestRuns } from "../../../shared/db/backtest-result-schema.js";
@@ -20,15 +24,22 @@ export interface StrategyArtifactStore {
 
 export interface ManagedPosition { quantity: number; cost: number; enteredAtMs: number }
 export type ManagedPortfolio = Record<string, ManagedPosition>;
+interface EntryHold { symbol: string; bars: number; requiredBars: number }
+function entryHoldSummary(holds: readonly EntryHold[] = []): string {
+  if (!holds.length) return "";
+  const shown = holds.slice(0, 5).map(hold => `${hold.symbol} ${hold.bars}/${hold.requiredBars}봉`);
+  return ` · 이력 부족 매수 보류 ${holds.length}종목 (${shown.join(", ")}${holds.length > shown.length ? " 외" : ""})`;
+}
 export interface TradingDecisionEngine {
   /** 장 시작 후 한정된 실행 창만 허용한다. 휴장·미확인 달력에서는 주문하지 않는다. */
   canTrade(now: number): boolean;
   evaluate(input: {
     deployment: TradingDeployment;
     portfolio: ManagedPortfolio;
+    cashKrw: number;
     checkpoint: string | null;
     warmupOnly: boolean;
-  }): Promise<{ checkpoint: string; barTsMs: number; orders: readonly OrderIntent[] }>;
+  }): Promise<{ checkpoint: string; barTsMs: number; orders: readonly OrderIntent[]; entryHolds?: readonly EntryHold[]; priorVolumes?: Record<string, number>; venues?: Record<string, "KOSPI" | "KOSDAQ"> }>;
   close(): Promise<void>;
 }
 
@@ -68,10 +79,29 @@ export class TradingService {
   }) {
     this.db = deps.database.db;
     this.db.insert(tradingControl).values({singleton:1}).onConflictDoNothing().run();
-    if (this.isPaper) this.initializePaper();
+    if (this.isPaper) { this.initializePaper(); this.hydratePaperSource(); }
     else if (this.control().mode === "PAPER") throw new TradingError("모의투자 저장소를 실매매 실행기로 열 수 없습니다.");
   }
   private get isPaper() { return this.deps.broker.mode === "PAPER"; }
+  private hydratePaperSource() {
+    this.deps.database.sqlite.transaction(() => {
+      const row=this.current(); if(!row||row.mode!=="PAPER")return;
+      const setup=tradingSetupSchema.parse(JSON.parse(row.setupJson));
+      if(!setup.sourceJobId||(setup.paperCommissionProfileId!==undefined&&setup.paperSlippageProfileId!==undefined))return;
+      const job=this.db.select().from(backtestJobs).where(eq(backtestJobs.id,setup.sourceJobId)).get();
+      let request:ReturnType<typeof backtestRequestSchema.safeParse>|null=null;
+      try{if(job?.status==="COMPLETED")request=backtestRequestSchema.safeParse(JSON.parse(job.requestJson));}catch{ /* 손상된 원본은 기본 설정을 유지하고 사용자에게 알린다. */ }
+      const execution=request?.success?request.data.execution:null;
+      const profiles=tradingSetupSchema.safeParse({...setup,paperCommissionProfileId:setup.paperCommissionProfileId??execution?.commissionProfileId,paperSlippageProfileId:setup.paperSlippageProfileId??execution?.slippageProfileId});
+      if(execution&&profiles.success&&profiles.data.paperCommissionProfileId&&profiles.data.paperSlippageProfileId){
+        this.db.update(tradingDeployments).set({setupJson:JSON.stringify(profiles.data)}).where(eq(tradingDeployments.id,row.id)).run();
+        return;
+      }
+      const message="원본 백테스트의 체결 비용을 확인할 수 없어 기존 모의투자 기본 비용을 사용합니다.";
+      const prior=this.db.select().from(tradingEvents).where(and(eq(tradingEvents.deploymentId,row.id),eq(tradingEvents.message,message))).get();
+      if(!prior)this.event(message,"system","WARNING",row.id);
+    }).immediate();
+  }
   private initializePaper() {
     this.deps.database.sqlite.transaction(() => {
       if (this.control().mode === "PAPER") return;
@@ -92,6 +122,9 @@ export class TradingService {
   private control() { return this.db.select().from(tradingControl).where(eq(tradingControl.singleton,1)).get()!; }
   private current() { return this.db.select().from(tradingDeployments).where(eq(tradingDeployments.slot,1)).get() ?? null; }
   private portfolio(row: DeploymentRow): ManagedPortfolio { return JSON.parse(row.portfolioJson) as ManagedPortfolio; }
+  private strategyCash(row: DeploymentRow): number {
+    return this.deployment(row).budgetKrw + row.realizedPnl - Object.values(this.portfolio(row)).reduce((sum, position) => sum + position.cost, 0);
+  }
   private event(message: string, actor="system", severity: "INFO"|"WARNING"|"ERROR"="INFO", id=this.current()?.id ?? null) {
     this.db.insert(tradingEvents).values({deploymentId:id,actor,severity,message,createdAtMs:this.now()}).run();
   }
@@ -177,16 +210,19 @@ export class TradingService {
         if (shouldStop()) throw new Error("서버 종료 또는 매매 설정 변경으로 데이터 준비를 중단했습니다.");
         if (need) {
           const key = JSON.stringify(need);
-          if (attempted.has(key)) throw new Error(`수집·재검증 후에도 해결되지 않았습니다. ${attempted.get(key) || cause}`);
+          if (attempted.has(key)) {
+            const details = [cause, attempted.get(key)].filter(Boolean).join(" · ");
+            throw new Error(`수집·재검증 후에도 해결되지 않았습니다. ${details}`);
+          }
           const diagnostics = await this.deps.prepareData!(need, (message) => progress(message), shouldStop);
           attempted.set(key, diagnostics);
         }
         if (shouldStop()) throw new Error("서버 종료 또는 매매 설정 변경으로 데이터 준비를 중단했습니다.");
         progress("매매 데이터 수집 후 전략 입력 검증 중");
         try {
-          await this.deps.engine.evaluate({ deployment: this.deployment(before), portfolio: this.portfolio(before), checkpoint: before.checkpoint, warmupOnly: true });
+          const ready = await this.deps.engine.evaluate({ deployment: this.deployment(before), portfolio: this.portfolio(before), cashKrw: this.strategyCash(before), checkpoint: before.checkpoint, warmupOnly: true });
           if (shouldStop()) throw new Error("서버 종료 또는 매매 설정 변경으로 데이터 준비를 중단했습니다.");
-          progress("매매 데이터 준비 완료 · 자동매매를 켜면 다시 확인 후 시작합니다.", "READY");
+          progress("매매 데이터 준비 완료 · 자동매매를 켜면 다시 확인 후 시작합니다." + entryHoldSummary(ready.entryHolds), "READY");
           return;
         } catch (error) {
           if (!(error instanceof TradingDataRequired)) throw error;
@@ -250,7 +286,8 @@ export class TradingService {
     const request=backtestRequestSchema.parse(JSON.parse(job.requestJson));
     const artifact=this.artifacts().find(a=>a.strategyId===run.strategyId&&a.version===run.strategyVersion&&a.executionVersion===job.runnerVersion);
     if(!artifact)return {setup:null,strategyName:run.strategyId,strategyVersion:run.strategyVersion,error:"이 백테스트를 실행한 버전의 실행 파일이 보관되어 있지 않습니다. 최신 버전으로 임의 대체하지 않습니다. 사용 가능한 버전으로 백테스트한 뒤 가져오세요."};
-    return {strategyName:artifact.name,strategyVersion:artifact.version,error:null,setup:tradingSetupSchema.parse({strategyId:run.strategyId,artifactHash:artifact.artifactHash,parameters:JSON.parse(run.parameterJson),universeRule:request.universeRule,timeframe:"1d",budgetKrw:request.capital.initialCash,maxPositions:request.risk.maxPositions,maxPositionPercent:request.risk.maxPositionWeightPercent??100,dailyLossLimitPercent:3,maxOrderKrw:Math.min(request.capital.initialCash,99_000_000),maxSlippageBps:50,randomSeed:request.randomSeed,sourceJobId:jobId})};
+    if(this.isPaper&&(!["kr-equity-default","zero-cost"].includes(request.execution.commissionProfileId)||!["fixed-5bps","zero-slippage"].includes(request.execution.slippageProfileId)||!getCostProfile(request.execution.commissionProfileId)||!getSlippageProfile(request.execution.slippageProfileId)))return {setup:null,strategyName:artifact.name,strategyVersion:artifact.version,error:"백테스트의 수수료 또는 슬리피지 설정을 모의투자에서 지원하지 않습니다."};
+    return {strategyName:artifact.name,strategyVersion:artifact.version,error:null,setup:tradingSetupSchema.parse({...(this.isPaper?{paperCommissionProfileId:request.execution.commissionProfileId,paperSlippageProfileId:request.execution.slippageProfileId}:{}),strategyId:run.strategyId,artifactHash:artifact.artifactHash,parameters:JSON.parse(run.parameterJson),universeRule:request.universeRule,timeframe:"1d",budgetKrw:request.capital.initialCash,maxPositions:request.risk.maxPositions,maxPositionPercent:request.risk.maxPositionWeightPercent??100,dailyLossLimitPercent:3,maxOrderKrw:this.isPaper?99_000_000:Math.min(request.capital.initialCash,99_000_000),maxSlippageBps:50,randomSeed:request.randomSeed,sourceJobId:jobId})};
   }
   private async validate(input:TradingSetup) {
     const setup=tradingSetupSchema.parse(input);
@@ -268,6 +305,12 @@ export class TradingService {
   }
   async register(input:TradingSetup,expectedRevision:number,actor:string,initialCashKrw?:number) {
     const {setup,artifact}=await this.validate(input);
+    if(this.isPaper&&setup.sourceJobId){
+      const source=await this.source(setup.sourceJobId);
+      if(!source.setup||(setup.paperCommissionProfileId!==undefined&&source.setup.paperCommissionProfileId!==setup.paperCommissionProfileId)||(setup.paperSlippageProfileId!==undefined&&source.setup.paperSlippageProfileId!==setup.paperSlippageProfileId))throw new TradingError(source.error??"백테스트 체결 비용 설정이 원본과 다릅니다.","UNSUPPORTED_EXECUTION",422);
+      setup.paperCommissionProfileId=source.setup.paperCommissionProfileId;
+      setup.paperSlippageProfileId=source.setup.paperSlippageProfileId;
+    }
     this.change(expectedRevision,()=>{
       if(this.current())throw new TradingError("전략은 최대 1개까지 등록할 수 있습니다. 기존 전략을 먼저 제거하세요.");
       if(this.pending().length)throw new TradingError("확인이 끝나지 않은 주문이 있어 새 전략을 등록할 수 없습니다.");
@@ -278,9 +321,13 @@ export class TradingService {
     });return this.snapshot();
   }
   async update(input:TradingSetup,expectedRevision:number,actor:string,initialCashKrw?:number) {
-    const {setup}=await this.validate(input);
+    const current=this.current();
+    const previousSetup=current?this.deployment(current):null;
+    const inherited=this.isPaper&&previousSetup&&input.sourceJobId===previousSetup.sourceJobId?{...input,paperCommissionProfileId:input.paperCommissionProfileId??previousSetup.paperCommissionProfileId,paperSlippageProfileId:input.paperSlippageProfileId??previousSetup.paperSlippageProfileId}:input;
+    const {setup}=await this.validate(inherited);
     this.change(expectedRevision,()=>{
       const row=this.requireInactive();const previous=this.deployment(row);
+      if(previous.sourceJobId!==setup.sourceJobId||previous.paperCommissionProfileId!==setup.paperCommissionProfileId||previous.paperSlippageProfileId!==setup.paperSlippageProfileId)throw new TradingError("백테스트 체결 비용 설정은 변경할 수 없습니다.");
       if(previous.strategyId!==setup.strategyId||previous.artifactHash!==setup.artifactHash)throw new TradingError("전략 교체는 기존 전략 제거 후 등록하고, 버전 변경은 별도 기능을 사용하세요.");
       this.setInitialCash(initialCashKrw,actor);
       this.db.update(tradingDeployments).set({setupJson:JSON.stringify(setup),checkpoint:null,lastDecisionAtMs:null,updatedAtMs:this.now(),returnBase:row.activatedAtMs===null?setup.budgetKrw:previous.budgetKrw===setup.budgetKrw?row.returnBase:null,activity:"설정 변경 · 비활성 유지"}).where(eq(tradingDeployments.id,row.id)).run();
@@ -411,16 +458,20 @@ export class TradingService {
     if(this.pending().length)throw new TradingError("기존 주문을 모두 확인한 후 활성화하세요.");
     const deployment=this.deployment(before);
     let prepared:Awaited<ReturnType<TradingDecisionEngine["evaluate"]>>;
-    try { prepared=await this.deps.engine.evaluate({deployment,portfolio:this.portfolio(before),checkpoint:before.checkpoint,warmupOnly:true}); }
+    try { prepared=await this.deps.engine.evaluate({deployment,portfolio:this.portfolio(before),cashKrw:this.strategyCash(before),checkpoint:before.checkpoint,warmupOnly:true}); }
     catch(error){
       if(error instanceof TradingDataRequired&&this.deps.prepareData&&this.control().revision===expectedRevision&&this.current()?.id===before.id&&this.current()?.status==="INACTIVE")return this.prepareData(expectedRevision,actor,error.need);
       const message=error instanceof Error?error.message:"전략 준비에 실패했습니다.";
-      if(this.control().revision===expectedRevision&&this.current()?.status==="INACTIVE")this.db.update(tradingDeployments).set({lastError:message,activity:"비활성 · 전략 준비 확인 필요"}).where(eq(tradingDeployments.id,before.id)).run();
+      const row = this.current();
+      if(this.control().revision===expectedRevision&&row?.id===before.id&&row.status==="INACTIVE"){
+        this.db.update(tradingDeployments).set({lastError:message,activity:"비활성 · 전략 준비 확인 필요"}).where(eq(tradingDeployments.id,before.id)).run();
+        this.preparation = { deploymentId: before.id, revision: expectedRevision, state: { status: "FAILED", message } };
+      }
       throw new TradingError(message,"STRATEGY_NOT_READY");
     }
     this.change(expectedRevision,()=>{
       const row=this.requireInactive();if(row.id!==before.id)throw new TradingError("등록 전략이 변경되었습니다.");
-      this.db.update(tradingDeployments).set({status:"ACTIVE",checkpoint:prepared.checkpoint,lastDecisionAtMs:prepared.barTsMs,activatedAtMs:row.activatedAtMs??this.now(),updatedAtMs:this.now(),lastError:null,activity:"활성 · 다음 거래일의 유효한 신호를 기다립니다."}).where(eq(tradingDeployments.id,row.id)).run();
+      this.db.update(tradingDeployments).set({status:"ACTIVE",checkpoint:prepared.checkpoint,lastDecisionAtMs:prepared.barTsMs,activatedAtMs:row.activatedAtMs??this.now(),updatedAtMs:this.now(),lastError:null,activity:"활성 · 다음 거래일의 유효한 신호를 기다립니다." + entryHoldSummary(prepared.entryHolds)}).where(eq(tradingDeployments.id,row.id)).run();
       this.event("사용자가 매매 활성화 · 기존 포지션 유지, 새 판단부터 주문 허용",actor);
     });return this.snapshot();
   }
@@ -492,7 +543,7 @@ export class TradingService {
         else {if(delta>current.quantity)throw new TradingError("전략 관리 수량을 초과한 매도 체결입니다.");const cost=current.cost*delta/current.quantity;realized+=deltaAmount-cost;if(current.quantity===delta)delete portfolio[order.symbol];else portfolio[order.symbol]={...current,quantity:current.quantity-delta,cost:current.cost-cost};}
       }
       this.db.update(tradingDeployments).set({portfolioJson:JSON.stringify(portfolio),realizedPnl:realized}).where(eq(tradingDeployments.id,deployment.id)).run();
-      this.saveOrder(fresh,{status:received.status,filledQuantity:received.filledQuantity,averageFillPrice:received.averageFillPrice,error:null});
+      this.saveOrder(fresh,{status:received.status,filledQuantity:received.filledQuantity,averageFillPrice:received.averageFillPrice,error:received.error??null});
       this.db.update(tradingOrders).set({appliedQuantity:received.filledQuantity,appliedAmount:amount,appliedCosts:costs}).where(eq(tradingOrders.id,row.id)).run();
       if(delta>0)this.event(`${order.symbol} ${order.side==="BUY"?"매수":"매도"} ${delta}주 체결`,"system","INFO",row.deploymentId);
     }).immediate();
@@ -605,7 +656,7 @@ export class TradingService {
     if(!this.deps.engine.canTrade(this.now()))return;
     if(this.pending().length)return;
     let result: Awaited<ReturnType<TradingDecisionEngine["evaluate"]>>;
-    try { result=await this.deps.engine.evaluate({deployment,portfolio,checkpoint:current.checkpoint,warmupOnly:false}); }
+    try { result=await this.deps.engine.evaluate({deployment,portfolio,cashKrw:this.strategyCash(current),checkpoint:current.checkpoint,warmupOnly:false}); }
     catch(error) {
       if(error instanceof TradingDataRequired) {
         const handled = this.deps.database.sqlite.transaction(() => {
@@ -627,24 +678,47 @@ export class TradingService {
     const intents=result.orders.filter(o=>!manual.has(o.symbol));
     if(intents.length>400)throw new TradingError("한 번의 판단에서 주문 상한을 초과했습니다.");
     const quotes=intents.length?await this.deps.broker.quotes([...new Set(intents.map(o=>o.symbol))]):[];
-    let cash=Math.min(snapshot.account!.cashBuyingPower,deployment.budgetKrw-snapshot.positions.filter(p=>p.deploymentId===row.id).reduce((n,p)=>n+p.marketValue,0));
+    const strategyRow=this.current()!;
+    const heldValue=snapshot.positions.filter(p=>p.deploymentId===row.id).reduce((n,p)=>n+p.marketValue,0);
+    let equity=this.strategyCash(strategyRow)+heldValue;
+    let cash=Math.min(snapshot.account!.cashBuyingPower,this.strategyCash(strategyRow));
+    const buyCostFactor=1+(this.isPaper?(getCostProfile(deployment.paperCommissionProfileId??paperTradingCostProfile.id)?.buyCommissionRate??paperTradingCostProfile.buyCommissionRate):0.01);
     const planned:TradingOrder[]=[];const symbols=new Set(Object.keys(portfolio));const seen=new Set<string>();
-    for(const intent of [...intents].sort((a,b)=>a.side===b.side?a.symbol.localeCompare(b.symbol):a.side==="SELL"?-1:1)){
+    for(const intent of (this.isPaper?intents:[...intents].sort((a,b)=>a.side===b.side?0:a.side==="SELL"?-1:1))){
       if(seen.has(intent.symbol))throw new TradingError("같은 판단에서 한 종목의 중복 주문이 생성되었습니다.");seen.add(intent.symbol);
       if(!Number.isSafeInteger(intent.quantity)||intent.quantity<=0||!/^\d{6}$/.test(intent.symbol))throw new TradingError("전략이 유효하지 않은 주문을 생성했습니다.");
       const quote=quotes.find(q=>q.symbol===intent.symbol);
       if(!quote||quote.timestampMs>this.now()+5_000||this.now()-quote.timestampMs>30_000||quote.price<=0)throw new TradingError(`시세가 오래되었거나 없습니다: ${intent.symbol}`);
       // 국내 보통주의 보수적 공통 호가 배수. 매수 상한·매도 하한을 벗어나지 않도록 반올림한다.
-      const rawPrice=quote.price*(1+(intent.side==="BUY"?1:-1)*deployment.maxSlippageBps/10_000);
+      const rawPrice=quote.price*(10_000+(intent.side==="BUY"?1:-1)*deployment.maxSlippageBps)/10_000;
       const tick=rawPrice<2_000?1:rawPrice<5_000?5:rawPrice<20_000?10:rawPrice<50_000?50:rawPrice<200_000?100:rawPrice<500_000?500:1_000;
       const price=(intent.side==="BUY"?Math.floor(rawPrice/tick):Math.ceil(rawPrice/tick))*tick;
       let quantity=Math.min(intent.quantity,Math.floor(deployment.maxOrderKrw/price));
-      if(intent.side==="SELL")quantity=Math.min(quantity,portfolio[intent.symbol]?.quantity??0,snapshot.positions.find(p=>p.symbol===intent.symbol)?.quantity??0);
-      else {
+      if(this.isPaper&&result.priorVolumes){
+        const rate=getKrxExecutionRules(deployment.universeRule.markets[0]!).maxVolumeParticipationRate;
+        const volume=result.priorVolumes[intent.symbol];
+        if(rate!==undefined)quantity=Math.min(quantity,priorVolumeCapacity(volume??0,rate));
+      }
+      if(intent.side==="SELL"){
+        quantity=Math.min(quantity,portfolio[intent.symbol]?.quantity??0,snapshot.positions.find(p=>p.symbol===intent.symbol)?.quantity??0);
+        if(this.isPaper&&quantity>0){
+          const fillPrice=paperFillPrice(deployment,"SELL",intent.symbol,quote.price,this.now(),result.venues?.[intent.symbol]);
+          if(fillPrice>=price){
+            const profile=getCostProfile(deployment.paperCommissionProfileId??paperTradingCostProfile.id)!;
+            const gross=quantity*fillPrice;
+            const proceeds=gross*(1-profile.sellCommissionRate)-sellTaxAmount(profile,gross,this.now(),result.venues?.[intent.symbol]);
+            cash+=proceeds;equity+=proceeds-quantity*quote.price;
+          }
+        }
+      } else {
         if(!symbols.has(intent.symbol)&&symbols.size>=deployment.maxPositions)continue;
         const existing=snapshot.positions.find(p=>p.symbol===intent.symbol)?.marketValue??0;
-        quantity=Math.min(quantity,Math.floor(Math.max(0,deployment.budgetKrw*deployment.maxPositionPercent/100-existing)/price),Math.floor(Math.max(0,cash)/(price*1.01)));
-        cash-=quantity*price*1.01;if(quantity>0)symbols.add(intent.symbol);
+        const fillPrice=this.isPaper?paperFillPrice(deployment,"BUY",intent.symbol,quote.price,this.now(),result.venues?.[intent.symbol]):price;
+        const weight=deployment.maxPositionPercent/100;
+        quantity=Math.min(quantity,this.isPaper?weightLimitedBuyQuantity(equity,existing,quote.price,fillPrice,buyCostFactor,weight):Math.floor(Math.max(0,equity*weight-existing)/price),Math.floor(Math.max(0,cash)/(fillPrice*buyCostFactor)));
+        cash-=quantity*fillPrice*buyCostFactor;
+        if(this.isPaper)equity-=quantity*(fillPrice*buyCostFactor-quote.price);
+        if(quantity>0)symbols.add(intent.symbol);
       }
       if(quantity<=0)continue;
       planned.push({id:randomUUID(),deploymentId:row.id,brokerOrderId:null,symbol:intent.symbol,side:intent.side,quantity,price,filledQuantity:0,averageFillPrice:null,status:"CREATED",reason:intent.reason??"전략 신호",error:null,createdAtMs:this.now(),updatedAtMs:this.now()});
@@ -652,7 +726,7 @@ export class TradingService {
     this.deps.database.sqlite.transaction(()=>{
       this.assertSend(row.id,control.revision);
       for(const [index,order] of planned.entries())this.db.insert(tradingOrders).values({id:order.id,deploymentId:row.id,accountId:control.accountId!,decisionKey:`${result.barTsMs}:${index}`,payloadJson:JSON.stringify(order),status:order.status,createdAtMs:order.createdAtMs,updatedAtMs:order.updatedAtMs}).run();
-      this.db.update(tradingDeployments).set({checkpoint:result.checkpoint,lastDecisionAtMs:result.barTsMs,activity:planned.length?`${planned.length}건 주문 계획 저장`:`신호 확인 완료 · 주문 없음`,updatedAtMs:this.now()}).where(eq(tradingDeployments.id,row.id)).run();
+      this.db.update(tradingDeployments).set({checkpoint:result.checkpoint,lastDecisionAtMs:result.barTsMs,activity:(planned.length ? `${planned.length}건 주문 계획 저장` : "신호 확인 완료 · 주문 없음") + entryHoldSummary(result.entryHolds),updatedAtMs:this.now()}).where(eq(tradingDeployments.id,row.id)).run();
     }).immediate();
     for(const order of planned){
       const stored=this.db.select().from(tradingOrders).where(eq(tradingOrders.id,order.id)).get()!;
@@ -661,7 +735,7 @@ export class TradingService {
         await this.refresh();
         const quotes=await this.deps.broker.quotes([order.symbol]);const quote=quotes.find(q=>q.symbol===order.symbol);
         const sellable=order.side==="SELL"?await this.deps.broker.sellableQuantity?.(control.accountId!,order.symbol):undefined;
-        const guard=()=>{
+        const guard=(execution?:{price:number;quotePrice:number})=>{
           this.assertSend(row.id,control.revision);
           const currentSnapshot=this.snapshot();const observed=this.control().syncedAtMs;
           if(!observed||this.now()-observed>SYNC_MAX_AGE_MS||!currentSnapshot.account||!quote||quote.timestampMs>this.now()+5000||this.now()-quote.timestampMs>30_000)throw new TradingError("주문 직전 잔고·시세가 최신 상태가 아닙니다.");
@@ -670,21 +744,27 @@ export class TradingService {
           const pendingBuys=this.pending(row.id).filter(p=>p.id!==order.id&&p.status!=="CREATED").map(p=>JSON.parse(p.payloadJson) as TradingOrder).filter(p=>p.side==="BUY");
           const pendingValue=pendingBuys.reduce((n,p)=>n+(p.quantity-p.filledQuantity)*p.price,0);
           const heldValue=currentSnapshot.positions.filter(p=>p.deploymentId===row.id).reduce((n,p)=>n+p.marketValue,0);
-          const value=order.quantity*order.price;
+          const strategyCash=this.strategyCash(this.current()!);
+          const equity=strategyCash+heldValue;
+          const modelQuote=execution?.quotePrice??quote.price;
+          const modelPrice=this.isPaper?(execution?.price??paperFillPrice(deployment,order.side,order.symbol,modelQuote,this.now(),result.venues?.[order.symbol])):order.price;
+          const value=order.quantity*modelPrice;
           if(order.side==="BUY"){
+            if(!holding&&currentSnapshot.positions.filter(p=>p.deploymentId===row.id).length>=deployment.maxPositions)throw new TradingError("주문 직전 보유 종목 한도가 변경되었습니다.");
             const pendingSymbolValue=pendingBuys.filter(p=>p.symbol===order.symbol).reduce((n,p)=>n+(p.quantity-p.filledQuantity)*p.price,0);
-            if(value*1.01>currentSnapshot.account.cashBuyingPower||heldValue+pendingValue+value>deployment.budgetKrw||(holding?.marketValue??0)+pendingSymbolValue+value>deployment.budgetKrw*deployment.maxPositionPercent/100||order.price>quote.price*(1+deployment.maxSlippageBps/10_000))throw new TradingError("주문 직전 매수 가능 금액·보유 한도·가격 조건이 변경되었습니다.");
-          }else if(!holding||order.quantity>holding.quantity||order.quantity>(sellable??holding.availableQuantity??0)||order.price<quote.price*(1-deployment.maxSlippageBps/10_000))throw new TradingError("주문 직전 매도 가능 수량·가격 조건이 변경되었습니다.");
+            const weightExceeded=this.isPaper?order.quantity>weightLimitedBuyQuantity(equity,(holding?.quantity??0)*modelQuote,modelQuote,modelPrice,buyCostFactor,deployment.maxPositionPercent/100):(holding?.marketValue??0)+pendingSymbolValue+value>equity*deployment.maxPositionPercent/100;
+            if(value*buyCostFactor>currentSnapshot.account.cashBuyingPower||pendingValue*buyCostFactor+value*buyCostFactor>strategyCash||weightExceeded||order.price*10_000>modelQuote*(10_000+deployment.maxSlippageBps))throw new TradingError("주문 직전 매수 가능 금액·보유 한도·가격 조건이 변경되었습니다.");
+          }else if(!holding||order.quantity>holding.quantity||order.quantity>(sellable??holding.availableQuantity??0)||order.price*10_000<quote.price*(10_000-deployment.maxSlippageBps))throw new TradingError("주문 직전 매도 가능 수량·가격 조건이 변경되었습니다.");
           const liveDay=this.current()?.dailyBaseJson;
           if(liveDay&&currentSnapshot.performance){const baseline=JSON.parse(liveDay) as {date:string;pnl:number};if(baseline.date===kstDateOf(this.now())&&(currentSnapshot.performance.totalPnl-baseline.pnl)/deployment.budgetKrw*100<=-deployment.dailyLossLimitPercent)throw new TradingError("일일 손실 한도에 도달했습니다.","DAILY_LOSS_LIMIT");}
         };
         await this.withPaperLedger(async()=>{
           guard();this.saveOrder(stored,{status:"SENDING"});
           try {
-            const result=await this.deps.broker.place(control.accountId!,{clientOrderId:order.id,symbol:order.symbol,side:order.side,quantity:order.quantity,price:order.price},()=>{requestStarted=false;guard();requestStarted=true;});
+            const placed=await this.deps.broker.place(control.accountId!,{clientOrderId:order.id,symbol:order.symbol,side:order.side,quantity:order.quantity,price:order.price,...(this.isPaper&&result.venues?.[order.symbol]?{venue:result.venues[order.symbol]}:{})},(execution)=>{requestStarted=false;guard(execution);requestStarted=true;});
             this.deps.database.sqlite.transaction(()=>{
               const latest=this.db.select().from(tradingOrders).where(eq(tradingOrders.id,stored.id)).get()!;
-              if(!["FILLED","REJECTED","CANCELLED"].includes(latest.status))this.saveOrder(latest,{brokerOrderId:result.orderId,status:"OPEN"});
+              if(!["FILLED","REJECTED","CANCELLED"].includes(latest.status))this.saveOrder(latest,{brokerOrderId:placed.orderId,status:"OPEN"});
             }).immediate();
           } catch(error) {
             if(this.isPaper&&error instanceof BrokerRequestError&&!error.uncertain)this.saveOrder(stored,{status:"REJECTED",error:error.message});

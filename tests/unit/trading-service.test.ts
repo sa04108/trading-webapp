@@ -96,11 +96,15 @@ describe("모의투자 실행 경계", () => {
     await vi.waitFor(() => expect(f.service.snapshot().dataPreparation?.status).toBe("FAILED"));
     expect(f.prepareData).toHaveBeenCalledTimes(1);
     expect(f.service.snapshot()).toMatchObject({ deployment: { status: "INACTIVE", lastError: expect.stringContaining("005930 2025년 자본변동: 직전 발행주식수 앵커가 없습니다.") }, orders: [] });
+    expect(f.service.snapshot().deployment?.lastError).toContain("005930 2025년 자본변동 결손");
     vi.mocked(f.engine.evaluate).mockResolvedValue({ checkpoint: "checked", barTsMs: 1, orders: [] });
     f.service.prepareData(f.service.snapshot().revision, "user");
     await vi.waitFor(() => expect(f.service.snapshot().dataPreparation?.status).toBe("READY"));
     expect(f.service.snapshot().deployment?.lastError).toBeNull();
     expect(f.service.snapshot().deployment?.status).toBe("INACTIVE");
+    vi.mocked(f.engine.evaluate).mockRejectedValueOnce(new Error("상장 후 일봉이 200개에 미달합니다."));
+    await expect(f.service.activate(f.service.snapshot().revision, "user")).rejects.toMatchObject({ code: "STRATEGY_NOT_READY" });
+    expect(f.service.snapshot()).toMatchObject({ dataPreparation: { status: "FAILED", message: "상장 후 일봉이 200개에 미달합니다." }, deployment: { status: "INACTIVE" }, orders: [] });
   });
   it("복구 중 설정 변경은 이전 작업을 중단하고 늦은 진행·완료를 새 설정에 반영하지 않는다", async () => {
     const f = fixture(true); await f.service.tick();
@@ -164,6 +168,102 @@ describe("모의투자 실행 경계", () => {
     f.service.prepareData(f.service.snapshot().revision, "user");
     await vi.waitFor(() => expect(f.service.snapshot().dataPreparation?.status).toBe("READY"));
     expect(f.service.snapshot().orders).toEqual([]);
+  });
+  it("모의 매수 수량은 실제 수수료만 반영하여 계획하고 체결한다", async () => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register({ ...setup, maxOrderKrw: 1_000_000 }, f.service.snapshot().revision, "user", 1_000_000);
+    await f.service.activate(f.service.snapshot().revision, "user");
+    vi.mocked(f.engine.evaluate).mockResolvedValueOnce({ checkpoint: "buy", barTsMs: 2, orders: [{ symbol: "005930", side: "BUY", quantity: 2_000 }] });
+    await f.service.tick(); await f.service.refresh();
+    expect(f.service.snapshot().orders).toEqual([expect.objectContaining({ symbol: "005930", quantity: 999, filledQuantity: 999, status: "FILLED" })]);
+    expect(f.service.snapshot().account?.cashBuyingPower).toBeCloseTo(850.15);
+  });
+  it("모의 매수 자금이 부족하면 전략이 정한 종목 순서를 유지한다", async () => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register({ ...setup, budgetKrw: 100_000 }, f.service.snapshot().revision, "user", 100_000);
+    await f.service.activate(f.service.snapshot().revision, "user");
+    vi.mocked(f.engine.evaluate).mockResolvedValueOnce({ checkpoint: "priority", barTsMs: 2, orders: [{ symbol: "005930", side: "BUY", quantity: 60 }, { symbol: "000660", side: "BUY", quantity: 60 }] });
+    await f.service.tick(); await f.service.refresh();
+    expect(f.service.snapshot().orders).toEqual(expect.arrayContaining([expect.objectContaining({ symbol: "005930", quantity: 60, filledQuantity: 60, status: "FILLED" }), expect.objectContaining({ symbol: "000660", quantity: 39, filledQuantity: 39, status: "FILLED" })]));
+    expect(f.service.snapshot().account?.cashBuyingPower).toBeCloseTo(985.15);
+  });
+  it("모의 매수는 지정가 상한이 아닌 실제 예상 체결가로 자금을 계산한다", async () => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register({ ...setup, budgetKrw: 10_000, maxSlippageBps: 50, paperCommissionProfileId: "zero-cost", paperSlippageProfileId: "zero-slippage" }, f.service.snapshot().revision, "user", 10_000);
+    await f.service.activate(f.service.snapshot().revision, "user");
+    vi.mocked(f.engine.evaluate).mockResolvedValueOnce({ checkpoint: "limit", barTsMs: 2, orders: [{ symbol: "005930", side: "BUY", quantity: 10 }] });
+    await f.service.tick(); await f.service.refresh();
+    expect(f.service.snapshot().orders).toEqual([expect.objectContaining({ quantity: 10, price: 1005, averageFillPrice: 1000, filledQuantity: 10, status: "FILLED" })]);
+    expect(f.service.snapshot().account?.cashBuyingPower).toBe(0);
+  });
+  it("모의 매도 체결 후 현금과 보유 한도를 확인해 같은 판단의 매수를 진행한다", async () => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register({ ...setup, budgetKrw: 10_000, maxPositions: 2, paperCommissionProfileId: "zero-cost", paperSlippageProfileId: "zero-slippage" }, f.service.snapshot().revision, "user", 10_000);
+    await f.service.activate(f.service.snapshot().revision, "user");
+    await f.service.tick(); await f.service.refresh();
+    vi.mocked(f.engine.evaluate).mockResolvedValueOnce({ checkpoint: "rotate", barTsMs: 3, orders: [{ symbol: "005930", side: "SELL", quantity: 10 }, { symbol: "000660", side: "BUY", quantity: 10 }] });
+    await f.service.tick(); await f.service.refresh();
+    expect(f.service.snapshot().positions).toEqual([expect.objectContaining({ symbol: "000660", quantity: 10 })]);
+    expect(f.service.snapshot().orders).toEqual(expect.arrayContaining([expect.objectContaining({ symbol: "005930", side: "SELL", filledQuantity: 10, status: "FILLED" }), expect.objectContaining({ symbol: "000660", side: "BUY", filledQuantity: 10, status: "FILLED" })]));
+  });
+  it("예상 매도가 거절되면 매수에 예상 대금을 사용할 수 없다", async () => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register({ ...setup, budgetKrw: 10_000, maxPositions: 2, paperCommissionProfileId: "zero-cost", paperSlippageProfileId: "zero-slippage" }, f.service.snapshot().revision, "user", 10_000);
+    await f.service.activate(f.service.snapshot().revision, "user");
+    await f.service.tick(); await f.service.refresh();
+    let calls = 0;
+    vi.mocked(f.engine.evaluate).mockImplementationOnce(async () => {
+      f.broker.quotes.mockImplementation(async symbols => { calls++; return symbols.map(symbol => ({ symbol, price: calls === 5 && symbol === "005930" ? 900 : 1000, timestampMs: f.now() })); });
+      return { checkpoint: "rotate", barTsMs: 3, orders: [{ symbol: "005930", side: "SELL", quantity: 10 }, { symbol: "000660", side: "BUY", quantity: 10 }] };
+    });
+    await f.service.tick(); await f.service.refresh();
+    expect(f.service.snapshot().positions).toEqual([expect.objectContaining({ symbol: "005930", quantity: 10 })]);
+    expect(f.service.snapshot().orders).toEqual(expect.arrayContaining([expect.objectContaining({ symbol: "005930", side: "SELL", filledQuantity: 0, status: "REJECTED" }), expect.objectContaining({ symbol: "000660", side: "BUY", filledQuantity: 0, status: "REJECTED" })]));
+    expect(f.service.snapshot().account?.cashBuyingPower).toBe(0);
+  });
+  it.each([[1, "SELL"], [2, "BUY"]] as const)("모의 판단 시 보유 한도 %i와 주문 순서 %s를 지킨다", async (maxPositions, firstSide) => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register({ ...setup, budgetKrw: 10_000, maxPositions, paperCommissionProfileId: "zero-cost", paperSlippageProfileId: "zero-slippage" }, f.service.snapshot().revision, "user", 10_000);
+    await f.service.activate(f.service.snapshot().revision, "user");
+    await f.service.tick(); await f.service.refresh();
+    const sell = { symbol: "005930", side: "SELL" as const, quantity: 10 };
+    const buy = { symbol: "000660", side: "BUY" as const, quantity: 10 };
+    vi.mocked(f.engine.evaluate).mockResolvedValueOnce({ checkpoint: "rotate", barTsMs: 3, orders: firstSide === "SELL" ? [sell, buy] : [buy, sell] });
+    await f.service.tick(); await f.service.refresh();
+    expect(f.service.snapshot().positions).toEqual([]);
+    expect(f.service.snapshot().orders.filter(order => order.symbol === "000660")).toEqual([]);
+    expect(f.service.snapshot().account?.cashBuyingPower).toBe(10_000);
+  });
+  it("호가 단위로 예상 체결가가 지정가를 벗어나면 이유를 주문에 남긴다", async () => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register({ ...setup, paperSlippageProfileId: "fixed-5bps" }, f.service.snapshot().revision, "user");
+    await f.service.activate(f.service.snapshot().revision, "user");
+    await f.service.tick(); await f.service.refresh();
+    expect(f.service.snapshot().orders).toEqual([expect.objectContaining({ status: "REJECTED", filledQuantity: 0, error: expect.stringContaining("지정가") })]);
+  });
+  it("모의 체결은 직전 봉 거래량의 10%를 넘지 않는다", async () => {
+    const f = fixture(true); await paperActive(f);
+    vi.mocked(f.engine.evaluate).mockResolvedValueOnce({ checkpoint: "volume", barTsMs: 2, orders: [{ symbol: "005930", side: "BUY", quantity: 50 }], priorVolumes: { "005930": 127 } });
+    await f.service.tick(); await f.service.refresh();
+    expect(f.service.snapshot().orders).toEqual([expect.objectContaining({ quantity: 12, filledQuantity: 12, status: "FILLED" })]);
+  });
+  it("모의 체결은 저장된 무비용 설정을 사용한다", async () => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register({ ...setup, maxOrderKrw: 1_000_000, paperCommissionProfileId: "zero-cost", paperSlippageProfileId: "zero-slippage" }, f.service.snapshot().revision, "user", 1_000_000);
+    await f.service.activate(f.service.snapshot().revision, "user");
+    vi.mocked(f.engine.evaluate).mockResolvedValueOnce({ checkpoint: "zero", barTsMs: 2, orders: [{ symbol: "005930", side: "BUY", quantity: 1_000 }] });
+    await f.service.tick(); await f.service.refresh();
+    expect(f.service.snapshot().orders).toEqual([expect.objectContaining({ quantity: 1_000, filledQuantity: 1_000, averageFillPrice: 1_000, status: "FILLED" })]);
+    expect(f.service.snapshot().account?.cashBuyingPower).toBe(0);
+  });
+  it("모의 체결은 관측 시세에 저장된 슬리피지를 적용하고 지정가를 지킨다", async () => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register({ ...setup, maxSlippageBps: 50, paperSlippageProfileId: "fixed-5bps" }, f.service.snapshot().revision, "user");
+    await f.service.activate(f.service.snapshot().revision, "user");
+    await f.service.tick(); await f.service.refresh();
+    expect(f.service.snapshot().orders).toEqual([expect.objectContaining({ quantity: 10, averageFillPrice: 1001, status: "FILLED" })]);
+    expect(f.service.snapshot().orders[0]!.price).toBeGreaterThanOrEqual(1001);
+    expect(f.service.snapshot().account?.cashBuyingPower).toBeCloseTo(100_000_000 - 10_010 - 1.5015);
   });
   it("초기 자금을 설정과 함께 저장하고 재조회·다른 설정 변경에도 유지한다", async () => {
     const f=fixture(true);await f.service.tick();
@@ -318,13 +418,13 @@ describe("모의투자 실행 경계", () => {
 });
 
 describe("실매매 전략 생명주기", () => {
-  it.each([undefined, 12.5])("백테스트 비중 %s를 실매매 설정으로 가져오고 미설정은 100%%로 유지한다", async (cap) => {
-    const f = fixture();
+  it.each([[false, undefined], [false, 12.5], [true, 12.5]] as const)("백테스트 비중과 체결 설정을 가져온다 (모의 %s, 비중 %s)", async (paper, cap) => {
+    const f = fixture(paper);
     const request = {
       strategyId: "alpha", parameters: {}, universeRule: setup.universeRule,
       period: { from: "2026-01-01", to: "2026-12-31" },
       capital: { initialCash: setup.budgetKrw, currency: "KRW" },
-      execution: { fillTiming: "NEXT_BAR_OPEN", commissionProfileId: "kr-equity-default", slippageProfileId: "fixed-5bps" },
+      execution: { fillTiming: "NEXT_BAR_OPEN", commissionProfileId: paper ? "zero-cost" : "kr-equity-default", slippageProfileId: "fixed-5bps" },
       risk: { maxPositions: 10, maxPositionWeightPercent: cap }, randomSeed: 42,
     };
     f.database.db.insert(backtestJobs).values({
@@ -338,7 +438,22 @@ describe("실매매 전략 생명주기", () => {
       universeHash: "test", universeJson: "[]", engineVersion: "1", executionVersion: "1",
       feeModelVersion: "1", slippageModelVersion: "1", randomSeed: 42, gitCommitSha: "test", startedAtMs: 1,
     }).run();
-    expect((await f.service.source("source")).setup?.maxPositionPercent).toBe(cap ?? 100);
+    const source = await f.service.source("source");
+    expect(source.setup?.maxPositionPercent).toBe(cap ?? 100);
+    if (paper) {
+      expect(source.setup).toMatchObject({ paperCommissionProfileId: "zero-cost", paperSlippageProfileId: "fixed-5bps" });
+      await f.service.tick();
+      await expect(f.service.register({ ...source.setup!, paperCommissionProfileId: "kr-equity-default" }, f.service.snapshot().revision, "user")).rejects.toThrow(/원본/);
+      const {paperCommissionProfileId: _commission, paperSlippageProfileId: _slippage, ...legacy}=source.setup!;
+      await f.service.register(legacy, f.service.snapshot().revision, "user");
+      await f.service.update(legacy, f.service.snapshot().revision, "user");
+      await expect(f.service.update({ ...source.setup!, paperSlippageProfileId: "zero-slippage" }, f.service.snapshot().revision, "user")).rejects.toThrow(/변경할 수 없습니다/);
+      f.database.sqlite.prepare("UPDATE trading_deployments SET setup_json = ? WHERE slot = 1").run(JSON.stringify(legacy));
+      const reopened = new TradingService({ database: f.database, broker: createPaperTradingBroker({ database: f.database, marketData: f.broker, now: f.now }), artifacts: f.artifacts, engine: f.engine, now: f.now });
+      cleanup.unshift(() => reopened.close());
+      expect(reopened.snapshot().deployment).toMatchObject({ paperCommissionProfileId: "zero-cost", paperSlippageProfileId: "fixed-5bps" });
+      expect(JSON.parse((f.database.sqlite.prepare("SELECT setup_json FROM trading_deployments WHERE slot = 1").get() as {setup_json:string}).setup_json)).toMatchObject({ paperCommissionProfileId: "zero-cost", paperSlippageProfileId: "fixed-5bps" });
+    }
   });
 
   it("동시 등록은 단일 슬롯과 리비전을 지키고 고정 버전은 최신 변경 후에도 유지된다", async () => {
@@ -363,6 +478,28 @@ describe("실매매 전략 생명주기", () => {
     expect(f.service.snapshot().deployment?.artifactHash).toBe(oldHash);
     await f.service.tick();
     expect(f.engine.evaluate).toHaveBeenLastCalledWith(expect.objectContaining({ deployment: expect.objectContaining({ artifactHash: oldHash }), warmupOnly: false }));
+  });
+  it.each([[200_000, 1_188], [-200_000, 792]])("실현 손익 %i원을 전략 현금과 주문 수량에 반영한다", async (pnl, quantity) => {
+    const f = fixture();
+    f.broker.buyingPower.mockResolvedValue(2_000_000);
+    await active(f, { ...setup, maxOrderKrw: 2_000_000 });
+    f.database.sqlite.prepare("UPDATE trading_deployments SET realized_pnl = ?").run(pnl);
+    vi.mocked(f.engine.evaluate).mockResolvedValueOnce({ checkpoint: "profit", barTsMs: 2, orders: [{ symbol: "005930", side: "BUY", quantity: 2_000 }] });
+    await f.service.tick();
+    expect(f.engine.evaluate).toHaveBeenLastCalledWith(expect.objectContaining({ cashKrw: 1_000_000 + pnl, warmupOnly: false }));
+    expect(f.broker.place).toHaveBeenCalledWith("account", expect.objectContaining({ quantity, price: 1_000 }), expect.any(Function));
+  });
+  it("기존 보유 원가와 이미 반영한 수수료를 전략 현금에서 각각 한 번 차감한다", async () => {
+    const f = fixture();
+    f.broker.buyingPower.mockResolvedValue(2_000_000);
+    await active(f, { ...setup, maxOrderKrw: 2_000_000 });
+    f.database.sqlite.prepare("UPDATE trading_deployments SET realized_pnl = ?, portfolio_json = ?").run(-100, JSON.stringify({ "005930": { quantity: 100, cost: 80_000, enteredAtMs: 1 } }));
+    f.setHoldings([{ ...holding(100), averagePrice: 800, unrealizedPnl: 20_000 }]);
+    await f.service.refresh();
+    vi.mocked(f.engine.evaluate).mockResolvedValueOnce({ checkpoint: "holding", barTsMs: 2, orders: [{ symbol: "005930", side: "BUY", quantity: 2_000 }] });
+    await f.service.tick();
+    expect(f.engine.evaluate).toHaveBeenLastCalledWith(expect.objectContaining({ cashKrw: 919_900 }));
+    expect(f.broker.place).toHaveBeenCalledWith("account", expect.objectContaining({ quantity: 910, price: 1_000 }), expect.any(Function));
   });
   it("부분 체결 누계를 한 번만 반영하고 중지 후 잔량 취소·수동 보유를 유지한다", async () => {
     const f = fixture(); await active(f); await f.service.tick();
