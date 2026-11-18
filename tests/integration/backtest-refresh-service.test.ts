@@ -54,7 +54,7 @@ describe('영속 데이터 업데이트 작업', () => {
   it('요청 번호를 중복 제거하고 소유자별로 격리하며 충돌을 거절한다', () => {
     const job = service.create('alice', 'request', source, clone);
     expect(service.create('alice', 'request', source, clone).id).toBe(job.id);
-    expect(() => service.create('alice', 'request', source, { kind: 'RANDOM_SEEDS', count: 3 })).toThrow();
+    expect(() => service.create('alice', 'request', source, period)).toThrow('다른 작업');
     expect(() => service.get('bob', job.id)).toThrow();
     expect(() => service.cancel('bob', job.id)).toThrow();
     expect(service.create('bob', 'request', source, clone).id).not.toBe(job.id);
@@ -72,6 +72,35 @@ describe('영속 데이터 업데이트 작업', () => {
     expect(deps.buildSubmission).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ preparationJobId: 'fresh-prep' }));
     expect(startCount).toBe(1);
     expect(db.sqlite.prepare('SELECT preparation_job_id FROM backtest_jobs WHERE id=?').get(source)).toEqual({ preparation_job_id: 'original-prep' });
+  });
+
+  it('이전에 접수한 난수 작업은 저장된 요청으로 재개하고 완료 알림을 남긴다', async () => {
+    const job = service.create('alice', 'legacy-request', source, clone);
+    const action = { kind: 'RANDOM_SEEDS', count: 3 };
+    db.sqlite.prepare('UPDATE backtest_refresh_jobs SET action_json=? WHERE id=?').run(JSON.stringify(action), job.id);
+    await service.stop();
+    const resumed = makeService();
+    await resumed.pump();
+    expect(resumed.get('alice', job.id)).toMatchObject({ status: 'PREPARING', action });
+    prepStatus = 'COMPLETED';
+    await resumed.pump();
+    await resumed.pump();
+    expect(resumed.get('alice', job.id)).toMatchObject({ status: 'COMPLETED', action, resultHref: '/result' });
+    expect(deps.buildSubmission).toHaveBeenCalledTimes(1);
+    expect(deps.onFinished).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: job.id, status: 'COMPLETED', action }));
+  });
+
+  it('종료된 이전 난수 작업을 재시도로 새로 생성할 수 없다', () => {
+    for (const status of ['FAILED', 'CANCELLED']) {
+      const job = service.create('alice', `legacy-${status}`, source, clone);
+      db.sqlite.prepare('UPDATE backtest_refresh_jobs SET action_json=?,status=? WHERE id=?')
+        .run(JSON.stringify({ kind: 'RANDOM_SEEDS', count: 3 }), status, job.id);
+      expect(service.get('alice', job.id)).toMatchObject({ status, action: { kind: 'RANDOM_SEEDS', count: 3 } });
+      expect(() => service.retry('alice', job.id)).toThrow(expect.objectContaining({ statusCode: 409, message: expect.stringContaining('설정 탐색') }));
+      expect(() => service.create('alice', `legacy-${status}`, source, clone)).toThrow('다른 작업');
+    }
+    expect(db.sqlite.prepare('SELECT count(*) AS count FROM backtest_refresh_jobs').get()).toEqual({ count: 2 });
+    expect(deps.buildSubmission).not.toHaveBeenCalled();
   });
 
   it('기존 최적화 홀드아웃 요청은 새 설정으로 재전송해도 같은 작업을 이어간다', async () => {
@@ -214,7 +243,7 @@ describe('영속 데이터 업데이트 작업', () => {
   });
 
   it('실행 기준 변경은 실패와 알림으로 끝내고 재시도는 원래 설정을 한 번만 복원한다', async () => {
-    const action = { kind: 'RANDOM_SEEDS', count: 7 } as const;
+    const action = period;
     const job = service.create('alice', 'request', source, action);
     identity = 'v2'; await service.pump();
     expect(service.get('alice', job.id)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('변경') });

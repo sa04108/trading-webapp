@@ -1,6 +1,7 @@
 import { UNFILTERED_RANK_CONTROLS } from '../helpers/rank-controls.js';
 import { UNFILTERED_BREAKOUT_CONTROLS } from '../helpers/swing-controls.js';
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
+import { strategySourceHash } from '../../src/runtime/modules/strategy/application/strategy-source-hash.js';
 import { randomUUID } from 'node:crypto';
 import { readBacktestJobs } from '../helpers/backtest-jobs.js';
 import { and, desc, eq, gte, lte } from 'drizzle-orm';
@@ -146,6 +147,18 @@ function buildRequest(): BacktestRequest {
     risk: { maxPositions: 5 },
     randomSeed: 42,
   };
+}
+
+function createLegacySeedBatch(ctx: TestApp, sourceId: string, count: number) {
+  const source = ctx.container.jobQueue.getJob(sourceId)!;
+  return ctx.container.seedCloneBatchService.create(sourceId, count, {
+    preparationJobId: source.preparationJobId,
+    request: JSON.parse(source.requestJson),
+    schedule: JSON.parse(source.universeScheduleJson!),
+    universe: { entries: JSON.parse(source.universeJson!), hash: source.universeHash! },
+    provenancePin: JSON.parse(source.provenancePinJson!),
+    warnings: source.submitWarningsJson ? JSON.parse(source.submitWarningsJson) : [],
+  });
 }
 
 async function waitFor(condition: () => boolean, timeoutMs: number): Promise<void> {
@@ -1028,12 +1041,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         cookies: { session: cookie },
         payload: buildRequest(),
       }),
-      await ctx.app.inject({
-        method: 'POST',
-        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-        cookies: { session: cookie },
-        payload: { count: 2 },
-      }),
     ];
 
     for (const response of attempts) {
@@ -1094,12 +1101,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         url: `/api/v1/backtests/${sourceId}/clone-configured`,
         cookies: { session: cookie },
         payload: buildRequest(),
-      }),
-      await ctx.app.inject({
-        method: 'POST',
-        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-        cookies: { session: cookie },
-        payload: { count: 2 },
       }),
     ];
 
@@ -1260,7 +1261,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     'new',
     'clone',
     'clone-configured',
-    'clone-random-seeds',
   ] as const) {
     it(`${route} 경로는 준비 확인 직후 재무 coverage가 사라져도 생성하지 않는다`, async ({ scenario }) => {
     const { ctx, cookie } = scenario;
@@ -1318,9 +1318,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       ? { ...valueRequest, randomSeed: 99 }
       : route === 'clone-configured'
         ? { ...valueRequest, randomSeed: 99 }
-        : route === 'clone-random-seeds'
-          ? { count: 2 }
-          : undefined;
+        : undefined;
     const rejected = await ctx.app.inject({
       method: 'POST',
       url,
@@ -1340,7 +1338,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     'new',
     'clone',
     'clone-configured',
-    'clone-random-seeds',
   ] as const) {
     it(`${route} 경로는 검증 직후 실행 봉이 사라지면 500 대신 재준비 409를 반환한다`, async ({ scenario }) => {
     const { ctx, cookie } = scenario;
@@ -1422,9 +1419,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       ? { ...valueRequest, randomSeed: 99 }
       : route === 'clone-configured'
         ? { ...valueRequest, randomSeed: 99 }
-        : route === 'clone-random-seeds'
-          ? { count: 2 }
-          : undefined;
+        : undefined;
     const rejected = await ctx.app.inject({
       method: 'POST',
       url,
@@ -1691,7 +1686,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(changedPeriod.json().error).toBe('PREVIEW_REQUIRED');
   });
 
-  it('원본 재현성 pin이 없거나 손상되면 미리보기와 새 난수 복제를 강제한다', async ({ scenario }) => {
+  it('원본 재현성 pin이 없거나 손상되면 설정 변경 복제에 새 미리보기를 요구한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const pinPatches: Array<Partial<typeof backtestJobs.$inferInsert>> = [
@@ -1724,14 +1719,14 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       expect(draft.statusCode).toBe(200);
       expect(draft.json().reusablePreview).toBeNull();
 
-      const randomSeeds = await ctx.app.inject({
+      const cloned = await ctx.app.inject({
         method: 'POST',
-        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+        url: `/api/v1/backtests/${sourceId}/clone-configured`,
         cookies: { session: cookie },
-        payload: { count: 2 },
+        payload: buildRequest(),
       });
-      expect(randomSeeds.statusCode).toBe(409);
-      expect(randomSeeds.json().error).toBe('PREVIEW_REQUIRED');
+      expect(cloned.statusCode).toBe(409);
+      expect(cloned.json().error).toBe('PREVIEW_REQUIRED');
     }
 
     expect(ctx.container.seedCloneBatchService.list()).toEqual([]);
@@ -1749,26 +1744,43 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       const source = ctx.container.jobQueue.getJob(sourceId)!;
       ctx.container.database.sqlite.prepare("UPDATE backtest_preparation_jobs SET request_hash='previous-preview-version' WHERE id=?").run(source.preparationJobId);
       ctx.container.database.sqlite.prepare("UPDATE preparation_preview_cache SET validation_version='previous-preview-version' WHERE job_id=?").run(source.preparationJobId);
-      const rejected = await ctx.app.inject({
-        method: 'POST', url: `/api/v1/backtests/${sourceId}/${kind === 'CLONE' ? 'clone' : 'clone-random-seeds'}`,
-        cookies: { session: cookie }, ...(kind === 'RANDOM_SEEDS' ? { payload: { count: 3 } } : {}),
-      });
-      expect(rejected.statusCode, rejected.body).toBe(409);
+      if (kind === 'CLONE') {
+        const rejected = await ctx.app.inject({
+          method: 'POST', url: `/api/v1/backtests/${sourceId}/clone`, cookies: { session: cookie },
+        });
+        expect(rejected.statusCode, rejected.body).toBe(409);
+      }
       const payload = { requestId: randomUUID(), action: kind === 'CLONE' ? { kind } : { kind, count: 3 } };
       await withSparseQueuePreparation(ctx, request, async () => {
         const submit = () => ctx.app.inject({ method: 'POST', url: `/api/v1/backtests/${sourceId}/refresh-and-run`, cookies: { session: cookie }, payload });
-        expect((await ctx.app.inject({ method: 'POST', url: `/api/v1/backtests/${sourceId}/refresh-and-run`, payload })).statusCode).toBe(401);
-        const accepted = await submit();
-        expect(accepted.statusCode, accepted.body).toBe(202);
-        const refreshId = accepted.json().job.id as string;
-        expect((await submit()).json().job.id).toBe(refreshId);
+        let refreshId: string;
+        if (kind === 'CLONE') {
+          expect((await ctx.app.inject({ method: 'POST', url: `/api/v1/backtests/${sourceId}/refresh-and-run`, payload })).statusCode).toBe(401);
+          const accepted = await submit();
+          expect(accepted.statusCode, accepted.body).toBe(202);
+          refreshId = accepted.json().job.id as string;
+          expect((await submit()).json().job.id).toBe(refreshId);
+        } else {
+          // 기존 버전에서 승인된 작업이 재시작 후 이어지는 상태를 재현한다.
+          refreshId = `btr_${randomUUID()}`;
+          const owner = ctx.container.database.sqlite.prepare("SELECT id FROM users WHERE username = 'operator'").get() as { id: string };
+          const versions = readRuntimeVersions();
+          const runtimeIdentity = JSON.stringify({ execution: versions.executionVersion, preview: versions.previewVersion,
+            validation: versions.validationVersion, strategy: strategySourceHash(ctx.container.strategyRegistry.get(request.strategyId)!) });
+          const now = ctx.container.clock.now();
+          ctx.container.database.sqlite.prepare(`INSERT INTO backtest_refresh_jobs
+            (id, owner_id, request_id, source_job_id, action_json, request_json, warnings_json, runtime_identity, status, created_at_ms, updated_at_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'QUEUED', ?, ?)`)
+            .run(refreshId, owner.id, payload.requestId, sourceId, JSON.stringify(payload.action), source.requestJson, '[]', runtimeIdentity, now, now);
+        }
         let href = '';
         await vi.waitFor(async () => {
           const response = await ctx.app.inject({ method: 'GET', url: `/api/v1/backtests/refresh-jobs/${refreshId}`, cookies: { session: cookie } });
           expect(response.json().job, response.body).toMatchObject({ status: 'COMPLETED' });
           href = response.json().job.resultHref as string;
         }, { timeout: 15_000, interval: 100 });
-        expect((await submit()).json().job).toMatchObject({ id: refreshId, status: 'COMPLETED', resultHref: href });
+        const repeated = kind === 'CLONE' ? await submit() : await ctx.app.inject({ method: 'GET', url: `/api/v1/backtests/refresh-jobs/${refreshId}`, cookies: { session: cookie } });
+        expect(repeated.json().job).toMatchObject({ id: refreshId, status: 'COMPLETED', resultHref: href });
         const id = href.split('/').at(-1)!;
         const children = kind === 'CLONE' ? [ctx.container.jobQueue.getJob(id)!]
           : ctx.container.seedCloneBatchService.get(id)!.items.map(({ job }) => job!);
@@ -1805,15 +1817,11 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const sourceId = created.json().job.id as string;
     expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
 
-    const response = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 100 },
-    });
-    expect(response.statusCode).toBe(201);
-    const batchId = response.json().batch.id as string;
-    expect(response.json().batch).toMatchObject({
+    const response = createLegacySeedBatch(ctx, sourceId, 100);
+    const batchId = response.batch.id;
+    const batchView = await ctx.app.inject({ method: 'GET', url: `/api/v1/backtest-clone-batches/${batchId}`, cookies: { session: cookie } });
+    expect(batchView.statusCode).toBe(200);
+    expect(batchView.json().batch).toMatchObject({
       totalCount: 100,
       queuedCount: 20,
       pendingCount: 80,
@@ -1887,14 +1895,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const sourceId = created.json().job.id as string;
     expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
 
-    const response = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 21 },
-    });
-    expect(response.statusCode).toBe(201);
-    const batchId = response.json().batch.id as string;
+    const response = createLegacySeedBatch(ctx, sourceId, 21);
+    const batchId = response.batch.id;
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
@@ -1936,14 +1938,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const sourceId = created.json().job.id as string;
     expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
 
-    const response = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 21 },
-    });
-    expect(response.statusCode).toBe(201);
-    const batchId = response.json().batch.id as string;
+    const response = createLegacySeedBatch(ctx, sourceId, 21);
+    const batchId = response.batch.id;
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
@@ -1987,14 +1983,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const sourceId = created.json().job.id as string;
     expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
 
-    const response = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 21 },
-    });
-    expect(response.statusCode).toBe(201);
-    const batchId = response.json().batch.id as string;
+    const response = createLegacySeedBatch(ctx, sourceId, 21);
+    const batchId = response.batch.id;
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
@@ -2044,14 +2034,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     const sourceId = created.json().job.id as string;
     expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
 
-    const response = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 21 },
-    });
-    expect(response.statusCode).toBe(201);
-    const batchId = response.json().batch.id as string;
+    const response = createLegacySeedBatch(ctx, sourceId, 21);
+    const batchId = response.batch.id;
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
     expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
@@ -2106,33 +2090,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     }
   });
 
-  it('난수 비의존 전략은 API로도 난수 복제 묶음을 만들 수 없다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    await scenario.prepare(buildRequest());
-    const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
-    });
-    expect(created.statusCode).toBe(201);
-    const sourceId = created.json().job.id as string;
-    const registry = ctx.container.strategyRegistry;
-    const strategy = registry.get(STRATEGY_ID)!;
-    const originalGet = registry.get.bind(registry);
-    const lookup = vi.spyOn(registry, 'get').mockImplementation((id) => id === STRATEGY_ID
-      ? { ...strategy, supportsRandomSeed: false }
-      : originalGet(id));
-    try {
-      const response = await ctx.app.inject({
-        method: 'POST', url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-        cookies: { session: cookie }, payload: { count: 10 },
-      });
-      expect(response.statusCode).toBe(400);
-      expect(response.json().error).toContain('난수 시드의 영향을 받지 않아');
-      expect(ctx.container.seedCloneBatchService.list()).toHaveLength(0);
-    } finally {
-      lookup.mockRestore();
-    }
-  });
-
   it('재무 전략 난수 복제 대기 중 manifest의 재무 행이 사라지면 추가 승격을 막는다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     const request: BacktestRequest = {
@@ -2150,14 +2107,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(created.statusCode).toBe(201);
     const sourceId = created.json().job.id as string;
     expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
-    const response = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 21 },
-    });
-    expect(response.statusCode).toBe(201);
-    const batchId = response.json().batch.id as string;
+    const response = createLegacySeedBatch(ctx, sourceId, 21);
+    const batchId = response.batch.id;
     const before = ctx.container.seedCloneBatchService.get(batchId)!;
     const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
     const beforeJobCount = readBacktestJobs(ctx.container.database).length;
@@ -2184,13 +2135,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     const sourceId = created.json().job.id as string;
     ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
-    const batchResponse = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 100 },
-    });
-    const batchId = batchResponse.json().batch.id as string;
+    const batchResponse = createLegacySeedBatch(ctx, sourceId, 100);
+    const batchId = batchResponse.batch.id;
 
     const cancelled = await ctx.app.inject({
       method: 'POST',
@@ -2215,13 +2161,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     const sourceId = created.json().job.id as string;
     ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
-    const batchResponse = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 3 },
-    });
-    const batchId = batchResponse.json().batch.id as string;
+    const batchResponse = createLegacySeedBatch(ctx, sourceId, 3);
+    const batchId = batchResponse.batch.id;
     const beforeCancel = ctx.container.seedCloneBatchService.get(batchId)!;
     const runningJob = beforeCancel.items[0]!.job!;
     expect(
@@ -2261,13 +2202,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     const sourceId = created.json().job.id as string;
     ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
-    const batchResponse = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 2 },
-    });
-    const batchId = batchResponse.json().batch.id as string;
+    const batchResponse = createLegacySeedBatch(ctx, sourceId, 2);
+    const batchId = batchResponse.batch.id;
     const childIds = ctx.container.seedCloneBatchService.get(batchId)!.items
       .flatMap(({ job }) => job === null ? [] : [job.id]);
 
@@ -2316,14 +2252,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
     const batchIds: string[] = [];
     for (const count of [2, 3]) {
-      const response = await ctx.app.inject({
-        method: 'POST',
-        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-        cookies: { session: cookie },
-        payload: { count },
-      });
-      expect(response.statusCode).toBe(201);
-      batchIds.push(response.json().batch.id as string);
+      const response = createLegacySeedBatch(ctx, sourceId, count);
+      batchIds.push(response.batch.id);
     }
 
     const childIds = batchIds.flatMap((batchId) =>
@@ -2357,13 +2287,8 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     const sourceId = created.json().job.id as string;
     ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
-    const parentResponse = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 1 },
-    });
-    const parentBatchId = parentResponse.json().batch.id as string;
+    const parentResponse = createLegacySeedBatch(ctx, sourceId, 1);
+    const parentBatchId = parentResponse.batch.id;
     const parentChildId = ctx.container.seedCloneBatchService.get(parentBatchId)!.items[0]!.job!.id;
     ctx.container.jobQueue.setStatus(parentChildId, 'COMPLETED', {}, ['QUEUED']);
     ctx.container.seedCloneBatchService.onJobStatusChanged();
@@ -2374,8 +2299,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       cookies: { session: cookie },
       payload: { count: 1 },
     });
-    expect(rejectedNested.statusCode).toBe(409);
-    expect(rejectedNested.json().error).toContain('원본 백테스트에서 시작하세요');
+    expect(rejectedNested.statusCode).toBe(404);
 
     // 이전 버전에서 이미 만들어진 중첩 데이터를 재현한다. 생성 순간에만 일반 원본처럼
     // 보이게 하고, 곧바로 실제 계보를 복원한다.
@@ -2383,18 +2307,12 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       .set({ cloneBatchId: null })
       .where(eq(backtestJobs.id, parentChildId))
       .run();
-    const legacyNested = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${parentChildId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 1 },
-    });
-    expect(legacyNested.statusCode).toBe(201);
+    const legacyNested = createLegacySeedBatch(ctx, parentChildId, 1);
     ctx.container.database.db.update(backtestJobs)
       .set({ cloneBatchId: parentBatchId })
       .where(eq(backtestJobs.id, parentChildId))
       .run();
-    const nestedBatchId = legacyNested.json().batch.id as string;
+    const nestedBatchId = legacyNested.batch.id;
     const nestedChildId = ctx.container.seedCloneBatchService.get(nestedBatchId)!.items[0]!.job!.id;
 
     const blocked = await ctx.app.inject({
@@ -2443,13 +2361,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
     const sourceId = created.json().job.id as string;
     ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
-    const batchResponse = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 1 },
-    });
-    expect(batchResponse.statusCode).toBe(201);
+    createLegacySeedBatch(ctx, sourceId, 1);
     ctx.container.database.db.update(backtestJobs)
       .set({ createdAtMs: 1 })
       .where(eq(backtestJobs.id, sourceId))

@@ -11,7 +11,7 @@ import type { BacktestWizardService } from "../application/backtest-wizard-servi
 import { BacktestWizardError } from "../application/backtest-wizard-state.js";
 import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
 import { strategySourceHash } from "../../../../runtime/modules/strategy/application/strategy-source-hash.js";
-import { backtestRefreshActionSchema, type BacktestRefreshJob } from "../../../../shared/schemas/backtest-refresh.js";
+import { savedBacktestRefreshActionSchema, type BacktestRefreshJob } from "../../../../shared/schemas/backtest-refresh.js";
 import { registerBenchmarkComparisonRoutes } from "./benchmark-comparison-routes.js";
 import { BenchmarkComparisonService } from "../application/benchmark-comparison-service.js";
 import { historyQuerySchema } from "../../../../shared/schemas/backtest-history.js";
@@ -802,11 +802,6 @@ export function registerBacktestRoutes(
       const errors = validateStaticSubmission(rebased.request);
       const capacity = checkPositionCapacity(rebased.request);
       if (errors.length || capacity) throw new BacktestRefreshError(errors[0] ?? capacity!, 400);
-      if (action.kind === "RANDOM_SEEDS") {
-        if (source.cloneBatchId !== null) throw new BacktestRefreshError("설정 탐색 실험은 원본 백테스트에서 시작하세요.", 409);
-        if (strategies.describe(source.strategyId)?.supportsRandomSeed === false)
-          throw new BacktestRefreshError("이 전략은 난수 시드의 영향을 받지 않습니다.", 400);
-      }
       if (action.kind === "PERIOD_VALIDATION") {
         try { validations.plan(sourceJobId, action.config); }
         catch (error) { throw new BacktestRefreshError(error instanceof Error ? error.message : "검증 설정이 올바르지 않습니다.", 400); }
@@ -820,7 +815,7 @@ export function registerBacktestRoutes(
         strategy: strategy ? strategySourceHash(strategy) : null });
     },
     buildSubmission: async (row, preview) => {
-      const action = backtestRefreshActionSchema.parse(JSON.parse(row.actionJson));
+      const action = savedBacktestRefreshActionSchema.parse(JSON.parse(row.actionJson));
       if (action.kind === "PERIOD_VALIDATION") return () => {
         const experiment = validations.create(row.sourceJobId, action.config, { refreshData: true });
         return `/backtests/validations/${encodeURIComponent(experiment.id)}`;
@@ -846,6 +841,7 @@ export function registerBacktestRoutes(
             });
           return `/backtests/${encodeURIComponent(job.id)}`;
         }
+        // 새 요청에서는 난수 복제를 받지 않으며, 이전에 접수한 영속 작업만 이어간다.
         const batch = seedCloneBatches.create(row.sourceJobId, action.count, {
           request: { ...body, timeframe: validated.timeframe }, schedule: validated.resolved.schedule,
           universe: validated.universe, provenancePin: validated.provenancePin, warnings,
@@ -1299,96 +1295,6 @@ export function registerBacktestRoutes(
       return reply
         .code(201)
         .send({ job: serializeJob(cloned, deps.database, deps.executionProgress?.(cloned)), warnings: cloneWarnings });
-    },
-  );
-
-  app.post(
-    "/backtests/:id/clone-random-seeds",
-    { preHandler: requireAuth },
-    async (request, reply) => {
-      const { id } = request.params as { id: string };
-      const sourceJob = queue.getJob(id);
-      if (!sourceJob)
-        return reply.code(404).send({ error: "작업을 찾을 수 없습니다" });
-      if (sourceJob.cloneBatchId !== null) {
-        return reply.code(409).send({
-          error:
-            "설정 탐색 실험의 자식 실행에서는 새 설정 탐색 실험을 만들 수 없습니다. 원본 백테스트에서 시작하세요.",
-        });
-      }
-      if (
-        strategies.describe(sourceJob.strategyId)?.supportsRandomSeed === false
-      ) {
-        return reply
-          .code(400)
-          .send({
-            error:
-              "이 전략은 난수 시드의 영향을 받지 않아 새 난수로 복제할 수 없습니다.",
-          });
-      }
-      const countBody = z
-        .object({ count: z.number().int().min(1).max(100) })
-        .safeParse(request.body);
-      if (!countBody.success) {
-        return reply
-          .code(400)
-          .send({ error: "실행 개수는 1~100 사이의 정수여야 합니다." });
-      }
-
-      const rebased = rebaseStoredRequest(
-        sourceJob.requestJson,
-        strategies.get(sourceJob.strategyId)?.version ?? null,
-      );
-      if (!rebased.ok) return reply.code(400).send({ error: rebased.error });
-      const body = rebased.request;
-      const staticErrors = validateStaticSubmission(body);
-      if (staticErrors.length > 0)
-        return reply.code(400).send({ error: staticErrors[0] });
-      const reusable = await reusablePreviewFor(sourceJob, body);
-      if (!reusable) {
-        return reply.code(409).send({
-          error: "PREVIEW_REQUIRED",
-          message:
-            "원본의 준비 결과를 안전하게 재사용할 수 없습니다. 재설정 및 복제에서 미리보기를 완료하세요.",
-        });
-      }
-      const validated = await validateSubmission(body, reusable.preview, { request, reply });
-      if (!validated.ok) {
-        return reply
-          .code(validated.status)
-          .send({ error: validated.errors[0] });
-      }
-      const fundamentalsIssue = validated.fundamentalsIssue;
-      if (fundamentalsIssue)
-        return sendFundamentalsIssue(reply, fundamentalsIssue);
-      const capacityError = checkPositionCapacity(body);
-      if (capacityError) return reply.code(422).send({ error: capacityError });
-      const resourceError = await checkResources(deps.dataRoot);
-      if (resourceError) return reply.code(507).send({ error: resourceError });
-      if (reply.raw.destroyed) return reply;
-
-      const warnings = [...rebased.warnings, ...validated.warnings];
-      const batch = seedCloneBatches.create(id, countBody.data.count, {
-        submissionSnapshot: validated.snapshot,
-        preparationJobId: reusable.preview.preparationJobId,
-        request: { ...body, timeframe: validated.timeframe },
-        schedule: reusable.schedule,
-        universe: reusable.universe,
-        provenancePin: reusable.provenancePin,
-        warnings,
-      });
-      audit.record(
-        request.authUser?.username ?? "admin",
-        "backtest.seed-clone-batch.created",
-        {
-          sourceJobId: id,
-          batchId: batch.batch.id,
-          count: countBody.data.count,
-        },
-      );
-      return reply
-        .code(201)
-        .send({ batch: serializeBatch(batch, false), warnings });
     },
   );
 

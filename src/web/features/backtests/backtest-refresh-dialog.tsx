@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -43,7 +43,6 @@ function clearPendingRequest(storageKey: string): void {
 function confirmationLabel(action: BacktestRefreshAction | undefined): string {
   switch (action?.kind) {
     case "CLONE": return "업데이트 후 복제";
-    case "RANDOM_SEEDS": return `업데이트 후 ${action.count}회 복제`;
     case "PERIOD_VALIDATION": return "업데이트 후 기간검증";
     default: return "업데이트 후 실행";
   }
@@ -158,7 +157,12 @@ export function useBacktestRefresh(sourceId: string, initialJobId?: string | nul
           <p className="text-sm text-muted-foreground">선택한 설정과 기간으로 유니버스를 준비하고, 완료되면 자동으로 실행합니다.</p>
           <p className="text-xs text-muted-foreground">최신 데이터가 반영되어 결과가 원본과 달라질 수 있습니다.</p>
         </> : job ? <div className="space-y-5 py-2 text-sm" aria-live="polite">
-          {failed ? <Alert variant="destructive"><AlertDescription>{job.error ?? (job.status === "FAILED" ? "데이터 준비 또는 실행에 실패했습니다." : "작업이 취소되었습니다.")}</AlertDescription></Alert> : <>
+          {failed ? <>
+            <Alert variant="destructive"><AlertDescription>{job.error ?? (job.status === "FAILED" ? "데이터 준비 또는 실행에 실패했습니다." : "작업이 취소되었습니다.")}</AlertDescription></Alert>
+            {job.action.kind === "RANDOM_SEEDS" ? <p>
+              이전 난수 복제는 다시 실행할 수 없습니다. <Link className="underline" to={`/backtests/${encodeURIComponent(job.sourceJobId)}/search`}>설정 탐색에서 새 실험을 시작하세요.</Link>
+            </p> : null}
+          </> : <>
             <div className="space-y-2">
               <div className="flex justify-between gap-3"><span className="font-medium">{preparation.job && job.status === "PREPARING" ? preparationStatusDescription(preparation.job) : job.message}</span>{progress !== null ? <span className="tabular-nums">{progress}%</span> : null}</div>
               {progress !== null ? <Progress value={progress} aria-label="데이터 준비 진행률" /> : null}
@@ -175,8 +179,8 @@ export function useBacktestRefresh(sourceId: string, initialJobId?: string | nul
       <DialogFooter className="mx-0 mb-0 flex-row items-center justify-end gap-2 border-t bg-muted/50 px-6 py-4 sm:justify-end">
         {running ? <Button variant="ghost" className="mr-auto text-muted-foreground" disabled={busy} onClick={cancel}>작업 취소</Button> : null}
         <Button variant={!jobId || failed ? "outline" : "default"} onClick={() => setOpen(false)}>{!jobId ? "취소" : "닫기"}</Button>
-        {!jobId ? <Button disabled={busy} onClick={start}>{busy ? "요청 중…" : confirmationLabel(action)}</Button> : null}
-        {failed ? <Button disabled={busy} onClick={retry}>다시 준비 후 실행</Button> : null}
+        {!jobId ? <Button disabled={busy} onClick={start}>{busy ? "요청 중…" : confirmationLabel(pending?.action)}</Button> : null}
+        {failed && job?.action.kind !== "RANDOM_SEEDS" ? <Button disabled={busy} onClick={retry}>다시 준비 후 실행</Button> : null}
       </DialogFooter>
     </DialogContent>
   </Dialog>;

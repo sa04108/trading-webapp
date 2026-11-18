@@ -87,6 +87,7 @@ export class SeedCloneBatchService {
     private readonly validateSnapshot: SeedCloneSnapshotValidator,
   ) {}
 
+  /** 신규 API에서는 호출하지 않는다. 이전에 접수한 데이터 갱신 작업의 후속 실행 전용이다. */
   create(
     sourceJobId: string,
     count: number,

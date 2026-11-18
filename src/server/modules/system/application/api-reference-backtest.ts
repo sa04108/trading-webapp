@@ -26,7 +26,6 @@ add('GET', '/backtests/:id/warnings', '경고 다운로드', '완료 결과의 w
 add('POST', '/backtests/:id/cancel', '백테스트 취소', '작업 취소를 요청하고 status를 반환합니다.', { errors: [409] });
 add('POST', '/backtests/:id/clone', '백테스트 복제', '원본을 복제해 job과 warnings를 반환합니다.', { status: 201 });
 add('POST', '/backtests/:id/clone-configured', '설정 변경 복제', '요청 설정으로 복제해 job과 warnings를 반환합니다. 원본 준비 결과를 재사용할 수 없으면 미리보기가 필요합니다.', { input: body('새 일봉 백테스트 설정.', schema(backtestRequestSchema)), params: [query('wizardId', 'string', '완료된 미리보기의 편집 가능한 위저드 ID, 1~128자.')], status: 201, errors: [400, 404, 409, 422, 429, 503, 507] });
-add('POST', '/backtests/:id/clone-random-seeds', '난수 시드 복제', '서로 다른 난수로 실행할 batch와 warnings를 반환합니다.', { input: body('count: 1~100 정수.', schema(z.object({ count: z.number().int().min(1).max(100) }))), status: 201 });
 add('GET', '/backtests/:id/clone-draft', '복제 초안', '원본 요청, 전략 정보, blockers와 reusablePreview를 반환합니다.');
 add('DELETE', '/backtests/:id', '백테스트 삭제', '종료된 결과와 연결된 설정 탐색 실험·기간검증·하위 결과를 함께 삭제합니다. 진행 중인 관련 작업이 있으면 전체 삭제를 거부합니다.', { status: 204, errors: [404, 409] });
 add('POST', '/backtests/deletion-preview', '백테스트 삭제 범위 확인', '중복을 제외한 backtestCount, configurationSearchCount, periodValidationCount, blockers와 확인용 token을 반환합니다. 실험의 자식 결과를 선택하면 해당 실험과 형제 결과도 포함됩니다. 일반 복제 결과는 독립적입니다.', { input: body('일봉·분봉 mode와 선택한 ids(1~100개).', schema(backtestDeletionRequestSchema)), errors: [400, 404] });
@@ -37,10 +36,10 @@ add('GET', '/backtests/:id/export', '백테스트 결과 다운로드', 'job과 
 add('GET', '/backtests/:id/events', '백테스트 진행 이벤트', '진행 스냅샷과 변경을 SSE로 전송합니다.', { contentType: 'text/event-stream' });
 add('GET', '/backtests/history-extras', '백테스트 실험 집계', '요청한 원본들의 시드, 기간 검증, 탐색 집계를 summaries 배열로 반환합니다.', { params: [{ ...query('jobIds', 'string', '쉼표로 구분한 작업 ID 목록, 최대 100개.'), required: true }], errors: [400] });
 add('GET', '/backtests/:id/lineage', '백테스트 결과 계보', 'kind, roleLabel, complete와 items 경로를 반환합니다.');
-add('GET', '/backtest-clone-batches', '시드 복제 묶음 목록', 'batches와 sourceJobs를 반환합니다.', { params: [query('sourceJobIds', 'string', '쉼표로 구분한 원본 ID, 최대 200개.')] });
-add('GET', '/backtest-clone-batches/:id', '시드 복제 묶음 상세', '묶음의 batch 및 자식 상태를 반환합니다.');
-add('POST', '/backtest-clone-batches/:id/cancel', '시드 복제 묶음 취소', '대기 항목 승격을 중단하고 batch를 반환합니다.');
-add('DELETE', '/backtest-clone-batches/:id', '시드 복제 묶음 삭제', '종료된 묶음과 자식 결과를 삭제합니다.', { status: 204 });
+add('GET', '/backtest-clone-batches', '이전 시드 복제 묶음 목록', '기존 실험의 batches와 sourceJobs를 반환합니다.', { params: [query('sourceJobIds', 'string', '쉼표로 구분한 원본 ID, 최대 200개.')] });
+add('GET', '/backtest-clone-batches/:id', '이전 시드 복제 묶음 상세', '기존 실험의 batch 및 자식 상태를 반환합니다.');
+add('POST', '/backtest-clone-batches/:id/cancel', '이전 시드 복제 묶음 취소', '기존 진행 중인 실험의 대기 항목 승격을 중단하고 batch를 반환합니다.');
+add('DELETE', '/backtest-clone-batches/:id', '이전 시드 복제 묶음 삭제', '기존 종료된 묶음과 자식 결과를 삭제합니다.', { status: 204 });
 add('POST', '/backtests/universe-preview', '유니버스 준비', '준비된 미리보기는 200, 비동기 preparation job은 202로 반환합니다.', { input: body('universeRule, period, strategyId, parameters 및 선택적 sourceJobId, wizardId, completedPreparationJobId.', schema(preparationInputSchema.extend({ sourceJobId: z.string().min(1).optional(), wizardId: z.string().min(1).max(128).optional(), completedPreparationJobId: z.string().min(1).optional() }))), errors: [400, 409, 422, 503] });
 map['POST /api/v1/backtests/universe-preview']!.responses!.push({ status: 202, description: '준비 중인 job 객체.', contentType: 'application/json' });
 add('GET', '/backtests/preparation-jobs/:id', '준비 작업 상세', '준비 상태와 진행률을 job으로 반환합니다.');

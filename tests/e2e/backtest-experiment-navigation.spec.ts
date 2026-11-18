@@ -19,11 +19,6 @@ const oosItems = [...rootItems, { label: "기간검증", href: `/backtests/${sou
 
 async function setup(page: Page) {
   await login(page);
-  const state: { count: number | null } = { count: null };
-  await page.route(`**/api/v1/backtests/${sourceId}/clone-random-seeds`, (route) => {
-    state.count = route.request().postDataJSON().count;
-    return route.fulfill({ status: 201, json: { batch: { id: "navigation-batch" } } });
-  });
   await page.route("**/api/v1/strategies", (route) => route.fulfill({ json: { strategies: [{ id: request.strategyId, name: "횡단면 모멘텀", version: "1", description: "", supportsRandomSeed: true }] } }));
   await page.route(`**/api/v1/strategies/${request.strategyId}/schema`, (route) => route.fulfill({ json: { schema: { type: "object", properties: {} } } }));
   for (const id of [sourceId, seedId, oosId]) {
@@ -41,12 +36,11 @@ async function setup(page: Page) {
     trials: [{ id: "navigation-trial", fold: 0, role: "OOS", candidate: null, parameters: {}, period: { from: "2023-01-01", to: "2024-01-01" }, jobId: oosId, status: "COMPLETED", progress: 100, metrics, error: null, benchmarkReturnPct: 7 }] };
   await page.route(`**/api/v1/backtests/${sourceId}/validations`, (route) => route.fulfill({ json: { experiments: [experiment] } }));
   await page.route("**/api/v1/backtest-validations/navigation-validation", (route) => route.fulfill({ json: { experiment } }));
-  return state;
 }
 
 // 기존 검증 폼 검사는 부모 경로와 허브 이동을 확인하지 않으므로 실제 라우터·모바일 축약 경로를 검증한다.
 test("원본 요약에서 난수·기간검증으로 이동하고 직접 열린 자식의 경로를 보존한다", async ({ page }, testInfo) => {
-  const state = await setup(page);
+  await setup(page);
   await page.goto(`/backtests/${sourceId}`);
   await expect(page.getByRole("navigation", { name: "백테스트 경로" })).toContainText("결과 source");
   await expect(page.getByRole("region", { name: "기간 검증" })).toHaveCount(0);
@@ -57,11 +51,13 @@ test("원본 요약에서 난수·기간검증으로 이동하고 직접 열린 
   await expect(page).toHaveURL(`/backtests/${sourceId}/seeds`);
   await expect(page.getByText("모멘텀 점수가 같은 종목끼리 순서를 정할 때 시드를 사용합니다.")).toBeVisible();
   await expect(page.getByRole("link", { name: "실험 보기", exact: true })).toHaveAttribute("href", "/backtests/batches/navigation-batch");
-  await page.getByLabel("복제 개수 (1~100)").fill("0");
-  await expect(page.getByRole("button", { name: "이전 실험 시작" })).toBeDisabled();
-  await page.getByLabel("복제 개수 (1~100)").fill("3");
-  await page.getByRole("button", { name: "이전 실험 시작" }).click();
-  await expect.poll(() => state.count).toBe(3);
+  await expect(page.getByRole("button", { name: "이전 실험 시작" })).toHaveCount(0);
+  const searchLink = page.getByRole("link", { name: "설정 탐색 실험 열기" });
+  await expect(searchLink).toHaveAttribute("href", `/backtests/${sourceId}/search`);
+  await searchLink.click();
+  await expect(page).toHaveURL(`/backtests/${sourceId}/search`);
+  await page.goBack();
+  await page.getByRole("link", { name: "실험 보기", exact: true }).click();
   await expect(page).toHaveURL("/backtests/batches/navigation-batch");
   await page.locator(`a[href='/backtests/${seedId}']`).click();
   await expect(page.getByRole("navigation", { name: "백테스트 경로" })).toContainText("시드 77");
