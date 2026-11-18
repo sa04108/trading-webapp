@@ -50,7 +50,22 @@ describe("daily decision", () => {
     bars.push({ ...bars.at(-1)!, tsMs: ts + 86_400_000 });
     try { expect((await run(warm.checkpoint, false, next)).orders).toHaveLength(1); } finally { bars.pop(); }
   });
-  it("refuses missing latest data", async () => { await expect(run(null, true, "2026-11-14")).rejects.toThrow(/일봉/); });
+  it("최근 확정 봉이 빠지면 가격 자료만 수집한다", async () => {
+    await expect(run(null, true, "2026-11-14")).rejects.toMatchObject({
+      message: expect.stringContaining("005930"), need: { priceRange: { to: "2026-11-14" }, financial: null, actions: null },
+    });
+  });
+  it("상장 후 가능한 일봉이 부족하면 재수집을 요청하지 않는다", async () => {
+    const resolved = await runtime.resolver.resolveOrDescribeNeeds();
+    const entry = { shortCode: "005930", name: "신규상장주", market: "KOSPI", listedDate: "2026-11-12" };
+    const recent = { ...runtime, candles: { getCandlesArray: async () => bars.slice(-2) },
+      resolver: { resolveOrDescribeNeeds: async () => ({ ...resolved, unionEntries: new Map([[entry.shortCode, entry]]) }) } };
+    const message = { input: { deployment, portfolio: {}, checkpoint: null, warmupOnly: true }, date, bundlePath: "" };
+    const largerWarmup = { ...bundle, getStrategy: () => ({ ...strategy, dataRequirements: { priceWarmupBars: () => 3 } }) };
+    const failure = await calculate(message as never, {} as never, largerWarmup as never, recent as never).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ message: expect.stringMatching(/005930.*2026-11-12.*2개.*3개/) });
+    expect(failure).not.toHaveProperty("need");
+  });
   it("이미 수집한 자본변동 결손은 해당 종목·연도만 복구 요청하며 같은 봉의 재활성화도 검사한다", async () => {
     const warm = await run(null, true);
     const incomplete = { ...runtime, actionCoverage: { ...runtime.actionCoverage, getGapYears: () => new Map([["005930", [2025, 2026]]]) } };
@@ -99,7 +114,7 @@ describe("daily decision", () => {
       {} as never, bundle as never, incomplete as never,
     )).rejects.toMatchObject({
       message: expect.stringContaining("준비 구간의 종목 거래 봉이 누락"),
-      need: { priceRange: { to: date }, actions: { symbols: ["005930"] } },
+      need: { priceRange: { to: date }, actions: null, financial: null },
     });
   });
   it("clears suppressed exit intents on missed bars for an actual held position", async () => {

@@ -51,7 +51,7 @@ describe("daily decision worker integration", () => {
       database.db.delete(krxDailyBars).where(eq(krxDailyBars.date, "2026-11-16")).run();
       await expect(engine.evaluate({ deployment: { ...deployment, activatedAtMs: deployment.createdAtMs }, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: false } as never)).rejects.toMatchObject({
         constructor: TradingDataRequired,
-        need: { masterDates: ["2026-11-13"], priceRange: { to: "2026-11-16" }, actions: { symbols: ["005930"] } },
+        need: { masterDates: [], priceRange: { to: "2026-11-16" }, financial: null, actions: null },
       });
     } finally { await engine?.close(); database.close(); rmSync(root, { recursive: true, force: true }); }
   }, 90_000);

@@ -96,11 +96,15 @@ describe("모의투자 실행 경계", () => {
     await vi.waitFor(() => expect(f.service.snapshot().dataPreparation?.status).toBe("FAILED"));
     expect(f.prepareData).toHaveBeenCalledTimes(1);
     expect(f.service.snapshot()).toMatchObject({ deployment: { status: "INACTIVE", lastError: expect.stringContaining("005930 2025년 자본변동: 직전 발행주식수 앵커가 없습니다.") }, orders: [] });
+    expect(f.service.snapshot().deployment?.lastError).toContain("005930 2025년 자본변동 결손");
     vi.mocked(f.engine.evaluate).mockResolvedValue({ checkpoint: "checked", barTsMs: 1, orders: [] });
     f.service.prepareData(f.service.snapshot().revision, "user");
     await vi.waitFor(() => expect(f.service.snapshot().dataPreparation?.status).toBe("READY"));
     expect(f.service.snapshot().deployment?.lastError).toBeNull();
     expect(f.service.snapshot().deployment?.status).toBe("INACTIVE");
+    vi.mocked(f.engine.evaluate).mockRejectedValueOnce(new Error("상장 후 일봉이 200개에 미달합니다."));
+    await expect(f.service.activate(f.service.snapshot().revision, "user")).rejects.toMatchObject({ code: "STRATEGY_NOT_READY" });
+    expect(f.service.snapshot()).toMatchObject({ dataPreparation: { status: "FAILED", message: "상장 후 일봉이 200개에 미달합니다." }, deployment: { status: "INACTIVE" }, orders: [] });
   });
   it("복구 중 설정 변경은 이전 작업을 중단하고 늦은 진행·완료를 새 설정에 반영하지 않는다", async () => {
     const f = fixture(true); await f.service.tick();

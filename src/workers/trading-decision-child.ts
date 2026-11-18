@@ -110,16 +110,35 @@ export async function calculate(message: { input: Input; date: string; bundlePat
   const symbols = [...new Set([...selected, ...held])].sort();
   need = { ...need, financial: needsFinancial ? { symbols, ...financialYears } : null, actions: { symbols, fromYear: actionFromYear, toYear: actionToYear }, entries: [...resolution.unionEntries.values()] };
   const candles = await runtime.candles.getCandlesArray({ market: "KR", timeframe: "1d", symbols, fromTsMs: from, toTsMs: latest });
+  const calendar = createOfficialKrxTradingCalendar();
+  const priceNeed: TradingDataNeed = { masterDates: [], priceRange: need.priceRange, actions: null, financial: null, entries: [] };
   const histories = new Map<string, Candle[]>();
   for (const symbol of symbols) histories.set(symbol, []);
   for (const bar of candles) histories.get(bar.symbol)?.push(bar);
   for (const symbol of symbols) {
     const history = histories.get(symbol)!; history.sort((a, b) => a.tsMs - b.tsMs);
-    if (history.length < warmup || history.at(-1)?.tsMs !== latest) throw new DecisionDataRequired(`확정 일봉 또는 준비 이력이 부족합니다: ${symbol}`, need);
+    if (history.length < warmup) {
+      const entry = resolution.unionEntries.get(symbol);
+      const listed = entry?.listedDate;
+      const first = history[0];
+      if (entry && listed && listed >= fromDate && listed <= message.date &&
+          (!first || first.tsMs >= Date.parse(`${listed}T00:00:00Z`))) {
+        // 미확인 달력일도 개장 가능일로 세어 확보 가능한 봉 수를 과소평가하지 않는다.
+        let possibleBars = 0;
+        for (let day = listed; day <= message.date && possibleBars < warmup; day = addCalendarDays(day, 1)) {
+          if (calendar.classify(day, entry.market).state !== "CLOSED") possibleBars++;
+        }
+        if (possibleBars < warmup && history.length <= possibleBars) {
+          throw new Error(`${symbol} ${entry.name}의 상장일은 ${listed}입니다. ${message.date}까지 가능한 일봉은 최대 ${possibleBars}개로 전략 준비에 필요한 ${warmup}개에 미달합니다.`);
+        }
+      }
+    }
+    if (history.length < warmup || history.at(-1)?.tsMs !== latest) {
+      throw new DecisionDataRequired(`확정 일봉 또는 준비 이력이 부족합니다: ${symbol} (확보 ${history.length}개, 필요 ${warmup}개, 기준일 ${message.date})`, priceNeed);
+    }
     if (!checkpoint) histories.set(symbol, history.slice(-warmup));
   }
   if (!checkpoint) {
-    const calendar = createOfficialKrxTradingCalendar();
     for (const symbol of symbols) {
       const history = histories.get(symbol)!;
       const observed = new Set(history.map((bar) => bar.tsMs));
@@ -127,7 +146,7 @@ export async function calculate(message: { input: Input; date: string; bundlePat
       for (let day = firstDay; day <= message.date; day = addCalendarDays(day, 1)) {
         const state = calendar.classify(day, "KOSPI").state;
         if (state === "UNKNOWN") throw new Error(`준비 구간의 공식 거래일이 확인되지 않았습니다: ${day}`);
-        if (state === "OPEN" && !observed.has(Date.parse(`${day}T00:00:00Z`))) throw new DecisionDataRequired(`준비 구간의 종목 거래 봉이 누락되었습니다: ${symbol} ${day}`, need);
+        if (state === "OPEN" && !observed.has(Date.parse(`${day}T00:00:00Z`))) throw new DecisionDataRequired(`준비 구간의 종목 거래 봉이 누락되었습니다: ${symbol} ${day}`, priceNeed);
       }
     }
   }
@@ -172,7 +191,6 @@ export async function calculate(message: { input: Input; date: string; bundlePat
   const timeline = [...new Set([...histories.values()].flatMap((history) => history.map((bar) => bar.tsMs)))].sort((a, b) => a - b);
   const barsBySymbol = new Map(symbols.map((symbol) => [symbol, new Map(histories.get(symbol)!.map((bar) => [bar.tsMs, bar]))]));
   if (checkpoint) {
-    const calendar = createOfficialKrxTradingCalendar();
     const observed = new Set(timeline);
     const datesBySymbol = barsBySymbol;
     for (let day = addCalendarDays(new Date(checkpoint.lastBar).toISOString().slice(0, 10), 1); day <= message.date; day = addCalendarDays(day, 1)) {
@@ -180,8 +198,8 @@ export async function calculate(message: { input: Input; date: string; bundlePat
       if (state === "UNKNOWN") throw new Error(`중단 구간의 공식 거래일이 확인되지 않았습니다: ${day}`);
       if (state === "OPEN") {
         const dayTs = Date.parse(`${day}T00:00:00Z`);
-        if (!observed.has(dayTs)) throw new DecisionDataRequired(`중단 구간의 거래 봉이 누락되었습니다: ${day}`, need);
-        for (const symbol of symbols) if (!datesBySymbol.get(symbol)!.has(dayTs)) throw new DecisionDataRequired(`중단 구간의 종목 거래 봉이 누락되었습니다: ${symbol} ${day}`, need);
+        if (!observed.has(dayTs)) throw new DecisionDataRequired(`중단 구간의 거래 봉이 누락되었습니다: ${day}`, priceNeed);
+        for (const symbol of symbols) if (!datesBySymbol.get(symbol)!.has(dayTs)) throw new DecisionDataRequired(`중단 구간의 종목 거래 봉이 누락되었습니다: ${symbol} ${day}`, priceNeed);
       }
     }
   }
@@ -195,7 +213,7 @@ export async function calculate(message: { input: Input; date: string; bundlePat
     const isLast = ts === latest; const activePositions = checkpoint ? positions : new Map<string, Position>();
     const bars = new Map<string, Candle>();
     for (const symbol of symbols) { const bar = barsBySymbol.get(symbol)!.get(ts); if (bar) bars.set(symbol, bar); }
-    if (isLast && symbols.some((symbol) => !bars.has(symbol))) throw new DecisionDataRequired("최근 거래일의 확정 봉이 누락되었습니다", need);
+    if (isLast && symbols.some((symbol) => !bars.has(symbol))) throw new DecisionDataRequired("최근 거래일의 확정 봉이 누락되었습니다", priceNeed);
     factsView.advanceTo(ts + 6.5 * 3_600_000);
     for (const symbol of symbols) {
       const todayActions = factsView.corporateActions(symbol, ts).filter((action) => action.effectiveTsMs > previousTs);
@@ -205,7 +223,7 @@ export async function calculate(message: { input: Input; date: string; bundlePat
       }
     }
     previousTs = ts;
-    const marketValue = [...activePositions].reduce((sum, [symbol, pos]) => { const bar = bars.get(symbol); if (!bar) throw new DecisionDataRequired(`보유 종목의 봉이 누락되었습니다: ${symbol}`, need); return sum + pos.quantity * bar.close; }, 0);
+    const marketValue = [...activePositions].reduce((sum, [symbol, pos]) => { const bar = bars.get(symbol); if (!bar) throw new DecisionDataRequired(`보유 종목의 봉이 누락되었습니다: ${symbol}`, priceNeed); return sum + pos.quantity * bar.close; }, 0);
     const interrupted = warmupOnly || !checkpoint || !isLast;
     bundle.reconcileState(strategy.id, state, { interrupted, positions: [...activePositions.keys()], symbols });
     const ctx: StrategyBarContext = { getMarketIndexHistory: () => (marketIndex ?? []).filter((point) => point.tsMs <= ts), tsMs: ts, isRebalanceBar: isLast && !warmupOnly && (checkpoint?.firstDecision === true || latestSchedule.rebalanceDate !== checkpoint?.rebalanceDate), bars, getHistory: (symbol) => (histories.get(symbol) ?? []).filter((bar) => bar.tsMs <= ts), portfolio: { cash: Math.max(0, deployment.budgetKrw - marketValue), equity: deployment.budgetKrw, positions: activePositions }, rng, fundamentals: (symbol) => factsView.fundamentals(symbol), corporateActions: (symbol) => factsView.corporateActions(symbol, ts), tradableSymbols: targets, activeUniverseSymbols: targets, selectionMetric: (symbol) => metrics.get(symbol) ?? null };

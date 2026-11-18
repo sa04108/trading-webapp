@@ -177,7 +177,10 @@ export class TradingService {
         if (shouldStop()) throw new Error("서버 종료 또는 매매 설정 변경으로 데이터 준비를 중단했습니다.");
         if (need) {
           const key = JSON.stringify(need);
-          if (attempted.has(key)) throw new Error(`수집·재검증 후에도 해결되지 않았습니다. ${attempted.get(key) || cause}`);
+          if (attempted.has(key)) {
+            const details = [cause, attempted.get(key)].filter(Boolean).join(" · ");
+            throw new Error(`수집·재검증 후에도 해결되지 않았습니다. ${details}`);
+          }
           const diagnostics = await this.deps.prepareData!(need, (message) => progress(message), shouldStop);
           attempted.set(key, diagnostics);
         }
@@ -415,7 +418,11 @@ export class TradingService {
     catch(error){
       if(error instanceof TradingDataRequired&&this.deps.prepareData&&this.control().revision===expectedRevision&&this.current()?.id===before.id&&this.current()?.status==="INACTIVE")return this.prepareData(expectedRevision,actor,error.need);
       const message=error instanceof Error?error.message:"전략 준비에 실패했습니다.";
-      if(this.control().revision===expectedRevision&&this.current()?.status==="INACTIVE")this.db.update(tradingDeployments).set({lastError:message,activity:"비활성 · 전략 준비 확인 필요"}).where(eq(tradingDeployments.id,before.id)).run();
+      const row = this.current();
+      if(this.control().revision===expectedRevision&&row?.id===before.id&&row.status==="INACTIVE"){
+        this.db.update(tradingDeployments).set({lastError:message,activity:"비활성 · 전략 준비 확인 필요"}).where(eq(tradingDeployments.id,before.id)).run();
+        this.preparation = { deploymentId: before.id, revision: expectedRevision, state: { status: "FAILED", message } };
+      }
       throw new TradingError(message,"STRATEGY_NOT_READY");
     }
     this.change(expectedRevision,()=>{
