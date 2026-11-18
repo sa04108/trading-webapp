@@ -10,12 +10,6 @@ export interface ExperimentReturnDistribution {
 export interface BacktestHistoryExtras {
   jobId: string;
   search?: { experimentCount: number; activeCount: number; completedCount: number };
-  seed: {
-    batchCount: number;
-    activeCount: number;
-    completedCount: number;
-    returns: ExperimentReturnDistribution;
-  };
   validation: {
     experimentCount: number;
     activeCount: number;
@@ -34,7 +28,7 @@ export interface BacktestBreadcrumbEntry {
 
 export interface BacktestLineage {
   items: BacktestBreadcrumbEntry[];
-  kind: "original" | "seed" | "search" | "validation" | "unknown";
+  kind: "original" | "search" | "validation" | "unknown";
   roleLabel: string;
   /** 실험의 상위 기록이 없거나 연결이 손상되면 독립 결과로 단정하지 않는다. */
   complete: boolean;

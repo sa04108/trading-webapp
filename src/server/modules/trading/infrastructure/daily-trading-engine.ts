@@ -3,7 +3,7 @@ import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { addCalendarDays, kstDateOf } from "../../../../runtime/modules/market-data/domain/kst-date.js";
 import { createOfficialKrxTradingCalendar } from "../../market-data/infrastructure/krx/krx-trading-calendar.js";
-import type { TradingDataNeed } from "../application/trading-data.js";
+import { TradingDataRequired, type TradingDataNeed } from "../application/trading-data.js";
 import type { StrategyArtifactStore, TradingDecisionEngine } from "../application/trading-service.js";
 
 interface Options {
@@ -11,12 +11,10 @@ interface Options {
   dataPath: string;
   artifacts: StrategyArtifactStore;
   now: () => number;
-  ensureData?: (date: string, input: EvaluationInput, need: TradingDataNeed) => Promise<string | void>;
 }
 
 type EvaluationInput = Parameters<TradingDecisionEngine["evaluate"]>[0];
 type EvaluationOutput = Awaited<ReturnType<TradingDecisionEngine["evaluate"]>>;
-class DecisionDataRequired extends Error { constructor(message: string, readonly need: TradingDataNeed) { super(message); } }
 
 /** 검증되지 않은 휴장일에는 가장 최근 거래일도 추측하지 않는다. */
 export function latestClosedTradingDate(now: number): string {
@@ -46,13 +44,7 @@ export class DailyTradingEngine implements TradingDecisionEngine {
     if (this.closed) throw new Error("전략 실행기가 종료되었습니다");
     const date = latestClosedTradingDate(this.options.now());
     const bundlePath = this.options.artifacts.bundlePath(input.deployment.artifactHash);
-    try { return await this.run(input, date, bundlePath); }
-    catch (error) {
-      if (!(error instanceof DecisionDataRequired)) throw error;
-      if (this.closed) throw new Error("전략 실행기가 종료되었습니다", { cause: error });
-      const message = await this.options.ensureData?.(date, input, error.need);
-      throw new Error(typeof message === "string" && message ? message : error.message, { cause: error });
-    }
+    return this.run(input, date, bundlePath);
   }
   private run(input: EvaluationInput, date: string, bundlePath: string): Promise<EvaluationOutput> {
     const ts = import.meta.url.endsWith(".ts");
@@ -72,7 +64,8 @@ export class DailyTradingEngine implements TradingDecisionEngine {
         else if (message.type === "needs-data") {
           const need = message.need;
           if (!need || (need.marketIndex !== undefined && !agentDataRequestSchema.safeParse({ kind: "MARKET_INDEX", ...need.marketIndex }).success) || !Array.isArray(need.masterDates) || !Array.isArray(need.entries) || !(need.priceRange === null || (typeof need.priceRange?.from === "string" && typeof need.priceRange?.to === "string")) || !(need.financial === null || (Array.isArray(need.financial?.symbols) && Number.isInteger(need.financial?.fromYear) && Number.isInteger(need.financial?.toYear))) || !(need.actions === null || (Array.isArray(need.actions?.symbols) && Number.isInteger(need.actions?.fromYear) && Number.isInteger(need.actions?.toYear)))) failure = new Error("전략 데이터 준비 요청이 올바르지 않습니다");
-          else failure = new DecisionDataRequired(message.error ?? "전략 데이터가 준비되지 않았습니다", need);
+          else if (need.repairs !== undefined && (!Array.isArray(need.repairs) || need.repairs.length > 10_000 || need.repairs.some((repair) => !repair || !["FINANCIAL", "CORPORATE_ACTION"].includes(repair.kind) || !/^[A-Za-z0-9]{6}$/.test(repair.symbol) || !Number.isInteger(repair.year) || repair.year < 1990 || repair.year > 2100))) failure = new Error("전략 데이터 복구 요청이 올바르지 않습니다");
+          else failure = new TradingDataRequired(message.error ?? "전략 데이터가 준비되지 않았습니다", need);
         }
         else if (message.type === "failed") failure = new Error(message.error ?? "전략 판단에 실패했습니다");
       });

@@ -43,7 +43,6 @@ function clearPendingRequest(storageKey: string): void {
 function confirmationLabel(action: BacktestRefreshAction | undefined): string {
   switch (action?.kind) {
     case "CLONE": return "업데이트 후 복제";
-    case "RANDOM_SEEDS": return `업데이트 후 ${action.count}회 복제`;
     case "PERIOD_VALIDATION": return "업데이트 후 기간검증";
     default: return "업데이트 후 실행";
   }
@@ -92,7 +91,6 @@ export function useBacktestRefresh(sourceId: string, initialJobId?: string | nul
     setOpen(false);
     void client.invalidateQueries({ queryKey: ["backtests"] });
     void client.invalidateQueries({ queryKey: ["backtest-experiments"] });
-    void client.invalidateQueries({ queryKey: ["backtest-clone-batches"] });
     void client.invalidateQueries({ queryKey: ["period-validations"] });
     void navigate(job.resultHref);
   }, [open, job, client, navigate]);
@@ -175,7 +173,7 @@ export function useBacktestRefresh(sourceId: string, initialJobId?: string | nul
       <DialogFooter className="mx-0 mb-0 flex-row items-center justify-end gap-2 border-t bg-muted/50 px-6 py-4 sm:justify-end">
         {running ? <Button variant="ghost" className="mr-auto text-muted-foreground" disabled={busy} onClick={cancel}>작업 취소</Button> : null}
         <Button variant={!jobId || failed ? "outline" : "default"} onClick={() => setOpen(false)}>{!jobId ? "취소" : "닫기"}</Button>
-        {!jobId ? <Button disabled={busy} onClick={start}>{busy ? "요청 중…" : confirmationLabel(action)}</Button> : null}
+        {!jobId ? <Button disabled={busy} onClick={start}>{busy ? "요청 중…" : confirmationLabel(pending?.action)}</Button> : null}
         {failed ? <Button disabled={busy} onClick={retry}>다시 준비 후 실행</Button> : null}
       </DialogFooter>
     </DialogContent>

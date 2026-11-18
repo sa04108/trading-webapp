@@ -87,7 +87,7 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/v1/intraday/experiments/summary?**", (route) => {
     const ids = new URL(route.request().url()).searchParams.get("jobIds")!.split(",");
     const returns = { count: 0, mean: null, sampleStdDev: null };
-    return route.fulfill({ json: { summaries: ids.map(jobId => ({ jobId, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns, modes: { HOLDOUT: 0, WALK_FORWARD: 0 } } })) } });
+    return route.fulfill({ json: { summaries: ids.map(jobId => ({ jobId, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns, modes: { HOLDOUT: 0, WALK_FORWARD: 0 } } })) } });
   });
   await page.route("**/api/v1/intraday/runs/*/lineage", (route) => {
     const id = new URL(route.request().url()).pathname.split("/").at(-2)!;
@@ -633,11 +633,6 @@ test("분봉 실험 페이지를 재사용하고 검증 하위 결과와 일반 
   ] } }));
   await page.goto("/backtests/intraday/done");
   await expect(page.getByRole("link", { name: "설정 탐색 실험 열기" })).toHaveAttribute("href", "/backtests/intraday/done/search");
-  await page.goto("/backtests/intraday/done/seeds");
-  await expect(page).toHaveURL(/\/backtests\/intraday\/done\/seeds$/);
-  await expect(page.getByRole("button", { name: "이전 실험 시작" })).toBeDisabled();
-  await expect(page.getByText(/분봉 엔진은 주문 순서를 난수로 섞지 않습니다/)).toBeVisible();
-  await page.getByRole("link", { name: "원본 결과", exact: true }).click();
   await page.getByRole("link", { name: "기간검증 열기" }).click();
   await expect(page).toHaveURL(/\/backtests\/intraday\/done\/validations$/);
   const form = page.getByRole("region", { name: "기간 검증" });

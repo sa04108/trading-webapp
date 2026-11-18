@@ -19,12 +19,12 @@ export const systemApiMetadata: Record<string, ApiReferenceMetadata> = {
       { name: 'limit', in: 'query', type: 'integer', required: false, description: '페이지 크기 1~100, 기본 50.' },
       { name: 'offset', in: 'query', type: 'integer', required: false, description: '조회 시작 위치 0~1000000, 기본 0. 범위를 넘으면 마지막 페이지로 조정됩니다.' },
     ],
-    responses: [response(200, 'jobs, total, activeCount, retentionDays, limit, offset. total은 필터 적용 후 개수이며 activeCount는 전체 진행 작업 개수입니다.'), response(400, '지원하지 않는 필터 또는 페이지 값.')],
+    responses: [response(200, 'jobs, total, activeCount, finishedCount, selectionCount, retentionDays, limit, offset. total은 필터 적용 후 전체 개수, finishedCount는 그중 삭제 가능한 종료 이력 개수이며 activeCount는 필터와 무관한 전체 진행 작업 개수입니다. GET의 selectionCount는 finishedCount와 같습니다.'), response(400, '지원하지 않는 필터 또는 페이지 값.')],
   },
   'GET /api/v1/notifications': {
     title: '알림 목록', description: '최신순으로 최대 200개를 조회합니다. severity를 지정하면 해당 심각도의 알림을 먼저 필터링한 뒤 조회 상한을 적용합니다.',
     parameters: [{ name: 'severity', in: 'query', type: 'info | error', required: false, description: '생략하면 전체 알림, error이면 오류 알림만 조회합니다.', example: 'error' }],
-    responses: [response(200, 'notifications 배열. 각 항목은 id, type, severity, title, body, link, read, createdAtMs를 포함합니다.'), response(400, '지원하지 않는 severity 값.')],
+    responses: [response(200, 'notifications 배열과 total, selectionCount. GET의 selectionCount는 total과 같습니다. total은 필터에 맞는 전체 개수이며 200개 조회 상한을 적용하지 않습니다. 각 항목은 id, type, severity, title, body, link, read, createdAtMs를 포함합니다.'), response(400, '지원하지 않는 severity 값.')],
   },
   'POST /api/v1/auth/login': {
     title: '로그인', authentication: 'PUBLIC', description: '암호를 확인하고 서명된 HttpOnly 세션 쿠키를 발급합니다. TOTP_REQUIRED이면 추가 인증이 필요합니다.',

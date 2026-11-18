@@ -550,7 +550,6 @@ export class AgentClient {
             id: lease.jobId,
             status: "RUNNING",
             preparationJobId: null,
-            cloneBatchId: null,
           } as typeof backtestJobs.$inferInsert)
           .run();
       } finally {

@@ -53,10 +53,10 @@ add('DELETE', '/intraday/validations/:id', '분봉 기간 검증 삭제', '종�
 add('POST', '/intraday/runs/:id/clone', '분봉 결과 복제', '종료된 실행의 요청으로 새 분봉 실행을 제출합니다.', { status: 202, errors: [400, 404, 429] });
 add('GET', '/intraday/runs/:id/export', '분봉 결과 다운로드', '완료된 실행 전체를 JSON 파일로 반환합니다.');
 add('GET', '/intraday/runs/:id/lineage', '분봉 결과 계보', 'kind, roleLabel, complete 및 items로 상위 결과 경로를 반환합니다.');
-add('GET', '/intraday/experiments/summary', '분봉 실험 집계', '원본별 search, seed 및 validation 집계를 summaries로 반환합니다.', { params: [query('jobIds', 'string', '쉼표로 구분한 원본 ID, 최대 100개.', true)], errors: [400] });
+add('GET', '/intraday/experiments/summary', '분봉 실험 집계', '원본별 search 및 validation 집계를 summaries로 반환합니다.', { params: [query('jobIds', 'string', '쉼표로 구분한 원본 ID, 최대 100개.', true)], errors: [400] });
 const revision = body('현재 expectedRevision을 지정합니다.', tradingRevisionSchema);
 const activation = body('expectedRevision과 acknowledged=true를 지정합니다.', tradingRevisionSchema.extend({ acknowledged: z.literal(true) }));
-add('GET', '/trading', '실전 운용 상태', 'revision, deployment, broker, account, performance, positions, orders, events 및 blockers를 반환합니다.');
+add('GET', '/trading', '운용 상태', 'revision, deployment, broker, account, performance, positions, orders, events 및 blockers를 반환합니다. dataPreparation은 현재 설정의 데이터 준비 상태(RUNNING/READY/FAILED)와 message이며 작업이 없으면 null입니다.');
 add('GET', '/trading/quotes/:symbol', '운용 종목 현재 시세', '종목의 symbol, price, timestampMs를 반환합니다. 유효한 시세를 조회할 수 없으면 QUOTE_UNAVAILABLE 오류를 반환합니다.', { params: [{ name: 'symbol', in: 'path', type: 'string', required: true, description: '영문 또는 숫자 6자리 종목 코드.' }], errors: [400, 503] });
 add('GET', '/trading/strategies', '실전 운용 전략 버전', '사용 가능한 전략 아티팩트의 strategies 배열을 반환합니다.');
 add('GET', '/trading/source/:jobId', '운용 설정 원본 결과', '백테스트 결과에서 운용 설정에 사용할 원본 정보를 반환합니다.');
@@ -64,7 +64,8 @@ add('POST', '/trading/strategy', '운용 전략 등록', '단일 운용 전략�
 add('PUT', '/trading/strategy', '운용 전략 변경', '비활성 운용 전략 설정을 수정하고 변경된 상태를 반환합니다.', { input: body('전략 및 위험 설정과 expectedRevision.', tradingWriteSchema), errors: [400, 404, 409] });
 add('DELETE', '/trading/strategy', '운용 전략 제거', '현재 수정 버전을 확인하고 비활성 전략을 제거합니다.', { input: revision, errors: [400, 404, 409] });
 add('POST', '/trading/version', '운용 전략 버전 변경', '아티팩트 해시와 파라미터를 설정하고 변경된 상태를 반환합니다.', { input: body('expectedRevision, 64자리 artifactHash 및 parameters 객체.', tradingRevisionSchema.extend({ artifactHash: z.string().regex(/^[a-f0-9]{64}$/), parameters: z.record(z.string(), z.unknown()) })), errors: [400, 404, 409] });
-add('POST', '/trading/activate', '실전 운용 활성화', '명시적 확인과 현재 수정 버전으로 운용을 활성화합니다.', { input: activation, errors: [400, 404, 409] });
+add('POST', '/trading/activate', '운용 활성화', '명시적 확인과 현재 수정 버전으로 운용을 활성화합니다. 자료가 부족하거나 결손이면 준비를 시작하고 INACTIVE 상태를 반환합니다. dataPreparation이 READY가 된 뒤 다시 활성화해야 하며 자동으로 주문을 시작하지 않습니다.', { input: activation, errors: [400, 404, 409] });
+add('POST', '/trading/prepare', '매매 데이터 확인·복구', '자동매매 OFF 상태에서 고정 전략의 입력을 검사하고 필요한 종목·연도의 자료 수집 및 재검증을 비동기로 시작합니다. 현재 운용 상태를 반환하며 GET /trading의 dataPreparation으로 진행·실패 사유를 확인합니다. 같은 결손을 무한 재시도하지 않고 완료 후에도 OFF를 유지합니다.', { input: revision, status: 202, errors: [400, 409] });
 add('POST', '/trading/deactivate', '실전 운용 비활성화', '신규 주문을 중단하고 미체결 취소와 대조를 시작합니다.', { input: revision, errors: [400, 404, 409] });
 add('POST', '/trading/orders/:orderId/resolve', '불확실 주문 대조', '명시적 확인과 증권사 주문 ID 또는 null로 불확실한 주문을 대조합니다.', { input: body('expectedRevision, acknowledged=true, brokerOrderId (문자열 또는 null).', tradingRevisionSchema.extend({ acknowledged: z.literal(true), brokerOrderId: z.string().trim().min(1).max(500).nullable() })), errors: [400, 404, 409] });
 add('POST', '/trading/refresh', '실전 운용 상태 새로고침', '증권사 계좌와 주문 상태를 새로 조회합니다.', { input: body('빈 객체.', z.object({}).strict()), errors: [400, 409] });

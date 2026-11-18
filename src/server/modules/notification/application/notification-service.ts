@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { count, desc, eq, inArray } from "drizzle-orm";
+import { and, count, desc, eq, inArray, sql } from "drizzle-orm";
 import type { AppDatabase } from "../../../../runtime/shared/db/database.js";
 import { notifications } from "../../../shared/db/notification-schema.js";
 import type { Clock } from "../../../../runtime/shared/clock.js";
@@ -66,6 +66,15 @@ export class NotificationService {
       .map(row => ({ ...row, title: experimentTitle(row.title), body: row.body ? experimentTitle(row.body) : row.body }));
   }
 
+  count(severity?: NotificationSeverity, excludeIds: readonly string[] = []): number {
+    const [row] = this.db.select({ value: count() }).from(notifications)
+      .where(and(
+        severity === undefined ? undefined : eq(notifications.severity, severity),
+        sql`NOT EXISTS (SELECT 1 FROM json_each(${JSON.stringify(excludeIds)}) excluded WHERE excluded.value = ${notifications.id})`,
+      )).all();
+    return row?.value ?? 0;
+  }
+
   unreadCount(): number {
     const [row] = this.db
       .select({ value: count() })
@@ -91,7 +100,10 @@ export class NotificationService {
       .run();
   }
 
-  removeAll(): void {
-    this.db.delete(notifications).run();
+  removeAll(severity?: NotificationSeverity, excludeIds: readonly string[] = []): void {
+    this.db.delete(notifications).where(and(
+      severity === undefined ? undefined : eq(notifications.severity, severity),
+      sql`NOT EXISTS (SELECT 1 FROM json_each(${JSON.stringify(excludeIds)}) excluded WHERE excluded.value = ${notifications.id})`,
+    )).run();
   }
 }

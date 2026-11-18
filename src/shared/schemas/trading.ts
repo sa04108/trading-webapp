@@ -96,6 +96,10 @@ export interface TradingEvent {
 
 export interface TradingSnapshot {
   revision: number;
+  dataPreparation: {
+    status: "RUNNING" | "READY" | "FAILED";
+    message: string;
+  } | null;
   paperCapital: { initialCashKrw: number; canEdit: boolean } | null;
   deployment: TradingDeployment | null;
   broker: {

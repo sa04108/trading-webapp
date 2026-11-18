@@ -122,6 +122,7 @@ it.each(['operations', 'agent'] as const)('%s DB의 옛 벤치마크 pin을 제�
       VALUES ('source', 'COMPLETED', '{"randomSeed":42}', 'strategy', '{}', '[]', '[]', 'universe-hash', '{}', '{old-pin', 'old-hash', 1),
              ('queued', 'QUEUED', '{"randomSeed":43}', 'strategy', '{}', '[]', '[]', 'universe-hash', '{}', '{old-pin', 'old-hash', 2);
     `);
+    sqlite.exec("UPDATE backtest_jobs SET clone_batch_id='batch', clone_source_job_id='source' WHERE id='queued'");
     const tables = ['backtest_jobs'];
     if (role === 'operations') {
       sqlite.exec(`
@@ -139,9 +140,9 @@ it.each(['operations', 'agent'] as const)('%s DB의 옛 벤치마크 pin을 제�
         INSERT INTO backtest_benchmark_selections (user_id, job_id, benchmark_ids_json)
         VALUES ('user', 'source', '["KOSPI","SP500"]');
       `);
-      tables.push('backtest_clone_batches', 'backtest_clone_batch_items', 'backtest_equity_points', 'backtest_benchmark_selections');
+      tables.push('backtest_equity_points', 'backtest_benchmark_selections');
     }
-    const discarded = ['benchmark_json', 'benchmark_hash'];
+    const discarded = ['benchmark_json', 'benchmark_hash', 'clone_batch_id'];
     const snapshots = tables.map((table) => {
       const columns = (sqlite.pragma(`table_info(${table})`) as Array<{ name: string }>)
         .map(({ name }) => name).filter((name) => !discarded.includes(name));
@@ -150,13 +151,56 @@ it.each(['operations', 'agent'] as const)('%s DB의 옛 벤치마크 pin을 제�
     });
     for (let attempt = 0; attempt < 2; attempt += 1) {
       migrateDatabaseRole(sqlite, role, 'main');
-      for (const table of role === 'operations' ? ['backtest_jobs', 'backtest_clone_batches'] : ['backtest_jobs']) {
-        const columns = (sqlite.pragma(`table_info(${table})`) as Array<{ name: string }>).map(({ name }) => name);
-        for (const column of discarded) expect(columns).not.toContain(column);
+      const columns = (sqlite.pragma('table_info(backtest_jobs)') as Array<{ name: string }>).map(({ name }) => name);
+      for (const column of discarded) expect(columns).not.toContain(column);
+      if (role === 'operations') {
+        expect(sqlite.prepare("SELECT name FROM sqlite_schema WHERE name GLOB 'backtest_clone_batch*'").all()).toEqual([]);
+        expect(sqlite.prepare('SELECT severity, link FROM notifications').all()).toEqual([{ severity: 'error', link: '/backtests/source/search' }]);
       }
       for (const { query, rows } of snapshots) expect(sqlite.prepare(query).all()).toEqual(rows);
       expect(sqlite.pragma('foreign_key_check')).toEqual([]);
       expect(sqlite.pragma('foreign_keys', { simple: true })).toBe(1);
+    }
+  } finally { sqlite.close(); }
+});
+
+it('난수 복제 갱신 요청만 폐기하고 다른 작업과 공유하는 준비는 취소하지 않는다', () => {
+  const sqlite = new Database(':memory:');
+  try {
+    sqlite.pragma('foreign_keys = ON');
+    sqlite.exec('CREATE TABLE __drizzle_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, hash TEXT NOT NULL, created_at NUMERIC NOT NULL)');
+    for (const migration of readMigrationFiles({ migrationsFolder: 'migrations/operations' }).slice(0, 29)) {
+      for (const statement of migration.sql) sqlite.exec(statement);
+      sqlite.prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)').run(migration.hash, migration.folderMillis);
+    }
+    sqlite.exec(`
+      INSERT INTO users (id, username, password_hash, created_at_ms, updated_at_ms) VALUES ('owner','owner','test',1,1);
+      INSERT INTO backtest_jobs (id,status,request_json,strategy_id,universe_rule_json,universe_schedule_json,created_at_ms)
+        VALUES ('source','COMPLETED','{}','strategy','{}','[]',1);
+      INSERT INTO backtest_preparation_jobs (id,status,phase,request_hash,request_json,lifecycle_managed,created_at_ms,updated_at_ms)
+        VALUES ('exclusive','QUEUED','RESOLVING_STAGES','one','{}',1,1,1), ('shared','RUNNING','RESOLVING_STAGES','two','{}',1,1,1);
+      INSERT INTO notifications (id,type,severity,title,link,created_at_ms) VALUES
+        ('old','backtest','info','기존 알림','/backtests/source?refreshJob=old-a',1),
+        ('current','backtest','info','일반 복제','/backtests/source?refreshJob=current',2);
+    `);
+    const insert = sqlite.prepare(`INSERT INTO backtest_refresh_jobs
+      (id,owner_id,request_id,source_job_id,action_json,request_json,warnings_json,runtime_identity,status,preparation_job_id,created_at_ms,updated_at_ms)
+      VALUES (@id,'owner',@id,'source',@action,'{}','[]','v1',@status,@prep,1,1)`);
+    for (const [id, prep] of [['old-a','exclusive'], ['old-b','shared']])
+      insert.run({ id, prep, status: 'PREPARING', action: '{"kind":"RANDOM_SEEDS","count":5}' });
+    insert.run({ id: 'current', prep: 'shared', status: 'PREPARING', action: '{"kind":"CLONE"}' });
+    insert.run({ id: 'old-end', prep: null, status: 'COMPLETED', action: '{"kind":"RANDOM_SEEDS","count":2}' });
+    insert.run({ id: 'unrecognized', prep: null, status: 'FAILED', action: '{' });
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      migrateDatabaseRole(sqlite, 'operations', 'main');
+      expect(sqlite.prepare('SELECT id FROM backtest_refresh_jobs ORDER BY id').pluck().all()).toEqual(['current', 'unrecognized']);
+      expect(sqlite.prepare('SELECT id, cancel_requested FROM backtest_preparation_jobs ORDER BY id').all()).toEqual([
+        { id: 'exclusive', cancel_requested: 1 }, { id: 'shared', cancel_requested: 0 },
+      ]);
+      expect(sqlite.prepare('SELECT link FROM notifications ORDER BY created_at_ms').pluck().all())
+        .toEqual([null, '/backtests/source?refreshJob=current', '/backtests/source/search']);
+      expect(sqlite.pragma('foreign_key_check')).toEqual([]);
     }
   } finally { sqlite.close(); }
 });

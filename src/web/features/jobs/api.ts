@@ -1,20 +1,26 @@
-import { useQuery } from "@tanstack/react-query";
+import { queryOptions, useQuery } from "@tanstack/react-query";
 import { isFinishedJob, type JobFilter, type JobResponse, type JobsResponse } from "@shared/schemas/jobs";
 import { api, ApiError } from "@/lib/api-client";
 
 const cannotRefresh = (error: Error | null) => error instanceof ApiError && [401, 403, 404].includes(error.status);
 const retry = (count: number, error: Error) => count < 1 && !cannotRefresh(error);
 
-export function useJobs(status: JobFilter, offset: number) {
-  return useQuery<JobsResponse>({
-    queryKey: ["jobs", "list", status, offset],
+export function jobsQueryOptions(status: JobFilter, offset: number, excludeIds: readonly string[] = []) {
+  return queryOptions<JobsResponse>({
+    queryKey: ["jobs", "list", status, offset, excludeIds],
     placeholderData: (previous, previousQuery) => previousQuery?.queryKey[2] === status ? previous : undefined,
-    queryFn: ({ signal }) => api<JobsResponse>(`/jobs?status=${status}&limit=50&offset=${offset}`, { signal }),
+    queryFn: ({ signal }) => excludeIds.length
+      ? api<JobsResponse>("/jobs/list", { signal, method: "POST", body: JSON.stringify({ status, limit: 50, offset, excludeIds }) })
+      : api<JobsResponse>(`/jobs?status=${status}&limit=50&offset=${offset}`, { signal }),
     refetchInterval: (query) => cannotRefresh(query.state.error) ? false : query.state.error ? 30_000 : query.state.data?.activeCount ? 5_000 : 30_000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry,
   });
+}
+
+export function useJobs(status: JobFilter, offset: number, excludeIds: readonly string[] = []) {
+  return useQuery(jobsQueryOptions(status, offset, excludeIds));
 }
 
 export function useJob(id: string) {

@@ -140,9 +140,8 @@ export class BacktestWizardRecoveryService {
     return !this.database.sqlite.prepare(`SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id=? AND (user_id<>? OR context<>?)
       UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id=?
       UNION ALL SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id=?
-      UNION ALL SELECT 1 FROM backtest_clone_batches WHERE preparation_job_id=?
       UNION ALL SELECT 1 FROM configuration_search_items WHERE preparation_job_id=?
       UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id=? LIMIT 1`)
-      .get(id, wizard.ownerId, wizard.id, id, id, id, id, id);
+      .get(id, wizard.ownerId, wizard.id, id, id, id, id);
   }
 }

@@ -1028,12 +1028,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         cookies: { session: cookie },
         payload: buildRequest(),
       }),
-      await ctx.app.inject({
-        method: 'POST',
-        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-        cookies: { session: cookie },
-        payload: { count: 2 },
-      }),
     ];
 
     for (const response of attempts) {
@@ -1076,7 +1070,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     }).run();
 
     const beforeJobs = readBacktestJobs(ctx.container.database).length;
-    const beforeBatches = ctx.container.seedCloneBatchService.list().length;
     const attempts = [
       await ctx.app.inject({
         method: 'POST',
@@ -1095,12 +1088,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         cookies: { session: cookie },
         payload: buildRequest(),
       }),
-      await ctx.app.inject({
-        method: 'POST',
-        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-        cookies: { session: cookie },
-        payload: { count: 2 },
-      }),
     ];
 
     for (const response of attempts) {
@@ -1109,7 +1096,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
         .toMatch(/단축코드 005930.*여러 표준코드/);
     }
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobs);
-    expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
 
     const draft = await ctx.app.inject({
       method: 'GET',
@@ -1260,7 +1246,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     'new',
     'clone',
     'clone-configured',
-    'clone-random-seeds',
   ] as const) {
     it(`${route} 경로는 준비 확인 직후 재무 coverage가 사라져도 생성하지 않는다`, async ({ scenario }) => {
     const { ctx, cookie } = scenario;
@@ -1292,7 +1277,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       .where(eq(symbolFactsState.code, '005930'))
       .run();
     // 완료 cache 검사와 각 생성 관문의 TOCTOU를 강제로 연다. enqueue 직전 공통
-    // predicate가 다시 잡아야 하며, job/batch 행은 하나도 늘면 안 된다.
+    // predicate가 다시 잡아야 하며, job 행은 하나도 늘면 안 된다.
     if (route === 'new') {
       ctx.container.backtestPreparationOrchestrator.getReadyPreviewForWizard = () => cached;
     } else {
@@ -1310,7 +1295,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       });
     }
     const beforeJobs = readBacktestJobs(ctx.container.database).length;
-    const beforeBatches = ctx.container.seedCloneBatchService.list().length;
     const url = route === 'new'
       ? '/api/v1/backtests'
       : `/api/v1/backtests/${sourceId}/${route}`;
@@ -1318,9 +1302,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       ? { ...valueRequest, randomSeed: 99 }
       : route === 'clone-configured'
         ? { ...valueRequest, randomSeed: 99 }
-        : route === 'clone-random-seeds'
-          ? { count: 2 }
-          : undefined;
+        : undefined;
     const rejected = await ctx.app.inject({
       method: 'POST',
       url,
@@ -1332,7 +1314,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect((rejected.json() as { error: string }).error).toBe('PREPARATION_REQUIRED');
     expect((rejected.json() as { message: string }).message).toMatch(/coverage.*2025~2026년.*005930/);
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobs);
-    expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
     });
   }
 
@@ -1340,7 +1321,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     'new',
     'clone',
     'clone-configured',
-    'clone-random-seeds',
   ] as const) {
     it(`${route} 경로는 검증 직후 실행 봉이 사라지면 500 대신 재준비 409를 반환한다`, async ({ scenario }) => {
     const { ctx, cookie } = scenario;
@@ -1414,7 +1394,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     });
 
     const beforeJobs = readBacktestJobs(ctx.container.database).length;
-    const beforeBatches = ctx.container.seedCloneBatchService.list().length;
     const url = route === 'new'
       ? '/api/v1/backtests'
       : `/api/v1/backtests/${sourceId}/${route}`;
@@ -1422,9 +1401,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       ? { ...valueRequest, randomSeed: 99 }
       : route === 'clone-configured'
         ? { ...valueRequest, randomSeed: 99 }
-        : route === 'clone-random-seeds'
-          ? { count: 2 }
-          : undefined;
+        : undefined;
     const rejected = await ctx.app.inject({
       method: 'POST',
       url,
@@ -1437,7 +1414,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(rejected.json()).toMatchObject({ error: 'PREPARATION_REQUIRED' });
     expect((rejected.json() as { message: string }).message).toContain('005930');
     expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobs);
-    expect(ctx.container.seedCloneBatchService.list()).toHaveLength(beforeBatches);
     });
   }
 
@@ -1691,7 +1667,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     expect(changedPeriod.json().error).toBe('PREVIEW_REQUIRED');
   });
 
-  it('원본 재현성 pin이 없거나 손상되면 미리보기와 새 난수 복제를 강제한다', async ({ scenario }) => {
+  it('원본 재현성 pin이 없거나 손상되면 설정 변경 복제에 새 미리보기를 요구한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
     await scenario.prepare(buildRequest());
     const pinPatches: Array<Partial<typeof backtestJobs.$inferInsert>> = [
@@ -1724,22 +1700,21 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       expect(draft.statusCode).toBe(200);
       expect(draft.json().reusablePreview).toBeNull();
 
-      const randomSeeds = await ctx.app.inject({
+      const cloned = await ctx.app.inject({
         method: 'POST',
-        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
+        url: `/api/v1/backtests/${sourceId}/clone-configured`,
         cookies: { session: cookie },
-        payload: { count: 2 },
+        payload: buildRequest(),
       });
-      expect(randomSeeds.statusCode).toBe(409);
-      expect(randomSeeds.json().error).toBe('PREVIEW_REQUIRED');
+      expect(cloned.statusCode).toBe(409);
+      expect(cloned.json().error).toBe('PREVIEW_REQUIRED');
     }
 
-    expect(ctx.container.seedCloneBatchService.list()).toEqual([]);
   });
 
   // 서비스 대역 검사는 실제 준비 결과·제출 pin·작업 센터·알림의 연결을 보장하지 않는다.
-  for (const kind of ['CLONE', 'RANDOM_SEEDS'] as const) {
-    it(`${kind} 데이터 업데이트는 원본을 보존하고 새 준비 결과로 한 번만 실행한다`, async ({ scenario }) => {
+  {
+    it('CLONE 데이터 업데이트는 원본을 보존하고 새 준비 결과로 한 번만 실행한다', async ({ scenario }) => {
       const { ctx, cookie } = scenario;
       const request = buildRequest();
       await scenario.prepare(request);
@@ -1750,11 +1725,10 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       ctx.container.database.sqlite.prepare("UPDATE backtest_preparation_jobs SET request_hash='previous-preview-version' WHERE id=?").run(source.preparationJobId);
       ctx.container.database.sqlite.prepare("UPDATE preparation_preview_cache SET validation_version='previous-preview-version' WHERE job_id=?").run(source.preparationJobId);
       const rejected = await ctx.app.inject({
-        method: 'POST', url: `/api/v1/backtests/${sourceId}/${kind === 'CLONE' ? 'clone' : 'clone-random-seeds'}`,
-        cookies: { session: cookie }, ...(kind === 'RANDOM_SEEDS' ? { payload: { count: 3 } } : {}),
+        method: 'POST', url: `/api/v1/backtests/${sourceId}/clone`, cookies: { session: cookie },
       });
       expect(rejected.statusCode, rejected.body).toBe(409);
-      const payload = { requestId: randomUUID(), action: kind === 'CLONE' ? { kind } : { kind, count: 3 } };
+      const payload = { requestId: randomUUID(), action: { kind: 'CLONE' } };
       await withSparseQueuePreparation(ctx, request, async () => {
         const submit = () => ctx.app.inject({ method: 'POST', url: `/api/v1/backtests/${sourceId}/refresh-and-run`, cookies: { session: cookie }, payload });
         expect((await ctx.app.inject({ method: 'POST', url: `/api/v1/backtests/${sourceId}/refresh-and-run`, payload })).statusCode).toBe(401);
@@ -1768,11 +1742,11 @@ describe('backtest job queue (스펙 §10, §14)', () => {
           expect(response.json().job, response.body).toMatchObject({ status: 'COMPLETED' });
           href = response.json().job.resultHref as string;
         }, { timeout: 15_000, interval: 100 });
-        expect((await submit()).json().job).toMatchObject({ id: refreshId, status: 'COMPLETED', resultHref: href });
+        const repeated = await submit();
+        expect(repeated.json().job).toMatchObject({ id: refreshId, status: 'COMPLETED', resultHref: href });
         const id = href.split('/').at(-1)!;
-        const children = kind === 'CLONE' ? [ctx.container.jobQueue.getJob(id)!]
-          : ctx.container.seedCloneBatchService.get(id)!.items.map(({ job }) => job!);
-        expect(children).toHaveLength(kind === 'CLONE' ? 1 : 3);
+        const children = [ctx.container.jobQueue.getJob(id)!];
+        expect(children).toHaveLength(1);
         for (const child of children) {
           expect(child.cloneSourceJobId).toBe(sourceId);
           expect(child.preparationJobId).not.toBe(source.preparationJobId);
@@ -1789,292 +1763,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
       });
     });
   }
-
-  it('새 난수 100개는 중복 없이 저장하고 기존 QUEUED 상한만큼 순차 투입한다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    const request = buildRequest();
-    request.risk.maxPositionWeightPercent = 12.5;
-    await scenario.prepare(request);
-    const created = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/backtests',
-      cookies: { session: cookie },
-      payload: request,
-    });
-    expect(created.statusCode).toBe(201);
-    const sourceId = created.json().job.id as string;
-    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
-
-    const response = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 100 },
-    });
-    expect(response.statusCode).toBe(201);
-    const batchId = response.json().batch.id as string;
-    expect(response.json().batch).toMatchObject({
-      totalCount: 100,
-      queuedCount: 20,
-      pendingCount: 80,
-    });
-    expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(20);
-
-    const topLevel = await ctx.app.inject({
-      method: 'GET',
-      url: '/api/v1/backtests?limit=200',
-      cookies: { session: cookie },
-    });
-    expect(topLevel.statusCode).toBe(200);
-    expect(topLevel.json().jobs).toHaveLength(1);
-    expect(topLevel.json().jobs[0]).toMatchObject({ id: sourceId, cloneBatchId: null });
-
-    const detail = await ctx.app.inject({
-      method: 'GET',
-      url: `/api/v1/backtest-clone-batches/${batchId}`,
-      cookies: { session: cookie },
-    });
-    expect(detail.statusCode).toBe(200);
-    const items = detail.json().batch.items as Array<{
-      randomSeed: number;
-      jobId: string | null;
-      status: string;
-    }>;
-    expect(items).toHaveLength(100);
-    expect(new Set(items.map((item) => item.randomSeed)).size).toBe(100);
-    expect(items.some((item) => item.randomSeed === buildRequest().randomSeed)).toBe(false);
-
-    const firstQueued = items.find((item) => item.status === 'QUEUED')!;
-    expect(ctx.container.jobQueue.setStatus(firstQueued.jobId!, 'STARTING', {}, ['QUEUED'])).toBe(true);
-    ctx.container.seedCloneBatchService.onJobStatusChanged();
-    const afterSlot = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(afterSlot.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(79);
-    expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(20);
-
-    const child = afterSlot.items.find(({ job }) => job?.cloneBatchId === batchId)?.job;
-    expect(child?.cloneSourceJobId).toBe(sourceId);
-    const childRequest = JSON.parse(child!.requestJson) as BacktestRequest;
-    const { randomSeed: _sourceSeed, ...sourceSettings } = request;
-    const { randomSeed: _childSeed, ...childSettings } = childRequest;
-    expect(childSettings).toEqual({ ...sourceSettings, timeframe: '1d' });
-
-    for (let round = 0; round < 6; round += 1) {
-      const current = ctx.container.seedCloneBatchService.get(batchId)!;
-      for (const { job } of current.items) {
-        if (job && !ctx.container.jobQueue.isTerminal(job.status)) {
-          ctx.container.jobQueue.setStatus(job.id, 'COMPLETED', {}, [
-            'QUEUED', 'STARTING', 'RUNNING', 'CANCELLING',
-          ]);
-        }
-      }
-      ctx.container.seedCloneBatchService.onJobStatusChanged();
-    }
-    const completed = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(completed.batch.status).toBe('COMPLETED');
-    expect(completed.items.every(({ item }) => item.state === 'DISPATCHED')).toBe(true);
-  });
-
-  it('난수 복제 대기 중 identity 이력이 바뀌면 다음 자식 승격 전에 묶음을 실패시킨다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    await scenario.prepare(buildRequest());
-    const created = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/backtests',
-      cookies: { session: cookie },
-      payload: buildRequest(),
-    });
-    expect(created.statusCode).toBe(201);
-    const sourceId = created.json().job.id as string;
-    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
-
-    const response = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 21 },
-    });
-    expect(response.statusCode).toBe(201);
-    const batchId = response.json().batch.id as string;
-    const before = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
-    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
-    const beforeJobCount = readBacktestJobs(ctx.container.database).length;
-
-    ctx.container.database.db.insert(symbolMasterVersions).values({
-      standardCode: 'KR7999999999',
-      shortCode: '005930',
-      validFromDate: '1990-01-01',
-      validToDate: '2000-01-01',
-      name: '과거 발행사',
-      market: 'KOSPI',
-      sharesOutstanding: '1',
-      instrumentType: 'COMMON_STOCK',
-      listedDate: '1990-01-01',
-      recordedAtMs: ctx.container.clock.now(),
-    }).run();
-    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
-
-    ctx.container.seedCloneBatchService.pump();
-
-    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(failed.batch.status).toBe('FAILED');
-    expect(failed.batch.error).toMatch(/단축코드 005930.*여러 표준코드/);
-    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
-    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
-  });
-
-  it('난수 복제 대기 중 기간 coverage가 사라지면 다음 자식 승격 전에 묶음을 실패시킨다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    await scenario.prepare(buildRequest());
-    const created = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/backtests',
-      cookies: { session: cookie },
-      payload: buildRequest(),
-    });
-    expect(created.statusCode).toBe(201);
-    const sourceId = created.json().job.id as string;
-    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
-
-    const response = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 21 },
-    });
-    expect(response.statusCode).toBe(201);
-    const batchId = response.json().batch.id as string;
-    const before = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
-    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
-    const beforeJobCount = readBacktestJobs(ctx.container.database).length;
-
-    ctx.container.database.db.delete(symbolMasterCoverage).run();
-    ctx.container.database.db.insert(symbolMasterCoverage).values(
-      ['2026-01-05', '2026-02-05', '2026-03-05', '2026-04-05', '2026-05-05', '2026-06-05']
-        .map((date) => ({
-          startDate: date,
-          endDate: date,
-          collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.container.clock.now(),
-        })),
-    ).run();
-    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
-
-    ctx.container.seedCloneBatchService.pump();
-
-    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(failed.batch.status).toBe('FAILED');
-    expect(failed.batch.error).toContain('기간 전체');
-    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
-    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
-  });
-
-  it('재무 전략 난수 복제 대기 중 필수 연도 coverage가 사라지면 추가 승격을 막는다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    const request: BacktestRequest = {
-      ...buildRequest(),
-      strategyId: 'value-quality-rank',
-      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
-      risk: { maxPositions: 1 },
-    };
-    await seedValueQualityFacts(ctx.container, ['005930']);
-    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
-    await scenario.prepare(request);
-    const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: request,
-    });
-    expect(created.statusCode).toBe(201);
-    const sourceId = created.json().job.id as string;
-    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
-
-    const response = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 21 },
-    });
-    expect(response.statusCode).toBe(201);
-    const batchId = response.json().batch.id as string;
-    const before = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
-    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
-    const beforeJobCount = readBacktestJobs(ctx.container.database).length;
-
-    ctx.container.database.db.update(symbolFactsState)
-      .set({ coveredYearsJson: JSON.stringify([2026]) })
-      .where(eq(symbolFactsState.code, '005930'))
-      .run();
-    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
-    ctx.container.seedCloneBatchService.pump();
-
-    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(failed.batch.status).toBe('FAILED');
-    expect(failed.batch.error).toMatch(/coverage.*2025~2026년.*005930/);
-    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
-    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
-  });
-
-  it('난수 복제 대기 중 기간 일봉이 사라지면 다음 자식 승격 전에 묶음을 실패시킨다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    registerSymbols(ctx.container, 'KR', ['000660']);
-    const request = { ...buildRequest(), universeRule: universeRule(2) };
-    seedDailyBars(ctx.container.database.db, [
-      {
-        symbol: '000660',
-        market: 'KR',
-        timeframe: '1d',
-        tsMs: Date.parse('2025-12-31T00:00:00Z'),
-        open: 100,
-        high: 102,
-        low: 99,
-        close: 101,
-        volume: 1_000,
-      },
-      ...buildTrendingDailyCandles('000660'),
-    ]);
-    await seedCorporateActionCoverage(ctx.container, ['000660'], ACTION_COVERAGE_YEARS);
-    await scenario.prepare(request);
-    const created = await ctx.app.inject({
-      method: 'POST',
-      url: '/api/v1/backtests',
-      cookies: { session: cookie },
-      payload: request,
-    });
-    expect(created.statusCode).toBe(201);
-    const sourceId = created.json().job.id as string;
-    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
-
-    const response = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 21 },
-    });
-    expect(response.statusCode).toBe(201);
-    const batchId = response.json().batch.id as string;
-    const before = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(before.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
-    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
-    const beforeJobCount = readBacktestJobs(ctx.container.database).length;
-
-    ctx.container.database.db
-      .delete(krxDailyBars)
-      .where(and(
-        eq(krxDailyBars.shortCode, '000660'),
-        gte(krxDailyBars.date, request.period.from),
-        lte(krxDailyBars.date, request.period.to),
-      ))
-      .run();
-    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
-
-    ctx.container.seedCloneBatchService.pump();
-
-    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(failed.batch.status).toBe('FAILED');
-    expect(failed.batch.error).toMatch(/000660.*일봉|일봉.*000660/);
-    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
-    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
-  });
 
   it('벤치마크 조회가 실패해도 제출과 재설정 복제를 실행한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
@@ -2104,374 +1792,6 @@ describe('backtest job queue (스펙 §10, §14)', () => {
     } finally {
       coverage.mockRestore();
     }
-  });
-
-  it('난수 비의존 전략은 API로도 난수 복제 묶음을 만들 수 없다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    await scenario.prepare(buildRequest());
-    const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
-    });
-    expect(created.statusCode).toBe(201);
-    const sourceId = created.json().job.id as string;
-    const registry = ctx.container.strategyRegistry;
-    const strategy = registry.get(STRATEGY_ID)!;
-    const originalGet = registry.get.bind(registry);
-    const lookup = vi.spyOn(registry, 'get').mockImplementation((id) => id === STRATEGY_ID
-      ? { ...strategy, supportsRandomSeed: false }
-      : originalGet(id));
-    try {
-      const response = await ctx.app.inject({
-        method: 'POST', url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-        cookies: { session: cookie }, payload: { count: 10 },
-      });
-      expect(response.statusCode).toBe(400);
-      expect(response.json().error).toContain('난수 시드의 영향을 받지 않아');
-      expect(ctx.container.seedCloneBatchService.list()).toHaveLength(0);
-    } finally {
-      lookup.mockRestore();
-    }
-  });
-
-  it('재무 전략 난수 복제 대기 중 manifest의 재무 행이 사라지면 추가 승격을 막는다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    const request: BacktestRequest = {
-      ...buildRequest(),
-      strategyId: 'value-quality-rank',
-      parameters: { ...UNFILTERED_RANK_CONTROLS, topN: 1, rebalanceMonths: 3, staleQuarters: 2 },
-      risk: { maxPositions: 1 },
-    };
-    await seedValueQualityFacts(ctx.container, ['005930']);
-    seedFinancialCoverage(ctx.container, ['005930'], [2025, 2026]);
-    await scenario.prepare(request);
-    const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: request,
-    });
-    expect(created.statusCode).toBe(201);
-    const sourceId = created.json().job.id as string;
-    expect(ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
-    const response = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 21 },
-    });
-    expect(response.statusCode).toBe(201);
-    const batchId = response.json().batch.id as string;
-    const before = ctx.container.seedCloneBatchService.get(batchId)!;
-    const child = before.items.find(({ item }) => item.state === 'DISPATCHED')!.job!;
-    const beforeJobCount = readBacktestJobs(ctx.container.database).length;
-
-    ctx.container.database.db.delete(facts)
-      .where(eq(facts.key, '005930'))
-      .run();
-    // 정상적인 공시 결측과 구분하여 완료 manifest의 실제 fact 삭제를 차단한다.
-    expect(ctx.container.jobQueue.setStatus(child.id, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
-    ctx.container.seedCloneBatchService.pump();
-
-    const failed = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(failed.batch.status).toBe('FAILED');
-    expect(failed.batch.error).toMatch(/coverage.*005930/);
-    expect(failed.items.filter(({ item }) => item.state === 'PENDING')).toHaveLength(1);
-    expect(readBacktestJobs(ctx.container.database)).toHaveLength(beforeJobCount);
-  });
-
-  it('설정 탐색 실험 취소는 새 승격을 막고 대기 중인 자식도 취소한다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    await scenario.prepare(buildRequest());
-    const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
-    });
-    const sourceId = created.json().job.id as string;
-    ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
-    const batchResponse = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 100 },
-    });
-    const batchId = batchResponse.json().batch.id as string;
-
-    const cancelled = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtest-clone-batches/${batchId}/cancel`,
-      cookies: { session: cookie },
-    });
-    expect(cancelled.statusCode).toBe(200);
-    expect(cancelled.json().batch).toMatchObject({
-      status: 'CANCELLED',
-      cancelledCount: 100,
-      pendingCount: 0,
-      queuedCount: 0,
-    });
-    expect(ctx.container.jobQueue.countByStatus(['QUEUED'])).toBe(0);
-  });
-
-  it('설정 탐색 실험 취소는 실행 중 자식이 끝날 때까지 CANCELLING을 유지한다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    await scenario.prepare(buildRequest());
-    const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
-    });
-    const sourceId = created.json().job.id as string;
-    ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
-    const batchResponse = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 3 },
-    });
-    const batchId = batchResponse.json().batch.id as string;
-    const beforeCancel = ctx.container.seedCloneBatchService.get(batchId)!;
-    const runningJob = beforeCancel.items[0]!.job!;
-    expect(
-      ctx.container.jobQueue.setStatus(runningJob.id, 'RUNNING', {}, ['QUEUED']),
-    ).toBe(true);
-
-    const cancelling = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtest-clone-batches/${batchId}/cancel`,
-      cookies: { session: cookie },
-    });
-    expect(cancelling.statusCode).toBe(200);
-    expect(cancelling.json().batch).toMatchObject({
-      status: 'CANCELLING',
-      runningCount: 1,
-      queuedCount: 0,
-      pendingCount: 0,
-      cancelledCount: 2,
-      completedAtMs: null,
-    });
-
-    expect(
-      ctx.container.jobQueue.setStatus(runningJob.id, 'CANCELLED', {}, ['CANCELLING']),
-    ).toBe(true);
-    ctx.container.seedCloneBatchService.onJobStatusChanged();
-
-    const cancelled = ctx.container.seedCloneBatchService.get(batchId)!;
-    expect(cancelled.batch.status).toBe('CANCELLED');
-    expect(cancelled.batch.completedAtMs).not.toBeNull();
-  });
-
-  it('실행 중인 설정 탐색 실험 삭제는 막고 취소 완료 뒤에는 원본을 남긴 채 단독 삭제한다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    await scenario.prepare(buildRequest());
-    const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
-    });
-    const sourceId = created.json().job.id as string;
-    ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
-    const batchResponse = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 2 },
-    });
-    const batchId = batchResponse.json().batch.id as string;
-    const childIds = ctx.container.seedCloneBatchService.get(batchId)!.items
-      .flatMap(({ job }) => job === null ? [] : [job.id]);
-
-    expect(childIds).toHaveLength(2);
-    const activeBatchDelete = await ctx.app.inject({
-      method: 'DELETE',
-      url: `/api/v1/backtest-clone-batches/${batchId}`,
-      cookies: { session: cookie },
-    });
-    expect(activeBatchDelete.statusCode).toBe(409);
-
-    const activeSourceDelete = await ctx.app.inject({
-      method: 'DELETE',
-      url: `/api/v1/backtests/${sourceId}`,
-      cookies: { session: cookie },
-    });
-    expect(activeSourceDelete.statusCode).toBe(409);
-
-    const cancelled = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtest-clone-batches/${batchId}/cancel`,
-      cookies: { session: cookie },
-    });
-    expect(cancelled.statusCode).toBe(200);
-    expect(cancelled.json().batch.status).toBe('CANCELLED');
-
-    const deleted = await ctx.app.inject({
-      method: 'DELETE',
-      url: `/api/v1/backtest-clone-batches/${batchId}`,
-      cookies: { session: cookie },
-    });
-    expect(deleted.statusCode).toBe(204);
-    expect(ctx.container.seedCloneBatchService.get(batchId)).toBeNull();
-    expect(ctx.container.jobQueue.getJob(sourceId)).not.toBeNull();
-    expect(childIds.every((id) => ctx.container.jobQueue.getJob(id) === null)).toBe(true);
-  });
-
-  it('원본 삭제는 종료된 설정 탐색 실험 묶음과 모든 자식 백테스트를 함께 삭제한다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    await scenario.prepare(buildRequest());
-    const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
-    });
-    const sourceId = created.json().job.id as string;
-    ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
-
-    const batchIds: string[] = [];
-    for (const count of [2, 3]) {
-      const response = await ctx.app.inject({
-        method: 'POST',
-        url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-        cookies: { session: cookie },
-        payload: { count },
-      });
-      expect(response.statusCode).toBe(201);
-      batchIds.push(response.json().batch.id as string);
-    }
-
-    const childIds = batchIds.flatMap((batchId) =>
-      ctx.container.seedCloneBatchService.get(batchId)!.items
-        .flatMap(({ job }) => job === null ? [] : [job.id]));
-    expect(childIds).toHaveLength(5);
-    for (const childId of childIds) {
-      expect(ctx.container.jobQueue.setStatus(childId, 'COMPLETED', {}, ['QUEUED'])).toBe(true);
-    }
-    ctx.container.seedCloneBatchService.onJobStatusChanged();
-    expect(batchIds.every(
-      (batchId) => ctx.container.seedCloneBatchService.get(batchId)?.batch.status === 'COMPLETED',
-    )).toBe(true);
-
-    const deleted = await ctx.app.inject({
-      method: 'DELETE',
-      url: `/api/v1/backtests/${sourceId}`,
-      cookies: { session: cookie },
-    });
-    expect(deleted.statusCode).toBe(204);
-    expect(ctx.container.jobQueue.getJob(sourceId)).toBeNull();
-    expect(batchIds.every((batchId) => ctx.container.seedCloneBatchService.get(batchId) === null)).toBe(true);
-    expect(childIds.every((childId) => ctx.container.jobQueue.getJob(childId) === null)).toBe(true);
-  });
-
-  it('seed 자식의 신규 중첩 실험은 막고 기존 중첩은 활성 후손까지 검사해 재귀 삭제한다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    await scenario.prepare(buildRequest());
-    const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
-    });
-    const sourceId = created.json().job.id as string;
-    ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
-    const parentResponse = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 1 },
-    });
-    const parentBatchId = parentResponse.json().batch.id as string;
-    const parentChildId = ctx.container.seedCloneBatchService.get(parentBatchId)!.items[0]!.job!.id;
-    ctx.container.jobQueue.setStatus(parentChildId, 'COMPLETED', {}, ['QUEUED']);
-    ctx.container.seedCloneBatchService.onJobStatusChanged();
-
-    const rejectedNested = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${parentChildId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 1 },
-    });
-    expect(rejectedNested.statusCode).toBe(409);
-    expect(rejectedNested.json().error).toContain('원본 백테스트에서 시작하세요');
-
-    // 이전 버전에서 이미 만들어진 중첩 데이터를 재현한다. 생성 순간에만 일반 원본처럼
-    // 보이게 하고, 곧바로 실제 계보를 복원한다.
-    ctx.container.database.db.update(backtestJobs)
-      .set({ cloneBatchId: null })
-      .where(eq(backtestJobs.id, parentChildId))
-      .run();
-    const legacyNested = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${parentChildId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 1 },
-    });
-    expect(legacyNested.statusCode).toBe(201);
-    ctx.container.database.db.update(backtestJobs)
-      .set({ cloneBatchId: parentBatchId })
-      .where(eq(backtestJobs.id, parentChildId))
-      .run();
-    const nestedBatchId = legacyNested.json().batch.id as string;
-    const nestedChildId = ctx.container.seedCloneBatchService.get(nestedBatchId)!.items[0]!.job!.id;
-
-    const blocked = await ctx.app.inject({
-      method: 'DELETE',
-      url: `/api/v1/backtest-clone-batches/${parentBatchId}`,
-      cookies: { session: cookie },
-    });
-    expect(blocked.statusCode).toBe(409);
-    expect(ctx.container.seedCloneBatchService.get(parentBatchId)).not.toBeNull();
-    expect(ctx.container.seedCloneBatchService.get(nestedBatchId)).not.toBeNull();
-
-    const blockedSource = await ctx.app.inject({
-      method: 'DELETE',
-      url: `/api/v1/backtests/${sourceId}`,
-      cookies: { session: cookie },
-    });
-    expect(blockedSource.statusCode).toBe(409);
-    expect(ctx.container.jobQueue.getJob(sourceId)).not.toBeNull();
-
-    const cancelled = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtest-clone-batches/${nestedBatchId}/cancel`,
-      cookies: { session: cookie },
-    });
-    expect(cancelled.statusCode).toBe(200);
-    expect(cancelled.json().batch.status).toBe('CANCELLED');
-
-    const deleted = await ctx.app.inject({
-      method: 'DELETE',
-      url: `/api/v1/backtest-clone-batches/${parentBatchId}`,
-      cookies: { session: cookie },
-    });
-    expect(deleted.statusCode).toBe(204);
-    expect(ctx.container.seedCloneBatchService.get(parentBatchId)).toBeNull();
-    expect(ctx.container.seedCloneBatchService.get(nestedBatchId)).toBeNull();
-    expect(ctx.container.jobQueue.getJob(parentChildId)).toBeNull();
-    expect(ctx.container.jobQueue.getJob(nestedChildId)).toBeNull();
-    expect(ctx.container.jobQueue.getJob(sourceId)).not.toBeNull();
-  });
-
-  it('설정 탐색 실험 목록은 기본 50개 job 페이지 밖의 원본 요약도 함께 반환한다', async ({ scenario }) => {
-    const { ctx, cookie } = scenario;
-    await scenario.prepare(buildRequest());
-    const created = await ctx.app.inject({
-      method: 'POST', url: '/api/v1/backtests', cookies: { session: cookie }, payload: buildRequest(),
-    });
-    const sourceId = created.json().job.id as string;
-    ctx.container.jobQueue.setStatus(sourceId, 'COMPLETED', {}, ['QUEUED']);
-    const batchResponse = await ctx.app.inject({
-      method: 'POST',
-      url: `/api/v1/backtests/${sourceId}/clone-random-seeds`,
-      cookies: { session: cookie },
-      payload: { count: 1 },
-    });
-    expect(batchResponse.statusCode).toBe(201);
-    ctx.container.database.db.update(backtestJobs)
-      .set({ createdAtMs: 1 })
-      .where(eq(backtestJobs.id, sourceId))
-      .run();
-    for (let index = 0; index < 50; index += 1) {
-      ctx.container.jobQueue.enqueue({ ...buildRequest(), randomSeed: 1_000 + index });
-    }
-
-    const jobsResponse = await ctx.app.inject({
-      method: 'GET', url: '/api/v1/backtests', cookies: { session: cookie },
-    });
-    expect(jobsResponse.statusCode).toBe(200);
-    expect(jobsResponse.json().jobs).toHaveLength(50);
-    expect(jobsResponse.json().jobs.some((job: { id: string }) => job.id === sourceId)).toBe(false);
-
-    const batchesResponse = await ctx.app.inject({
-      method: 'GET', url: '/api/v1/backtest-clone-batches', cookies: { session: cookie },
-    });
-    expect(batchesResponse.statusCode).toBe(200);
-    expect(batchesResponse.json().sourceJobs).toEqual([
-      expect.objectContaining({ id: sourceId, cloneBatchId: null }),
-    ]);
   });
 
   it('초안은 방향 없는 기존 가격 변동 단계를 과거 LOW 방향으로 복원한다', async ({ scenario }) => {

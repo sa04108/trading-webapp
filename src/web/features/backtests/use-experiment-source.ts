@@ -31,7 +31,6 @@ export function useExperimentSource(id: string, mode: ExperimentMode) {
       request: run.request, status: run.status,
       name: getIntradayStrategy(run.request.strategyId).name,
       strategyVersion: run.result?.strategyVersion,
-      supportsRandomSeed: false, cloneBatchId: null,
     };
   } else if (query.data) {
     const { job, run } = query.data as BacktestDetail;
@@ -39,8 +38,6 @@ export function useExperimentSource(id: string, mode: ExperimentMode) {
     source = {
       request: job.request, status: job.status, name: strategy?.name ?? job.strategyId,
       strategyVersion: run?.strategyVersion,
-      supportsRandomSeed: Boolean(strategy && strategy.supportsRandomSeed !== false),
-      cloneBatchId: job.cloneBatchId,
     };
   }
   return { source, isLoading: query.isLoading, error: query.error, isError: query.isError };

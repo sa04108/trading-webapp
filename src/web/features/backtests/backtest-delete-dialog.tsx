@@ -26,7 +26,6 @@ export function BacktestDeleteDialog({ mode, ids, onClose, onDeleted }: {
       void client.invalidateQueries({ queryKey: ["intraday-runs"] });
       void client.invalidateQueries({ queryKey: ["intraday-run"] });
       void client.invalidateQueries({ queryKey: ["intraday-experiments"] });
-      void client.invalidateQueries({ queryKey: ["backtest-clone-batches"] });
       void client.invalidateQueries({ queryKey: ["configuration-searches"] });
       void client.invalidateQueries({ queryKey: ["jobs"] });
       onDeleted();

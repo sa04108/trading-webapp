@@ -52,6 +52,11 @@ export function registerTradingRoutes(app: FastifyInstance, service: TradingServ
     const { expectedRevision } = activationSchema.parse(request.body);
     return service.deactivate(expectedRevision, request.authUser!.id);
   }));
+  app.post("/trading/prepare", auth, async (request, reply) => respond(reply, () => {
+    const { expectedRevision } = tradingRevisionSchema.parse(request.body);
+    const snapshot = service.prepareData(expectedRevision, request.authUser!.id);
+    return reply.code(202).send(snapshot);
+  }));
   app.post("/trading/orders/:orderId/resolve", auth, async (request, reply) => respond(reply, () => {
     const { orderId } = orderParamsSchema.parse(request.params);
     const { expectedRevision, brokerOrderId } = resolveSchema.parse(request.body);

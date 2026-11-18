@@ -316,12 +316,11 @@ export class PeriodValidationService {
               .prepare(
                 `
           SELECT 1 FROM backtest_validations WHERE source_job_id = ?
-          UNION ALL SELECT 1 FROM backtest_clone_batches WHERE source_job_id = ?
           UNION ALL SELECT 1 FROM configuration_searches WHERE mode='daily' AND source_job_id = ?
           UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE source_job_id = ? AND status IN ('QUEUED','PREPARING','SUBMITTING') LIMIT 1
         `,
               )
-              .get(trial.jobId, trial.jobId, trial.jobId, trial.jobId)
+              .get(trial.jobId, trial.jobId, trial.jobId)
           )
             throw new Error("하위 백테스트에서 만든 실험을 먼저 삭제하세요.");
         }
@@ -508,11 +507,10 @@ export class PeriodValidationService {
         SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id = ? AND validation_id <> ?
         UNION ALL SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id = ?
         UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id = ?
-        UNION ALL SELECT 1 FROM backtest_clone_batches WHERE preparation_job_id = ?
         UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id = ? LIMIT 1
       `,
         )
-        .get(prep.id, experiment.id, prep.id, prep.id, prep.id, prep.id);
+        .get(prep.id, experiment.id, prep.id, prep.id, prep.id);
       if (!shared) {
         this.deps.preparation.cancel(prep.id);
         pending = true;

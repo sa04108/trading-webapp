@@ -56,48 +56,11 @@ export interface JobSummary {
   createdAtMs: number;
   startedAtMs: number | null;
   completedAtMs: number | null;
-  cloneBatchId: string | null;
   cloneSourceJobId: string | null;
   progressEpoch?: string;
   progressRevision?: number;
   progress?: ExecutionProgress | null;
   metrics?: Pick<BacktestMetrics, "totalReturnPct" | "cagrPct" | "maxDrawdownPct" | "sharpe" | "winRate" | "tradeCount"> | null;
-}
-
-export type SeedCloneBatchStatus =
-  "ACTIVE" | "CANCELLING" | "COMPLETED" | "FAILED" | "CANCELLED";
-export type SeedCloneItemStatus = "PENDING" | "DELETED" | BacktestStatus;
-
-export interface SeedCloneBatchSummary {
-  id: string;
-  sourceJobId: string;
-  strategyId: string;
-  status: SeedCloneBatchStatus;
-  totalCount: number;
-  pendingCount: number;
-  queuedCount: number;
-  runningCount: number;
-  completedCount: number;
-  failedCount: number;
-  cancelledCount: number;
-  interruptedCount: number;
-  deletedCount: number;
-  request: BacktestRequestBody;
-  error: string | null;
-  createdAtMs: number;
-  completedAtMs: number | null;
-}
-
-export interface SeedCloneBatchItem {
-  ordinal: number;
-  randomSeed: number;
-  jobId: string | null;
-  status: SeedCloneItemStatus;
-  metrics: BacktestMetrics | null;
-}
-
-export interface SeedCloneBatchDetail extends SeedCloneBatchSummary {
-  items: SeedCloneBatchItem[];
 }
 
 export interface BacktestMetrics {

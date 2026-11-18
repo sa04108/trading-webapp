@@ -1,0 +1,1 @@
+ALTER TABLE `backtest_jobs` DROP COLUMN `clone_batch_id`;

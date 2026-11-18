@@ -255,17 +255,16 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       expect(factWarning).not.toContain('CHEAP');
       expect(factWarning).not.toContain('RICH');
 
-      // 같은 정상 결측 멤버십을 재사용하는 난수 실험도 전체 종목을 다시 제외하지 않는다.
-      const cloned = await ctx.app.inject({
-        method: 'POST', url: `/api/v1/backtests/${jobId}/clone-random-seeds`,
-        cookies: { session: cookie }, payload: { count: 2 },
-      });
-      expect(cloned.statusCode).toBe(201);
-      const batch = ctx.container.seedCloneBatchService.get(cloned.json().batch.id)!;
-      expect(batch.batch.status).toBe('ACTIVE');
-      expect(batch.items).toHaveLength(2);
-      for (const { job: child } of batch.items) {
-        const childSchedule = JSON.parse(child!.universeScheduleJson) as Array<{ symbols: string[] }>;
+      // 난수 시드만 바꿔 설정 변경 복제해도 정상 결측 멤버십을 다시 제외하지 않는다.
+      for (const randomSeed of [2, 3]) {
+        const cloned = await ctx.app.inject({
+          method: 'POST', url: `/api/v1/backtests/${jobId}/clone-configured`,
+          cookies: { session: cookie }, payload: { ...payload, randomSeed },
+        });
+        expect(cloned.statusCode, cloned.body).toBe(201);
+        const child = ctx.container.jobQueue.getJob(cloned.json().job.id)!;
+        expect(JSON.parse(child.requestJson).randomSeed).toBe(randomSeed);
+        const childSchedule = JSON.parse(child.universeScheduleJson) as Array<{ symbols: string[] }>;
         expect(childSchedule).toHaveLength(2);
         expect(childSchedule.every((entry) => entry.symbols.includes('NOFACTS'))).toBe(true);
       }

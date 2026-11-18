@@ -2,7 +2,7 @@ import { assertSubmissionSnapshot, type SubmissionSnapshot } from "./submission-
 import { preserveCompletedWizards } from "./backtest-wizard-state.js";
 import { EventEmitter } from "node:events";
 import {
-  and, asc, count, desc, eq, getTableColumns, inArray, isNull, or, sql,
+  and, asc, count, desc, eq, getTableColumns, inArray, isNull, sql,
 } from "drizzle-orm";
 import type {
   HistoryGroup,
@@ -47,7 +47,6 @@ export interface EnqueueMetadata {
     readonly context?: string;
     readonly requireMatch?: boolean;
   };
-  readonly cloneBatchId?: string | null;
   readonly cloneSourceJobId?: string | null;
 }
 
@@ -175,7 +174,6 @@ export class JobQueue {
             ? JSON.stringify(pinnedUniverse.entries)
             : null,
           universeHash: pinnedUniverse?.hash ?? null,
-          cloneBatchId: metadata.cloneBatchId ?? null,
           cloneSourceJobId: metadata.cloneSourceJobId ?? null,
           submitWarningsJson:
             warnings.length > 0 ? JSON.stringify(warnings) : null,
@@ -599,16 +597,9 @@ export class JobQueue {
     );
   }
 
-  /**
-   * 일반 백테스트 목록용 최상위 작업. 난수 시드 배치 자식은 부모 묶음 화면에서만
-   * 노출해야 100개 자식이 페이지 한도를 차지해 기존 작업을 밀어내지 않는다.
-   */
+  /** 설정 탐색과 기간검증의 하위 결과는 실험 상세에서 조회한다. */
   private topLevelWhere(strategyId?: string) {
     return and(
-      // 이전 버전에서 중첩 실험의 원본이 된 자식은 연결된 실험에 접근할 수 있게 남긴다.
-      or(isNull(backtestJobs.cloneBatchId), sql`EXISTS (
-        SELECT 1 FROM backtest_clone_batches b WHERE b.source_job_id = ${backtestJobs.id}
-      )`),
       sql`NOT EXISTS (
         SELECT 1 FROM backtest_validation_trials v WHERE v.job_id = ${backtestJobs.id}
       )`,
@@ -743,8 +734,11 @@ export class JobQueue {
   deleteJob(jobId: string): boolean {
     return this.handle.sqlite
       .transaction(() => {
-        if (this.handle.sqlite.prepare(`SELECT 1 FROM configuration_searches WHERE mode='daily' AND source_job_id=?
-          UNION ALL SELECT 1 FROM configuration_search_items WHERE job_id=? LIMIT 1`).get(jobId, jobId)) return false;
+        if (this.handle.sqlite.prepare(`SELECT 1 FROM configuration_searches WHERE mode='daily' AND source_job_id=@id
+          UNION ALL SELECT 1 FROM configuration_search_items WHERE job_id=@id
+          UNION ALL SELECT 1 FROM backtest_validations WHERE source_job_id=@id
+          UNION ALL SELECT 1 FROM backtest_validation_trials WHERE job_id=@id
+          UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE source_job_id=@id AND status IN ('QUEUED','PREPARING','SUBMITTING') LIMIT 1`).get({ id: jobId })) return false;
         const job = this.getJob(jobId);
         if (
           !job ||

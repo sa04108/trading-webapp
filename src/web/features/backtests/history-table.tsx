@@ -37,7 +37,6 @@ export function HistoryTable({ columns, busy, children }: {
           {columns.map((id) => (
             <TableHead key={id} className="text-right text-muted-foreground">
               {HISTORY_TABLE_COLUMNS.find((column) => column.id === id)!.label}
-              {id === "seed" ? <InfoHint label="난수 시드 통계 설명">건수는 이전 설정 탐색 실험 수이며 괄호는 완료된 실행 중 유효한 수익률의 표본 표준편차입니다.</InfoHint> : null}
               {id === "validation" ? <InfoHint label="기간 검증 통계 설명">건수는 기간 검증 실험 수이며 괄호는 모든 OOS 회차가 평가된 완료 실험별 OOS 평균 수익률 분포의 표본 표준편차입니다.</InfoHint> : null}
             </TableHead>
           ))}
@@ -54,7 +53,6 @@ export type HistoryTableValues = {
   mdd?: number | null;
   date: number;
   sharpe?: number | null;
-  seed?: { count: number; stddev: number | null };
   validation?: { count: number; stddev: number | null };
 };
 
@@ -64,7 +62,7 @@ export function HistoryMetricCells({ columns, values }: {
 }) {
   return columns.map((id) => {
     if (id === "date") return <TableCell key={id} className="text-right text-muted-foreground tabular-nums">{formatDateTime(values.date)}</TableCell>;
-    if (id === "seed" || id === "validation") {
+    if (id === "validation") {
       const stats = values[id];
       return <TableCell key={id} className="text-right tabular-nums">{stats === undefined ? "—" : `${stats.count} (${stats.stddev == null ? "—" : `${stats.stddev.toFixed(2)}%p`})`}</TableCell>;
     }

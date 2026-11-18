@@ -489,7 +489,6 @@ export function IntradayListPage() {
                           mdd: run.metrics?.maxDrawdownPct,
                           date: run.createdAtMs,
                           sharpe: run.metrics?.sharpe,
-                          seed: extrasById.has(run.id) ? { count: 0, stddev: null } : undefined,
                           validation: extrasById.has(run.id) ? { count: extrasById.get(run.id)!.validation.experimentCount, stddev: extrasById.get(run.id)!.validation.returns.sampleStdDev } : undefined,
                         }} />
                       </TableRow>

@@ -8,7 +8,6 @@ export function experimentPaths(mode: ExperimentMode = "daily") {
   return {
     result: (id: string) => `${base}/${encodeURIComponent(id)}`,
     search: (id: string) => `${base}/${encodeURIComponent(id)}/search`,
-    seeds: (id: string) => `${base}/${encodeURIComponent(id)}/seeds`,
     validations: (id: string) => `${base}/${encodeURIComponent(id)}/validations`,
     validation: (id: string) => `${base}/validations/${encodeURIComponent(id)}`,
     apiResult: (id: string) => `${apiBase}/${encodeURIComponent(id)}`,

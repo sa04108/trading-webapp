@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { eq } from "drizzle-orm";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { TradingDataRequired } from "../../src/server/modules/trading/application/trading-data.js";
 import { openDatabase } from "../../src/runtime/shared/db/database.js";
 import { readRuntimeVersions } from "../../src/runtime/shared/runtime-versions.js";
 import { krxDailyBars, symbols } from "../../src/runtime/shared/db/schema.js";
@@ -33,20 +34,25 @@ describe("daily decision worker integration", () => {
       const artifacts = new StrategyArtifacts({ dataRoot: root, buildRoot });
       const artifact = artifacts.list().find((a) => a.strategyId === "range-breakout" && a.latest)!;
       let now = Date.parse("2026-11-16T00:01:00Z");
-      const ensureData = vi.fn(async (_date: string, _input: unknown, _need: unknown) => "데이터 준비 필요");
-      engine = new DailyTradingEngine({ databasePath, dataPath: database.dataPath, artifacts, now: () => now, ensureData });
+      engine = new DailyTradingEngine({ databasePath, dataPath: database.dataPath, artifacts, now: () => now });
       const deployment = { strategyId: artifact.strategyId, artifactHash: artifact.artifactHash, version: artifact.version, parameters: { ...UNFILTERED_BREAKOUT_CONTROLS, lookbackBars: 2, atrPeriod: 2 }, createdAtMs: Date.parse("2026-11-13T00:00:00Z"), activatedAtMs: null, budgetKrw: 100000, randomSeed: 1, universeRule: { markets: ["KOSPI"], stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 1 }], rebalanceInterval: { unit: "NONE", value: 1 } } };
       const warm = await engine.evaluate({ deployment, portfolio: {}, checkpoint: null, warmupOnly: true } as never);
       expect(warm.orders).toEqual([]);
-      expect(ensureData).not.toHaveBeenCalled();
       now = Date.parse("2026-11-17T00:01:00Z");
       const decision = await engine.evaluate({ deployment: { ...deployment, activatedAtMs: deployment.createdAtMs }, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: false } as never);
       expect(decision.orders).toMatchObject([{ symbol: "005930", side: "BUY" }]);
-      expect(ensureData).not.toHaveBeenCalled();
+      const coverage = new SqliteCorporateActionCoverageStore(database.db, { collectionVersion });
+      coverage.addCoverageResult("005930", [2026], [2026], Date.now());
+      await expect(engine.evaluate({ deployment, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: true } as never)).rejects.toMatchObject({
+        constructor: TradingDataRequired,
+        need: { repairs: [{ kind: "CORPORATE_ACTION", symbol: "005930", year: 2026 }], priceRange: null },
+      });
+      coverage.addCoverageResult("005930", [2026], [], Date.now());
       database.db.delete(krxDailyBars).where(eq(krxDailyBars.date, "2026-11-16")).run();
-      await expect(engine.evaluate({ deployment: { ...deployment, activatedAtMs: deployment.createdAtMs }, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: false } as never)).rejects.toThrow("데이터 준비 필요");
-      expect(ensureData).toHaveBeenCalledTimes(1);
-      expect(ensureData.mock.calls[0]?.[2]).toMatchObject({ masterDates: ["2026-11-13"], priceRange: { to: "2026-11-16" }, actions: { symbols: ["005930"] } });
+      await expect(engine.evaluate({ deployment: { ...deployment, activatedAtMs: deployment.createdAtMs }, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: false } as never)).rejects.toMatchObject({
+        constructor: TradingDataRequired,
+        need: { masterDates: ["2026-11-13"], priceRange: { to: "2026-11-16" }, actions: { symbols: ["005930"] } },
+      });
     } finally { await engine?.close(); database.close(); rmSync(root, { recursive: true, force: true }); }
   }, 90_000);
 });

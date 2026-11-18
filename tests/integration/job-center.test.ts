@@ -82,7 +82,6 @@ describe("작업 관찰·취소·이력 경계", () => {
     for (let i = 0; i < 3; i++) backtest(ctx.container, `finished-${i}`, "FAILED", now - i, { completedAtMs: now - i });
     backtest(ctx.container, "interrupted", "INTERRUPTED", now - 10, { completedAtMs: now - 10 });
     backtest(ctx.container, "user-cancelled", "CANCELLED", now - 11, { completedAtMs: now - 11 });
-    backtest(ctx.container, "batch-child", "QUEUED", now, { cloneBatchId: "batch" });
     for (const [id, ownerId, status] of [["own", ctx.container.userRepository.findByUsername(admin.username)!.id, "PREPARING"], ["foreign", "another-owner", "RUNNING"], ["foreign-failed", "another-owner", "FAILED"]]) {
       ctx.container.database.db.insert(intradayRuns).values({ id: id!, ownerId: ownerId!, status: status!, requestJson: JSON.stringify(request), resultJson: "not parsed for observation", createdAtMs: now, updatedAtMs: now }).run();
     }
@@ -99,7 +98,7 @@ describe("작업 관찰·취소·이력 경계", () => {
     expect(page.jobs).toHaveLength(2);
     expect(page.jobs.every((job) => job.finishedAtMs === null)).toBe(true);
     const all = (await get("")).json<JobsResponse>().jobs;
-    for (const hidden of ["backtest:expired", "backtest:batch-child", "intraday-backtest:foreign", "intraday-collection:internal"]) expect(all.map((job) => job.id)).not.toContain(hidden);
+    for (const hidden of ["backtest:expired", "intraday-backtest:foreign", "intraday-collection:internal"]) expect(all.map((job) => job.id)).not.toContain(hidden);
     expect(all.find((job) => job.id === "backtest:old-active")?.progress?.percent).toBe(25);
     expect(all.find((job) => job.id === "intraday-backtest:own")?.progress).toMatchObject({ current: 120, total: null, percent: null });
     expect((await get("?status=finished")).json<JobsResponse>()).toMatchObject({ total: 6, activeCount: 3 });
@@ -112,6 +111,48 @@ describe("작업 관찰·취소·이력 경계", () => {
     for (const path of ["/intraday-backtest:foreign", "/intraday-collection:internal"]) expect((await get(path)).statusCode).toBe(404);
     expect((await ctx.app.inject({ method: "POST", url: "/api/v1/jobs/intraday-backtest:foreign/cancel", cookies: { session: cookie } })).statusCode).toBe(404);
     expect((await ctx.app.inject({ method: "DELETE", url: "/api/v1/jobs", cookies: { session: cookie }, payload: { ids: ["intraday-backtest:foreign"] } })).statusCode).toBe(404);
+  });
+
+  it("필터의 모든 종료 이력을 페이지 경계 밖까지 제외 항목과 활성 작업을 보존하며 삭제한다", async ({ ctx, cookie, admin }) => {
+    const now = Date.now();
+    for (let i = 0; i < 105; i++) backtest(ctx.container, `bulk-${i}`, "FAILED", now, { completedAtMs: now });
+    backtest(ctx.container, "bulk-completed", "COMPLETED", now, { completedAtMs: now });
+    backtest(ctx.container, "bulk-active", "RUNNING", now);
+    ctx.container.database.db.insert(intradayRuns).values({ id: "foreign-bulk", ownerId: "another-owner", status: "FAILED", requestJson: JSON.stringify(request), createdAtMs: now, updatedAtMs: now }).run();
+    const get = (query: string) => ctx.app.inject({ method: "GET", url: `/api/v1/jobs${query}`, cookies: { session: cookie } });
+    const remove = (payload: object) => ctx.app.inject({ method: "DELETE", url: "/api/v1/jobs", cookies: { session: cookie }, payload });
+    expect((await get("?status=error&limit=2")).json()).toMatchObject({ total: 105, finishedCount: 105, activeCount: 1 });
+    for (const payload of [{ all: true, status: "errror" }, { all: "true" }, { all: true, excludeIds: [42] }]) expect((await remove(payload)).statusCode).toBe(400);
+    expect((await remove({ all: true, status: "active" })).statusCode).toBe(204);
+    expect(ctx.container.database.db.select().from(jobDismissals).all()).toEqual([]);
+    expect((await remove({ all: true, status: "error", excludeIds: ["backtest:bulk-0"] })).statusCode).toBe(204);
+    expect((await get("?status=all")).json()).toMatchObject({ total: 3, finishedCount: 2, activeCount: 1 });
+    expect(ctx.container.database.db.select().from(backtestJobs).all()).toHaveLength(107);
+    const owner = ctx.container.userRepository.findByUsername(admin.username)!.id;
+    expect(ctx.container.database.db.select().from(jobDismissals).all().map(({ userId, jobId }) => ({ userId, jobId })))
+      .toEqual(expect.arrayContaining(Array.from({ length: 104 }, (_, i) => ({ userId: owner, jobId: `backtest:bulk-${i + 1}` }))));
+    expect(ctx.container.database.db.select().from(jobDismissals).all()).toHaveLength(104);
+    expect((await remove({ all: true, status: "error", excludeIds: ["backtest:bulk-0"] })).statusCode).toBe(204);
+    expect((await remove({ ids: ["backtest:bulk-0"] })).statusCode).toBe(204);
+    expect((await remove({ all: true })).statusCode).toBe(204);
+    expect((await get("?status=all")).json()).toMatchObject({ total: 1, finishedCount: 0, activeCount: 1 });
+  });
+
+  it("목록 선택 수는 현재 보이는 종료 작업의 유효한 제외 항목만 반영한다", async ({ ctx, cookie }) => {
+    const now = Date.now();
+    backtest(ctx.container, "selection-a", "FAILED", now, { completedAtMs: now });
+    backtest(ctx.container, "selection-b", "FAILED", now, { completedAtMs: now });
+    backtest(ctx.container, "selection-active", "RUNNING", now);
+    ctx.container.database.db.insert(intradayRuns).values({ id: "selection-foreign", ownerId: "another-owner", status: "FAILED", requestJson: JSON.stringify(request), createdAtMs: now, updatedAtMs: now }).run();
+    const list = (payload: object, authenticated = true) => ctx.app.inject({ method: "POST", url: "/api/v1/jobs/list", ...(authenticated ? { cookies: { session: cookie } } : {}), payload });
+    const payload = { status: "all", limit: 1, excludeIds: ["backtest:selection-a", "backtest:selection-a", "backtest:missing", "backtest:selection-active", "intraday-backtest:selection-foreign"] };
+    expect((await list(payload, false)).statusCode).toBe(401);
+    expect((await list({ ...payload, unexpected: true })).statusCode).toBe(400);
+    expect((await list(payload)).json()).toMatchObject({ total: 3, activeCount: 1, finishedCount: 2, selectionCount: 1 });
+    expect((await ctx.app.inject({ method: "GET", url: "/api/v1/jobs?status=all", cookies: { session: cookie } })).json()).toMatchObject({ finishedCount: 2, selectionCount: 2 });
+    ctx.container.database.db.delete(backtestJobs).where(eq(backtestJobs.id, "selection-a")).run();
+    expect((await list(payload)).json()).toMatchObject({ total: 2, finishedCount: 1, selectionCount: 1 });
+    expect((await list({ status: "active", excludeIds: [] })).json()).toMatchObject({ total: 1, finishedCount: 0, selectionCount: 0 });
   });
 
   it("종료 이력 삭제는 원자적·사용자별이며 원본 백테스트와 지표를 보존한다", async ({ ctx, cookie }) => {

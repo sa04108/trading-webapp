@@ -4,6 +4,7 @@ import { SECURITY_HEADERS } from "../../../shared/security.js";
 import type {
   NotificationRow,
   NotificationService,
+  NotificationSeverity,
 } from "../application/notification-service.js";
 
 type PreHandler = (
@@ -16,10 +17,24 @@ export function registerNotificationRoutes(
   service: NotificationService,
   requireAuth: PreHandler,
 ): void {
+  const list = (severity?: NotificationSeverity, excludeIds: readonly string[] = []) => {
+    const total = service.count(severity);
+    return { notifications: service.list(severity), total, selectionCount: excludeIds.length ? service.count(severity, excludeIds) : total };
+  };
   app.get("/notifications", { preHandler: requireAuth }, async (request, reply) => {
     const query = z.object({ severity: z.enum(["error", "info"]).optional() }).safeParse(request.query);
     if (!query.success) return reply.code(400).send({ error: "알림 필터가 올바르지 않습니다." });
-    return { notifications: service.list(query.data.severity) };
+    return list(query.data.severity);
+  });
+
+  app.post("/notifications/list", { preHandler: requireAuth }, async (request, reply) => {
+    const body = z.object({
+      severity: z.enum(["error", "info"]).optional(),
+      excludeIds: z.array(z.string().min(1).max(200)).max(10_000).default([]),
+    }).strict().safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: "알림 필터가 올바르지 않습니다." });
+    const { severity, excludeIds } = body.data;
+    return list(severity, excludeIds);
   });
 
   app.get(
@@ -44,8 +59,14 @@ export function registerNotificationRoutes(
     { preHandler: requireAuth },
     async (request, reply) => {
       const body = request.body as { ids?: unknown; all?: unknown } | null;
-      if (body?.all === true) {
-        service.removeAll();
+      if (body && typeof body === "object" && "all" in body) {
+        const bulk = z.object({
+          all: z.literal(true),
+          severity: z.enum(["info", "error"]).optional(),
+          excludeIds: z.array(z.string().min(1).max(200)).max(10_000).default([]),
+        }).strict().safeParse(body);
+        if (!bulk.success) return reply.code(400).send({ error: "삭제할 알림을 지정하세요" });
+        service.removeAll(bulk.data.severity, bulk.data.excludeIds);
         return reply.code(204).send();
       }
       const ids = Array.isArray(body?.ids)

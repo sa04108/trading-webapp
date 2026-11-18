@@ -73,8 +73,9 @@ export class BacktestRefreshService {
     const row = this.owned(ownerId, id);
     if (row.status !== "FAILED" && row.status !== "CANCELLED")
       throw new BacktestRefreshError("실패하거나 취소된 작업만 다시 시작할 수 있습니다.", 409);
+    const action = backtestRefreshActionSchema.parse(JSON.parse(row.actionJson));
     // 같은 실패 화면을 여러 번 눌러도 한 번의 후속 재시도만 만든다.
-    return this.create(ownerId, `retry:${id}`, row.sourceJobId, backtestRefreshActionSchema.parse(JSON.parse(row.actionJson)));
+    return this.create(ownerId, `retry:${id}`, row.sourceJobId, action);
   }
 
   cancel(ownerId: string, id: string): BacktestRefreshJob {
@@ -164,10 +165,9 @@ export class BacktestRefreshService {
       SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id=?
       UNION ALL SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id=?
       UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id=?
-      UNION ALL SELECT 1 FROM backtest_clone_batches WHERE preparation_job_id=?
       UNION ALL SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id=?
       UNION ALL SELECT 1 FROM configuration_search_items WHERE preparation_job_id=? LIMIT 1
-    `).get(id, id, id, id, id, id);
+    `).get(id, id, id, id, id);
     if (!shared) this.deps.preparation.cancel(id);
   }
 

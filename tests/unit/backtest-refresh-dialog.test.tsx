@@ -10,12 +10,12 @@ describe("refresh request identity", () => {
       getItem: (key: string) => values.get(key) ?? null,
       setItem: (key: string, value: string) => values.set(key, value),
     });
-    const action = { kind: "RANDOM_SEEDS" as const, count: 10 };
+    const action = { kind: "PERIOD_VALIDATION" as const, config: { mode: "HOLDOUT" as const, splitDate: "2023-01-01" } };
     const first = pendingRequest("source", action, "reason");
-    action.count = 20;
-    const retry = pendingRequest("source", { kind: "RANDOM_SEEDS", count: 10 }, "reason");
+    action.config.splitDate = "2024-01-01";
+    const retry = pendingRequest("source", { kind: "PERIOD_VALIDATION", config: { mode: "HOLDOUT", splitDate: "2023-01-01" } }, "reason");
     const different = pendingRequest("source", action, "reason");
-    expect(first.action).toEqual({ kind: "RANDOM_SEEDS", count: 10 });
+    expect(first.action).toEqual({ kind: "PERIOD_VALIDATION", config: { mode: "HOLDOUT", splitDate: "2023-01-01" } });
     expect(retry.requestId).toBe(first.requestId);
     expect(different.requestId).not.toBe(first.requestId);
   });

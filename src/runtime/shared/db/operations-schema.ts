@@ -104,8 +104,7 @@ export const backtestJobs = sqliteTable(
      */
     universeJson: text("universe_json"),
     universeHash: text("universe_hash"),
-    /** 난수 시드 일괄 복제 묶음과 원본 계보. 일반 제출은 둘 다 null이다. */
-    cloneBatchId: text("clone_batch_id"),
+    /** 복제할 때 사용한 원본 작업 ID. */
     cloneSourceJobId: text("clone_source_job_id"),
     progressBars: integer("progress_bars"),
     totalBars: integer("total_bars"),

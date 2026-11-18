@@ -54,7 +54,7 @@ describe('영속 데이터 업데이트 작업', () => {
   it('요청 번호를 중복 제거하고 소유자별로 격리하며 충돌을 거절한다', () => {
     const job = service.create('alice', 'request', source, clone);
     expect(service.create('alice', 'request', source, clone).id).toBe(job.id);
-    expect(() => service.create('alice', 'request', source, { kind: 'RANDOM_SEEDS', count: 3 })).toThrow();
+    expect(() => service.create('alice', 'request', source, period)).toThrow('다른 작업');
     expect(() => service.get('bob', job.id)).toThrow();
     expect(() => service.cancel('bob', job.id)).toThrow();
     expect(service.create('bob', 'request', source, clone).id).not.toBe(job.id);
@@ -214,7 +214,7 @@ describe('영속 데이터 업데이트 작업', () => {
   });
 
   it('실행 기준 변경은 실패와 알림으로 끝내고 재시도는 원래 설정을 한 번만 복원한다', async () => {
-    const action = { kind: 'RANDOM_SEEDS', count: 7 } as const;
+    const action = period;
     const job = service.create('alice', 'request', source, action);
     identity = 'v2'; await service.pump();
     expect(service.get('alice', job.id)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('변경') });

@@ -11,7 +11,7 @@ function fixture() {
     source: vi.fn(async (id: string) => ({ id })),
     quote: vi.fn(async (symbol: string) => ({ symbol, price: 1000, timestampMs: 123 })),
     register: vi.fn(), update: vi.fn(), remove: vi.fn(), version: vi.fn(),
-    activate: vi.fn(), resolveOrder: vi.fn(), deactivate: vi.fn(), refresh: vi.fn(), selectAccount: vi.fn(),
+    activate: vi.fn(), resolveOrder: vi.fn(), deactivate: vi.fn(), refresh: vi.fn(), selectAccount: vi.fn(), prepareData: vi.fn(),
   };
   registerTradingRoutes(app, service as unknown as TradingService, async (request, reply) => {
     if (request.headers.authorization !== "test") { await reply.code(401).send({ error: "unauthorized" }); return; }
@@ -24,6 +24,7 @@ const mutations = [
   ["POST", "/trading/strategy"], ["PUT", "/trading/strategy"], ["DELETE", "/trading/strategy"],
   ["POST", "/trading/version"], ["POST", "/trading/activate"], ["POST", "/trading/deactivate"],
   ["POST", "/trading/orders/00000000-0000-4000-8000-000000000001/resolve"], ["POST", "/trading/refresh"],
+  ["POST", "/trading/prepare"],
 ] as const;
 
 describe("거래 경로 인증과 요청 계약", () => {
@@ -48,7 +49,20 @@ describe("거래 경로 인증과 요청 계약", () => {
       const response = await app.inject({ method, url, payload: {} });
       expect(response.statusCode, `${method} ${url}`).toBe(401);
     }
-    for (const method of [service.register, service.update, service.remove, service.version, service.activate, service.resolveOrder, service.deactivate, service.refresh, service.selectAccount]) expect(method).not.toHaveBeenCalled();
+    for (const method of [service.register, service.update, service.remove, service.version, service.activate, service.resolveOrder, service.deactivate, service.refresh, service.selectAccount, service.prepareData]) expect(method).not.toHaveBeenCalled();
+    await app.close();
+  });
+  it("데이터 복구는 리비전을 요구하고 서버가 결정한 대상만 비동기로 준비한다", async () => {
+    const { app, service } = fixture();
+    for (const payload of [{}, { expectedRevision: -1 }, { expectedRevision: 3, symbol: "005930" }]) {
+      expect((await app.inject({ method: "POST", url: "/trading/prepare", headers: auth, payload })).statusCode).toBe(400);
+    }
+    expect(service.prepareData).not.toHaveBeenCalled();
+    service.prepareData.mockReturnValue({ revision: 4, dataPreparation: { status: "RUNNING", message: "확인 중" } });
+    const response = await app.inject({ method: "POST", url: "/trading/prepare", headers: auth, payload: { expectedRevision: 3 } });
+    expect(response.statusCode).toBe(202);
+    expect(response.json()).toMatchObject({ revision: 4, dataPreparation: { status: "RUNNING" } });
+    expect(service.prepareData).toHaveBeenCalledWith(3, "user-1");
     await app.close();
   });
   it.each(["activate", "deactivate"] as const)("%s는 명시적 확인과 리비전이 모두 필요하고 추가 필드를 거부한다", async (action) => {
