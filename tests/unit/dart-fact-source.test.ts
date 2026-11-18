@@ -956,7 +956,7 @@ describe('createDartFactSource — 요청 구성', () => {
           status: '000',
           message: '정상',
           list: [
-            { rcept_no: '20250515000001', se: '보통주', istc_totqy: '1,000,000', stlm_dt: '2025-03-31' },
+            { rcept_no: '20250515000001', se: '보통주식', istc_totqy: '1,000,000', stlm_dt: '2025-03-31' },
             { rcept_no: '20250515000001', se: '우선주', istc_totqy: '200,000', stlm_dt: '2025-03-31' },
             { rcept_no: '20250515000001', se: '합계', istc_totqy: '1,200,000', stlm_dt: '2025-03-31' },
           ],
@@ -982,6 +982,54 @@ describe('createDartFactSource — 요청 구성', () => {
     expect(shares).toHaveLength(1);
     expect(shares[0]?.value).toBe(1_000_000);
     expect(shares[0]?.periodKey).toBe('2025Q1');
+  });
+
+  it('보통주와 보통주식 행이 충돌하면 재무 주식수를 확정하지 않는다', async () => {
+    const source = createDartFactSource({ baseUrl: 'https://dart.test', apiKey: 'K' }, LOGGER, {
+      fetchImpl: (async (url: string | URL) => String(url).includes('stockTotqySttus') && String(url).includes('reprt_code=11013')
+        ? jsonResponse({ status: '000', list: [
+          { rcept_no: '20250515000001', se: '보통주', istc_totqy: '100', stlm_dt: '2025-03-31' },
+          { rcept_no: '20250515000001', se: '보통주식', istc_totqy: '200', stlm_dt: '2025-03-31' },
+          { rcept_no: '20250515000001', se: '합계', istc_totqy: '300', stlm_dt: '2025-03-31' },
+        ] }) : jsonResponse({ status: '013' })) as typeof fetch,
+      sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER,
+    });
+    const result = await source.fetchFinancials({ symbols: ['005930'], years: [2025], shareYears: [2025], consolidated: true });
+    expect(result.facts.filter(fact => fact.field === 'SHARES_OUTSTANDING')).toEqual([]);
+    expect(result.gaps).toContainEqual(expect.objectContaining({ field: 'SHARES_OUTSTANDING', severity: 'BLOCKING' }));
+  });
+
+  it.each(['20250601000001', 'invalid'])('동일 주식수의 중복 공시는 접수 근거를 확인한다 (%s)', async (receipt) => {
+    const source = createDartFactSource({ baseUrl: 'https://dart.test', apiKey: 'K' }, LOGGER, {
+      fetchImpl: (async (url: string | URL) => String(url).includes('stockTotqySttus') && String(url).includes('reprt_code=11013')
+        ? jsonResponse({ status: '000', list: [
+          { rcept_no: '20250515000001', se: '보통주', istc_totqy: '100', stlm_dt: '2025-03-31' },
+          { rcept_no: receipt, se: '보통주식', istc_totqy: '100', stlm_dt: '2025.03.31' },
+        ] }) : jsonResponse({ status: '013' })) as typeof fetch,
+      sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER,
+    });
+    const result = await source.fetchFinancials({ symbols: ['005930'], years: [2025], shareYears: [2025], consolidated: true });
+    if (receipt === 'invalid') {
+      expect(result.facts).toEqual([]);
+      expect(result.gaps).toContainEqual(expect.objectContaining({ field: 'SHARES_OUTSTANDING', severity: 'BLOCKING' }));
+    } else {
+      expect(result.gaps).toEqual([]);
+      expect(result.facts).toContainEqual(expect.objectContaining({ field: 'SHARES_OUTSTANDING', value: 100, asOfTsMs: receiptDateToAsOfTsMs(receipt) }));
+    }
+  });
+
+  it('중복 보통주 행의 주식수가 모두 공란이면 MISSING으로 남긴다', async () => {
+    const source = createDartFactSource({ baseUrl: 'https://dart.test', apiKey: 'K' }, LOGGER, {
+      fetchImpl: (async (url: string | URL) => String(url).includes('stockTotqySttus') && String(url).includes('reprt_code=11013')
+        ? jsonResponse({ status: '000', list: [
+          { rcept_no: '20250515000001', se: '보통주', istc_totqy: '-', stlm_dt: '2025-03-31' },
+          { rcept_no: '20250515000001', se: '보통주식', istc_totqy: '', stlm_dt: '2025.03.31' },
+        ] }) : jsonResponse({ status: '013' })) as typeof fetch,
+      sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER,
+    });
+    const result = await source.fetchFinancials({ symbols: ['005930'], years: [2025], shareYears: [2025], consolidated: true });
+    expect(result.facts).toEqual([]);
+    expect(result.gaps).toContainEqual(expect.objectContaining({ field: 'SHARES_OUTSTANDING', kind: 'MISSING', severity: 'BLOCKING' }));
   });
 
   it.each([
@@ -1417,6 +1465,53 @@ describe('createDartFactSource — 종목별 호출에서도 캐시가 공유된
 });
 
 describe('createDartFactSource — fetchCorporateActions 자본변동 접기', () => {
+  it.each(['없음', '동일 기준일', '수량 충돌', '첫 행 누락', '기준일 역순', '기준일 순서', '빈 행'])('보통주식 앵커와 같은 날 우선주 무상증자를 구분한다 (%s)', async (conflict) => {
+    const source = createDartFactSource({ baseUrl: 'https://dart.test', apiKey: 'K' }, LOGGER, {
+      fetchImpl: (async (url: string | URL) => {
+        const target = String(url);
+        if (target.includes('stockTotqySttus') && target.includes('bsns_year=2025') && target.includes('reprt_code=11011')) return jsonResponse({ status: '000', list: [
+          { rcept_no: '20260330000001', se: '보통주', istc_totqy: '10,000,000', stlm_dt: '2025-12-31' },
+        ] });
+        if (target.includes('stockTotqySttus') && target.includes('bsns_year=2026') && target.includes('reprt_code=11012')) return jsonResponse({ status: '000', list: [
+          { rcept_no: '20260814000001', se: '보통주식', istc_totqy: ['첫 행 누락', '빈 행'].includes(conflict) ? '-' : '16,068,790', stlm_dt: conflict === '기준일 역순' ? '2026-09-30' : '2026-06-30' },
+          ...(conflict !== '없음' ? [{ rcept_no: '20260814000001', se: '보통주', istc_totqy: conflict === '빈 행' ? '-' : ['첫 행 누락', '동일 기준일'].includes(conflict) ? '16,068,790' : '16,068,791', stlm_dt: conflict === '기준일 순서' ? '2026-09-30' : conflict === '동일 기준일' ? '2026.06.30' : '2026-06-30' }] : []),
+          { rcept_no: '20260814000001', se: '종류주식', istc_totqy: '122,037', stlm_dt: '2026-06-30' },
+          { rcept_no: '20260814000001', se: '합계', istc_totqy: '16,190,827', stlm_dt: '2026-06-30' },
+        ] });
+        if (target.includes('irdsSttus') && target.includes('reprt_code=11012')) return jsonResponse({ status: '000', list: [
+          { rcept_no: '20260814000001', isu_dcrs_de: '2026-08-06', isu_dcrs_stle: '무상증자', isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '16,068,790' },
+          { rcept_no: '20260814000001', isu_dcrs_de: '2026-08-06', isu_dcrs_stle: '무상증자', isu_dcrs_stock_knd: '상환전환우선주', isu_dcrs_qy: '122,037' },
+        ] });
+        return jsonResponse({ status: '013' });
+      }) as typeof fetch, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER,
+    });
+    const result = await source.fetchCorporateActions({ symbols: ['196170'], years: [2026], shareYears: [2025, 2026], consolidated: true });
+    if (!['없음', '동일 기준일', '빈 행'].includes(conflict)) {
+      expect(result.facts).toEqual([]);
+      expect(result.gaps).toContainEqual(expect.objectContaining({ periodKey: '2026-08-06', severity: 'BLOCKING' }));
+    } else {
+      expect(result.gaps).toEqual([]);
+      const before = conflict === '빈 행' ? 10_000_000 : 16_068_790;
+      expect(result.facts).toEqual([expect.objectContaining({ periodKey: '2026-08-06', value: (before + 16_068_790) / before, corporateActionBeforeShares: before, corporateActionAfterShares: before + 16_068_790 })]);
+    }
+  });
+
+  it('분할 방향을 판단할 후행 기준일 공시들이 충돌하면 비율을 확정하지 않는다', async () => {
+    const source = createDartFactSource({ baseUrl: 'https://dart.test', apiKey: 'K' }, LOGGER, {
+      fetchImpl: (async (url: string | URL) => {
+        const target = String(url);
+        if (target.includes('stockTotqySttus') && target.includes('reprt_code=11013')) return jsonResponse({ status: '000', list: [{ rcept_no: '20250515000001', se: '보통주식', istc_totqy: '100', stlm_dt: '2025-03-31' }] });
+        if (target.includes('stockTotqySttus') && target.includes('reprt_code=11012')) return jsonResponse({ status: '000', list: [{ rcept_no: '20250815000001', se: '보통주식', istc_totqy: '120', stlm_dt: '2025-06-30' }] });
+        if (target.includes('stockTotqySttus') && target.includes('reprt_code=11014')) return jsonResponse({ status: '000', list: [{ rcept_no: '20251115000001', se: '보통주', istc_totqy: '80', stlm_dt: '2025-06-30' }] });
+        if (target.includes('irdsSttus') && target.includes('reprt_code=11014')) return jsonResponse({ status: '000', list: [{ rcept_no: '20251115000001', isu_dcrs_de: '2025-05-01', isu_dcrs_stle: '주식분할', isu_dcrs_stock_knd: '보통주', isu_dcrs_qy: '20' }] });
+        return jsonResponse({ status: '013' });
+      }) as typeof fetch, sleep: async () => undefined, corpCodeResolver: STUB_RESOLVER,
+    });
+    const result = await source.fetchCorporateActions({ symbols: ['005930'], years: [2025], shareYears: [2025], consolidated: true });
+    expect(result.facts).toEqual([]);
+    expect(result.gaps).toContainEqual(expect.objectContaining({ periodKey: '2025-05-01', severity: 'BLOCKING' }));
+  });
+
   const SHARE_BASELINE = [{
     rcept_no: '20200515000001',
     se: '보통주',
@@ -1438,7 +1533,7 @@ describe('createDartFactSource — fetchCorporateActions 자본변동 접기', (
       const target = String(url);
       if (date && target.includes('stockTotqySttus') && target.includes('reprt_code=11013')) {
         return jsonResponse({ status: '000', list: [
-          { rcept_no: '20150515001307', se: '보통주', istc_totqy: shares, stlm_dt: date },
+          { rcept_no: '20150515001307', se: '보통주식', istc_totqy: shares, stlm_dt: date },
           ...(_label.startsWith('같은 응답 내') ? [{ rcept_no: '20150515001307', se: '보통주', istc_totqy: _label.includes('누락') ? '-' : '35,332,265', stlm_dt: date }] : []),
         ] });
       }

@@ -117,6 +117,13 @@ interface SharesAtPeriod {
   readonly backwardAmbiguous?: boolean;
 }
 
+/** 같은 기준일의 서로 다른 공시가 충돌하면 어느 한쪽도 근거로 쓰지 않는다. */
+function reliableShareSnapshot(snapshot: SharesAtPeriod, snapshots: readonly SharesAtPeriod[]): boolean {
+  return !snapshot.backwardAmbiguous && !snapshots.some((other) =>
+    other.dateKey === snapshot.dateKey && (other.backwardAmbiguous || other.shares !== snapshot.shares),
+  );
+}
+
 interface OrderedIssuedShareChange {
   readonly row: DartIssuanceRow;
   readonly order: number;
@@ -171,6 +178,10 @@ function inferAmbiguousSplitRows(
       else if (next === undefined) next = snapshot;
     }
     if (anchor === undefined || next === undefined) continue;
+    if (!reliableShareSnapshot(anchor, sharesByPeriod) || !reliableShareSnapshot(next, sharesByPeriod)) {
+      contradictedRows.add(target.row);
+      continue;
+    }
     const interval = changes.filter(
       (change) =>
         change.dateKey > anchor.dateKey && change.dateKey <= next.dateKey,
@@ -697,15 +708,12 @@ export function createDartFactSource(
     );
   }
 
-  /** 응답 행에서 '보통주' 행만 골라낸다. se 가 문자열이 아니면(필드명이 바뀐 경우)
-   *  .replace 가 TypeError 를 던지므로 typeof 로 먼저 막는다 — 그런 행은 매칭 실패로
-   *  취급해 호출부가 gap 을 남기게 한다. */
-  function findCommonShareRow(
-    rows: readonly DartShareRow[],
-  ): DartShareRow | undefined {
-    return rows.find(
-      (row) => readDartString(row, "se")?.replace(/\s/g, "") === "보통주",
-    );
+  /** 보통주 표기만 인정하고 종류주식과 합계는 제외한다. */
+  function commonShareRows(rows: readonly DartShareRow[]): DartShareRow[] {
+    return rows.filter((row) => {
+      const label = readDartString(row, "se")?.replace(/\s/g, "");
+      return label === "보통주" || label === "보통주식";
+    });
   }
 
   /** istc_totqy 가 문자열이 아니면 parseAmount 가 아니라 여기서 먼저 null 로 떨어뜨린다
@@ -714,6 +722,19 @@ export function createDartFactSource(
   function readShareAmount(row: DartShareRow): number | null {
     const amount = readDartString(row, "istc_totqy");
     return amount === null ? null : parseAmount(amount);
+  }
+
+  function shareDate(row: DartShareRow): string | null {
+    return normalizeDateKey(readDartString(row, "stlm_dt") ?? "");
+  }
+
+  function conflictingCommonRows(rows: readonly DartShareRow[]): boolean {
+    if (rows.length < 2) return false;
+    const first = rows[0]!;
+    const shares = readShareAmount(first);
+    const date = shareDate(first);
+    return shares === null || date === null ||
+      rows.some(row => readShareAmount(row) !== shares || shareDate(row) !== date);
   }
 
   async function fetchFinancials(
@@ -823,14 +844,22 @@ export function createDartFactSource(
             );
             // 보통주만 쓴다 — 시가총액은 봉 종가(보통주 가격) × 보통주 수다.
             // '합계' 행을 쓰면 우선주가 섞여 시가총액이 과대계상된다.
-            const common = findCommonShareRow(shareRows);
+            const commonRows = commonShareRows(shareRows);
+            const common = commonRows[0];
             const periodKey = `${year}Q${REPORT_CODE_TO_QUARTER[reportCode]}`;
             if (common) {
+              const receipts = commonRows.map(row => receiptDateToAsOfTsMs(readDartString(row, "rcept_no") ?? ""));
+              const allMissing = commonRows.every(row => {
+                const amount = readDartString(row, "istc_totqy");
+                return amount !== null && ["", "-"].includes(amount.trim());
+              });
+              if ((!allMissing && conflictingCommonRows(commonRows)) || (commonRows.length > 1 && receipts.some(receipt => receipt === null))) {
+                gaps.push({ symbol, periodKey, field: "SHARES_OUTSTANDING", kind: "INVALID", reason: "보통주 발행주식수 행이 서로 일치하지 않습니다", severity: "BLOCKING" });
+                continue;
+              }
               const value = readShareAmount(common);
               const rawAmount = readDartString(common, "istc_totqy");
-              const asOf = receiptDateToAsOfTsMs(
-                readDartString(common, "rcept_no") ?? "",
-              );
+              const asOf = receipts.every(receipt => receipt !== null) ? Math.max(...receipts as number[]) : null;
               if (value === null || value <= 0 || asOf === null) {
                 gaps.push({
                   symbol,
@@ -922,6 +951,7 @@ export function createDartFactSource(
 
         /** 'YYYY-MM-DD' → 그 시점의 발행주식수. DART 표가 명시한 기준일을 쓴다. */
         const sharesByPeriod: SharesAtPeriod[] = [];
+        let unresolvedShareSnapshot = false;
         const filedReports = new Set<string>();
 
         // 앵커 때문에 shareYears 를 돈다 — 대상 연도만 읽으면 그 연도 연초 이벤트의
@@ -938,30 +968,31 @@ export function createDartFactSource(
               hooks,
             );
             if (shareRows.length > 0) filedReports.add(`${year}:${reportCode}`);
-            const common = findCommonShareRow(shareRows);
-            if (!common) continue;
-            const shares = readShareAmount(common);
-            const rawSettlementDate = readDartString(common, "stlm_dt");
-            const dateKey =
-              rawSettlementDate === null
-                ? null
-                : normalizeDateKey(rawSettlementDate);
-            if (shares === null || shares <= 0 || dateKey === null) {
-              // '-' 주식총수는 사건이 아니라 비율 계산용 앵커 부재다. 실제 보정 대상
-              // 사건이 이 앵커를 필요로 할 때 파서가 사건 날짜와 함께 gap을 남긴다.
+            const commonRows = commonShareRows(shareRows);
+            const usable = commonRows.find(row => (readShareAmount(row) ?? 0) > 0);
+            if (!usable) continue;
+            const dates = new Set(commonRows.map(shareDate));
+            // 수량은 있으나 기준일을 모르는 중복 행은 다른 앵커와의 선후를 알 수 없다.
+            if (dates.delete(null) && commonRows.length > 1) unresolvedShareSnapshot = true;
+            if (dates.size > 1) {
+              for (const dateKey of dates) {
+                if (dateKey !== null) sharesByPeriod.push({ dateKey, shares: 0, backwardAmbiguous: true });
+              }
               continue;
             }
-            const commonRows = shareRows.filter(row => readDartString(row, "se")?.replace(/\s/g, "") === "보통주");
+            const shares = readShareAmount(usable);
+            const dateKey = shareDate(usable);
+            if (shares === null || dateKey === null) continue;
             const receipts = commonRows.map(row => receiptDateToAsOfTsMs(readDartString(row, "rcept_no") ?? ""));
-            const backwardAmbiguous = commonRows.some((row, index) => {
-              const rowDate = readDartString(row, "stlm_dt");
-              return readShareAmount(row) !== shares || rowDate === null || normalizeDateKey(rowDate) !== dateKey || receipts[index] === null;
-            });
+            const backwardAmbiguous = conflictingCommonRows(commonRows) || receipts.some(receipt => receipt === null);
             sharesByPeriod.push({ dateKey, shares, backwardAmbiguous,
               asOfTsMs: backwardAmbiguous ? null : Math.max(...receipts as number[]) });
           }
         }
         sharesByPeriod.sort((a, b) => (a.dateKey < b.dateKey ? -1 : 1));
+        if (unresolvedShareSnapshot) {
+          for (let i = 0; i < sharesByPeriod.length; i++) sharesByPeriod[i] = { ...sharesByPeriod[i]!, backwardAmbiguous: true };
+        }
 
         // irdsSttus는 누적 스냅샷이다. 최신 제출 보고서가 이전 행을 정정·삭제할 수 있으므로
         // 행을 합치지 않고 전체 집합을 교체한다. 그대로 남은 이벤트만 최초 접수번호를 쓴다.
@@ -1054,6 +1085,7 @@ export function createDartFactSource(
           dateKey: string,
           targetRow: DartIssuanceRow,
         ): number | null => {
+          if (unresolvedShareSnapshot) return null;
           let anchor: SharesAtPeriod | null = null;
           for (const entry of sharesByPeriod) {
             if (entry.dateKey >= dateKey) break;
@@ -1073,7 +1105,7 @@ export function createDartFactSource(
             });
             if (unknownDate) return null;
             const next = sharesByPeriod.find(entry => entry.dateKey >= dateKey);
-            if (next === undefined || next.dateKey === dateKey || next.backwardAmbiguous || next.asOfTsMs == null ||
+            if (next === undefined || next.dateKey === dateKey || !reliableShareSnapshot(next, sharesByPeriod) || next.asOfTsMs == null ||
                 !Number.isSafeInteger(next.shares) || next.shares <= 0) return null;
             const sameDate = sharesByPeriod.filter(entry => entry.dateKey === next.dateKey);
             if (sameDate.some(entry => entry.backwardAmbiguous || entry.shares !== next.shares || entry.asOfTsMs == null)) return null;
@@ -1098,6 +1130,7 @@ export function createDartFactSource(
             backwardEvidence.set(dateKey, Math.max(backwardEvidence.get(dateKey) ?? 0, evidence));
             return shares;
           }
+          if (!reliableShareSnapshot(anchor, sharesByPeriod)) return null;
           let shares = anchor.shares;
           for (const change of issuedShareChanges) {
             if (change.dateKey <= anchor.dateKey) continue;
