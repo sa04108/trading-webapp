@@ -722,7 +722,7 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
       tradeFromTsMs: START + HOUR,
     });
     expect(seen.map((item) => item.isRebalanceBar)).toEqual([false, true, false]);
-    expect(seen.every((item) => item.tradable === null)).toBe(true);
+    expect(seen.map(item => item.tradable)).toEqual([new Set(), null, null]);
   });
 });
 

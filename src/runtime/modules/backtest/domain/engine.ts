@@ -1,8 +1,8 @@
+import { BUY_PRIORITY_SEED_SALT, evaluateDailyBar, markedEquity, membershipExits, prioritizeDailyOrders, priorVolumeCapacity, requiredDailyBars } from "../../strategy/domain/daily-decision.js";
 import type { MarketIndexPoint } from "../../market-data/domain/market-index.js";
 import type { Candle } from "../../market-data/domain/candle.js";
 import type {
   AnyTradingStrategy,
-  PortfolioView,
   StrategyBarContext,
 } from "../../strategy/domain/strategy.js";
 import { CORPORATE_ACTION_FIELD, type Fact } from "../../facts/domain/fact.js";
@@ -11,6 +11,7 @@ import { adjustForRatio } from "./corporate-action-adjust.js";
 import {
   proceedsFromSell,
   requiredCashForBuy,
+  weightLimitedBuyQuantity,
   simulateFill,
 } from "./execution.js";
 import {
@@ -180,15 +181,15 @@ export interface BacktestRunResult {
  * 2.11.0: 단주 현금정산 뒤 남은 포지션에 매수수수료 원가를 비례 배분한다.
  * 2.12.0: 실행 경고에서 개별 종목 코드를 빼고 사유별 주문·종목 수로 요약한다.
  * 2.13.0: 날짜별 단기금리로 일 수익률을 차감하여 Sharpe를 계산한다.
+ * 2.14.0: 종목별 진입 준비와 주문 판단을 일봉 매매 실행기와 공유한다.
  */
-export const ENGINE_VERSION = "2.13.0";
+export const ENGINE_VERSION = "2.14.0";
 
 const PROGRESS_INTERVAL_BARS = 500;
 const MS_PER_DAY = 86_400_000;
 /** ECMAScript Date가 표현할 수 있는 양의 최대 epoch millisecond. */
 const MAX_DATE_TS_MS = 8_640_000_000_000_000;
-/** 전략에 노출된 RNG 흐름과 매수 우선순위 RNG 흐름을 분리하는 32-bit salt. */
-const BUY_PRIORITY_SEED_SALT = 0x9e3779b9;
+
 
 /**
  * 취소 확인 간격(봉 수). `runBacktestCancellable` 만 쓴다.
@@ -454,6 +455,8 @@ function* runBacktestSteps(
   const historyFor = (symbol: string): readonly Candle[] =>
     recentHistoryBySymbol?.get(symbol)?.asArray() ??
     historyBySymbol?.get(symbol) ?? [];
+  const minimumBars = requiredDailyBars(strategy, input.parameters);
+  const counts = new Map<string, number>();
   const lastCloseBySymbol = new Map<string, number>();
   let currentExecutionBars: ReadonlyMap<string, Candle> = new Map();
   const positions = new Map<string, Position>();
@@ -628,14 +631,7 @@ function* runBacktestSteps(
     rng,
   });
 
-  const markToMarket = (): number => {
-    let value = cash;
-    for (const position of positions.values()) {
-      const lastClose = lastCloseBySymbol.get(position.symbol);
-      if (lastClose !== undefined) value += position.quantity * lastClose;
-    }
-    return value;
-  };
+  const markToMarket = () => markedEquity(cash, positions, symbol => lastCloseBySymbol.get(symbol));
 
   const recordProgress = (tsMs: number, barCount: number): void => {
     processedBars += barCount;
@@ -1006,24 +1002,14 @@ function* runBacktestSteps(
           .filter((order) => order.side === "SELL")
           .map((order) => order.symbol),
       );
-      for (const [symbol, position] of positions) {
-        if (
-          retiredSymbols.has(symbol) ||
-          membershipSymbols.has(symbol) ||
-          position.quantity <= 0
-        )
-          continue;
+      for (const forcedExit of membershipExits(positions, membershipSymbols)) {
+        const { symbol } = forcedExit;
+        if (retiredSymbols.has(symbol)) continue;
         const isNewForcedExit = !unresolvedForcedExitSymbols.has(symbol);
         // 이전 전략 SELL이나 지연된 forced SELL을 전량 engine order 한 건으로 교체한다.
         pendingOrders = pendingOrders.filter(
           (order) => !(order.symbol === symbol && order.side === "SELL"),
         );
-        const forcedExit: OrderIntent = {
-          symbol,
-          side: "SELL",
-          quantity: position.quantity,
-          reason: "REBALANCE_EXIT",
-        };
         if (sellEligibleNow.has(symbol)) pendingOrders.push(forcedExit);
         else forcedExitsForNextOpen.push(forcedExit);
         unresolvedForcedExitSymbols.add(symbol);
@@ -1127,6 +1113,7 @@ function* runBacktestSteps(
       else
         historyBySymbol!.get(symbol)!.push(bar);
       lastCloseBySymbol.set(symbol, bar.close);
+      counts.set(symbol, (counts.get(symbol) ?? 0) + 1);
     }
 
     // 폐지된 코드는 새 발행사와 구분할 수 없으므로 전략 입력에서도 완전히 감춘다.
@@ -1144,58 +1131,6 @@ function* runBacktestSteps(
       symbols,
     );
 
-    if (!isTradeBar) {
-      const warmupContext: StrategyBarContext = {
-        tsMs,
-        isRebalanceBar: false,
-        getMarketIndexHistory: () => (input.marketIndex ?? []).filter((point) => point.tsMs <= tsMs),
-        bars: strategyBars,
-        getHistory: (symbol) =>
-          contextRetiredSymbols.has(symbol)
-            ? []
-            : historyFor(symbol),
-        portfolio: { cash, equity: markToMarket(), positions },
-        rng,
-        fundamentals: (symbol) =>
-          contextRetiredSymbols.has(symbol)
-            ? null
-            : input.fundamentals ? input.fundamentals(symbol, tsMs) : factView.fundamentals(symbol),
-        corporateActions: (symbol) =>
-          contextRetiredSymbols.has(symbol)
-            ? []
-            : factView.corporateActions(symbol, tsMs),
-        tradableSymbols: strategyTradableSymbols,
-        activeUniverseSymbols: strategyActiveUniverseSymbols,
-        selectionMetric: (symbol) =>
-          contextRetiredSymbols.has(symbol)
-            ? null
-            : (activeSelectionMetrics?.get(symbol) ?? null),
-      };
-      // warm-up은 전략 지표/커서 상태만 전진시킨다. 반환 주문은 의도적으로 버린다.
-      // event-only 시각은 strategyTimeline의 실제 봉이 아니므로 RNG·2단계 신호 상태도
-      // 소비하지 않는다.
-      if (strategyBars.size > 0)
-        strategy.onBars(warmupContext, state, input.parameters);
-      if (visitedBars % CANCEL_YIELD_INTERVAL_BARS < allBarCount) yield;
-      continue;
-    }
-
-    // 폐지·유니버스 이탈 청산을 모두 마쳤다면 미뤄 둔 매수는 **이번** 체결 루프로
-    // 되돌리지 않고 다음 봉 대기열에 둔다. 그래야 이미 지난 현재 시가에 소급 체결되지 않는다.
-    if (!buysAwaitingForcedExitAttempt && deferredRebalanceBuys.length > 0) {
-      promoteDeferredBuys(promotedBuySymbolsThisBar);
-    }
-
-    // 4. 평가금액 갱신
-    equityPoints.push({ tsMs, equity: markToMarket() });
-    maxConcurrentPositions = Math.max(maxConcurrentPositions, positions.size);
-
-    // 5~6. 전략 호출
-    const portfolioView: PortfolioView = {
-      cash,
-      equity: equityPoints[equityPoints.length - 1]?.equity ?? cash,
-      positions,
-    };
     const context: StrategyBarContext = {
       tsMs,
       isRebalanceBar,
@@ -1205,7 +1140,7 @@ function* runBacktestSteps(
         contextRetiredSymbols.has(symbol)
           ? []
           : historyFor(symbol),
-      portfolio: portfolioView,
+      portfolio: { cash, equity: markToMarket(), positions },
       rng,
       fundamentals: (symbol) =>
         contextRetiredSymbols.has(symbol)
@@ -1222,7 +1157,27 @@ function* runBacktestSteps(
           ? null
           : (activeSelectionMetrics?.get(symbol) ?? null),
     };
-    const decision = strategy.onBars(context, state, input.parameters);
+    if (!isTradeBar) {
+      // warm-up은 전략 지표/커서 상태만 전진시킨다. 반환 주문은 의도적으로 버린다.
+      // event-only 시각은 strategyTimeline의 실제 봉이 아니므로 RNG·2단계 신호 상태도
+      // 소비하지 않는다.
+      if (strategyBars.size > 0)
+        evaluateDailyBar(strategy, state, input.parameters, context, minimumBars, counts, true);
+      if (visitedBars % CANCEL_YIELD_INTERVAL_BARS < allBarCount) yield;
+      continue;
+    }
+
+    // 폐지·유니버스 이탈 청산을 모두 마쳤다면 미뤄 둔 매수는 **이번** 체결 루프로
+    // 되돌리지 않고 다음 봉 대기열에 둔다. 그래야 이미 지난 현재 시가에 소급 체결되지 않는다.
+    if (!buysAwaitingForcedExitAttempt && deferredRebalanceBuys.length > 0) {
+      promoteDeferredBuys(promotedBuySymbolsThisBar);
+    }
+
+    // 4. 평가금액 갱신
+    equityPoints.push({ tsMs, equity: context.portfolio.equity });
+    maxConcurrentPositions = Math.max(maxConcurrentPositions, positions.size);
+
+    const decision = evaluateDailyBar(strategy, state, input.parameters, context, minimumBars, counts, false);
 
     // 7~8. 리스크 검증 후 다음 봉 대기열 등록
     //
@@ -1236,7 +1191,7 @@ function* runBacktestSteps(
       warnRetiredOrder(order.symbol);
       return false;
     });
-    for (const order of randomizeSimultaneousBuyPriority(eligibleOrders)) {
+    for (const order of prioritizeDailyOrders(eligibleOrders, buyPriorityRng)) {
       if (
         order.side === "SELL" &&
         unresolvedForcedExitSymbols.has(order.symbol)
@@ -1546,25 +1501,6 @@ function* runBacktestSteps(
 
   // ── 내부 helpers ─────────────────────────────────────────────
 
-  function randomizeSimultaneousBuyPriority(
-    orders: readonly OrderIntent[],
-  ): OrderIntent[] {
-    const buys = orders.filter((order) => order.side === "BUY");
-    if (buys.length < 2) return [...orders];
-
-    for (let index = buys.length - 1; index > 0; index -= 1) {
-      const swapIndex = Math.floor(buyPriorityRng() * (index + 1));
-      const current = buys[index] as OrderIntent;
-      buys[index] = buys[swapIndex] as OrderIntent;
-      buys[swapIndex] = current;
-    }
-
-    let buyIndex = 0;
-    return orders.map((order) =>
-      order.side === "BUY" ? (buys[buyIndex++] as OrderIntent) : order,
-    );
-  }
-
   function retireSymbols(retiringSymbols: ReadonlySet<string>): void {
     const purgedBuySymbols = new Set<string>();
     for (const order of [...pendingOrders, ...deferredRebalanceBuys]) {
@@ -1786,20 +1722,8 @@ function* runBacktestSteps(
         }
         const heldValue = (positions.get(fill.symbol)?.quantity ?? 0) * basePrice;
         // 매수 후 평가액 = 매수 전 평가액 - 수수료 - 시가 대비 체결 비용이다.
-        // 기존 보유분 + q주 평가액 <= 상한 × 매수 후 평가액을 q에 대해 푼다.
-        const costPerShare = fill.price * (1 + input.execution.cost.buyCommissionRate) - basePrice;
-        const targetValue = equityAtOpen * maxPositionWeight;
-        const valuePerShare = basePrice + maxPositionWeight * costPerShare;
-        const rawQuantity = (targetValue - heldValue) / valuePerShare;
-        // 정확히 한도인 1주가 0.9999999999999999로 계산되어 거부되지 않게 한다.
-        // 기존 보유액을 뺄 때의 상쇄 오차도 원래 금액 크기로 계산한다.
-        const quantityTolerance = 4 * Number.EPSILON * (
-          (Math.abs(targetValue) + Math.abs(heldValue)) / valuePerShare
-          + Math.abs(rawQuantity)
-        );
-        const allowedQuantity = Math.max(0, Math.floor(
-          rawQuantity + quantityTolerance,
-        ));
+        const allowedQuantity = weightLimitedBuyQuantity(equityAtOpen, heldValue, basePrice,
+          fill.price, 1 + input.execution.cost.buyCommissionRate, maxPositionWeight);
         if (allowedQuantity < input.execution.rules.minOrderQty) {
           weightRejectedOrderCount += 1;
           return null;
@@ -1902,9 +1826,7 @@ function* runBacktestSteps(
     // 사후에 확인한 현재 일봉 총거래량보다 많이 체결됐다고 만들 수는 없다. 현재 거래량은
     // 전략 입력이나 주문 수량 산정에는 쓰지 않고 불가능 체결을 줄이는 물리적 상한으로만 쓴다.
     // 분할 봉의 currentVolume은 이미 새 주식 단위이고, priorVolume만 unitRatio로 맞춘다.
-    const priorParticipationCapacity = Math.floor(
-      priorVolume * unitRatio * maxVolumeParticipationRate,
-    );
+    const priorParticipationCapacity = priorVolumeCapacity(priorVolume * unitRatio, maxVolumeParticipationRate);
     const capacity = Math.min(
       priorParticipationCapacity,
       Math.floor(currentVolume),

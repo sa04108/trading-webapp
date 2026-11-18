@@ -28,6 +28,7 @@ export interface BrokerOrder {
   averageFillPrice: number | null;
   commission: number;
   tax: number;
+  error?: string;
   status: "OPEN" | "PARTIAL" | "FILLED" | "CANCELLED" | "REJECTED";
 }
 
@@ -53,7 +54,8 @@ export interface TradingBroker {
     side: "BUY" | "SELL";
     quantity: number;
     price: number;
-  }, beforeSend?: () => void): Promise<{ orderId: string }>;
+    venue?: "KOSPI" | "KOSDAQ";
+  }, beforeSend?: (execution?: { price: number; quotePrice: number }) => void): Promise<{ orderId: string }>;
   cancel(accountId: string, orderId: string): Promise<void>;
   quotes(symbols: string[]): Promise<BrokerQuote[]>;
   dailyCandles(symbol: string, fromMs: number, toMs: number): Promise<Candle[]>;
