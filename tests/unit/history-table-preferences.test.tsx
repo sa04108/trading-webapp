@@ -17,7 +17,7 @@ describe("백테스트 표 설정 복구", () => {
       visible: [],
     })).toEqual({
       version: 1,
-      order: ["seed", "return", "cagr", "mdd", "date", "sharpe", "validation"],
+      order: ["return", "cagr", "mdd", "date", "sharpe", "validation"],
       visible: [],
     });
     expect(normalizeHistoryTablePreferences({ version: 1, order: [], visible: ["validation", "unknown", "validation"] }).visible)

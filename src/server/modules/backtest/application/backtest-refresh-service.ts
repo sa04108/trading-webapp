@@ -5,7 +5,7 @@ import { newId } from "../../../../runtime/shared/ids.js";
 import { backtestPreparationJobs } from "../../../../runtime/shared/db/operations-schema.js";
 import type { BacktestPreparationOrchestrator, BacktestUniversePreview } from "../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js";
 import { backtestRefreshJobs } from "../../../shared/db/backtest-refresh-schema.js";
-import { backtestRefreshActionLabel, backtestRefreshActionSchema, savedBacktestRefreshActionSchema, type BacktestRefreshAction, type BacktestRefreshJob, type BacktestRefreshStatus } from "../../../../shared/schemas/backtest-refresh.js";
+import { backtestRefreshActionLabel, backtestRefreshActionSchema, type BacktestRefreshAction, type BacktestRefreshJob, type BacktestRefreshStatus } from "../../../../shared/schemas/backtest-refresh.js";
 import type { BacktestRequest } from "../../../../shared/schemas/backtest-request.js";
 import { PreparationReferenceError, PreparationReferenceService } from "./preparation-reference-service.js";
 
@@ -45,7 +45,7 @@ export class BacktestRefreshService {
       )).get();
       const actionJson = JSON.stringify(normalized);
       if (existing) {
-        const existingAction = savedBacktestRefreshActionSchema.parse(JSON.parse(existing.actionJson));
+        const existingAction = backtestRefreshActionSchema.parse(JSON.parse(existing.actionJson));
         if (existing.sourceJobId !== sourceJobId || JSON.stringify(existingAction) !== actionJson)
           throw new BacktestRefreshError("같은 요청 번호에 다른 작업을 지정할 수 없습니다.", 409);
         return this.dto(existing);
@@ -73,9 +73,7 @@ export class BacktestRefreshService {
     const row = this.owned(ownerId, id);
     if (row.status !== "FAILED" && row.status !== "CANCELLED")
       throw new BacktestRefreshError("실패하거나 취소된 작업만 다시 시작할 수 있습니다.", 409);
-    const action = savedBacktestRefreshActionSchema.parse(JSON.parse(row.actionJson));
-    if (action.kind === "RANDOM_SEEDS")
-      throw new BacktestRefreshError("이전 난수 복제는 새로 실행할 수 없습니다. 설정 탐색에서 난수 시드를 지정하세요.", 409);
+    const action = backtestRefreshActionSchema.parse(JSON.parse(row.actionJson));
     // 같은 실패 화면을 여러 번 눌러도 한 번의 후속 재시도만 만든다.
     return this.create(ownerId, `retry:${id}`, row.sourceJobId, action);
   }
@@ -116,7 +114,7 @@ export class BacktestRefreshService {
   }
 
   private dto(row: BacktestRefreshRow): BacktestRefreshJob {
-    const action = savedBacktestRefreshActionSchema.parse(JSON.parse(row.actionJson));
+    const action = backtestRefreshActionSchema.parse(JSON.parse(row.actionJson));
     const status = row.status as BacktestRefreshStatus;
     const preparation = row.preparationJobId ? this.deps.preparation.get(row.preparationJobId) : null;
     const messages: Record<BacktestRefreshStatus, string> = {
@@ -167,10 +165,9 @@ export class BacktestRefreshService {
       SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id=?
       UNION ALL SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id=?
       UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id=?
-      UNION ALL SELECT 1 FROM backtest_clone_batches WHERE preparation_job_id=?
       UNION ALL SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id=?
       UNION ALL SELECT 1 FROM configuration_search_items WHERE preparation_job_id=? LIMIT 1
-    `).get(id, id, id, id, id, id);
+    `).get(id, id, id, id, id);
     if (!shared) this.deps.preparation.cancel(id);
   }
 
@@ -202,7 +199,7 @@ export class BacktestRefreshService {
     const request = JSON.parse(row.requestJson) as BacktestRequest;
     if (this.deps.runtimeIdentity(request) !== row.runtimeIdentity)
       throw new Error("준비 중 실행 기준이 변경되어 자동 실행을 중단했습니다. 최신 기준으로 다시 시도하세요.");
-    const action = savedBacktestRefreshActionSchema.parse(JSON.parse(row.actionJson));
+    const action = backtestRefreshActionSchema.parse(JSON.parse(row.actionJson));
     // 공유 준비와 기간검증도 새 작업을 승인한 시점의 공시 목록 확인을 거친다.
     if (row.status === "QUEUED" && this.deps.refreshProviderFilings) {
       await this.deps.refreshProviderFilings();

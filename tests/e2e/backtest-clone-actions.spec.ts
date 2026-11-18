@@ -34,7 +34,6 @@ const detail = {
     createdAtMs: Date.UTC(2026, 0, 1),
     startedAtMs: Date.UTC(2026, 0, 1),
     completedAtMs: Date.UTC(2026, 0, 1),
-    cloneBatchId: null,
     cloneSourceJobId: null,
   },
   run: null,
@@ -108,25 +107,14 @@ test('난수 비의존 전략도 설정 탐색을 제공하고 재현 정보에�
   await expect(page.getByText('난수 시드', { exact: true })).toHaveCount(0);
 });
 
-test('이전 난수 작업의 실패 화면은 재시도 대신 설정 탐색으로 안내한다', async ({ page }) => {
+test('복제 작업 실패 화면에서 다시 준비할 수 있다', async ({ page }) => {
   await login(page);
   await page.route(`**/api/v1/backtests/${JOB_ID}`, route => route.fulfill({ json: detail }));
-  await page.route('**/api/v1/backtests/refresh-jobs/*', route => {
-    const id = route.request().url().split('/').at(-1)!;
-    return route.fulfill({ json: { job: {
-      id, sourceJobId: JOB_ID, status: 'FAILED',
-      action: id === 'legacy' ? { kind: 'RANDOM_SEEDS', count: 3 } : { kind: 'CLONE' },
-      preparationJobId: null, message: '데이터 준비 실패', error: '실행 기준이 변경되었습니다.',
-      resultHref: null, createdAtMs: 1, completedAtMs: 2,
-    } } });
-  });
-  await page.goto(`/backtests/${JOB_ID}?refreshJob=legacy`);
-  const dialog = page.getByRole('dialog');
-  await expect(dialog).toContainText('이전 난수 복제는 다시 실행할 수 없습니다.');
-  await expect(dialog.getByRole('button', { name: '다시 준비 후 실행' })).toHaveCount(0);
-  await expect(dialog.getByRole('link', { name: '설정 탐색에서 새 실험을 시작하세요.' })).toHaveAttribute('href', `/backtests/${JOB_ID}/search`);
-
+  await page.route('**/api/v1/backtests/refresh-jobs/*', route => route.fulfill({ json: { job: {
+    id: 'clone', sourceJobId: JOB_ID, status: 'FAILED', action: { kind: 'CLONE' },
+    preparationJobId: null, message: '데이터 준비 실패', error: '실행 기준이 변경되었습니다.',
+    resultHref: null, createdAtMs: 1, completedAtMs: 2,
+  } } }));
   await page.goto(`/backtests/${JOB_ID}?refreshJob=clone`);
-  await expect(dialog.getByRole('button', { name: '다시 준비 후 실행' })).toBeVisible();
-  await expect(dialog.getByText('이전 난수 복제는 다시 실행할 수 없습니다.')).toHaveCount(0);
+  await expect(page.getByRole('dialog').getByRole('button', { name: '다시 준비 후 실행' })).toBeVisible();
 });

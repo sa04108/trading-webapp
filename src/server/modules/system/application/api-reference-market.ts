@@ -53,7 +53,7 @@ add('DELETE', '/intraday/validations/:id', '분봉 기간 검증 삭제', '종�
 add('POST', '/intraday/runs/:id/clone', '분봉 결과 복제', '종료된 실행의 요청으로 새 분봉 실행을 제출합니다.', { status: 202, errors: [400, 404, 429] });
 add('GET', '/intraday/runs/:id/export', '분봉 결과 다운로드', '완료된 실행 전체를 JSON 파일로 반환합니다.');
 add('GET', '/intraday/runs/:id/lineage', '분봉 결과 계보', 'kind, roleLabel, complete 및 items로 상위 결과 경로를 반환합니다.');
-add('GET', '/intraday/experiments/summary', '분봉 실험 집계', '원본별 search, seed 및 validation 집계를 summaries로 반환합니다.', { params: [query('jobIds', 'string', '쉼표로 구분한 원본 ID, 최대 100개.', true)], errors: [400] });
+add('GET', '/intraday/experiments/summary', '분봉 실험 집계', '원본별 search 및 validation 집계를 summaries로 반환합니다.', { params: [query('jobIds', 'string', '쉼표로 구분한 원본 ID, 최대 100개.', true)], errors: [400] });
 const revision = body('현재 expectedRevision을 지정합니다.', tradingRevisionSchema);
 const activation = body('expectedRevision과 acknowledged=true를 지정합니다.', tradingRevisionSchema.extend({ acknowledged: z.literal(true) }));
 add('GET', '/trading', '운용 상태', 'revision, deployment, broker, account, performance, positions, orders, events 및 blockers를 반환합니다. dataPreparation은 현재 설정의 데이터 준비 상태(RUNNING/READY/FAILED)와 message이며 작업이 없으면 null입니다.');

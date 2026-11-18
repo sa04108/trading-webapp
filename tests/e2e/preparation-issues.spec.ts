@@ -210,8 +210,7 @@ test('결과 화면도 준비 확인사항을 분리하고 과거 실행 경고�
         createdAtMs: Date.UTC(2026, 0, 1),
         startedAtMs: Date.UTC(2026, 0, 1),
         completedAtMs: Date.UTC(2026, 0, 2),
-        cloneBatchId: null,
-        cloneSourceJobId: null,
+            cloneSourceJobId: null,
       },
       run: {
         strategyId: 'range-breakout',

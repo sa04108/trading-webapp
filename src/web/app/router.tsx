@@ -1,5 +1,4 @@
 import { ConfigurationSearchPage, ConfigurationSearchDetailPage } from "../features/backtests/configuration-search-page";
-import { SeedExperimentsPage } from "../features/backtests/seed-experiments-page";
 import { PeriodValidationPage, PeriodValidationDetailPage } from "../features/backtests/period-validation-pages";
 import { createBrowserRouter } from "react-router";
 import {
@@ -13,7 +12,6 @@ import { BacktestDetailPage } from "../features/backtests/backtest-detail-page";
 import { BacktestsPage } from "../features/backtests/backtests-page";
 import { NewBacktestEntry } from "../features/backtests/new-backtest-entry";
 import { NewBacktestWizard } from "../features/backtests/new-backtest-wizard";
-import { SeedCloneBatchPage } from "../features/backtests/seed-clone-batch-page";
 import { DashboardPage } from "../features/dashboard/dashboard-page";
 import {
   DataPage,
@@ -48,13 +46,10 @@ export const router = createBrowserRouter([
           { path: "backtests/intraday/:id/search", element: <ConfigurationSearchPage mode="intraday" /> },
           { path: "backtests/searches/:searchId", element: <ConfigurationSearchDetailPage /> },
           { path: "backtests/:id/search", element: <ConfigurationSearchPage /> },
-          { path: "backtests/intraday/:id/seeds", element: <SeedExperimentsPage mode="intraday" /> },
           { path: "backtests/intraday/:id/validations", element: <PeriodValidationPage mode="intraday" /> },
           { path: "backtests/intraday/validations/:validationId", element: <PeriodValidationDetailPage mode="intraday" /> },
           { path: "backtests/new", element: <NewBacktestEntry /> },
           { path: "backtests/new/:step", element: <NewBacktestWizard /> },
-          { path: "backtests/batches/:id", element: <SeedCloneBatchPage /> },
-          { path: "backtests/:id/seeds", element: <SeedExperimentsPage /> },
           { path: "backtests/:id/validations", element: <PeriodValidationPage /> },
           { path: "backtests/validations/:validationId", element: <PeriodValidationDetailPage /> },
           { path: "backtests/:id", element: <BacktestDetailPage /> },

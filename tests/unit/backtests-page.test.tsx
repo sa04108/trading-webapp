@@ -70,7 +70,6 @@ function job(id: string, status: JobSummary['status']): JobSummary {
     createdAtMs: Date.UTC(2026, 0, 2),
     startedAtMs: null,
     completedAtMs: status === 'COMPLETED' ? Date.UTC(2026, 0, 2) : null,
-    cloneBatchId: null,
     cloneSourceJobId: null,
     metrics: status === 'COMPLETED' ? metrics : null,
   };
@@ -144,7 +143,7 @@ describe('백테스트 목록', () => {
     client.setQueryData(['backtests', 'groups'], { groups: [{ strategyId: source.strategyId, total: 1 }] });
     client.setQueryData(['backtests', 'history', 'strategyId=range-breakout&sort=createdAt&dir=desc&limit=6&offset=0'], { jobs: [source], total: 1 });
     client.setQueryData(['backtest-experiments', 'summaries', ['source']], {
-      summaries: [{ jobId: 'source', seed: { batchCount: 1 }, validation: { experimentCount: 1 } }],
+      summaries: [{ jobId: 'source', validation: { experimentCount: 1 } }],
     });
     client.setQueryData(['strategies'], {
       strategies: [{
@@ -166,7 +165,6 @@ describe('백테스트 목록', () => {
     );
 
     expect(html).toContain('href="/backtests/source"');
-    expect(html).toContain('href="/backtests/source/seeds"');
     expect(html).toContain('href="/backtests/source/validations"');
     expect(html).not.toContain('/backtests/batches/');
   });
@@ -177,12 +175,12 @@ describe('백테스트 목록', () => {
     client.setQueryData(['backtests', 'groups'], { groups: [{ strategyId: source.strategyId, total: 1 }] });
     client.setQueryData(['backtests', 'history', 'strategyId=range-breakout&sort=createdAt&dir=desc&limit=10&offset=0'], { jobs: [source], total: 1 });
     client.setQueryData(['backtest-experiments', 'summaries', ['source']], {
-      summaries: [{ jobId: 'source', benchmarkExcessReturnPct: 3, seed: { batchCount: 2, activeCount: 0, completedCount: 1, returns: { count: 5, mean: 10, sampleStdDev: 1.25 } }, validation: { experimentCount: 1, activeCount: 0, completedCount: 1, returns: { count: 1, mean: 4, sampleStdDev: null }, modes: {} } }],
+      summaries: [{ jobId: 'source', benchmarkExcessReturnPct: 3, validation: { experimentCount: 1, activeCount: 0, completedCount: 1, returns: { count: 1, mean: 4, sampleStdDev: null }, modes: {} } }],
     });
     const preference = vi.spyOn(tablePreferences, 'useHistoryTablePreferences').mockReturnValue({
       order: [...tablePreferences.DEFAULT_HISTORY_TABLE_PREFERENCES.order],
-      visible: ['seed', 'validation'],
-      visibleColumns: tablePreferences.HISTORY_TABLE_COLUMNS.filter((column) => column.id === 'seed' || column.id === 'validation'),
+      visible: ['validation'],
+      visibleColumns: tablePreferences.HISTORY_TABLE_COLUMNS.filter((column) => column.id === 'validation'),
       setVisible: () => {},
       setOrder: () => {},
     });
@@ -190,7 +188,6 @@ describe('백테스트 목록', () => {
       const html = renderToStaticMarkup(
         <QueryClientProvider client={client}><TooltipProvider><MemoryRouter initialEntries={['/backtests?view=table']}><BacktestsPage /></MemoryRouter></TooltipProvider></QueryClientProvider>,
       );
-      expect(html).toContain('2 (1.25%p)');
       expect(html).toContain('1 (—)');
       expect(html).not.toContain('초과수익률');
       expect(html).not.toContain('+3.00%');

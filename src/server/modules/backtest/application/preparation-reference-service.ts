@@ -152,7 +152,6 @@ export class PreparationReferenceService {
   hasConsumers(preparationJobId: string): boolean {
     return Boolean(this.database.sqlite.prepare(`SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id=@id
       UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id=@id
-      UNION ALL SELECT 1 FROM backtest_clone_batches WHERE preparation_job_id=@id
       UNION ALL SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id=@id
       UNION ALL SELECT 1 FROM configuration_search_items WHERE preparation_job_id=@id
       UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id=@id LIMIT 1`).get({ id: preparationJobId }));
@@ -165,8 +164,6 @@ export class PreparationReferenceService {
       DELETE FROM backtest_preparation_jobs
       WHERE lifecycle_managed = 1 AND status IN ('COMPLETED', 'FAILED', 'CANCELLED')
         AND NOT EXISTS (SELECT 1 FROM backtest_jobs b
-          WHERE b.preparation_job_id = backtest_preparation_jobs.id)
-        AND NOT EXISTS (SELECT 1 FROM backtest_clone_batches b
           WHERE b.preparation_job_id = backtest_preparation_jobs.id)
         AND NOT EXISTS (SELECT 1 FROM preparation_wizard_references w
           WHERE w.preparation_job_id = backtest_preparation_jobs.id)

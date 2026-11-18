@@ -82,7 +82,6 @@ describe("작업 관찰·취소·이력 경계", () => {
     for (let i = 0; i < 3; i++) backtest(ctx.container, `finished-${i}`, "FAILED", now - i, { completedAtMs: now - i });
     backtest(ctx.container, "interrupted", "INTERRUPTED", now - 10, { completedAtMs: now - 10 });
     backtest(ctx.container, "user-cancelled", "CANCELLED", now - 11, { completedAtMs: now - 11 });
-    backtest(ctx.container, "batch-child", "QUEUED", now, { cloneBatchId: "batch" });
     for (const [id, ownerId, status] of [["own", ctx.container.userRepository.findByUsername(admin.username)!.id, "PREPARING"], ["foreign", "another-owner", "RUNNING"], ["foreign-failed", "another-owner", "FAILED"]]) {
       ctx.container.database.db.insert(intradayRuns).values({ id: id!, ownerId: ownerId!, status: status!, requestJson: JSON.stringify(request), resultJson: "not parsed for observation", createdAtMs: now, updatedAtMs: now }).run();
     }
@@ -99,7 +98,7 @@ describe("작업 관찰·취소·이력 경계", () => {
     expect(page.jobs).toHaveLength(2);
     expect(page.jobs.every((job) => job.finishedAtMs === null)).toBe(true);
     const all = (await get("")).json<JobsResponse>().jobs;
-    for (const hidden of ["backtest:expired", "backtest:batch-child", "intraday-backtest:foreign", "intraday-collection:internal"]) expect(all.map((job) => job.id)).not.toContain(hidden);
+    for (const hidden of ["backtest:expired", "intraday-backtest:foreign", "intraday-collection:internal"]) expect(all.map((job) => job.id)).not.toContain(hidden);
     expect(all.find((job) => job.id === "backtest:old-active")?.progress?.percent).toBe(25);
     expect(all.find((job) => job.id === "intraday-backtest:own")?.progress).toMatchObject({ current: 120, total: null, percent: null });
     expect((await get("?status=finished")).json<JobsResponse>()).toMatchObject({ total: 6, activeCount: 3 });

@@ -61,7 +61,7 @@ export function registerIntradayValidationRoutes(app: FastifyInstance, database:
     const summaries: BacktestHistoryExtras[] = ids.map(jobId => {
       const experiments = service.list(request.authUser!.id, jobId), modes = { HOLDOUT: 0, WALK_FORWARD: 0 };
       const samples: number[] = []; for (const e of experiments) { modes[e.config.mode]++; if (e.status !== "COMPLETED") continue; const oos = e.trials.filter(t => t.role === "OOS"); if (oos.length && oos.every(t => t.status === "COMPLETED" && t.metrics && t.metrics.intradayDaily?.isComplete !== false && Number.isFinite(t.metrics.totalReturnPct))) samples.push(oos.reduce((sum, t) => sum + t.metrics!.totalReturnPct / oos.length, 0)); }
-      return { jobId, search: searches(jobId), seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: distribution([]) }, validation: { experimentCount: experiments.length, activeCount: experiments.filter(e => e.status === "ACTIVE" || e.status === "CANCELLING").length, completedCount: experiments.filter(e => e.status === "COMPLETED").length, returns: distribution(samples), modes } };
+      return { jobId, search: searches(jobId), validation: { experimentCount: experiments.length, activeCount: experiments.filter(e => e.status === "ACTIVE" || e.status === "CANCELLING").length, completedCount: experiments.filter(e => e.status === "COMPLETED").length, returns: distribution(samples), modes } };
     }); return { summaries };
   }));
   return service;

@@ -38,7 +38,6 @@ async function historyFixture(page: Page) {
     createdAtMs: Date.UTC(2026, 10, 15 - i),
     startedAtMs: null,
     completedAtMs: Date.UTC(2026, 10, 15 - i),
-    cloneBatchId: null,
     cloneSourceJobId: null,
     metrics:
       i === 11
@@ -109,7 +108,7 @@ async function historyFixture(page: Page) {
     });
   });
   await page.route(/\/api\/v1\/backtests\/history-extras(?:\?|$)/, (route) =>
-    route.fulfill({ json: { summaries: new URL(route.request().url()).searchParams.get("jobIds")?.split(",").map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, seed: { batchCount: ["history-0", "history-1"].includes(jobId) ? 1 : 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null } }, validation: { experimentCount: ["history-0", "history-2"].includes(jobId) ? 1 : 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) ?? [] } }),
+    route.fulfill({ json: { summaries: new URL(route.request().url()).searchParams.get("jobIds")?.split(",").map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, validation: { experimentCount: ["history-0", "history-2"].includes(jobId) ? 1 : 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) ?? [] } }),
   );
   await page.route(/\/api\/v1\/backtests\/history-\d+$/, (route) => {
     const id = new URL(route.request().url()).pathname.split("/").at(-1)!;
@@ -173,11 +172,10 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
   expect(Math.abs(editBox.y + editBox.height / 2 - moreBox.y - moreBox.height / 2)).toBeLessThanOrEqual(1);
   await expect(group.locator("tbody > tr")).toHaveCount(10);
   const firstRow = group.locator("tbody > tr").first();
-  await expect(firstRow.getByRole("link", { name: "난수", exact: true })).toHaveAttribute("href", "/backtests/history-0/seeds");
   await expect(firstRow.getByRole("link", { name: "검증", exact: true })).toHaveAttribute("href", "/backtests/history-0/validations");
-  // 건수가 0인데도 양쪽 버튼을 항상 표시하던 회귀를 표·카드에서 함께 확인한다.
-  const experimentLinks = group.locator('a[href$="/seeds"], a[href$="/validations"]');
-  const expectedExperimentLinks = ["/backtests/history-0/seeds", "/backtests/history-0/validations", "/backtests/history-1/seeds", "/backtests/history-2/validations"];
+  // 기록이 없는 항목에 검증 버튼이 표시되지 않는지 표·카드에서 함께 확인한다.
+  const experimentLinks = group.locator('a[href$="/validations"]');
+  const expectedExperimentLinks = ["/backtests/history-0/validations", "/backtests/history-2/validations"];
   await expect.poll(() => experimentLinks.evaluateAll((links) => links.map((link) => link.getAttribute("href")).sort())).toEqual(expectedExperimentLinks);
   await expect(group.getByRole("columnheader")).toHaveText(["기간", "수익률", "CAGR", "MDD", "실행일"]);
 
@@ -210,10 +208,10 @@ test("전략별 전체 이력에서 정렬·보기·페이지를 전환하고 �
   ).toBe(true);
   await viewToggle.click();
   await expect(viewToggle).toBeChecked();
-  await expect(group.locator('a[href^="/backtests/history-"]:not([href$="/seeds"]):not([href$="/validations"])')).toHaveCount(6);
+  await expect(group.locator('a[href^="/backtests/history-"]:not([href$="/validations"])')).toHaveCount(6);
   await expect.poll(() => experimentLinks.evaluateAll((links) => links.map((link) => link.getAttribute("href")).sort())).toEqual(expectedExperimentLinks);
   const boxes = await group
-    .locator('a[href^="/backtests/history-"]:not([href$="/seeds"]):not([href$="/validations"])')
+    .locator('a[href^="/backtests/history-"]:not([href$="/validations"])')
     .evaluateAll((nodes) =>
       nodes.map((n) => {
         // 실험 버튼이 있는 카드와 없는 카드는 제목 높이가 다르므로 카드 자체를 비교한다.
@@ -306,7 +304,8 @@ test("표시 항목과 순서를 저장하고 일봉·분봉에 같은 표 구�
   await expect(table.getByRole("columnheader")).toHaveText(["기간", "수익률", "CAGR", "MDD", "실행일"]);
   await page.getByRole("button", { name: "표시 항목", exact: true }).click();
   const menu = page.getByRole("dialog", { name: "표시 항목", exact: true });
-  await expect(menu.getByRole("checkbox")).toHaveCount(7);
+  await expect(menu.getByRole("checkbox")).toHaveCount(6);
+  await expect(menu.getByRole("checkbox", { name: "난수 표시", exact: true })).toHaveCount(0);
   await expect(menu).not.toContainText("기본 항목");
   await expect(menu).not.toContainText("추가 항목");
   await menu.getByRole("checkbox", { name: "CAGR 표시", exact: true }).uncheck();
@@ -330,7 +329,6 @@ test("표시 항목과 순서를 저장하고 일봉·분봉에 같은 표 구�
   }
   await expect(table.getByRole("columnheader")).toHaveText(["기간", "실행일", "수익률", "MDD"]);
   await expect(menu.getByRole("checkbox", { name: "CAGR 표시", exact: true })).not.toBeChecked();
-  await menu.getByRole("checkbox", { name: "난수 표시", exact: true }).check();
   await menu.getByRole("checkbox", { name: "검증 표시", exact: true }).check();
   await menu.getByRole("checkbox", { name: "Sharpe 표시", exact: true }).check();
   const sharpe = menu.getByRole("button", { name: "Sharpe 순서 변경", exact: true });
@@ -342,7 +340,7 @@ test("표시 항목과 순서를 저장하고 일봉·분봉에 같은 표 구�
   await page.keyboard.press("ArrowUp");
   await expect(announcement).toHaveText("Sharpe, 4번째 위치입니다.");
   await page.keyboard.press("Space");
-  const headers = ["기간", "실행일", "수익률", "Sharpe", "MDD", /난수/, /검증/];
+  const headers = ["기간", "실행일", "수익률", "Sharpe", "MDD", /검증/];
   await expect(table.getByRole("columnheader")).toHaveText(headers);
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const menuBox = await menu.boundingBox();
@@ -366,7 +364,7 @@ test("표시 항목과 순서를 저장하고 일봉·분봉에 같은 표 구�
   await menu.getByRole("checkbox", { name: "CAGR 표시", exact: true }).check();
   await page.keyboard.press("Escape");
   await page.goto("/backtests?view=table");
-  await expect(table.getByRole("columnheader")).toHaveText(["기간", "실행일", "수익률", "CAGR", "Sharpe", "MDD", /난수/, /검증/]);
+  await expect(table.getByRole("columnheader")).toHaveText(["기간", "실행일", "수익률", "CAGR", "Sharpe", "MDD", /검증/]);
 });
 
 // 기존 정적 렌더링·삭제 검사는 5초 재조회 중 체크박스가 사라지는 회귀를 잡지 못한다.
@@ -385,7 +383,7 @@ for (const view of ["table", "cards"] as const) {
         entered();
         await pending;
       }
-      await route.fulfill({ json: { summaries: new URL(route.request().url()).searchParams.get("jobIds")?.split(",").map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null } }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) ?? [] } });
+      await route.fulfill({ json: { summaries: new URL(route.request().url()).searchParams.get("jobIds")?.split(",").map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) ?? [] } });
     });
     await page.goto(`/backtests?view=${view}&collapsed=strategy-b`);
     await strategyGroup(page).getByRole("button", { name: "편집", exact: true }).click();
@@ -431,7 +429,7 @@ test("실험 정보 재조회 실패에도 선택과 삭제 확인을 허용한�
   await page.route(/\/api\/v1\/backtests\/history-extras(?:\?|$)/, (route) => {
     if (fail) return route.fulfill({ status: 503, json: { error: "unavailable" } });
     const ids = new URL(route.request().url()).searchParams.get("jobIds")?.split(",") ?? [];
-    return route.fulfill({ json: { summaries: ids.map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null } }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) } });
+    return route.fulfill({ json: { summaries: ids.map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) } });
   });
   await page.goto("/backtests?view=table&collapsed=strategy-b");
   await strategyGroup(page).getByRole("button", { name: "편집", exact: true }).click();
@@ -514,7 +512,7 @@ test("새 목록의 실험 정보를 기다리거나 실패해도 기존 선택�
       return route.fulfill({ status: 503, json: { error: "unavailable" } });
     }
     const ids = new URL(route.request().url()).searchParams.get("jobIds")?.split(",") ?? [];
-    return route.fulfill({ json: { summaries: ids.map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, seed: { batchCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null } }, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) } });
+    return route.fulfill({ json: { summaries: ids.map((jobId) => ({ jobId, benchmarkExcessReturnPct: null, validation: { experimentCount: 0, activeCount: 0, completedCount: 0, returns: { count: 0, mean: null, sampleStdDev: null }, modes: {} } })) } });
   });
   await page.goto("/backtests?view=table&collapsed=strategy-b");
   await strategyGroup(page).getByRole("button", { name: "편집", exact: true }).click();

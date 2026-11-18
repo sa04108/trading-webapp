@@ -16,8 +16,10 @@ describe('configuration search HTTP', () => {
     expect(direct.statusCode, direct.body).toBe(404);
     const refresh = await ctx.app.inject({ method: 'POST', url: `/api/v1/backtests/${source.id}/refresh-and-run`, cookies: { session: cookie }, payload: { requestId: crypto.randomUUID(), action: { kind: 'RANDOM_SEEDS', count: 3 } } });
     expect(refresh.statusCode, refresh.body).toBe(400);
-    for (const table of ['backtest_clone_batches', 'backtest_refresh_jobs']) {
-      expect(ctx.container.database.sqlite.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
+    expect(ctx.container.database.sqlite.prepare('SELECT count(*) AS count FROM backtest_refresh_jobs').get()).toEqual({ count: 0 });
+    for (const [method, url] of [['GET', '/api/v1/backtest-clone-batches'], ['GET', '/api/v1/backtest-clone-batches/legacy'], ['POST', '/api/v1/backtest-clone-batches/legacy/cancel'], ['DELETE', '/api/v1/backtest-clone-batches/legacy']] as const) {
+      const response = await ctx.app.inject({ method, url, cookies: { session: cookie } });
+      expect(response.statusCode, response.body).toBe(404);
     }
     expect(ctx.container.database.sqlite.prepare('SELECT id FROM backtest_jobs').all()).toEqual([{ id: source.id }]);
     const reference = await ctx.app.inject({ method: 'GET', url: '/api/v1/system/api-reference', cookies: { session: cookie } });

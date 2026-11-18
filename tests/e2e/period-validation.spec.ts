@@ -17,7 +17,7 @@ const metrics = { initialCash: 10_000_000, finalEquity: 11_000_000, totalReturnP
 async function setup(page: Page) {
   await login(page);
   await page.route(`**/api/v1/backtests/${id}`, (route) => route.fulfill({ json: {
-    job: { id, request, status: 'COMPLETED', strategyId: request.strategyId, createdAtMs: 1, startedAtMs: 1, completedAtMs: 2, cloneBatchId: null, cloneSourceJobId: null, error: null },
+    job: { id, request, status: 'COMPLETED', strategyId: request.strategyId, createdAtMs: 1, startedAtMs: 1, completedAtMs: 2, cloneSourceJobId: null, error: null },
     run: null, metrics, benchmark: null, provenancePin: null, universeRebalancing: [],
   } }));
   await page.route(`**/api/v1/backtests/${id}/series`, (route) => route.fulfill({ json: { equity: [], benchmark: [], drawdown: [], monthly: [], symbols: [], totalEquityPoints: 0 } }));

@@ -6,7 +6,6 @@ export const HISTORY_TABLE_COLUMNS = [
   { id: "mdd", label: "MDD" },
   { id: "date", label: "실행일" },
   { id: "sharpe", label: "Sharpe" },
-  { id: "seed", label: "난수" },
   { id: "validation", label: "검증" },
 ] as const;
 

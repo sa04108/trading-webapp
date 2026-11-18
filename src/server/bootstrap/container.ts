@@ -11,10 +11,6 @@ import { AgentDataQueue } from "../modules/agents/application/agent-data-queue.j
 import { AgentCoordinator } from "../modules/agents/application/agent-coordinator.js";
 import path from "node:path";
 import fs from "node:fs";
-import { and, eq, inArray, lte } from "drizzle-orm";
-import { facts as factsTable } from "../../runtime/shared/db/data-schema.js";
-import type { Fact } from "../../runtime/modules/facts/domain/fact.js";
-import { periodToTsRange } from "../../shared/schemas/backtest-request.js";
 import type { AppConfig } from "./config.js";
 import { readRuntimeVersions } from "../../runtime/shared/runtime-versions.js";
 import { readGitCommitSha } from "../../runtime/shared/build-info.js";
@@ -39,7 +35,6 @@ import type { NotificationInput } from "../modules/notification/application/noti
 import {
   createBacktestNotificationListener,
   createIntradayNotificationListener,
-  createSeedCloneBatchNotificationListener,
 } from "./notification-wiring.js";
 import { createPreparationNotificationListener } from "./preparation-notification-wiring.js";
 import { AuthService } from "../modules/auth/application/auth-service.js";
@@ -74,7 +69,6 @@ import { DailyTradingEngine } from "../modules/trading/infrastructure/daily-trad
 import { TradingDataPreparation } from "../modules/trading/application/trading-data-preparation.js";
 import { KrxDailyCandleRepository } from "../../runtime/modules/market-data/infrastructure/krx-daily-candle-repository.js";
 import { StrategyRegistry } from "../../runtime/modules/strategy/application/strategy-registry.js";
-import { strategyRequiresFinancialData } from "../../runtime/modules/strategy/domain/strategy.js";
 import {
   JobOrchestrator,
   type JobEvent,
@@ -85,10 +79,6 @@ import { BacktestWizardDraftService } from "../modules/backtest/application/back
 import { BacktestWizardService } from "../modules/backtest/application/backtest-wizard-service.js";
 import { BacktestWizardRecoveryService } from "../modules/backtest/application/backtest-wizard-recovery-service.js";
 import { ResultsService } from "../modules/backtest/application/results-service.js";
-import {
-  createSeedCloneBatchJobListener,
-  SeedCloneBatchService,
-} from "../modules/backtest/application/seed-clone-batch-service.js";
 import type { FactRepository } from "../../runtime/modules/facts/application/ports.js";
 import type { CorporateActionCoverageStore } from "../../runtime/modules/facts/application/corporate-action-coverage.js";
 import type { FactCoverageStore } from "../../runtime/modules/facts/application/fact-coverage-store.js";
@@ -101,16 +91,6 @@ import type { SymbolMasterScheduler } from "../modules/market-data/application/s
 import { SelectionMetricRepository } from "../../runtime/modules/market-data/application/selection-metric-repository.js";
 import { UniverseRuleResolver } from "../../runtime/modules/backtest/application/universe-rule-resolver.js";
 import { BacktestPreparationOrchestrator } from "../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js";
-import { assertSafePinnedScheduleIdentities } from "../../runtime/modules/backtest/application/backtest-symbol-identity.js";
-import {
-  financialCoverageGapMessage,
-  findFinancialCoverageGap,
-} from "../../runtime/modules/backtest/application/backtest-financial-coverage.js";
-import {
-  delistedEventsToTsMsBySymbol,
-  financialFactCutoffsFromCoverage,
-} from "../../runtime/modules/backtest/application/backtest-financial-execution-window.js";
-import { findIncompleteFundamentalCheckpointsFromCoverageSync } from "../../runtime/modules/backtest/application/backtest-financial-data-readiness.js";
 import { BenchmarkService } from "../modules/market-data/application/benchmark-service.js";
 import { BacktestLeaseService } from "../modules/backtest/application/backtest-lease-service.js";
 import { RemoteResultUploadManager } from "../modules/backtest/infrastructure/remote-result-upload-manager.js";
@@ -159,7 +139,6 @@ export interface Container {
   readonly agentCoordinator: AgentCoordinator;
   readonly remoteResultUploadManager: RemoteResultUploadManager;
   readonly resultsService: ResultsService;
-  readonly seedCloneBatchService: SeedCloneBatchService;
   readonly benchmarkService: BenchmarkService;
   readonly riskFreeRateService: RiskFreeRateService;
   readonly factRepository: FactRepository;
@@ -562,118 +541,6 @@ export function createContainer(
   const remoteResultUploadManager = new RemoteResultUploadManager(
     config.tempRoot,
   );
-  const seedCloneBatchService = new SeedCloneBatchService(
-    database,
-    jobQueue,
-    config.maxQueuedBacktests,
-    clock,
-    (schedule, request) => {
-      assertSafePinnedScheduleIdentities(schedule, {
-        symbolMaster: symbolMasterService,
-      });
-      if (
-        !symbolMasterService.isRangeCovered(
-          request.period.from,
-          request.period.to,
-        )
-      ) {
-        throw new Error(
-          "종목 마스터가 백테스트 기간 전체를 커버하지 않습니다 — " +
-            "기간 전체 KRX 데이터를 동기화한 뒤 설정 탐색 실험을 다시 시작하세요.",
-        );
-      }
-      const symbols = [
-        ...new Set(schedule.flatMap((entry) => entry.symbols)),
-      ].sort();
-      const { fromTsMs, toTsMs } = periodToTsRange(request.period);
-      const periodCoverage = candleCoverageService.getCoverageBetween(
-        symbols,
-        fromTsMs,
-        toTsMs,
-      );
-      const missingSymbols = periodCoverage
-        .filter((row) => row.barCount === 0)
-        .map((row) => row.code);
-      if (missingSymbols.length > 0) {
-        throw new Error(
-          `선택한 기간에 일봉이 없는 유니버스 종목이 있습니다: ${missingSymbols.join(", ")} — ` +
-            "일봉을 동기화한 뒤 설정 탐색 실험을 다시 시작하세요.",
-        );
-      }
-      const strategy = strategyRegistry.get(request.strategyId);
-      if (strategy === null) {
-        throw new Error(`알 수 없는 전략입니다: ${request.strategyId}`);
-      }
-      const financialCoverageGap = findFinancialCoverageGap({
-        request,
-        strategy,
-        symbols,
-        coverage: factCoverageStore,
-        schedule,
-      });
-      if (financialCoverageGap !== null) {
-        throw new Error(financialCoverageGapMessage(financialCoverageGap));
-      }
-      if (!strategyRequiresFinancialData(strategy)) return;
-      const financialCutoffs = financialFactCutoffsFromCoverage({
-        period: request.period,
-        schedule,
-        delistedTsMsBySymbol: delistedEventsToTsMsBySymbol(
-          symbolMasterService.delistedEventsBetween(
-            request.period.from,
-            request.period.to,
-          ),
-        ),
-        candles: candleCoverageService,
-      });
-      const missingCutoffs = symbols.filter(
-        (symbol) => !financialCutoffs.has(symbol),
-      );
-      if (missingCutoffs.length > 0) {
-        throw new Error(
-          `실제 편입 기간·상장폐지 이전에 실행 가능한 일봉이 없는 종목이 있습니다: ${missingCutoffs.join(", ")} — ` +
-            "일봉과 유니버스 데이터를 다시 준비한 뒤 설정 탐색 실험을 다시 시작하세요.",
-        );
-      }
-      // 공시 결측은 원본 실행과 같은 시점별 전략 판정으로 처리한다.
-      if (strategy.dataRequirements?.fundamentalFields !== undefined) return;
-      const incomplete =
-        strategy.dataRequirements?.fundamentalsReady === undefined
-          ? (() => {
-              const symbolsWithFacts =
-                financialFactAvailabilityService.symbolsWithFinancialFacts(
-                  financialCutoffs,
-                );
-              return symbols.filter((symbol) => !symbolsWithFacts.has(symbol));
-            })()
-          : findIncompleteFundamentalCheckpointsFromCoverageSync({
-              strategy,
-              parameters: request.parameters,
-              readFacts: (query) =>
-                database.db
-                  .select()
-                  .from(factsTable)
-                  .where(
-                    and(
-                      eq(factsTable.scope, "SYMBOL"),
-                      inArray(factsTable.key, [...query.keys!]),
-                      lte(factsTable.asOfTsMs, query.asOfMaxTsMs!),
-                    ),
-                  )
-                  .all() as Fact[],
-              schedule,
-              candles: candleCoverageService,
-              period: request.period,
-            }).map((checkpoint) => checkpoint.symbol);
-      if (incomplete.length > 0) {
-        throw new Error(
-          "준비 완료 후 전략이 요구하는 PIT 재무 입력이 사라진 종목이 있습니다: " +
-            `${incomplete.join(", ")} — 고정된 설정 탐색 실험 유니버스를 재순위할 수 없으므로 ` +
-            "새 미리보기를 준비한 뒤 실험을 다시 시작하세요.",
-        );
-      }
-    },
-  );
   const backtestNotificationListener = createBacktestNotificationListener({
     queue: {
       getJob: (jobId) =>
@@ -689,24 +556,6 @@ export function createContainer(
     notify: safeNotify,
     logger,
   });
-  const rawSeedBatchJobListener = createSeedCloneBatchJobListener(
-    seedCloneBatchService,
-  );
-  const seedBatchJobListener = (event: JobEvent): void => {
-    try {
-      rawSeedBatchJobListener(event);
-    } catch (error) {
-      logger.warn(
-        {
-          module: "backtest",
-          event: "backtest.seed-batch-listener-failed",
-          jobId: event.jobId,
-          err: error,
-        },
-        "seed batch job listener failed",
-      );
-    }
-  };
   for (const source of [jobOrchestrator.events, backtestLeaseService.events]) {
     source.on("job", (event: JobEvent) => {
       if (event.kind !== "status") return;
@@ -714,19 +563,7 @@ export function createContainer(
       catch (error) { logger.warn({ err: error, jobId: event.jobId }, "위저드 작업 상태 동기화 실패"); }
     });
     source.on("job", backtestNotificationListener);
-    source.on("job", seedBatchJobListener);
   }
-  seedCloneBatchService.events.on(
-    "batch",
-    createSeedCloneBatchNotificationListener({
-      getBatch: (batchId) => seedCloneBatchService.get(batchId),
-      strategyName: (strategyId) =>
-        strategyRegistry.describe(strategyId)?.name ?? null,
-      notify: safeNotify,
-      logger,
-    }),
-  );
-
   const systemStatus: SystemStatusProviders = {
     queueLength: () => jobQueue.countByStatus(["QUEUED"]),
     runningJobs: () =>
@@ -768,7 +605,6 @@ export function createContainer(
     agentCoordinator,
     remoteResultUploadManager,
     resultsService,
-    seedCloneBatchService,
     benchmarkService,
     factRepository,
     riskFreeRateService,

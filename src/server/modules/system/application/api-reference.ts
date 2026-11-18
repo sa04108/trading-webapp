@@ -7,7 +7,7 @@ import type { ApiEndpoint, ApiReference } from '../../../../shared/schemas/api-r
 
 export type ApiReferenceMetadata = Partial<Pick<ApiEndpoint, 'title' | 'description' | 'authentication' | 'requestBody' | 'responses' | 'parameters'>>;
 const known: Record<string, ApiReferenceMetadata> = { ...backtestApiMetadata, ...marketApiMetadata, ...systemApiMetadata, ...searchApiMetadata };
-const groups: Record<string, string> = { auth: '인증', 'openapi-tokens': 'OpenAPI 토큰', benchmarks: '벤치마크', 'backtest-validations': '기간 검증', health: '상태', system: '시스템', backtests: '일봉 백테스트', 'backtest-clone-batches': '일봉 백테스트', 'configuration-searches': '설정 탐색', intraday: '분봉', trading: '실전 운용', agents: '에이전트', jobs: '작업', notifications: '알림', symbols: '종목', 'symbol-master': '종목 데이터', 'market-data': '시장 데이터', strategies: '전략', markets: '시장' };
+const groups: Record<string, string> = { auth: '인증', 'openapi-tokens': 'OpenAPI 토큰', benchmarks: '벤치마크', 'backtest-validations': '기간 검증', health: '상태', system: '시스템', backtests: '일봉 백테스트', 'configuration-searches': '설정 탐색', intraday: '분봉', trading: '실전 운용', agents: '에이전트', jobs: '작업', notifications: '알림', symbols: '종목', 'symbol-master': '종목 데이터', 'market-data': '시장 데이터', strategies: '전략', markets: '시장' };
 export interface ApiReferenceStore { readonly routes: Map<string, RouteOptions> }
 export function installApiReference(app: FastifyInstance): ApiReferenceStore {
   const store: ApiReferenceStore = { routes: new Map() };

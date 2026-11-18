@@ -39,7 +39,6 @@ async function main(): Promise<void> {
   container.backtestWizardRecoveryService.recover();
   container.jobOrchestrator.start();
   container.agentCoordinator.start();
-  container.seedCloneBatchService.recover();
   container.backtestPreparationOrchestrator.recoverOrphaned(container.refreshProviderFilings);
   container.intradayService.recover();
 

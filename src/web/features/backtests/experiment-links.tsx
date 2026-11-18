@@ -4,7 +4,7 @@ import type { BacktestHistoryExtras } from "@shared/schemas/backtest-experiments
 import { experimentPaths, type ExperimentMode } from "./experiment-paths";
 
 export function hasExperimentRecords(summary: BacktestHistoryExtras | undefined): boolean {
-  return (summary?.search?.experimentCount ?? 0) > 0 || (summary?.seed.batchCount ?? 0) > 0 || (summary?.validation.experimentCount ?? 0) > 0;
+  return (summary?.search?.experimentCount ?? 0) > 0 || (summary?.validation.experimentCount ?? 0) > 0;
 }
 
 export function ExperimentLinks({ jobId, summary, mode = "daily" }: { jobId: string; summary?: BacktestHistoryExtras; mode?: ExperimentMode }) {
@@ -12,7 +12,6 @@ export function ExperimentLinks({ jobId, summary, mode = "daily" }: { jobId: str
   const paths = experimentPaths(mode);
   return <span className="relative z-10 inline-flex gap-1">
     {(summary?.search?.experimentCount ?? 0) > 0 ? <Button asChild variant="outline" size="sm" className="h-5 px-2 text-xs"><Link to={paths.search(jobId)}>탐색</Link></Button> : null}
-    {(summary?.seed.batchCount ?? 0) > 0 ? <Button asChild variant="outline" size="sm" className="h-5 px-2 text-xs"><Link to={paths.seeds(jobId)}>난수</Link></Button> : null}
     {(summary?.validation.experimentCount ?? 0) > 0 ? <Button asChild variant="outline" size="sm" className="h-5 px-2 text-xs"><Link to={paths.validations(jobId)}>검증</Link></Button> : null}
   </span>;
 }

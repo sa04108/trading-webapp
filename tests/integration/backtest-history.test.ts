@@ -1,9 +1,7 @@
 import { describe, expect } from "vitest";
-import { eq } from "drizzle-orm";
 import { authenticatedTest as it } from "../helpers/test-fixtures.js";
 import { backtestJobs } from "../../src/runtime/shared/db/operations-schema.js";
 import { backtestMetrics } from "../../src/server/shared/db/backtest-result-schema.js";
-import { backtestCloneBatches } from "../../src/server/shared/db/backtest-batch-schema.js";
 import {
   backtestValidations,
   backtestValidationTrials,
@@ -76,7 +74,6 @@ describe("백테스트 전체 이력 조회", () => {
         .run();
     }
     insert("other-strategy", 60, { strategyId: "another-strategy" });
-    insert("batch-child", 61, { cloneBatchId: "batch" });
     insert("validation-child", 62);
     db.insert(backtestValidations)
       .values({
@@ -204,76 +201,4 @@ describe("백테스트 전체 이력 조회", () => {
     expect(await get("periodEnd", 1)).toBe("newer-short-a");
   });
 
-  // 최신 100개 묶음 밖의 활성 실험도 원본 페이지에서 확인되어 삭제를 막아야 한다.
-  it("화면에 있는 원본의 실험은 전역 100개 제한 없이 조회한다", async ({
-    ctx,
-    cookie,
-  }) => {
-    const db = ctx.container.database.db;
-    for (const id of ["old-source", "new-source"])
-      db.insert(backtestJobs)
-        .values({
-          id,
-          strategyId: request.strategyId,
-          status: "COMPLETED",
-          createdAtMs: 1,
-          requestJson: JSON.stringify(request),
-          universeRuleJson: JSON.stringify(request.universeRule),
-          universeScheduleJson: "[]",
-        })
-        .run();
-    for (let i = 0; i < 101; i++)
-      db.insert(backtestCloneBatches)
-        .values({
-          id: `batch-${i}`,
-          sourceJobId: i === 0 ? "old-source" : "new-source",
-          strategyId: request.strategyId,
-          status: i === 0 ? "CANCELLING" : "COMPLETED",
-          totalCount: 1,
-          requestJson: JSON.stringify(request),
-          universeScheduleJson: "[]",
-          createdAtMs: i,
-        })
-        .run();
-    const get = (suffix = "") =>
-      ctx.app.inject({
-        method: "GET",
-        url: `/api/v1/backtest-clone-batches${suffix}`,
-        cookies: { session: cookie },
-      });
-    expect((await get()).json().batches).toHaveLength(100);
-    const filtered = (await get("?sourceJobIds=old-source")).json();
-    expect(filtered.batches).toEqual([
-      expect.objectContaining({
-        id: "batch-0",
-        sourceJobId: "old-source",
-        status: "CANCELLING",
-      }),
-    ]);
-    expect(filtered.sourceJobs.map((j: { id: string }) => j.id)).toEqual([
-      "old-source",
-    ]);
-    expect(
-      (await get("?sourceJobIds=old-source,new-source")).json().batches,
-    ).toHaveLength(101);
-    expect((await get("?sourceJobIds=missing")).json()).toEqual({
-      batches: [],
-      sourceJobs: [],
-    });
-    expect((await get("?sourceJobIds=")).statusCode).toBe(400);
-    // 이전 버전에서 중첩 실험 원본이 된 자식도 정렬된 페이지를 통해 다시 접근할 수 있다.
-    db.update(backtestJobs)
-      .set({ cloneBatchId: "legacy-parent" })
-      .where(eq(backtestJobs.id, "old-source"))
-      .run();
-    const history = await ctx.app.inject({
-      method: "GET",
-      url: "/api/v1/backtests?strategyId=range-breakout",
-      cookies: { session: cookie },
-    });
-    expect(history.json().jobs.map((j: { id: string }) => j.id)).toContain(
-      "old-source",
-    );
-    expect(history.json().total).toBe(2);
-  });
 });

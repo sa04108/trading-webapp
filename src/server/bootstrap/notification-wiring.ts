@@ -11,10 +11,6 @@ import type {
   BacktestJobRow,
   JobQueue,
 } from "../modules/backtest/application/job-queue.js";
-import type {
-  SeedCloneBatchDetail,
-  SeedCloneBatchEvent,
-} from "../modules/backtest/application/seed-clone-batch-service.js";
 import type { NotificationInput } from "../modules/notification/application/notification-service.js";
 import type { IntradayTerminalEvent } from "../modules/intraday/application/intraday-service.js";
 import { INTRADAY_STRATEGIES } from "../../shared/schemas/intraday-strategies.js";
@@ -117,9 +113,6 @@ export function createBacktestNotificationListener(deps: {
         event.jobId,
       );
       if (!job) return;
-      // 설정 탐색 실험은 최대 100개 자식이 끝난다. 자식별 알림은 센터를 덮으므로
-      // 배치 서비스의 최종 전이 알림 하나가 대신한다.
-      if (job.cloneBatchId !== null && job.cloneBatchId !== undefined) return;
       const terminal = TERMINAL_NOTIFICATIONS[job.status];
       if (!terminal) return;
 
@@ -155,66 +148,6 @@ export function createBacktestNotificationListener(deps: {
           err: error,
         },
         "backtest notification failed",
-      );
-    }
-  };
-}
-
-const BATCH_TERMINAL_TITLES: Record<SeedCloneBatchEvent["status"], string> = {
-  COMPLETED: "설정 탐색 실험이 완료되었습니다",
-  FAILED: "설정 탐색 실험이 실패했습니다",
-  CANCELLED: "설정 탐색 실험이 취소되었습니다",
-};
-
-/** 자식 알림 대신 배치가 최종 상태로 한 번 전이될 때 만드는 요약 알림. */
-export function createSeedCloneBatchNotificationListener(deps: {
-  getBatch: (batchId: string) => SeedCloneBatchDetail | null;
-  strategyName: (strategyId: string) => string | null;
-  notify: (input: NotificationInput) => void;
-  logger: Logger;
-}): (event: SeedCloneBatchEvent) => void {
-  return (event) => {
-    try {
-      const detail = deps.getBatch(event.batchId);
-      if (!detail) return;
-      const statuses = detail.items.map(({ item, job }) => {
-        if (item.state === "PENDING") return "PENDING";
-        if (item.state === "CANCELLED") return "CANCELLED";
-        return job?.status ?? "DELETED";
-      });
-      const count = (status: string): number =>
-        statuses.filter((candidate) => candidate === status).length;
-      const completed = count("COMPLETED");
-      const failed = count("FAILED");
-      const cancelled = count("CANCELLED");
-      const interrupted = count("INTERRUPTED");
-      const deleted = count("DELETED");
-      const pending = count("PENDING");
-      const label =
-        deps.strategyName(detail.batch.strategyId) ?? detail.batch.strategyId;
-
-      deps.notify({
-        type: "backtest",
-        severity:
-          event.status === "FAILED" || failed + interrupted > 0
-            ? "error"
-            : "info",
-        title: BATCH_TERMINAL_TITLES[event.status],
-        body:
-          `${label} · 총 ${detail.batch.totalCount}개\n` +
-          `완료 ${completed} · 실패 ${failed} · 취소 ${cancelled} · 중단 ${interrupted} · ` +
-          `미실행 ${pending} · 삭제 ${deleted}`,
-        link: `/backtests/batches/${event.batchId}`,
-      });
-    } catch (error) {
-      deps.logger.warn(
-        {
-          module: "notification",
-          event: "notify.seed_clone_batch.failed",
-          batchId: event.batchId,
-          err: error,
-        },
-        "seed clone batch notification failed",
       );
     }
   };

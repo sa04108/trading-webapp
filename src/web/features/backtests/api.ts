@@ -13,8 +13,6 @@ import {
   type JobSummary,
   type RunMetadata,
   type SeriesResponse,
-  type SeedCloneBatchDetail,
-  type SeedCloneBatchSummary,
   type TradeRow,
 } from "./types";
 
@@ -51,32 +49,6 @@ export function useBacktests(refetchIntervalMs?: number) {
     queryKey: ["backtests"],
     queryFn: () => api<{ jobs: JobSummary[] }>("/backtests"),
     refetchInterval: refetchIntervalMs ?? false,
-  });
-}
-
-export function useSeedCloneBatches(refetchIntervalMs?: number) {
-  return useQuery({
-    queryKey: ["backtest-clone-batches"],
-    queryFn: () =>
-      api<{
-        batches: SeedCloneBatchSummary[];
-        sourceJobs: JobSummary[];
-      }>("/backtest-clone-batches"),
-    refetchInterval: refetchIntervalMs ?? false,
-  });
-}
-
-export function useSeedCloneBatch(batchId: string) {
-  return useQuery({
-    queryKey: ["backtest-clone-batches", batchId],
-    queryFn: () =>
-      api<{ batch: SeedCloneBatchDetail }>(
-        `/backtest-clone-batches/${batchId}`,
-      ),
-    refetchInterval: (query) => {
-      const status = query.state.data?.batch.status;
-      return status === "ACTIVE" || status === "CANCELLING" ? 2_000 : false;
-    },
   });
 }
 

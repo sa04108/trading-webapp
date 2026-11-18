@@ -46,15 +46,6 @@ describe('PreparationReferenceService', () => {
     `).run(id, preparationJobId);
   }
 
-  function batch(id: string, preparationJobId: string): void {
-    writer.sqlite.prepare(`
-      INSERT INTO backtest_clone_batches
-        (id, source_job_id, strategy_id, status, total_count, request_json,
-         universe_schedule_json, preparation_job_id, created_at_ms)
-      VALUES (?, 'source', 'range-breakout', 'COMPLETED', 1, '{}', '[]', ?, 1)
-    `).run(id, preparationJobId);
-  }
-
   it('사용자 전체에서 최대 하나의 wizard 참조를 문맥과 함께 원자적으로 교체한다', () => {
     preparation('prep_a');
     preparation('prep_b');
@@ -89,10 +80,9 @@ describe('PreparationReferenceService', () => {
     expect(service.getWizard('user_b')).toMatchObject({ preparationJobId: 'prep_a' });
   });
 
-  it('공유된 job·batch가 있는 준비 결과는 한 참조 해제만으로 수집하지 않는다', () => {
+  it('공유된 job이 있는 준비 결과는 한 참조 해제만으로 수집하지 않는다', () => {
     preparation('prep_shared');
     backtest('backtest_shared', 'prep_shared');
-    batch('batch_shared', 'prep_shared');
     service.bindWizard('user_a', '', 'prep_shared');
 
     service.releaseWizard('user_a');

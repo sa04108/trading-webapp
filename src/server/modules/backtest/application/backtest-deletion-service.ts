@@ -5,7 +5,7 @@ import type { BacktestDeletionPreview } from "../../../../shared/schemas/backtes
 
 type Mode = "daily" | "intraday";
 type Row = { id: string; status: string; ownerId?: string };
-type Plan = { jobs: Set<string>; searches: Set<string>; validations: Set<string>; batches: Set<string>; blockers: Set<string> };
+type Plan = { jobs: Set<string>; searches: Set<string>; validations: Set<string>; blockers: Set<string> };
 const terminal = (status: string) => ["COMPLETED", "FAILED", "CANCELLED"].includes(status);
 export class BacktestDeletionError extends Error {
   constructor(message: string, readonly statusCode = 409) { super(message); }
@@ -32,7 +32,6 @@ export class BacktestDeletionService {
       if (mode === "daily") this.hooks.beforeDeleteDaily?.([...plan.jobs]);
       this.remove("configuration_searches", plan.searches);
       this.remove(mode === "daily" ? "backtest_validations" : "intraday_validations", plan.validations);
-      this.remove("backtest_clone_batches", plan.batches);
       this.remove(mode === "daily" ? "backtest_jobs" : "intraday_runs", plan.jobs);
       if (mode === "daily") this.hooks.collectPreparations?.();
       return summary;
@@ -48,15 +47,15 @@ export class BacktestDeletionService {
     const sorted = (values: Iterable<string>) => [...values].sort();
     return {
       backtestCount: plan.jobs.size,
-      configurationSearchCount: plan.searches.size + plan.batches.size,
+      configurationSearchCount: plan.searches.size,
       periodValidationCount: plan.validations.size,
       blockers: [...plan.blockers],
-      token: createHash("sha256").update(JSON.stringify([owner, mode, sorted(new Set(ids)), sorted(plan.jobs), sorted(plan.searches), sorted(plan.validations), sorted(plan.batches)])).digest("hex"),
+      token: createHash("sha256").update(JSON.stringify([owner, mode, sorted(new Set(ids)), sorted(plan.jobs), sorted(plan.searches), sorted(plan.validations)])).digest("hex"),
     };
   }
 
   private plan(owner: string, mode: Mode, ids: string[]): Plan {
-    const plan: Plan = { jobs: new Set(), searches: new Set(), validations: new Set(), batches: new Set(), blockers: new Set() };
+    const plan: Plan = { jobs: new Set(), searches: new Set(), validations: new Set(), blockers: new Set() };
     const pending = [...new Set(ids)];
     const jobTable = sql.identifier(mode === "daily" ? "backtest_jobs" : "intraday_runs");
     const validations = sql.identifier(mode === "daily" ? "backtest_validations" : "intraday_validations");
@@ -94,12 +93,6 @@ export class BacktestDeletionService {
         owned(row); plan.validations.add(row.id);
         if (!terminal(row.status)) plan.blockers.add("진행 중인 기간검증이 있습니다. 검증이 종료된 뒤 삭제할 수 있습니다.");
         addChildren(sql`SELECT ${childColumn} AS id FROM ${trials} WHERE validation_id=${row.id}`);
-      }
-      if (mode === "daily") for (const row of this.db.all<Row>(sql`SELECT id, status FROM backtest_clone_batches WHERE source_job_id=${id} OR id IN (SELECT batch_id FROM backtest_clone_batch_items WHERE job_id=${id})`)) {
-        if (plan.batches.has(row.id)) continue;
-        plan.batches.add(row.id);
-        if (!terminal(row.status)) plan.blockers.add("진행 중인 설정 탐색 실험이 있습니다. 실험이 종료된 뒤 삭제할 수 있습니다.");
-        addChildren(sql`SELECT job_id AS id FROM backtest_clone_batch_items WHERE batch_id=${row.id}`);
       }
     }
     return plan;

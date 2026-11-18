@@ -23,7 +23,7 @@ test("완료 결과에서 여러 지수 선택을 저장하고 비교 실패를 
   let attempts = 0;
   const backfill = { benchmarkId: null, state: "IDLE", from: null, to: null, cursorDate: null, error: null };
   await page.route(`**/api/v1/backtests/${id}`, (route) => route.fulfill({ json: {
-    job: { id, status: "COMPLETED", request, strategyId: request.strategyId, createdAtMs: first, completedAtMs: last, cloneBatchId: null, cloneSourceJobId: null, error: null },
+    job: { id, status: "COMPLETED", request, strategyId: request.strategyId, createdAtMs: first, completedAtMs: last, cloneSourceJobId: null, error: null },
     run: null, metrics, benchmark: { name: "과거 벤치마크", available: true, totalReturnPct: 99, excessReturnPct: -89 }, provenancePin: null, universeRebalancing: [],
   } }));
   await page.route(`**/api/v1/backtests/${id}/series`, (route) => route.fulfill({ json: { equity: [{ tsMs: first, value: 10000000 }, { tsMs: last, value: 11000000 }], benchmark: [{ tsMs: first, value: 100 }], drawdown: [], monthly: [], symbols: [], totalEquityPoints: 2 } }));

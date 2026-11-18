@@ -34,12 +34,8 @@ add('GET', '/backtests/:id/trades', '거래 목록', 'trades 배열과 필터 �
 add('GET', '/backtests/:id/series', '백테스트 차트 시계열', 'equity, drawdown, monthly, symbols, totalEquityPoints를 반환합니다.', { errors: [404] });
 add('GET', '/backtests/:id/export', '백테스트 결과 다운로드', 'job과 전체 결과 및 benchmarkIds를 JSON 파일로 반환합니다.');
 add('GET', '/backtests/:id/events', '백테스트 진행 이벤트', '진행 스냅샷과 변경을 SSE로 전송합니다.', { contentType: 'text/event-stream' });
-add('GET', '/backtests/history-extras', '백테스트 실험 집계', '요청한 원본들의 시드, 기간 검증, 탐색 집계를 summaries 배열로 반환합니다.', { params: [{ ...query('jobIds', 'string', '쉼표로 구분한 작업 ID 목록, 최대 100개.'), required: true }], errors: [400] });
+add('GET', '/backtests/history-extras', '백테스트 실험 집계', '요청한 원본들의 기간 검증, 탐색 집계를 summaries 배열로 반환합니다.', { params: [{ ...query('jobIds', 'string', '쉼표로 구분한 작업 ID 목록, 최대 100개.'), required: true }], errors: [400] });
 add('GET', '/backtests/:id/lineage', '백테스트 결과 계보', 'kind, roleLabel, complete와 items 경로를 반환합니다.');
-add('GET', '/backtest-clone-batches', '이전 시드 복제 묶음 목록', '기존 실험의 batches와 sourceJobs를 반환합니다.', { params: [query('sourceJobIds', 'string', '쉼표로 구분한 원본 ID, 최대 200개.')] });
-add('GET', '/backtest-clone-batches/:id', '이전 시드 복제 묶음 상세', '기존 실험의 batch 및 자식 상태를 반환합니다.');
-add('POST', '/backtest-clone-batches/:id/cancel', '이전 시드 복제 묶음 취소', '기존 진행 중인 실험의 대기 항목 승격을 중단하고 batch를 반환합니다.');
-add('DELETE', '/backtest-clone-batches/:id', '이전 시드 복제 묶음 삭제', '기존 종료된 묶음과 자식 결과를 삭제합니다.', { status: 204 });
 add('POST', '/backtests/universe-preview', '유니버스 준비', '준비된 미리보기는 200, 비동기 preparation job은 202로 반환합니다.', { input: body('universeRule, period, strategyId, parameters 및 선택적 sourceJobId, wizardId, completedPreparationJobId.', schema(preparationInputSchema.extend({ sourceJobId: z.string().min(1).optional(), wizardId: z.string().min(1).max(128).optional(), completedPreparationJobId: z.string().min(1).optional() }))), errors: [400, 409, 422, 503] });
 map['POST /api/v1/backtests/universe-preview']!.responses!.push({ status: 202, description: '준비 중인 job 객체.', contentType: 'application/json' });
 add('GET', '/backtests/preparation-jobs/:id', '준비 작업 상세', '준비 상태와 진행률을 job으로 반환합니다.');

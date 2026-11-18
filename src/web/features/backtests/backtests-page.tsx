@@ -394,10 +394,6 @@ export function BacktestsPage() {
                             mdd: job.metrics?.maxDrawdownPct,
                             date: job.createdAtMs,
                             sharpe: job.metrics?.sharpe,
-                            seed: extrasBySource.has(job.id) ? {
-                              count: extrasBySource.get(job.id)!.seed.batchCount,
-                              stddev: extrasBySource.get(job.id)!.seed.returns.sampleStdDev,
-                            } : undefined,
                             validation: extrasBySource.has(job.id) ? {
                               count: extrasBySource.get(job.id)!.validation.experimentCount,
                               stddev: extrasBySource.get(job.id)!.validation.returns.sampleStdDev,
