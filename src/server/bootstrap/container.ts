@@ -360,7 +360,6 @@ export function createContainer(
     symbols: symbolService,
     facts: factSyncService,
     usage: externalApiUsage,
-    progress: (id, message, error) => tradingService.preparationProgress(id, message, error),
   });
   const tradingMarketData = createTossTradingBroker(tossConfig, logger, { client: tossClient });
   const tradingService = new TradingService({
@@ -372,13 +371,13 @@ export function createContainer(
       getName: (symbol) => symbolService.getLocalNames([symbol]).get(symbol)?.name,
     }),
     artifacts: tradingArtifacts,
+    prepareData: (need, onProgress, shouldStop) => tradingDataPreparation.prepare(need, onProgress, shouldStop),
     now: () => clock.now(),
     engine: new DailyTradingEngine({
       databasePath: config.databasePath,
       dataPath: database.dataPath,
       artifacts: tradingArtifacts,
       now: () => clock.now(),
-      ensureData: async (_date, input, need) => tradingDataPreparation.request(input.deployment.id, input.deployment.artifactHash, need),
     }),
     notify: (message) => notificationService.create({ type: "trading", severity: "error", title: "자동매매 주문 중지", body: message, link: "/trading" }),
   });
@@ -793,7 +792,6 @@ export function createContainer(
         const tradingClosing = tradingService.close();
         tossClient?.close();
         await Promise.all([intradayClosing, tradingClosing]);
-        await tradingDataPreparation.close();
         clearInterval(pruneTimer);
         await collection.filingDiscovery.stop();
         await submissionValidator?.stop();

@@ -5,6 +5,7 @@ import type { TradingArtifact, TradingSnapshot } from "../../src/shared/schemas/
 const snapshot: TradingSnapshot = {
   revision: 17,
   deployment: null,
+  dataPreparation: null,
   paperCapital: { initialCashKrw: 100_000_000, canEdit: true },
   broker: {
     provider: "PAPER",
@@ -145,4 +146,43 @@ test("보유 종목에서 시세와 제공 시각을 확인한다", async ({ pag
   const closed = quotes;
   await page.clock.runFor(5100);
   expect(quotes).toBe(closed);
+});
+
+
+test("데이터 복구 상태를 확인하고 실패 후 재시도해도 자동 매매는 꺼져 있다", async ({ page }) => {
+  await login(page);
+  await page.clock.install();
+  const artifact: TradingArtifact = { strategyId: "range-breakout", name: "전략", description: "검증용", version: "1", artifactHash: "a".repeat(64), executionVersion: "b".repeat(64), latest: true, parameterSchema: { type: "object", properties: {} } };
+  let current: TradingSnapshot = { ...snapshot, deployment: {
+    id: "deployment-a", strategyId: artifact.strategyId, name: artifact.name, version: artifact.version, artifactHash: artifact.artifactHash, status: "INACTIVE", parameters: {}, universeRule: { markets: ["KOSPI"], stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 100 }], rebalanceInterval: { unit: "MONTH", value: 1 } }, timeframe: "1d", budgetKrw: 10_000_000, maxPositions: 10, maxPositionPercent: 10, dailyLossLimitPercent: 3, maxOrderKrw: 1_000_000, maxSlippageBps: 50, randomSeed: 42, sourceJobId: null, createdAtMs: 1, updatedAtMs: 1, activatedAtMs: null, lastDecisionAtMs: null, lastError: "이전 데이터 오류", activity: "대기", latestArtifactHash: artifact.artifactHash, latestVersion: artifact.version,
+  } };
+  const revisions: number[] = [];
+  let activations = 0;
+  let reads = 0;
+  await page.route("**/api/v1/trading", (route) => { reads++; return route.fulfill({ json: current }); });
+  await page.route("**/api/v1/trading/strategies", (route) => route.fulfill({ json: { strategies: [artifact] } }));
+  await page.route("**/api/v1/trading/activate", (route) => { activations++; return route.fulfill({ json: current }); });
+  await page.route("**/api/v1/trading/prepare", (route) => {
+    revisions.push(route.request().postDataJSON().expectedRevision);
+    current = { ...current, revision: current.revision + 1, dataPreparation: { status: "RUNNING", message: "005930 자본변동 확인 중" } };
+    return route.fulfill({ status: 202, json: current });
+  });
+  await page.goto("/trading");
+  await page.getByRole("button", { name: "데이터 확인·복구" }).click();
+  await expect(page.getByRole("button", { name: "데이터 준비 중" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "자동 매매 OFF" })).toBeDisabled();
+  expect(revisions).toEqual([17]);
+  const before = reads;
+  current = { ...current, revision: 19, dataPreparation: { status: "FAILED", message: "005930 2024: 자본변동 결손" }, deployment: { ...current.deployment!, lastError: "005930 2024: 자본변동 결손" } };
+  await page.clock.runFor(5_100);
+  await expect.poll(() => reads).toBeGreaterThan(before);
+  await expect(page.getByText("005930 2024: 자본변동 결손", { exact: false })).toHaveCount(1);
+  await page.getByRole("button", { name: "데이터 복구 재시도" }).click();
+  await expect(page.getByRole("button", { name: "데이터 준비 중" })).toBeDisabled();
+  expect(revisions).toEqual([17, 19]);
+  current = { ...current, revision: 21, dataPreparation: { status: "READY", message: "전체 입력 확인 완료" }, deployment: { ...current.deployment!, lastError: null } };
+  await page.clock.runFor(5_100);
+  await expect(page.getByText(/전체 입력 확인 완료/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "자동 매매 OFF" })).toBeEnabled();
+  expect(activations).toBe(0);
 });

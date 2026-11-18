@@ -45,9 +45,7 @@ export async function calculate(message: { input: Input; date: string; bundlePat
   if (checkpoint && checkpoint.lastBar === latest) {
     if (!warmupOnly) return { checkpoint: message.input.checkpoint!, barTsMs: latest, orders: [] };
     if (!Array.isArray(checkpoint.members)) throw new Error("저장된 유니버스 상태가 올바르지 않습니다");
-    bundle.reconcileState(strategy.id, checkpoint.state, { interrupted: true, positions: Object.keys(portfolio), symbols: checkpoint.members.map((member) => member.symbol) });
-    checkpoint.firstDecision = true;
-    return { checkpoint: serialize(checkpoint).toString("base64"), barTsMs: latest, orders: [] };
+    // 같은 확정 봉이라도 활성화·복구 전에는 현재 coverage와 결손을 다시 확인한다.
   }
   const anchor = kstDateOf(deployment.activatedAtMs ?? deployment.createdAtMs);
   const period = { from: anchor > message.date ? message.date : anchor, to: message.date };
@@ -94,7 +92,16 @@ export async function calculate(message: { input: Input; date: string; bundlePat
     };
     throw new DecisionDataRequired("유니버스 선정 데이터가 준비되지 않았습니다", need);
   }
-  if (resolution.dataExclusions.length || resolution.corporateActionExclusions.length) throw new Error("유니버스 입력에 확인되지 않은 데이터 결손이 있습니다");
+  if (resolution.dataExclusions.length || resolution.corporateActionExclusions.length) {
+    const repairs: NonNullable<TradingDataNeed["repairs"]> = resolution.corporateActionExclusions.map((gap) => ({ kind: "CORPORATE_ACTION", symbol: gap.symbol, year: gap.year }));
+    for (const gap of resolution.dataExclusions) {
+      if (gap.category !== "DART_FINANCIAL" && gap.category !== "DART_CORPORATE_ACTION") continue;
+      for (const year of new Set(gap.periodKey.match(/(?:19|20)\d{2}/g) ?? [])) repairs.push({ kind: gap.category === "DART_FINANCIAL" ? "FINANCIAL" : "CORPORATE_ACTION", symbol: gap.symbol, year: Number(year) });
+    }
+    const details = resolution.dataExclusions.slice(0, 5).map((gap) => `${gap.symbol} ${gap.periodKey}: ${gap.reason}`).join("; ");
+    if (repairs.length) throw new DecisionDataRequired(`유니버스 입력 결손을 복구합니다: ${details}`, { masterDates: [], priceRange: null, financial: null, actions: null, entries: [...resolution.unionEntries.values()], repairs });
+    throw new Error(`유니버스 입력에 확인되지 않은 데이터 결손이 있습니다: ${details}`);
+  }
   const latestSchedule = resolution.schedule.at(-1);
   if (!latestSchedule || latestSchedule.members.length === 0 || latestSchedule.members.length > 200) throw new Error("유니버스 선정 결과가 비었거나 한도를 초과합니다");
   const members = checkpoint && checkpoint.rebalanceDate === latestSchedule.rebalanceDate ? checkpoint.members : latestSchedule.members;
@@ -127,16 +134,26 @@ export async function calculate(message: { input: Input; date: string; bundlePat
   const firstYear = actionFromYear, lastYear = actionToYear;
   const years = Array.from({ length: lastYear - firstYear + 1 }, (_, i) => firstYear + i);
   const actionCoverage = runtime.actionCoverage.getCoveredYears(symbols), actionGaps = runtime.actionCoverage.getGapYears(symbols);
+  const repairs: NonNullable<TradingDataNeed["repairs"]> = [];
   for (const symbol of symbols) {
-    if (years.some((year) => actionGaps.get(symbol)?.includes(year))) throw new Error(`자본변동 이력에 결손이 있습니다: ${symbol}`);
-    if (years.some((year) => !actionCoverage.get(symbol)?.includes(year))) throw new DecisionDataRequired(`자본변동 이력이 준비되지 않았습니다: ${symbol}`, need);
+    for (const year of years) if (actionGaps.get(symbol)?.includes(year)) repairs.push({ kind: "CORPORATE_ACTION", symbol, year });
   }
   if (strategy.requiresFundamentals || (strategy.dataRequirements?.fundamentalLookbackQuarters ?? 0) > 0) {
     const coverage = runtime.factCoverage.getCoverageState(symbols);
     const financialRequiredYears = Array.from({ length: financialYears.toYear - financialYears.fromYear + 1 }, (_, i) => financialYears.fromYear + i);
     for (const symbol of symbols) {
-      if (financialRequiredYears.some((year) => coverage.get(symbol)?.blockingGapYears.includes(year))) throw new Error(`재무 이력에 결손이 있습니다: ${symbol}`);
-      if (financialRequiredYears.some((year) => !coverage.get(symbol)?.verifiedYears.includes(year))) throw new DecisionDataRequired(`재무 이력이 준비되지 않았습니다: ${symbol}`, need);
+      for (const year of financialRequiredYears) if (coverage.get(symbol)?.blockingGapYears.includes(year)) repairs.push({ kind: "FINANCIAL", symbol, year });
+    }
+  }
+  if (repairs.length) {
+    const details = repairs.slice(0, 10).map((repair) => `${repair.symbol} ${repair.year}년 ${repair.kind === "CORPORATE_ACTION" ? "자본변동" : "재무"}`).join(", ");
+    throw new DecisionDataRequired(`이력에 결손이 있습니다: ${details}`, { masterDates: [], priceRange: null, financial: null, actions: null, entries: need.entries, repairs });
+  }
+  for (const symbol of symbols) if (years.some((year) => !actionCoverage.get(symbol)?.includes(year))) throw new DecisionDataRequired(`자본변동 이력이 준비되지 않았습니다: ${symbol}`, need);
+  if (strategy.requiresFundamentals || (strategy.dataRequirements?.fundamentalLookbackQuarters ?? 0) > 0) {
+    const coverage = runtime.factCoverage.getCoverageState(symbols);
+    for (const symbol of symbols) for (let year = financialYears.fromYear; year <= financialYears.toYear; year++) {
+      if (!coverage.get(symbol)?.verifiedYears.includes(year)) throw new DecisionDataRequired(`재무 이력이 준비되지 않았습니다: ${symbol}`, need);
     }
   }
   const facts = await runtime.facts.getFacts({ scope: "SYMBOL", keys: symbols, asOfMaxTsMs: latest + 6.5 * 3_600_000 });
@@ -196,7 +213,7 @@ export async function calculate(message: { input: Input; date: string; bundlePat
     if (isLast && !warmupOnly && checkpoint) orders = decision.orders;
     else bundle.reconcileState(strategy.id, state, { interrupted: true, positions: [...activePositions.keys()], symbols });
   }
-  if (!checkpoint && held.length) bundle.reconcileState(strategy.id, state, { interrupted: true, positions: held, symbols });
+  if (warmupOnly || (!checkpoint && held.length)) bundle.reconcileState(strategy.id, state, { interrupted: true, positions: held, symbols });
   const next: Checkpoint = { abi: 1, hash: deployment.artifactHash, strategyId: strategy.id, state, lastBar: latest, rngCalls: calls, firstDecision: warmupOnly, rebalanceDate: latestSchedule.rebalanceDate, members: [...members] };
   return { checkpoint: serialize(next).toString("base64"), barTsMs: latest, orders };
 }

@@ -9,6 +9,7 @@ import { backtestJobs } from "../../src/runtime/shared/db/operations-schema.js";
 import { backtestRuns } from "../../src/server/shared/db/backtest-result-schema.js";
 import { createPaperTradingBroker } from "../../src/server/modules/trading/infrastructure/paper-trading-broker.js";
 import { kstDateOf } from "../../src/runtime/modules/market-data/domain/kst-date.js";
+import { TradingDataRequired, type TradingDataNeed } from "../../src/server/modules/trading/application/trading-data.js";
 
 const oldHash = "a".repeat(64), newHash = "b".repeat(64);
 const setup: TradingSetup = { strategyId: "alpha", artifactHash: oldHash, parameters: {}, universeRule: { markets: ["KOSPI"], stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 100 }], rebalanceInterval: { unit: "MONTH", value: 1 } }, timeframe: "1d", budgetKrw: 1_000_000, maxPositions: 10, maxPositionPercent: 100, dailyLossLimitPercent: 5, maxOrderKrw: 100_000, maxSlippageBps: 0, randomSeed: 42, sourceJobId: null };
@@ -40,9 +41,10 @@ function fixture(paper = false) {
   const artifacts: StrategyArtifactStore = { list: () => list, load: async () => strategy, bundlePath: () => "" };
   const engine: TradingDecisionEngine = { canTrade: () => true, evaluate: vi.fn<TradingDecisionEngine["evaluate"]>(async ({ warmupOnly }) => ({ checkpoint: "checkpoint", barTsMs: warmupOnly ? 1 : 2, orders: warmupOnly ? [] : [{ symbol: "005930", side: "BUY", quantity: 10 }] })), close: async () => {} };
   const executionBroker = paper ? createPaperTradingBroker({ database, marketData: broker, now: () => now }) : broker;
-  const service = new TradingService({ database, broker: executionBroker, artifacts, engine, now: () => now });
+  const prepareData = vi.fn(async (_need: TradingDataNeed, _progress: (message: string) => void, _shouldStop: () => boolean): Promise<string | void> => {});
+  const service = new TradingService({ database, broker: executionBroker, artifacts, engine, prepareData, now: () => now });
   cleanup.push(async () => { await service.close(); database.close(); });
-  return { service, broker, database, engine, artifacts, now: () => now, advance: (ms: number) => { now += ms; }, setArtifacts: (next: TradingArtifact[]) => { list = next; }, setHoldings: (next: BrokerHolding[]) => { holdings = next; }, setRemote: (next: BrokerOrder[]) => { remote = next; }, getRemote: () => remote };
+  return { service, broker, database, engine, prepareData, artifacts, now: () => now, advance: (ms: number) => { now += ms; }, setArtifacts: (next: TradingArtifact[]) => { list = next; }, setHoldings: (next: BrokerHolding[]) => { holdings = next; }, setRemote: (next: BrokerOrder[]) => { remote = next; }, getRemote: () => remote };
 }
 async function prepare(f: ReturnType<typeof fixture>, config: TradingSetup = setup) {
   await f.service.tick();
@@ -59,6 +61,110 @@ describe("모의투자 실행 경계", () => {
     await f.service.register(setup, f.service.snapshot().revision, "user");
     await f.service.activate(f.service.snapshot().revision, "user");
   }
+  const repairNeed: TradingDataNeed = { masterDates: [], priceRange: null, financial: null, actions: null, entries: [], repairs: [{ kind: "CORPORATE_ACTION", symbol: "005930", year: 2025 }] };
+  it("활성화 중 결손은 자동 수집·재검증하고 완료 후에도 OFF와 잔고를 유지한다", async () => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register(setup, f.service.snapshot().revision, "user");
+    const evaluate = vi.mocked(f.engine.evaluate);
+    evaluate.mockRejectedValueOnce(new TradingDataRequired("005930 2025년 자본변동 결손", repairNeed));
+    let release!: () => void;
+    const gate = { promise: new Promise<void>((resolve) => { release = resolve; }), resolve: () => release() };
+    cleanup.unshift(async () => gate.resolve());
+    f.prepareData.mockImplementationOnce(async (_need, progress) => { progress("005930 2025년 자본변동 복구 중"); await gate.promise; });
+    const started = await f.service.activate(f.service.snapshot().revision, "user");
+    expect(started.deployment?.status).toBe("INACTIVE");
+    expect(started.dataPreparation?.status).toBe("RUNNING");
+    await vi.waitFor(() => expect(f.service.snapshot().dataPreparation?.message).toContain("005930 2025년"));
+    expect(f.prepareData.mock.calls[0]?.[0]).toEqual(repairNeed);
+    expect(f.service.prepareData(f.service.snapshot().revision, "user").dataPreparation?.status).toBe("RUNNING");
+    await expect(f.service.activate(f.service.snapshot().revision, "user")).rejects.toThrow("데이터 준비 중");
+    gate.resolve();
+    await vi.waitFor(() => expect(f.service.snapshot().dataPreparation?.status).toBe("READY"));
+    expect(f.prepareData).toHaveBeenCalledTimes(1);
+    expect(evaluate.mock.calls.at(-1)?.[0].warmupOnly).toBe(true);
+    expect(f.service.snapshot()).toMatchObject({ deployment: { status: "INACTIVE", lastDecisionAtMs: null, lastError: null }, orders: [], positions: [], account: { cashBuyingPower: 100_000_000 } });
+    expect(f.broker.place).not.toHaveBeenCalled();
+    await f.service.activate(f.service.snapshot().revision, "user");
+    expect(f.service.snapshot().deployment?.status).toBe("ACTIVE");
+  });
+  it("동일 결손을 반복 수집하지 않으며 명시적 재시도에서 다시 검증한다", async () => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register(setup, f.service.snapshot().revision, "user");
+    vi.mocked(f.engine.evaluate).mockRejectedValue(new TradingDataRequired("005930 2025년 자본변동 결손", repairNeed));
+    f.prepareData.mockResolvedValueOnce("005930 2025년 자본변동: 직전 발행주식수 앵커가 없습니다.");
+    f.service.prepareData(f.service.snapshot().revision, "user");
+    await vi.waitFor(() => expect(f.service.snapshot().dataPreparation?.status).toBe("FAILED"));
+    expect(f.prepareData).toHaveBeenCalledTimes(1);
+    expect(f.service.snapshot()).toMatchObject({ deployment: { status: "INACTIVE", lastError: expect.stringContaining("005930 2025년 자본변동: 직전 발행주식수 앵커가 없습니다.") }, orders: [] });
+    vi.mocked(f.engine.evaluate).mockResolvedValue({ checkpoint: "checked", barTsMs: 1, orders: [] });
+    f.service.prepareData(f.service.snapshot().revision, "user");
+    await vi.waitFor(() => expect(f.service.snapshot().dataPreparation?.status).toBe("READY"));
+    expect(f.service.snapshot().deployment?.lastError).toBeNull();
+    expect(f.service.snapshot().deployment?.status).toBe("INACTIVE");
+  });
+  it("복구 중 설정 변경은 이전 작업을 중단하고 늦은 진행·완료를 새 설정에 반영하지 않는다", async () => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register(setup, f.service.snapshot().revision, "user");
+    vi.mocked(f.engine.evaluate).mockRejectedValueOnce(new TradingDataRequired("결손", repairNeed));
+    let release!: () => void;
+    const gate = { promise: new Promise<void>((resolve) => { release = resolve; }), resolve: () => release() };
+    cleanup.unshift(async () => gate.resolve());
+    f.prepareData.mockImplementationOnce(async (_need, progress, shouldStop) => {
+      await gate.promise;
+      expect(shouldStop()).toBe(true);
+      progress("이전 작업 완료");
+    });
+    f.service.prepareData(f.service.snapshot().revision, "user");
+    await vi.waitFor(() => expect(f.prepareData).toHaveBeenCalledOnce());
+    await f.service.update({ ...setup, budgetKrw: 2_000_000 }, f.service.snapshot().revision, "user");
+    gate.resolve();
+    await f.service.close();
+    expect(f.service.snapshot()).toMatchObject({ dataPreparation: null, deployment: { budgetKrw: 2_000_000, status: "INACTIVE", activity: "설정 변경 · 비활성 유지", lastError: null }, orders: [] });
+  });
+  it("운용 중 데이터 결손은 주문을 중지하고 복구하되 자동으로 재활성화하지 않는다", async () => {
+    const f = fixture(true); await paperActive(f);
+    vi.mocked(f.engine.evaluate).mockRejectedValueOnce(new TradingDataRequired("005930 2025년 자본변동 결손", repairNeed));
+    await f.service.tick();
+    await vi.waitFor(() => expect(f.service.snapshot().dataPreparation?.status).toBe("READY"));
+    expect(f.service.snapshot()).toMatchObject({ deployment: { status: "INACTIVE" }, orders: [], positions: [], account: { cashBuyingPower: 100_000_000 } });
+    expect(f.prepareData.mock.calls[0]?.[0]).toEqual(repairNeed);
+    expect(f.broker.place).not.toHaveBeenCalled();
+  });
+  it("이전 실행의 늦은 결손 응답이 다시 활성화한 전략을 중지하지 않는다", async () => {
+    const f = fixture(true); await paperActive(f);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    cleanup.unshift(async () => release());
+    const evaluate = vi.mocked(f.engine.evaluate);
+    evaluate.mockImplementationOnce(async () => { await pending; throw new TradingDataRequired("이전 실행 결손", repairNeed); });
+    const tick = f.service.tick();
+    await vi.waitFor(() => expect(evaluate).toHaveBeenCalledTimes(2));
+    f.service.deactivate(f.service.snapshot().revision, "user");
+    await f.service.activate(f.service.snapshot().revision, "user");
+    const revision = f.service.snapshot().revision;
+    release(); await tick;
+    expect(f.service.snapshot()).toMatchObject({ revision, deployment: { status: "ACTIVE", lastError: null }, dataPreparation: null, orders: [] });
+    expect(f.prepareData).not.toHaveBeenCalled();
+  });
+  it("복구 중 실행기 임대가 만료되면 늦은 완료를 저장하지 않고 재시도를 허용한다", async () => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register(setup, f.service.snapshot().revision, "user");
+    vi.mocked(f.engine.evaluate).mockRejectedValueOnce(new TradingDataRequired("결손", repairNeed));
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    cleanup.unshift(async () => release());
+    f.prepareData.mockImplementationOnce(async (_need, progress) => { await pending; progress("잘못된 완료"); });
+    f.service.prepareData(f.service.snapshot().revision, "user");
+    await vi.waitFor(() => expect(f.prepareData).toHaveBeenCalledOnce());
+    const activity = f.service.snapshot().deployment?.activity;
+    f.advance(120_001); release();
+    await vi.waitFor(() => expect(f.service.snapshot().dataPreparation?.status).toBe("FAILED"));
+    expect(f.service.snapshot().deployment?.activity).toBe(activity);
+    expect(f.service.snapshot().deployment?.status).toBe("INACTIVE");
+    f.service.prepareData(f.service.snapshot().revision, "user");
+    await vi.waitFor(() => expect(f.service.snapshot().dataPreparation?.status).toBe("READY"));
+    expect(f.service.snapshot().orders).toEqual([]);
+  });
   it("초기 자금을 설정과 함께 저장하고 재조회·다른 설정 변경에도 유지한다", async () => {
     const f=fixture(true);await f.service.tick();
     await f.service.register(setup,f.service.snapshot().revision,"user",5_000_000);
