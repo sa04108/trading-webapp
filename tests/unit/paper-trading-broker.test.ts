@@ -11,7 +11,7 @@ function setup() {
   const quotes = vi.fn(async (symbols: string[]) => symbols.map(symbol => ({ symbol, price: 1000, timestampMs: time })));
   const dailyCandles = vi.fn(async () => []);
   const marketData = { quotes, dailyCandles };
-  const make = () => createPaperTradingBroker({ database, marketData, now: () => time });
+  const make = (accountSlot = 1) => createPaperTradingBroker({ database, marketData, accountSlot, now: () => time });
   return { broker: make(), make, quotes, dailyCandles };
 }
 
@@ -28,6 +28,34 @@ describe("paper trading broker", () => {
     expect(order.commission).toBeCloseTo(1.5);
     await expect(reopened.place("PAPER", { ...buy, quantity: 11 })).rejects.toMatchObject({ uncertain: false });
     expect(await reopened.orders("PAPER", "2026-11-17", "2026-11-17")).toHaveLength(1);
+  });
+  it("isolates account balances, cost profiles and order history by slot", async () => {
+    const { broker, make } = setup();
+    const second = make(2);
+    const deploymentSetup = {
+      strategyId: "alpha", artifactHash: "a".repeat(64), parameters: {},
+      universeRule: { markets: ["KOSPI"], stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 100 }], rebalanceInterval: { unit: "MONTH", value: 1 } },
+      timeframe: "1d", budgetKrw: 1_000_000, maxPositions: 10, maxPositionPercent: 10,
+      dailyLossLimitPercent: 3, maxOrderKrw: 100_000, maxSlippageBps: 50, randomSeed: 42,
+      paperCommissionProfileId: "zero-cost", paperSlippageProfileId: "fixed-5bps",
+    };
+    database.sqlite.prepare("INSERT INTO trading_deployments (id, slot, account_slot, mode, setup_json, name, version, status, created_at_ms, updated_at_ms, activity) VALUES (?, ?, 2, 'PAPER', ?, 'test', '1', 'INACTIVE', ?, ?, '')").run("two", 2, JSON.stringify(deploymentSetup), time, time);
+    expect(await broker.accounts()).toEqual([{ id: "PAPER", label: "모의투자" }]);
+    expect(await second.accounts()).toEqual([{ id: "PAPER-2", label: "모의투자" }]);
+    await broker.place("PAPER", buy);
+    await expect(second.place("PAPER-2", { ...buy, clientOrderId: "sell", side: "SELL", price: 990 })).rejects.toMatchObject({ uncertain: false });
+    await second.place("PAPER-2", { ...buy, clientOrderId: "two", quantity: 3, price: 1010 });
+    expect(await broker.buyingPower("PAPER")).toBe(99_989_998.5);
+    expect(await second.buyingPower("PAPER-2")).toBe(99_996_997);
+    expect(await broker.holdings("PAPER")).toMatchObject([{ quantity: 10, averagePrice: 1000 }]);
+    expect(await second.holdings("PAPER-2")).toMatchObject([{ quantity: 3, averagePrice: 1001 }]);
+    expect(await second.order("PAPER-2", "two")).toMatchObject({ averageFillPrice: 1001, commission: 0 });
+    await expect(second.order("PAPER-2", "one")).rejects.toMatchObject({ uncertain: false, message: "주문을 찾을 수 없습니다" });
+    await expect(second.cancel("PAPER-2", "one")).rejects.toMatchObject({ uncertain: false, message: "주문을 찾을 수 없습니다" });
+    await expect(second.place("PAPER-2", { ...buy, price: 1010 })).rejects.toMatchObject({ uncertain: false });
+    expect(await second.buyingPower("PAPER-2")).toBe(99_996_997);
+    expect(await second.orders("PAPER-2", "2026-11-17", "2026-11-17")).toMatchObject([{ id: "two" }]);
+    await expect(second.buyingPower("PAPER")).rejects.toMatchObject({ uncertain: false });
   });
   it("enforces cash, holdings, limit and quote freshness", async () => {
     const { broker, quotes } = setup();

@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import { describe, expect, it, vi } from "vitest";
-import { TradingError, type TradingService } from "../../src/server/modules/trading/application/trading-service.js";
+import { TradingError } from "../../src/server/modules/trading/application/trading-service.js";
+import type { TradingPresets } from "../../src/server/modules/trading/application/trading-presets.js";
 import { registerTradingRoutes } from "../../src/server/modules/trading/presentation/trading-routes.js";
 
 function fixture() {
@@ -13,7 +14,7 @@ function fixture() {
     register: vi.fn(), update: vi.fn(), remove: vi.fn(), version: vi.fn(),
     activate: vi.fn(), resolveOrder: vi.fn(), deactivate: vi.fn(), refresh: vi.fn(), selectAccount: vi.fn(), prepareData: vi.fn(),
   };
-  registerTradingRoutes(app, service as unknown as TradingService, async (request, reply) => {
+  registerTradingRoutes(app, { defaultAccount:service } as unknown as TradingPresets, async (request, reply) => {
     if (request.headers.authorization !== "test") { await reply.code(401).send({ error: "unauthorized" }); return; }
     request.authUser = { id: "user-1", username: "tester" };
   });
@@ -21,6 +22,8 @@ function fixture() {
 }
 const auth = { authorization: "test" };
 const mutations = [
+  ["POST", "/trading/presets"],
+  ["PATCH", "/trading/title"],
   ["POST", "/trading/strategy"], ["PUT", "/trading/strategy"], ["DELETE", "/trading/strategy"],
   ["POST", "/trading/version"], ["POST", "/trading/activate"], ["POST", "/trading/deactivate"],
   ["POST", "/trading/orders/00000000-0000-4000-8000-000000000001/resolve"], ["POST", "/trading/refresh"],

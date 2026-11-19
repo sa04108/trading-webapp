@@ -2,6 +2,7 @@ import { z } from "zod";
 import { universeRuleSchema } from "./universe-rule.js";
 
 export const PAPER_TRADING_ACCOUNT_ID = "PAPER";
+export const paperTradingAccountId = (slot: number): string => slot === 1 ? PAPER_TRADING_ACCOUNT_ID : `PAPER-${slot}`;
 export const PAPER_TRADING_INITIAL_CASH_KRW = 100_000_000;
 export const paperInitialCashSchema = z.number().int().min(10_000).max(1_000_000_000_000);
 
@@ -12,6 +13,7 @@ export interface TradingQuote {
 }
 
 export const tradingSetupSchema = z.object({
+  title: z.string().trim().max(100).optional(),
   strategyId: z.string().min(1).max(100),
   artifactHash: z.string().regex(/^[a-f0-9]{64}$/),
   parameters: z.record(z.string(), z.unknown()),
@@ -31,6 +33,13 @@ export const tradingSetupSchema = z.object({
 
 export type TradingSetup = z.infer<typeof tradingSetupSchema>;
 export type TradingStatus = "INACTIVE" | "ACTIVE" | "STOPPING" | "ERROR";
+
+export interface TradingPresetSummary {
+  id: string;
+  title: string;
+  status: "ACTIVE" | "INACTIVE" | "ERROR";
+  createdAtMs: number;
+}
 
 export interface TradingArtifact {
   strategyId: string;
@@ -144,4 +153,11 @@ export const tradingRevisionSchema = z.object({
 export const tradingWriteSchema = tradingSetupSchema.extend({
   expectedRevision: z.number().int().nonnegative(),
   initialCashKrw: paperInitialCashSchema.optional(),
+});
+
+export const tradingPresetCreateSchema = tradingWriteSchema.extend({ expectedRevision: z.literal(0), requestId: z.string().uuid() });
+export const tradingPresetTitleSchema = tradingRevisionSchema.extend({
+  deploymentId: z.string().uuid(),
+  expectedTitle: z.string().max(100),
+  title: z.string().trim().max(100),
 });

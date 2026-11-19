@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { login } from './login';
 import type { ConfigurationSearchCatalog, ConfigurationSearchConfig, ConfigurationSearchDetail } from '../../src/shared/schemas/configuration-search.js';
 
@@ -62,6 +62,58 @@ test('일봉 설정을 고정 해제하고 미리 본 조합 그대로 실행한
   await page.getByRole('dialog').getByRole('button', { name: '실행 시작' }).click();
   await expect.poll(() => state.started).toBe('preview-exact');
   await expect(page).toHaveURL('/backtests/searches/preview-exact');
+});
+
+test('범위 핸들을 드래그하고 키보드로 조정한 값을 새 미리보기에 반영한다', async ({ page }, testInfo) => {
+  const state = await setup(page, daily);
+  await page.getByRole('checkbox', { name: '임계값 고정', exact: true }).uncheck();
+  const minimum = page.getByRole('slider', { name: '임계값 최소 슬라이더' });
+  const maximum = page.getByRole('slider', { name: '임계값 최대 슬라이더' });
+  const preview = page.getByRole('button', { name: '조합 미리보기' });
+  await preview.click();
+  await expect(page.getByText('생성될 조합 미리보기')).toBeVisible();
+
+  const drag = async (thumb: Locator, targetX: number) => {
+    await thumb.scrollIntoViewIfNeeded();
+    const box = await thumb.boundingBox();
+    if (!box) throw new Error('범위 슬라이더 핸들을 찾지 못했습니다');
+    const x = box.x + box.width / 2, y = box.y + box.height / 2;
+    if (testInfo.project.name === 'mobile') {
+      const session = await page.context().newCDPSession(page);
+      try {
+        await session.send('Emulation.setTouchEmulationEnabled', { enabled: true });
+        await session.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }] });
+        // 실제 손가락처럼 세로 이동을 섞어 브라우저 스크롤이 드래그를 취소하는 회귀도 검출한다.
+        for (let step = 1; step <= 12; step++) {
+          await session.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + (targetX - x) * step / 12, y: y + step * 2, id: 1 }] });
+        }
+        await session.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      } finally {
+        await session.detach();
+      }
+    } else {
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(targetX, y + 24, { steps: 12 });
+      await page.mouse.up();
+    }
+  };
+
+  await drag(maximum, page.viewportSize()!.width - 1);
+  await expect(maximum).toHaveAttribute('aria-valuenow', '10');
+  await expect(page.getByLabel('임계값 최대', { exact: true })).toHaveValue('10');
+  await expect(minimum).toHaveAttribute('aria-valuenow', '1');
+  await expect(page.getByText('생성될 조합 미리보기')).toHaveCount(0);
+  await drag(minimum, 0);
+  await expect(minimum).toHaveAttribute('aria-valuenow', '0.1');
+  await expect(page.getByLabel('임계값 최소', { exact: true })).toHaveValue('0.1');
+  await expect(maximum).toHaveAttribute('aria-valuenow', '10');
+  await minimum.press('ArrowRight');
+  await maximum.press('ArrowLeft');
+  await expect(page.getByLabel('임계값 최소', { exact: true })).toHaveValue('0.2');
+  await expect(page.getByLabel('임계값 최대', { exact: true })).toHaveValue('9.9');
+  await preview.click();
+  await expect.poll(() => state.posted).toMatchObject({ config: { settings: { 'parameters.threshold': { kind: 'RANGE', min: 0.2, max: 9.9 } } } });
 });
 
 test('분봉 미리보기 요청 중 설정을 변경하면 늦은 응답을 실행할 수 없다', async ({ page }) => {
