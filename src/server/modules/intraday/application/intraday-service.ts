@@ -12,6 +12,8 @@ import type { AppDatabase } from "../../../../runtime/shared/db/database.js";
 import {
   intradayCollections,
   intradayRuns,
+  historyStrategyId,
+  historyMetrics,
 } from "../../../shared/db/intraday-schema.js";
 import {
   INTRADAY_RETENTION_DAYS,
@@ -643,13 +645,12 @@ export class IntradayService {
     }
   }
   listRunGroups(ownerId: string): HistoryGroup[] {
-    const strategyId = sql<string>`json_extract(${intradayRuns.requestJson}, '$.strategyId')`;
     return this.options.db
-      .select({ strategyId, total: count() })
+      .select({ strategyId: historyStrategyId, total: count() })
       .from(intradayRuns)
       .where(this.runHistoryWhere(ownerId))
-      .groupBy(strategyId)
-      .orderBy(asc(strategyId))
+      .groupBy(historyStrategyId)
+      .orderBy(asc(historyStrategyId))
       .all();
   }
   private runHistoryWhere(ownerId: string, strategyId?: string) {
@@ -658,7 +659,7 @@ export class IntradayService {
       sql`NOT EXISTS (SELECT 1 FROM intraday_validation_trials WHERE run_id = ${intradayRuns.id})`,
       sql`NOT EXISTS (SELECT 1 FROM configuration_search_items WHERE job_id = ${intradayRuns.id})`,
       strategyId === undefined ? undefined :
-        sql`json_extract(${intradayRuns.requestJson}, '$.strategyId') = ${strategyId}`,
+        eq(historyStrategyId, strategyId),
     );
   }
   countRuns(ownerId: string, strategyId?: string): number {
@@ -673,9 +674,7 @@ export class IntradayService {
     query: HistoryQuery = historyQuerySchema.parse({ limit: 100 }),
   ): IntradayRunSummary[] {
     const periodEnd = sql`json_extract(${intradayRuns.requestJson}, '$.period.to')`;
-    const returnPct = sql<number | null>`CASE WHEN ${intradayRuns.status} = 'COMPLETED' THEN json_extract(${intradayRuns.resultJson}, '$.metrics.returnPct') END`;
-    const maxDrawdownPct = sql<number | null>`CASE WHEN ${intradayRuns.status} = 'COMPLETED' THEN json_extract(${intradayRuns.resultJson}, '$.metrics.maxDrawdownPct') END`;
-    const sharpe = sql<number | null>`CASE WHEN ${intradayRuns.status} = 'COMPLETED' THEN json_extract(${intradayRuns.resultJson}, '$.metrics.sharpe') END`;
+    const returnPct = sql<number | null>`json_extract(${historyMetrics}, '$[0]')`;
     const columns = {
       createdAt: intradayRuns.createdAtMs,
       periodEnd,
@@ -684,25 +683,26 @@ export class IntradayService {
       cagrPct: sql`NULL`,
     };
     const column = columns[query.sort];
-    return this.options.db
-      .select({ ...runColumns, returnPct, maxDrawdownPct, sharpe })
-      .from(intradayRuns)
-      .where(this.runHistoryWhere(ownerId, query.strategyId))
-      .orderBy(
-        asc(sql`${column} IS NULL`),
-        query.dir === "asc" ? asc(column) : desc(column),
-        desc(intradayRuns.createdAtMs),
-        desc(intradayRuns.id),
-      )
-      .limit(query.limit)
-      .offset(query.offset)
-      .all()
-      .map((row) => ({
+    const sort = query.dir === "asc" ? asc(column) : desc(column);
+    const ordering = query.sort === "createdAt" ? sort : sql`${column} IS NULL, ${sort}, ${desc(intradayRuns.createdAtMs)}`;
+    // 전략 필터가 없으면 SQLite는 날짜 인덱스를 선택해 대용량 결과 JSON을 다시 읽을 수 있다.
+    const rows = this.options.db.all<RunRow & { metricsJson: string | null }>(sql`
+      SELECT id, owner_id AS ownerId, request_json AS requestJson, status, error,
+             created_at_ms AS createdAtMs, updated_at_ms AS updatedAtMs, ${historyMetrics} AS metricsJson
+      FROM ${intradayRuns} INDEXED BY intraday_runs_history
+      WHERE ${this.runHistoryWhere(ownerId, query.strategyId)}
+      ORDER BY ${ordering}, ${desc(intradayRuns.id)}
+      LIMIT ${query.limit} OFFSET ${query.offset}
+    `);
+    return rows.map((row) => {
+      const [returns, drawdown, sharpe] = row.metricsJson ? JSON.parse(row.metricsJson) as (number | null)[] : [];
+      return {
         ...this.run(row),
-        metrics: row.returnPct === null || row.maxDrawdownPct === null
-          ? null
-          : { returnPct: row.returnPct, maxDrawdownPct: normalizeDrawdown(row.maxDrawdownPct), sharpe: row.sharpe },
-      }));
+        metrics: returns == null || drawdown == null ? null : {
+          returnPct: returns, maxDrawdownPct: normalizeDrawdown(drawdown), sharpe: sharpe ?? null,
+        },
+      };
+    });
   }
   getRun(ownerId: string, id: string): IntradayRun {
     const row = this.options.db

@@ -1,9 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { configurationSearches, configurationSearchItems } from "../../../shared/db/configuration-search-schema.js";
-import { searchCounts } from "../../backtest/presentation/backtest-experiment-routes.js";
+import { intradayHistoryExtras } from "../application/intraday-history-extras.js";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
-import type { BacktestHistoryExtras, BacktestLineage } from "../../../../shared/schemas/backtest-experiments.js";
+import type { BacktestLineage } from "../../../../shared/schemas/backtest-experiments.js";
 import { intradayValidationTrials, intradayValidations } from "../../../shared/db/intraday-validation-schema.js";
 import { IntradayError, type IntradayService } from "../application/intraday-service.js";
 import { IntradayValidationService } from "../application/intraday-validation-service.js";
@@ -56,13 +56,7 @@ export function registerIntradayValidationRoutes(app: FastifyInstance, database:
   app.get("/intraday/experiments/summary", auth, async (request, reply) => respond(reply, () => {
     const raw = (request.query as { jobIds?: string }).jobIds; if (!raw || raw.length > 13000) throw new IntradayError("잘못된 작업 ID입니다.", 400);
     const ids = [...new Set(raw.split(","))]; if (ids.length > 100 || ids.some(x => !x || x.length > 128)) throw new IntradayError("잘못된 작업 ID입니다.", 400);
-    const distribution = (v: number[]) => { const mean = v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; return { count: v.length, mean, sampleStdDev: v.length > 1 ? Math.sqrt(v.reduce((a, b) => a + (b - mean!) ** 2, 0) / (v.length - 1)) : null }; };
-    const searches = searchCounts(database, "intraday", ids, request.authUser!.id);
-    const summaries: BacktestHistoryExtras[] = ids.map(jobId => {
-      const experiments = service.list(request.authUser!.id, jobId), modes = { HOLDOUT: 0, WALK_FORWARD: 0 };
-      const samples: number[] = []; for (const e of experiments) { modes[e.config.mode]++; if (e.status !== "COMPLETED") continue; const oos = e.trials.filter(t => t.role === "OOS"); if (oos.length && oos.every(t => t.status === "COMPLETED" && t.metrics && t.metrics.intradayDaily?.isComplete !== false && Number.isFinite(t.metrics.totalReturnPct))) samples.push(oos.reduce((sum, t) => sum + t.metrics!.totalReturnPct / oos.length, 0)); }
-      return { jobId, search: searches(jobId), validation: { experimentCount: experiments.length, activeCount: experiments.filter(e => e.status === "ACTIVE" || e.status === "CANCELLING").length, completedCount: experiments.filter(e => e.status === "COMPLETED").length, returns: distribution(samples), modes } };
-    }); return { summaries };
+    return { summaries: intradayHistoryExtras(database, request.authUser!.id, ids) };
   }));
   return service;
 }

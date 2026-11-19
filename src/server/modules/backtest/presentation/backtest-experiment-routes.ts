@@ -1,12 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { and, eq, inArray } from "drizzle-orm";
+import { distribution, searchCounts } from "../application/history-summary.js";
 import { z } from "zod";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import { backtestJobs } from "../../../../runtime/shared/db/operations-schema.js";
 import { backtestMetrics } from "../../../shared/db/backtest-result-schema.js";
 import { backtestValidations, backtestValidationTrials } from "../../../shared/db/backtest-validation-schema.js";
 import { configurationSearches, configurationSearchItems } from "../../../shared/db/configuration-search-schema.js";
-import type { BacktestBreadcrumbEntry, BacktestHistoryExtras, BacktestLineage, ExperimentReturnDistribution } from "../../../../shared/schemas/backtest-experiments.js";
+import type { BacktestBreadcrumbEntry, BacktestHistoryExtras, BacktestLineage } from "../../../../shared/schemas/backtest-experiments.js";
 import { periodValidationConfigSchema, periodValidationLabel, type PeriodValidationConfig } from "../../../../shared/schemas/period-validation.js";
 
 function configOf(json: string): PeriodValidationConfig | null {
@@ -14,21 +15,8 @@ function configOf(json: string): PeriodValidationConfig | null {
     return periodValidationConfigSchema.parse(JSON.parse(json));
   } catch { return null; }
 }
-function distribution(values: number[]): ExperimentReturnDistribution {
-  const count = values.length;
-  const mean = count ? values.reduce((sum, value) => sum + value / count, 0) : null;
-  const variance = count > 1 ? values.reduce((sum, value) => sum + (value - mean!) ** 2 / (count - 1), 0) : null;
-  return { count, mean: mean !== null && Number.isFinite(mean) ? mean : null,
-    sampleStdDev: variance !== null && Number.isFinite(variance) ? Math.sqrt(variance) : null };
-}
 const finite = (value: number | null): value is number => value !== null && Number.isFinite(value);
 
-/** 목록에 보이는 원본의 스칼라 지표만 일괄 조회한다. 실험 결과 본문과 매매 시계열은 읽지 않는다. */
-export function searchCounts(database: DatabaseHandle, mode: "daily" | "intraday", ids: string[], ownerId?: string) {
-  const rows = database.db.select({ source: configurationSearches.sourceJobId, status: configurationSearches.status }).from(configurationSearches)
-    .where(and(eq(configurationSearches.mode, mode), inArray(configurationSearches.sourceJobId, ids), ownerId ? eq(configurationSearches.ownerId, ownerId) : undefined)).all();
-  return (id: string) => { const own = rows.filter(row => row.source === id && row.status !== "PREVIEW"); return { experimentCount: own.length, activeCount: own.filter(row => row.status === "ACTIVE" || row.status === "CANCELLING").length, completedCount: own.filter(row => row.status === "COMPLETED").length }; };
-}
 export function historyExtras(database: DatabaseHandle, ids: string[], ownerId?: string): BacktestHistoryExtras[] {
   const db = database.db;
   const jobs = db.select({ id: backtestJobs.id }).from(backtestJobs).where(inArray(backtestJobs.id, ids)).all();

@@ -35,37 +35,27 @@ export class TradingPresets {
 
   list() {
     const rows = this.database.sqlite.prepare(`
-      WITH ranked AS (
-        SELECT d.id, d.account_slot AS accountSlot, d.created_at_ms AS createdAtMs, d.slot IS NULL AS archived,
+      WITH presets AS (
+        SELECT d.id, d.account_slot AS accountSlot, d.created_at_ms AS createdAtMs,
           coalesce(nullif(trim(json_extract(d.setup_json, '$.title')), ''), d.name) AS title,
-          CASE WHEN d.slot IS NULL THEN 'INACTIVE'
-               WHEN d.last_error IS NOT NULL OR c.error IS NOT NULL OR d.status = 'ERROR' THEN 'ERROR'
+          CASE WHEN d.last_error IS NOT NULL OR c.error IS NOT NULL OR d.status = 'ERROR' THEN 'ERROR'
                WHEN d.status = 'ACTIVE' THEN 'ACTIVE' ELSE 'INACTIVE' END AS status,
-          row_number() OVER (PARTITION BY d.account_slot ORDER BY d.slot IS NULL, d.created_at_ms DESC, d.rowid DESC) AS rank,
           d.rowid AS sequence
         FROM trading_deployments d JOIN trading_control c ON c.singleton = d.account_slot
-        WHERE d.mode = 'PAPER'
+        WHERE d.mode = 'PAPER' AND d.slot IS NOT NULL
       )
-      SELECT id, title, status, createdAtMs, archived, accountSlot FROM ranked WHERE rank = 1
+      SELECT id, title, status, createdAtMs, accountSlot FROM presets
       ORDER BY CASE status WHEN 'ACTIVE' THEN 0 WHEN 'INACTIVE' THEN 1 ELSE 2 END, createdAtMs, sequence
-    `).all() as Array<TradingPresetSummary & { archived: number; accountSlot: number }>;
-    const presets: TradingPresetSummary[] = [], archived: TradingPresetSummary[] = [];
-    let defaultAccountPresetId: string | null = null;
-    for (const { archived: removed, accountSlot, ...summary } of rows) {
-      if (accountSlot === 1) defaultAccountPresetId = summary.id;
-      (removed ? archived : presets).push(summary);
-    }
-    return { presets, archived, defaultAccountPresetId };
+    `).all() as Array<TradingPresetSummary & { accountSlot: number }>;
+    const defaultAccountPresetId = rows.find(row => row.accountSlot === 1)?.id ?? null;
+    const presets = rows.map(({ id, title, status, createdAtMs }) => ({ id, title, status, createdAtMs }));
+    return { presets, archived: [], defaultAccountPresetId };
   }
 
   forPreset(id: string): TradingService {
     const row = this.database.sqlite.prepare(`
       SELECT d.account_slot AS slot FROM trading_deployments d
-      LEFT JOIN trading_deployments current ON current.slot = d.account_slot
-      WHERE d.id = ? AND d.mode = 'PAPER' AND (current.id = d.id OR (current.id IS NULL AND d.id = (
-        SELECT latest.id FROM trading_deployments latest WHERE latest.account_slot = d.account_slot AND latest.mode = 'PAPER'
-        ORDER BY latest.created_at_ms DESC, latest.rowid DESC LIMIT 1
-      )))
+      WHERE d.id = ? AND d.mode = 'PAPER' AND d.slot IS NOT NULL
     `).get(id) as { slot: number } | undefined;
     if (!row) throw new TradingError("모의투자를 찾을 수 없습니다.", "PRESET_NOT_FOUND", 404);
     return this.account(row.slot);

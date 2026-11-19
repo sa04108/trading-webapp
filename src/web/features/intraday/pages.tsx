@@ -1,3 +1,5 @@
+import { HistoryResultCard, HistoryResultDetails } from "../backtests/history-result-card";
+import { Badge } from "@/components/ui/badge";
 import { BacktestDeleteDialog } from "../backtests/backtest-delete-dialog";
 import { IntradayChartView } from "./intraday-chart";
 export { IntradayDataPage } from "./intraday-data-page";
@@ -8,7 +10,6 @@ import { ResultActions } from "../backtests/result-actions";
 import { IntradayReproductionInfo } from "./intraday-reproduction-info";
 import { ExperimentSummary } from "../backtests/experiment-summary";
 import { useBacktestHistoryExtras } from "../backtests/experiment-api";
-import { ExperimentLinks, hasExperimentRecords } from "../backtests/experiment-links";
 import { EquityChart } from "../backtests/result-charts";
 import { IntradayTradesSection } from "./intraday-trades-section";
 import { summarizeIntradayTrades } from "@shared/intraday-trades";
@@ -77,11 +78,15 @@ const active = (status: string) =>
 const statusLabel: Record<string, string> = {
   QUEUED: "대기",
   PREPARING: "데이터 준비",
-  RUNNING: "진행 중",
+  RUNNING: "실행 중",
   COMPLETED: "",
   FAILED: "실패",
-  CANCELLED: "취소",
+  CANCELLED: "취소됨",
 };
+function IntradayStatusBadge({ status }: { status: string }) {
+  if (status === "COMPLETED") return null;
+  return <Badge variant={status === "FAILED" ? "destructive" : active(status) ? "secondary" : "outline"}>{statusLabel[status]}</Badge>;
+}
 const time = (ms: number | null) =>
   ms === null
     ? "없음"
@@ -287,7 +292,7 @@ export function IntradayListPage() {
     }),
   });
   const visibleRuns = pages.flatMap((query, index) =>
-    controls.collapsed(groups.data?.groups[index]?.strategyId ?? "") || query.isPlaceholderData
+    controls.collapsed(groups.data?.groups[index]?.strategyId ?? "")
       ? [] : (query.data?.runs ?? []),
   );
   const extras = useBacktestHistoryExtras(visibleRuns.map((run) => run.id), 5_000, "intraday");
@@ -371,78 +376,27 @@ export function IntradayListPage() {
                 <div data-pagination-content aria-busy={query?.isPlaceholderData} className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(100%,260px),1fr))]">
                   {query?.data?.runs.map((run) => {
                     const summary = extrasById.get(run.id);
-                    const card = (
-                      <Card className="relative transition-colors hover:bg-muted/40">
-                        <CardContent className="space-y-2 py-4">
-                          {run.status !== "COMPLETED" || (!editing && hasExperimentRecords(summary)) ? <div className="flex justify-between gap-2 text-xs text-muted-foreground">
-                            {run.status !== "COMPLETED" ? <span className="flex items-center gap-1">{active(run.status) ? <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" aria-hidden /> : null}{statusLabel[run.status]}</span> : null}
-                            {!editing ? <ExperimentLinks jobId={run.id} summary={summary} mode="intraday" /> : null}
-                          </div> : null}
-                          <div className="flex items-baseline justify-between gap-2 whitespace-nowrap">
-                            {editing ? <p className="text-xs font-medium">
-                              {historyPeriod(run.request.period.from, run.request.period.to)}
-                            </p> : <Link className="text-xs font-medium underline after:absolute after:inset-0" to={`/backtests/intraday/${encodeURIComponent(run.id)}`}>{historyPeriod(run.request.period.from, run.request.period.to)}</Link>}
-                            <time
-                              className="shrink-0 text-[11px] text-muted-foreground tabular-nums"
-                              dateTime={new Date(run.createdAtMs).toISOString()}
-                              title={time(run.createdAtMs)}
-                            >
-                              {new Date(run.createdAtMs).toLocaleString("sv-SE", {
-                                timeZone: "Asia/Seoul", year: "2-digit", month: "2-digit", day: "2-digit",
-                                hour: "2-digit", minute: "2-digit",
-                              }).replaceAll("-", ".")}
-                            </time>
-                          </div>
-                          <p className="text-xs text-muted-foreground">
-                            {run.request.symbol} · {run.request.timeframe}
-                          </p>
-                          <div className="grid grid-cols-2 gap-3">
-                            <div>
-                              <p className="text-xs text-muted-foreground">
-                                수익률
-                              </p>
-                              <p
-                                className={`text-xl font-semibold tabular-nums ${pnlClass(run.metrics?.returnPct ?? null)}`}
-                              >
-                                {formatSignedPct(run.metrics?.returnPct ?? null)}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-xs text-muted-foreground">
-                                CAGR
-                              </p>
-                              <p className="text-xl font-semibold">—</p>
-                            </div>
-                          </div>
-                          <p className="border-t pt-2 text-xs text-muted-foreground">
-                            MDD{" "}
-                            <span className={pnlClass(run.metrics?.maxDrawdownPct)}>{formatSignedPct(run.metrics?.maxDrawdownPct ?? null)}</span>
-                          </p>
-                          {run.error ? (
-                            <p className="break-words text-destructive">
-                              {run.error}
-                            </p>
-                          ) : null}
-                        </CardContent>
-                      </Card>
-                    );
                     return (
                       <div key={run.id} className="min-w-0 max-w-[360px]">
-                        {editing ? (
-                          <div className="flex items-start gap-3">
-                            <Checkbox
-                              id={`intraday-${run.id}`}
-                              className="mt-5"
-                              checked={selected.has(run.id)}
-                              disabled={active(run.status) || deletion !== null || query?.isPlaceholderData}
-                              onCheckedChange={() => historyEditing.toggleOne(group.strategyId, run.id)}
-                              aria-label={`${time(run.createdAtMs)} 백테스트 선택`}
-                            />
-                            <label htmlFor={`intraday-${run.id}`} className="min-w-0 flex-1 cursor-pointer">{card}</label>
-                          </div>
-                        ) : (
-                          card
-                        )}
+                        <HistoryResultCard
+                          id={run.id}
+                          mode="intraday"
+                          href={`/backtests/intraday/${encodeURIComponent(run.id)}`}
+                          period={historyPeriod(run.request.period.from, run.request.period.to)}
+                          date={run.createdAtMs}
+                          description={`${run.request.symbol} · ${run.request.timeframe}`}
+                          status={run.status === "COMPLETED" ? null : <IntradayStatusBadge status={run.status} />}
+                          summary={summary}
+                          editing={editing}
+                          selected={selected.has(run.id)}
+                          deletable={!active(run.status)}
+                          selectionDisabled={deletion !== null || query?.isPlaceholderData}
+                          onToggle={() => historyEditing.toggleOne(group.strategyId, run.id)}
+                          error={run.error}
+                          metrics={run.status === "COMPLETED" && run.metrics ? {
+                            returnPct: run.metrics.returnPct, cagrPct: null, mddPct: run.metrics.maxDrawdownPct,
+                          } : undefined}
+                        />
                       </div>
                     );
                   })}
@@ -474,10 +428,14 @@ export function IntradayListPage() {
                               </Link>
                             )}
                           </div>
-                          <div className="mt-1 text-muted-foreground">
-                            {run.status !== "COMPLETED" ? `${statusLabel[run.status]} · ` : ""}{run.request.symbol}
-                          </div>
-                          {!editing ? <ExperimentLinks jobId={run.id} summary={extrasById.get(run.id)} mode="intraday" /> : null}
+                          <HistoryResultDetails
+                            id={run.id}
+                            mode="intraday"
+                            status={run.status === "COMPLETED" ? null : <IntradayStatusBadge status={run.status} />}
+                            description={run.request.symbol}
+                            summary={extrasById.get(run.id)}
+                            editing={editing}
+                          />
                           {run.error ? (
                             <p className="text-destructive">
                               {run.error}

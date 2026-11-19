@@ -209,6 +209,33 @@ describe("분봉 기간 검증", () => {
     f.database.db.update(intradayValidations).set({ sourceJobId: grandchild }).where(eq(intradayValidations.id, first.id)).run();
     expect((await get(grandchild)).json().complete).toBe(false);
   });
+  // 상세 조회 검사는 목록 집계가 학습 성과나 불완전한 OOS 일부를 포함하는 회귀를 잡지 못한다.
+  it("목록 요약은 소유자의 완료 실험별 전체 OOS 평균으로 분포를 계산한다", async () => {
+    const f = fixture(false, undefined, { ...request, period: { from: "2026-08-01", to: "2026-10-31" } });
+    const walk = await settle(f, (await f.validations.create("owner", "source", { mode: "WALK_FORWARD", trainMonths: 1, testMonths: 1 })).id);
+    const holdout = await settle(f, (await f.validations.create("owner", "source", { mode: "HOLDOUT", splitDate: "2026-10-01" })).id);
+    const oos = walk.trials.filter(t => t.role === "OOS");
+    expect(oos).toHaveLength(2);
+    const scores = (id: string, value: number, complete?: boolean) => {
+      f.database.db.update(intradayValidationTrials).set({ metricsJson: JSON.stringify({
+        totalReturnPct: value, ...(complete !== undefined ? { intradayDaily: { isComplete: complete } } : {}),
+      }) }).where(eq(intradayValidationTrials.id, id)).run();
+    };
+    scores(oos[0]!.id, -2);
+    scores(oos[1]!.id, 6, true);
+    scores(holdout.trials.find(t => t.role === "OOS")!.id, 6, true);
+    const app = Fastify();
+    registerIntradayValidationRoutes(app, f.database, f.runs, async req => { req.authUser = { id: String(req.headers.authorization), username: "test" }; });
+    cleanups.unshift(async () => { await app.close(); });
+    const summary = (owner = "owner") => app.inject({ url: "/intraday/experiments/summary?jobIds=source", headers: { authorization: owner } });
+    expect((await summary()).json().summaries[0].validation).toEqual({
+      experimentCount: 2, activeCount: 0, completedCount: 2, modes: { HOLDOUT: 1, WALK_FORWARD: 1 },
+      returns: { count: 2, mean: 4, sampleStdDev: Math.sqrt(8) },
+    });
+    scores(oos[0]!.id, -2, false);
+    expect((await summary()).json().summaries[0].validation.returns).toEqual({ count: 1, mean: 6, sampleStdDev: null });
+    expect((await summary("other")).statusCode).toBe(404);
+  });
   it("완료 성과를 한 번만 읽어 캐시하고 반복 조회는 분봉 본문을 읽지 않는다", async () => {
     const f = fixture();
     const spy = vi.spyOn(f.runs, "getRun");

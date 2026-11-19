@@ -225,6 +225,13 @@
       "when": 1795099882724,
       "tag": "0031_trading_toggle_jobs",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1795102883040,
+      "tag": "0032_intraday_history_index",
+      "breakpoints": true
     }
   ]
 }
