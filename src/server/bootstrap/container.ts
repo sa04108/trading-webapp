@@ -342,26 +342,6 @@ export function createContainer(
     usage: externalApiUsage,
   });
   const tradingMarketData = createTossTradingBroker(tossConfig, logger, { client: tossClient });
-  const tradingService = new TradingPresets(database, (accountSlot) => new TradingService({
-    accountSlot,
-    database,
-    broker: createPaperTradingBroker({
-      accountSlot, database,
-      marketData: { quotes: (symbols) => tradingMarketData.quotes(symbols), dailyCandles: (symbol, from, to) => tradingMarketData.dailyCandles(symbol, from, to) },
-      now: () => clock.now(),
-      getName: (symbol) => symbolService.getLocalNames([symbol]).get(symbol)?.name,
-    }),
-    artifacts: tradingArtifacts,
-    prepareData: (need, onProgress, shouldStop) => tradingDataPreparation.prepare(need, onProgress, shouldStop),
-    now: () => clock.now(),
-    engine: new DailyTradingEngine({
-      databasePath: config.databasePath,
-      dataPath: database.dataPath,
-      artifacts: tradingArtifacts,
-      now: () => clock.now(),
-    }),
-    notify: (message, presetId) => notificationService.create({ type: "trading", severity: "error", title: "자동매매 주문 중지", body: message, link: presetId ? `/trading?presetId=${encodeURIComponent(presetId)}` : "/trading" }),
-  }), (err) => logger.error({ err }, "모의투자 실행 오류"));
   // 로컬 폴백(symbolService)을 함께 넘긴다 — 증권사가 모르거나 조회에 실패한 코드도
   // 종목 마스터가 채워 둔 이름이 있으면 그걸로 보여준다 (자격 증명 미설정 환경도 포함).
   const symbolLibraryService = new SymbolLibraryService(database.sqlite, () => clock.now());
@@ -383,6 +363,28 @@ export function createContainer(
         body: "연결된 백테스트가 종료되었거나 없어 내부 수집을 재개할 수 없습니다. 필요한 기간을 다시 수집해주세요.", link: "/jobs" });
     },
   });
+
+  const tradingService = new TradingPresets(database, (accountSlot) => new TradingService({
+    accountSlot,
+    database,
+    broker: createPaperTradingBroker({
+      accountSlot, database,
+      marketData: { quotes: (symbols) => tradingMarketData.quotes(symbols), dailyCandles: (symbol, from, to) => tradingMarketData.dailyCandles(symbol, from, to) },
+      now: () => clock.now(),
+      getName: (symbol) => symbolService.getLocalNames([symbol]).get(symbol)?.name,
+    }),
+    intraday: intradayService,
+    artifacts: tradingArtifacts,
+    prepareData: (need, onProgress, shouldStop) => tradingDataPreparation.prepare(need, onProgress, shouldStop),
+    now: () => clock.now(),
+    engine: new DailyTradingEngine({
+      databasePath: config.databasePath,
+      dataPath: database.dataPath,
+      artifacts: tradingArtifacts,
+      now: () => clock.now(),
+    }),
+    notify: (message, presetId) => notificationService.create({ type: "trading", severity: "error", title: "자동매매 주문 중지", body: message, link: presetId ? `/trading?presetId=${encodeURIComponent(presetId)}` : "/trading" }),
+  }), (err) => logger.error({ err }, "모의투자 실행 오류"), (owner, id) => intradayService.getRun(owner, id), run => intradayService.verifyPaperReplay(run));
 
   const fredSource = createFredBenchmarkSource(
     config.fredApiKey

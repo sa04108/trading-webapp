@@ -22,7 +22,7 @@ function fixture() {
 }
 const auth = { authorization: "test" };
 const mutations = [
-  ["POST", "/trading/presets"],
+  ["POST", "/trading/presets"], ["POST", "/trading/intraday-presets"],
   ["PATCH", "/trading/title"],
   ["POST", "/trading/strategy"], ["PUT", "/trading/strategy"], ["DELETE", "/trading/strategy"],
   ["POST", "/trading/version"], ["POST", "/trading/activate"], ["POST", "/trading/deactivate"],

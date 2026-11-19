@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -118,4 +118,39 @@ describe("분봉 Parquet 저장", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+});
+
+// 실시간 병합은 수집기가 먼저 확정한 값을 덮지 않고 다른 월 파일을 다시 쓰지 않는다.
+it("확정 분봉만 누락 병합하고 다른 월과 기존 정정을 보존한다", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "intraday-live-"));
+  try {
+    const store = new ParquetIntradayStore(root);
+    const older = Date.UTC(2026, 8, 1), recent = Date.UTC(2026, 9, 1);
+    await store.merge("005930", [bar(older), bar(recent)], now);
+    const before = JSON.parse(await readFile(path.join(root, "005930", "manifest.json"), "utf8"));
+    const stale = await store.read("005930", recent, recent + minute);
+    expect(stale.bars).toEqual([bar(recent)]);
+    await new ParquetIntradayStore(root).merge("005930", [bar(recent + minute, 105)], now);
+    await store.mergeMissing("005930", [bar(recent, 109), bar(recent + minute, 108), bar(recent + 2 * minute, 107), bar(now, 106)], now);
+    expect((await store.read("005930", older, now)).bars).toEqual([bar(older), bar(recent), bar(recent + minute, 105), bar(recent + 2 * minute, 107)]);
+    const after = JSON.parse(await readFile(path.join(root, "005930", "manifest.json"), "utf8"));
+    expect(after.files[0]).toEqual(before.files[0]);
+    expect(after.files[1].file).not.toBe(before.files[1].file);
+    const files = await readdir(path.join(root, "005930"));
+    expect(files.filter(name => name.endsWith(".parquet")).sort()).toEqual(after.files.map((entry: { file: string }) => entry.file).sort());
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// 보관 경계가 월 중간으로 이동한 경우 해당 월만 잘라내고 다른 월의 봉을 보존한다.
+it("실시간 병합에서도 보관 만료와 종목 수 한도를 원자적으로 적용한다", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "intraday-live-retention-"));
+  try {
+    const store = new ParquetIntradayStore(root);
+    await store.merge("005930", [bar(cutoff), bar(cutoff + minute), bar(now - minute)], now);
+    await store.mergeMissing("005930", [bar(now, 105)], now + minute);
+    expect((await store.read("005930", cutoff, now)).bars).toEqual([bar(cutoff + minute), bar(now - minute), bar(now, 105)]);
+    for (let i = 0; i < 99; i++) await mkdir(path.join(root, String(i).padStart(6, "0")));
+    await expect(store.mergeMissing("999999", [bar(now)], now + minute)).rejects.toThrow(/100종목/);
+    await expect(store.merge("999999", [bar(now)], now + minute)).rejects.toThrow(/100종목/);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

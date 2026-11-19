@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { tradingPresetCreateSchema, tradingPresetTitleSchema, tradingRevisionSchema, tradingWriteSchema } from "../../../../shared/schemas/trading.js";
+import { intradayTradingPresetSchema, tradingPresetCreateSchema, tradingPresetTitleSchema, tradingRevisionSchema, tradingWriteSchema } from "../../../../shared/schemas/trading.js";
+import { IntradayError } from "../../intraday/application/intraday-service.js";
 import type { TradingPresets } from "../application/trading-presets.js";
 import { TradingError } from "../application/trading-service.js";
 
@@ -18,6 +19,7 @@ async function respond(reply: FastifyReply, operation: () => unknown): Promise<u
     return await operation();
   } catch (error) {
     if (error instanceof TradingError) return reply.code(error.statusCode).send({ error: error.message, code: error.code });
+    if (error instanceof IntradayError) return reply.code(error.statusCode).send({ error: error.message });
     if (error instanceof z.ZodError) return reply.code(400).send({ error: "요청 값을 확인하세요.", code: "INVALID_REQUEST" });
     throw error;
   }
@@ -31,6 +33,8 @@ export function registerTradingRoutes(app: FastifyInstance, presets: TradingPres
     return presetId === undefined ? presets.defaultAccount : presets.forPreset(presetId);
   };
   app.get("/trading/presets", auth, async (_request, reply) => respond(reply, () => presets.list()));
+  app.post("/trading/intraday-presets", auth, async (request, reply) => respond(reply, async () =>
+    reply.code(201).send(await presets.createIntraday(intradayTradingPresetSchema.parse(request.body), request.authUser!.id))));
   app.post("/trading/presets", auth, async (request, reply) => respond(reply, async () => {
     const {expectedRevision, initialCashKrw, requestId, ...setup} = tradingPresetCreateSchema.parse(request.body);
     const result = await presets.create(setup, expectedRevision, request.authUser!.id, initialCashKrw, requestId);

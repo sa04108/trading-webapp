@@ -145,6 +145,31 @@ export class ParquetIntradayStore {
       throw new Error("분봉 manifest와 데이터가 일치하지 않습니다");
     return bars;
   }
+  private async writeMonth(symbol: string, month: string, rows: IntradayBar[]): Promise<Entry> {
+    const dir = this.dir(symbol);
+    const buffer = parquetWriteBuffer({
+      columnData: fields.map((name) => ({
+        name,
+        type: "INT64" as const,
+        data: rows.map((row) => BigInt(row[name])),
+      })),
+    });
+    const bytes = new Uint8Array(buffer);
+    const sha256 = hash(bytes);
+    const file = `${sha256}.parquet`;
+    const target = path.join(dir, file);
+    let exists = false;
+    try {
+      const old = await fs.readFile(target);
+      if (hash(old) !== sha256)
+        throw new Error(`분봉 파일 checksum이 일치하지 않습니다: ${symbol}`);
+      exists = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (!exists) await this.atomicWrite(target, bytes);
+    return { month, file, sha256 };
+  }
   private async publish(
     symbol: string,
     bars: IntradayBar[],
@@ -161,28 +186,7 @@ export class ParquetIntradayStore {
     }
     const files: Entry[] = [];
     for (const [month, rows] of months) {
-      const buffer = parquetWriteBuffer({
-        columnData: fields.map((name) => ({
-          name,
-          type: "INT64" as const,
-          data: rows.map((row) => BigInt(row[name])),
-        })),
-      });
-      const bytes = new Uint8Array(buffer);
-      const sha256 = hash(bytes);
-      const file = `${sha256}.parquet`;
-      const target = path.join(dir, file);
-      let exists = false;
-      try {
-        const old = await fs.readFile(target);
-        if (hash(old) !== sha256)
-          throw new Error(`분봉 파일 checksum이 일치하지 않습니다: ${symbol}`);
-        exists = true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      if (!exists) await this.atomicWrite(target, bytes);
-      files.push({ month, file, sha256 });
+      files.push(await this.writeMonth(symbol, month, rows));
     }
     const m: Manifest = {
       version: 1,
@@ -260,6 +264,13 @@ export class ParquetIntradayStore {
       };
     });
   }
+  private async checkSymbolCapacity(symbol: string): Promise<void> {
+    let names: string[];
+    try { names = await fs.readdir(this.root); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return; }
+    if (names.filter(name => /^\d{6}$/.test(name)).length >= 100)
+      throw new Error(`초기 분봉 보관은 최대 100종목입니다: ${symbol}`);
+  }
   async merge(
     symbol: string,
     incoming: IntradayBar[],
@@ -271,6 +282,7 @@ export class ParquetIntradayStore {
         throw new Error("보관 기준 시각이 올바르지 않습니다");
       const cutoff = nowMs - INTRADAY_RETENTION_DAYS * 86_400_000;
       const m = await this.manifest(symbol);
+      if (!m) await this.checkSymbolCapacity(symbol);
       const existing = m ? await this.load(symbol, m) : [];
       const bars = new Map(
         existing
@@ -288,6 +300,64 @@ export class ParquetIntradayStore {
           nowMs,
         ),
       );
+    });
+  }
+  /** 기존 확정 봉을 우선하며 변경된 월 파일과 manifest만 교체한다. */
+  async mergeMissing(symbol: string, incoming: IntradayBar[], nowMs: number): Promise<IntradaySymbolData> {
+    return this.gate(async () => {
+      intradaySymbolSchema.parse(symbol);
+      if (!Number.isSafeInteger(nowMs)) throw new Error("보관 기준 시각이 올바르지 않습니다");
+      const cutoff = nowMs - INTRADAY_RETENTION_DAYS * 86_400_000;
+      const candidates = incoming.map(bar => intradayBarSchema.parse(bar))
+        .filter(bar => bar.endMs >= cutoff && bar.endMs <= nowMs - 60_000);
+      const old = await this.manifest(symbol);
+      if (!old && candidates.length) await this.checkSymbolCapacity(symbol);
+      const files = new Map((old?.files ?? []).map(entry => [entry.month, entry]));
+      const monthRows = new Map<string, IntradayBar[]>();
+      const loadMonth = async (month: string): Promise<IntradayBar[]> => {
+        const cached = monthRows.get(month);
+        if (cached) return cached;
+        const entry = files.get(month);
+        const [year, number] = month.split("-").map(Number);
+        const rows = entry && old ? await this.load(symbol, old, { fromMs: Date.UTC(year!, number! - 1, 1) - 9 * 3_600_000, toMs: Date.UTC(year!, number!, 1) - 9 * 3_600_000 - 1 }) : [];
+        const monthOnly = rows.filter(bar => monthOf(bar.endMs) === month);
+        monthRows.set(month, monthOnly);
+        return monthOnly;
+      };
+      let count = old?.bars ?? 0;
+      const changed = new Set<string>();
+      if (old?.firstEndMs !== null && old?.firstEndMs !== undefined && old.firstEndMs < cutoff) {
+        for (const entry of old.files) {
+          if (entry.month > monthOf(cutoff)) break;
+          const rows = await loadMonth(entry.month);
+          const kept = rows.filter(bar => bar.endMs >= cutoff);
+          if (kept.length !== rows.length) { count -= rows.length - kept.length; monthRows.set(entry.month, kept); changed.add(entry.month); }
+        }
+      }
+      for (const bar of candidates) {
+        const month = monthOf(bar.endMs);
+        const rows = await loadMonth(month);
+        if (!rows.some(row => row.endMs === bar.endMs)) { rows.push(bar); count++; changed.add(month); }
+      }
+      if (!changed.size && old) return this.summary(old);
+      if (!changed.size) return { symbol, bars: 0, firstEndMs: null, lastEndMs: null, revision: revision([]), updatedAtMs: nowMs };
+      await fs.mkdir(this.dir(symbol), { recursive: true });
+      for (const month of changed) {
+        const rows = monthRows.get(month)!;
+        rows.sort((a, b) => a.endMs - b.endMs);
+        if (rows.length) files.set(month, await this.writeMonth(symbol, month, rows));
+        else files.delete(month);
+      }
+      const entries = [...files.values()].sort((a, b) => a.month.localeCompare(b.month));
+      const firstRows = entries.length ? await loadMonth(entries[0]!.month) : [];
+      const lastRows = entries.length ? await loadMonth(entries.at(-1)!.month) : [];
+      const m: Manifest = { version: 1, symbol, files: entries, revision: revision(entries), bars: count,
+        firstEndMs: firstRows[0]?.endMs ?? null, lastEndMs: lastRows.at(-1)?.endMs ?? null, updatedAtMs: nowMs };
+      await this.atomicWrite(path.join(this.dir(symbol), "manifest.json"), JSON.stringify(m));
+      const keep = new Set(entries.map(entry => entry.file));
+      for (const file of await fs.readdir(this.dir(symbol)))
+        if (/^[a-f0-9]{64}\.parquet$/.test(file) && !keep.has(file)) await fs.rm(path.join(this.dir(symbol), file), { force: true });
+      return this.summary(m);
     });
   }
   async prune(nowMs: number): Promise<void> {

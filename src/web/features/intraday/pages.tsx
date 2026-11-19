@@ -18,7 +18,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { LoaderCircle } from "lucide-react";
 import { toast } from "sonner";
 import { BacktestHeader, NewBacktestButton } from "../backtests/backtest-header";
@@ -52,7 +52,7 @@ import {
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { TableCell, TableRow } from "@/components/ui/table";
@@ -866,6 +866,20 @@ function IntradayResult({ id }: { id: string }) {
   const client = useQueryClient();
   const navigate = useNavigate();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const paperRequestId = useRef<string | null>(null);
+  const paper = useMutation({
+    mutationFn: () => {
+      const key = `intraday-paper-request:${id}`;
+      paperRequestId.current ??= sessionStorage.getItem(key) ?? crypto.randomUUID();
+      sessionStorage.setItem(key, paperRequestId.current);
+      return api<{ id: string }>("/trading/intraday-presets", { method: "POST", body: JSON.stringify({ sourceRunId: id, requestId: paperRequestId.current }) });
+    },
+    onSuccess: (value) => {
+      sessionStorage.removeItem(`intraday-paper-request:${id}`);
+      void client.invalidateQueries({ queryKey: ["trading", "presets"] });
+      void navigate(`/trading?presetId=${encodeURIComponent(value.id)}`);
+    },
+  });
   const run = useQuery({
     queryKey: ["intraday-run", id],
     queryFn: () => api<IntradayRun>(`/intraday/runs/${encodeURIComponent(id)}`),
@@ -925,6 +939,13 @@ function IntradayResult({ id }: { id: string }) {
       </BacktestProgressCard> : null}
     </> : null}
     {completed && result && m && trades ? <>
+      <Card><CardHeader><CardTitle className="text-base">분봉 모의투자</CardTitle><CardDescription>이 백테스트의 고정 설정과 초기 자금을 복사해 독립 모의투자를 OFF 상태로 만듭니다.</CardDescription></CardHeader><CardContent className="space-y-3 text-sm">
+        <p>{result.request.symbol} · {result.request.period.from} ~ {result.request.period.to} · {result.request.timeframe} · 초기 자금 {formatKrw(result.request.initialCash)}</p>
+        <p>수수료 {result.request.execution.commissionBps}bps · 세금 {result.request.execution.taxBps}bps · 슬리피지 {result.request.execution.slippageBps}bps · 지연 {result.request.execution.latencyMs}ms · 주문 만료 {result.request.execution.orderExpiryMinutes}분 · 최대 참여율 {result.request.execution.maxParticipationPct}% · 당일 보유</p>
+        <p>모의 체결에는 확정된 1분 OHLCV가 사용됩니다.</p>
+        {paper.error ? <p role="alert" className="text-destructive">{paper.error.message}</p> : null}
+        <Button disabled={paper.isPending || paper.isSuccess} onClick={() => paper.mutate()}>{paper.isPending ? "생성 중…" : "이 결과로 모의투자 만들기"}</Button>
+      </CardContent></Card>
       <section aria-label="성과 요약" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {[
           { label: "누적 수익률", value: formatSignedPct(m.returnPct), className: pnlClass(m.returnPct) },

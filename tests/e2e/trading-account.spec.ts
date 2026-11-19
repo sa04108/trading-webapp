@@ -250,3 +250,36 @@ test("모의투자를 만들고 계좌별 자금과 설정을 분리한다", asy
     await expect(selector.locator('option[value=""]')).toHaveCount(0);
   }
 });
+
+// 분봉 계좌에서는 원본 설정만 표시하고 일봉 전용 변경 동작을 제공하지 않는다.
+test("분봉 모의투자는 고정 설정을 표시하고 확인 후 켠다", async ({ page }) => {
+  await login(page);
+  let current: TradingSnapshot = { ...snapshot, deployment: {
+    id: "minute-preset", kind: "intraday", name: "분봉 전략", strategyId: "intraday-ema", version: "1", status: "INACTIVE",
+    timeframe: "5m", sourceRunId: "run-1", executionVersion: "execution-1", createdAtMs: 1, updatedAtMs: 1,
+    activatedAtMs: null, lastDecisionAtMs: null, lastError: null, activity: "대기",
+    request: { mode: "intraday", strategyId: "intraday-ema", symbol: "005930", timeframe: "5m", period: { from: "2026-01-02", to: "2026-01-02" }, initialCash: 10_000_000,
+      parameters: { fast: 12, slow: 26, allocationPct: 95, stopLossPct: 3, takeProfitPct: 6 },
+      execution: { holdingPolicy: "DAY_ONLY", commissionBps: 1.5, taxBps: 20, slippageBps: 5, latencyMs: 1000, orderExpiryMinutes: 3, maxParticipationPct: 1 } },
+  } };
+  await page.route("**/api/v1/trading?presetId=minute-preset", (route) => route.fulfill({ json: current }));
+  await page.route("**/api/v1/trading/strategies", (route) => route.fulfill({ json: { strategies: [] } }));
+  await page.route("**/api/v1/trading/activate?presetId=minute-preset", (route) => {
+    current = { ...current, revision: 18, deployment: { ...current.deployment!, status: "ACTIVE" } };
+    return route.fulfill({ json: current });
+  });
+  await page.goto("/trading?presetId=minute-preset");
+  await expect(page.getByText(/확정된 1분 OHLCV로 모의 체결/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "데이터 확인·복구" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "최신 버전으로 변경" })).toHaveCount(0);
+  await page.getByRole("button", { name: "매매 설정" }).click();
+  const dialog = page.getByRole("dialog", { name: "매매 설정" });
+  await expect(dialog).toContainText("005930");
+  await expect(dialog).toContainText("2026-01-02");
+  await expect(dialog).toContainText("수수료 1.5bps");
+  await expect(dialog.getByRole("button", { name: "설정 저장" })).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: "자동 매매 OFF" }).click();
+  await page.getByRole("button", { name: "켜기", exact: true }).click();
+  await expect(page.getByRole("button", { name: "자동 매매 ON" })).toBeVisible();
+});

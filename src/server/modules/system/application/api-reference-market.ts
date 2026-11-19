@@ -3,7 +3,7 @@ import type { ApiReferenceMetadata } from './api-reference.js';
 import type { ApiEndpoint, ApiParameter } from '../../../../shared/schemas/api-reference.js';
 import { intradayCollectSchema, intradayRequestSchema } from '../../../../shared/schemas/intraday.js';
 import { periodValidationConfigSchema } from '../../../../shared/schemas/period-validation.js';
-import { tradingPresetCreateSchema, tradingPresetTitleSchema, tradingRevisionSchema, tradingWriteSchema } from '../../../../shared/schemas/trading.js';
+import { intradayTradingPresetSchema, tradingPresetCreateSchema, tradingPresetTitleSchema, tradingRevisionSchema, tradingWriteSchema } from '../../../../shared/schemas/trading.js';
 import { symbolMasterUniverseDtoSchema, symbolMasterCoverageDtoSchema, symbolMasterSyncDtoSchema, symbolMasterEventDtoSchema } from '../../../../shared/schemas/symbol-master.js';
 import { benchmarkIdSchema } from '../../../../shared/schemas/benchmark.js';
 
@@ -58,6 +58,7 @@ const revision = body('현재 expectedRevision을 지정합니다.', tradingRevi
 const activation = body('expectedRevision과 acknowledged=true를 지정합니다.', tradingRevisionSchema.extend({ acknowledged: z.literal(true) }));
 const presetScope = [query('presetId', 'string', '모의투자 목록에서 받은 ID. 생략하면 기존 기본 계좌를 사용합니다.')];
 add('GET', '/trading/presets', '모의투자 목록', 'presets는 활성·꺼짐·문제 순서, 같은 상태에서는 생성 시각순입니다. archived는 전략을 제거한 계좌의 이력 조회용 목록입니다.');
+add('POST', '/trading/intraday-presets', '분봉 모의투자 생성', '완료된 분봉 백테스트의 종목·전략·체결 조건과 초기 자금으로 독립된 비활성 모의계좌를 만듭니다.', { input: body('원본 분봉 백테스트 ID와 재시도 시 유지할 UUID, 선택적 이름.', intradayTradingPresetSchema), status: 201, errors: [400, 404, 409, 422] });
 add('POST', '/trading/presets', '모의투자 생성', '독립된 모의계좌와 비활성 전략을 생성하고 id와 snapshot을 반환합니다. title을 생략하면 전략 이름을 표시합니다.', { input: body('전략 설정, 선택적 초기 모의자금, expectedRevision=0, 재시도 시 유지할 UUID requestId.', tradingPresetCreateSchema), status: 201, errors: [400, 409, 422] });
 add('GET', '/trading', '운용 상태', 'revision, deployment, broker, account, performance, positions, orders, events 및 blockers를 반환합니다. dataPreparation은 현재 설정의 데이터 준비 상태(RUNNING/READY/FAILED)와 message이며 작업이 없으면 null입니다.', { params: presetScope });
 add('GET', '/trading/quotes/:symbol', '운용 종목 현재 시세', '종목의 symbol, price, timestampMs를 반환합니다. 유효한 시세를 조회할 수 없으면 QUOTE_UNAVAILABLE 오류를 반환합니다.', { params: [{ name: 'symbol', in: 'path', type: 'string', required: true, description: '영문 또는 숫자 6자리 종목 코드.' }], errors: [400, 503] });

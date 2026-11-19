@@ -348,7 +348,10 @@ describe("모의투자 실행 경계", () => {
     let cash=50_000-10_000-1.5;
     expect(f.service.snapshot()).toMatchObject({paperCapital:{initialCashKrw:50_000,canEdit:false},account:{cashBuyingPower:cash}});
     await expect(f.service.update({...setup,dailyLossLimitPercent:4},f.service.snapshot().revision,"user",70_000)).rejects.toThrow(/첫 체결/);
-    expect(f.service.snapshot().deployment?.dailyLossLimitPercent).toBe(5);
+    const deployment = f.service.snapshot().deployment;
+    expect(deployment?.timeframe).toBe("1d");
+    if (!deployment || deployment.timeframe !== "1d") throw new Error("일봉 배포가 아닙니다.");
+    expect(deployment.dailyLossLimitPercent).toBe(5);
     await f.service.update({...setup,dailyLossLimitPercent:4},f.service.snapshot().revision,"user");
     vi.mocked(f.engine.evaluate).mockImplementation(async ({warmupOnly})=>({checkpoint:"sold",barTsMs:warmupOnly?3:4,orders:warmupOnly?[]:[{symbol:"005930",side:"SELL",quantity:10}]}));
     await f.service.activate(f.service.snapshot().revision,"user");
@@ -533,7 +536,10 @@ describe("실매매 전략 생명주기", () => {
     await expect(f.service.update(setup, revision, "user")).rejects.toThrow();
     expect(() => f.service.remove(revision, "user")).toThrow();
     await expect(f.service.version(newHash, {}, revision, "user")).rejects.toThrow();
-    expect(f.service.snapshot().deployment?.artifactHash).toBe(oldHash);
+    const deployment = f.service.snapshot().deployment;
+    expect(deployment?.timeframe).toBe("1d");
+    if (!deployment || deployment.timeframe !== "1d") throw new Error("일봉 배포가 아닙니다.");
+    expect(deployment.artifactHash).toBe(oldHash);
     await f.service.tick();
     expect(f.engine.evaluate).toHaveBeenLastCalledWith(expect.objectContaining({ deployment: expect.objectContaining({ artifactHash: oldHash }), warmupOnly: false }));
   });

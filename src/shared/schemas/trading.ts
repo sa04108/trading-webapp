@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { universeRuleSchema } from "./universe-rule.js";
+import type { IntradayRequest, IntradayTimeframe } from "./intraday.js";
 
 export const PAPER_TRADING_ACCOUNT_ID = "PAPER";
 export const paperTradingAccountId = (slot: number): string => slot === 1 ? PAPER_TRADING_ACCOUNT_ID : `PAPER-${slot}`;
@@ -67,6 +68,20 @@ export interface TradingDeployment extends TradingSetup {
   latestVersion: string | null;
 }
 
+export interface IntradayTradingSetup {
+  kind: "intraday";
+  title?: string;
+  sourceRunId: string;
+  executionVersion: string;
+  request: IntradayRequest;
+}
+
+export interface IntradayTradingDeployment extends IntradayTradingSetup,
+  Pick<TradingDeployment, "id" | "name" | "version" | "status" | "createdAtMs" | "updatedAtMs" | "activatedAtMs" | "lastDecisionAtMs" | "lastError" | "activity"> {
+  timeframe: IntradayTimeframe;
+  strategyId: IntradayRequest["strategyId"];
+}
+
 export interface TradingPosition {
   symbol: string;
   name: string;
@@ -112,7 +127,7 @@ export interface TradingSnapshot {
     message: string;
   } | null;
   paperCapital: { initialCashKrw: number; canEdit: boolean } | null;
-  deployment: TradingDeployment | null;
+  deployment: TradingDeployment | IntradayTradingDeployment | null;
   broker: {
     provider: "TOSS" | "PAPER";
     configured: boolean;
@@ -156,6 +171,11 @@ export const tradingWriteSchema = tradingSetupSchema.extend({
 });
 
 export const tradingPresetCreateSchema = tradingWriteSchema.extend({ expectedRevision: z.literal(0), requestId: z.string().uuid() });
+export const intradayTradingPresetSchema = z.object({
+  sourceRunId: z.string().min(1).max(100),
+  requestId: z.string().uuid(),
+  title: z.string().trim().max(100).optional(),
+}).strict();
 export const tradingPresetTitleSchema = tradingRevisionSchema.extend({
   deploymentId: z.string().uuid(),
   expectedTitle: z.string().max(100),
