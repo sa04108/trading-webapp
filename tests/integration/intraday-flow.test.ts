@@ -11,7 +11,6 @@ import {
   type IntradaySource,
   type IntradayTerminalEvent,
 } from "../../src/server/modules/intraday/application/intraday-service.js";
-import { runIntradayBacktest } from "../../src/runtime/modules/intraday/domain/engine.js";
 import { executeIntraday } from "../../src/server/modules/intraday/application/forked-intraday-engine.js";
 import { ParquetIntradayStore } from "../../src/server/modules/intraday/infrastructure/parquet-intraday-store.js";
 import { TossIntradaySource } from "../../src/server/modules/intraday/infrastructure/toss-intraday-source.js";
@@ -837,16 +836,4 @@ it("과거 수집 대기와 실시간 수집을 분리하고 상장일을 검증
   expect(fetchBars).toHaveBeenCalledTimes(2);
   expect(validateSymbol).toHaveBeenCalledTimes(2);
   release();
-});
-
-it("이전 버전의 분봉 결과는 같은 원본 기간의 체결과 잔고를 재현해야 가져올 수 있다", async () => {
-  const { service, store } = await fixture();
-  await store.merge(request.symbol, bars, now);
-  const result = runIntradayBacktest({ request, bars, dataRevision: "원본", tradingDates: [date] });
-  result.executionVersion = "previous-version";
-  const run: IntradayRun = { id: randomUUID(), createdAtMs: now, updatedAtMs: now, request, result, error: null, status: "COMPLETED" };
-  expect(result.fills.length).toBeGreaterThan(0);
-  await expect(service.verifyPaperReplay(run)).resolves.toBe(true);
-  result.fills[0]!.price++;
-  await expect(service.verifyPaperReplay(run)).resolves.toBe(false);
 });

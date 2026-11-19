@@ -44,7 +44,7 @@ function fixture() {
     return run;
   });
   cleanup.push(async () => { await presets.close(); for (const service of services) await service.close(); database.close(); });
-  return { database, presets, createService, intraday, result, setNow: (time: number) => { now = time; } };
+  return { database, presets, createService, intraday, run, result, setNow: (time: number) => { now = time; } };
 }
 
 // 부분 체결 중 재시작해도 배치 계산의 주문·비용·잔고와 일치해야 한다.
@@ -140,4 +140,27 @@ it("장중 ON 전의 매수 신호는 지표 준비에만 사용한다", async (
   await service.tick();
   expect(service.snapshot().orders).toEqual([]);
   expect(service.snapshot().account?.cashBuyingPower).toBe(request.initialCash);
+});
+
+it("보관 기간이 지난 이전 실행의 설정을 가져와 오늘 확정된 분봉으로 시작한다", async () => {
+  const f = fixture();
+  const period = { from: "2024-01-02", to: "2024-12-20" };
+  f.result.request = { ...request, period };
+  f.result.executionVersion = "previous-execution";
+  const input = { sourceRunId: f.run.id, requestId: "a26fe604-8498-4b73-a93f-f9eb07c20005" };
+  const version = f.result.strategyVersion;
+  f.result.strategyVersion = "1.0.0";
+  await expect(f.presets.createIntraday(input, "owner")).rejects.toMatchObject({ code: "UNSUPPORTED_EXECUTION" });
+  f.result.strategyVersion = version;
+  const created = await f.presets.createIntraday(input, "owner");
+  expect(created.snapshot.deployment).toMatchObject({
+    status: "INACTIVE", sourceRunId: input.sourceRunId, request: { ...request, period },
+    executionVersion: readRuntimeVersions().executionVersion,
+  });
+  const service = f.presets.forPreset(created.id);
+  await service.activate(created.snapshot.revision, "owner");
+  f.setNow(at("10:03"));
+  await service.tick();
+  expect(f.intraday.paperBars.mock.calls).toEqual([["005930", at("09:01"), at("10:02")]]);
+  expect(service.snapshot().orders).toMatchObject([{ side: "BUY", quantity: 94, filledQuantity: 10 }]);
 });

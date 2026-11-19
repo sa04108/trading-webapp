@@ -387,7 +387,7 @@ export function createContainer(
       now: () => clock.now(),
     }),
     notify: (message, presetId) => notificationService.create({ type: "trading", severity: "error", title: "자동매매 주문 중지", body: message, link: presetId ? `/trading?presetId=${encodeURIComponent(presetId)}` : "/trading" }),
-  }), (err) => logger.error({ err }, "모의투자 실행 오류"), (owner, id) => intradayService.getRun(owner, id), run => intradayService.verifyPaperReplay(run));
+  }), (err) => logger.error({ err }, "모의투자 실행 오류"), (owner, id) => intradayService.getRun(owner, id));
 
   const fredSource = createFredBenchmarkSource(
     config.fredApiKey

@@ -1,4 +1,4 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { LoaderCircle, LockKeyhole } from "lucide-react";
@@ -16,6 +16,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { api, ApiError } from "@/lib/api-client";
 import { PAPER_TRADING_INITIAL_CASH_KRW, paperInitialCashSchema, tradingSetupSchema, type TradingArtifact, type TradingSetup, type TradingSnapshot } from "@shared/schemas/trading";
 import { getIntradayStrategy, INTRADAY_TRADE_CONTROL_FIELDS } from "@shared/schemas/intraday-strategies";
+import type { IntradayRequest, IntradayRun } from "@shared/schemas/intraday";
 import type { RebalanceInterval } from "@shared/schemas/universe-rule";
 import { DEFAULT_UNIVERSE_MARKETS } from "@shared/universe-markets";
 import { UniverseMarketSelect } from "@/components/universe-market-select";
@@ -60,24 +61,38 @@ function ParameterFields({ artifact, value, onChange, disabled = false }: { arti
   return <div className="grid gap-3 sm:grid-cols-2">{Object.entries(properties(artifact)).map(([key, spec]) => <div className="space-y-1" key={key}><Label htmlFor={`param-${key}`}>{key}</Label>{spec.type === "boolean" ? <div><Checkbox disabled={disabled} id={`param-${key}`} checked={value[key] === true} onCheckedChange={(checked) => onChange({ ...value, [key]: checked === true })} /></div> : <Input disabled={disabled} id={`param-${key}`} type="number" step={spec.type === "integer" ? 1 : "any"} value={typeof value[key] === "number" && Number.isFinite(value[key]) ? String(value[key]) : ""} onChange={(e) => onChange({ ...value, [key]: e.target.value === "" ? undefined : Number(e.target.value) })} />}{spec.description ? <p className="text-xs text-muted-foreground">{spec.description}</p> : null}</div>)}</div>;
 }
 
+function MinuteSettings({ request, version }: { request: IntradayRequest; version: string }) {
+  return <>
+    <p>{getIntradayStrategy(request.strategyId).name} · {version} · {request.symbol} · {request.timeframe}</p>
+    <p>원본 기간 {request.period.from} ~ {request.period.to} · 초기 자금 {money(request.initialCash)}</p>
+    <p>모의 체결에는 확정된 1분 OHLCV가 사용됩니다.</p>
+    <div><p className="font-medium">고정 전략 파라미터</p><dl className="space-y-1">{Object.entries(request.parameters).map(([key, value]) => <div key={key} className="flex gap-2"><dt>{[...INTRADAY_TRADE_CONTROL_FIELDS, ...getIntradayStrategy(request.strategyId).fields].find((field) => field.key === key)?.label ?? ({ allocationPct: "매수 비중 (%)", stopLossPct: "손절 기준 (%)", takeProfitPct: "익절 기준 (%)" } as Record<string, string>)[key] ?? key}</dt><dd>{String(value)}</dd></div>)}</dl></div>
+    <div><p className="font-medium">고정 체결 조건</p><p>당일 청산 시도 · 수수료 {request.execution.commissionBps}bps · 세금 {request.execution.taxBps}bps · 슬리피지 {request.execution.slippageBps}bps · 지연 {request.execution.latencyMs}ms · 주문 만료 {request.execution.orderExpiryMinutes}분 · 최대 참여율 {request.execution.maxParticipationPct}%</p></div>
+  </>;
+}
+
 export function TradingPage() {
   const [search, setSearch] = useSearchParams();
   const sourceId = search.get("sourceJobId");
   const presetId = search.get("presetId");
-  return <TradingSession key={JSON.stringify([sourceId, presetId])} sourceId={sourceId} presetId={presetId} selectPreset={(id) => setSearch(id === null ? {} : { presetId: id })} />;
+  const sourceRunId = search.get("sourceRunId");
+  return <TradingSession key={JSON.stringify([sourceId, sourceRunId, presetId])} sourceId={sourceId} sourceRunId={sourceRunId} presetId={presetId} selectPreset={(id) => setSearch(id === null ? {} : { presetId: id })} />;
 }
 
-function TradingSession({ sourceId, presetId, selectPreset }: { sourceId: string | null; presetId: string | null; selectPreset: (id: string | null) => void }) {
+function TradingSession({ sourceId, sourceRunId, presetId, selectPreset }: { sourceId: string | null; sourceRunId: string | null; presetId: string | null; selectPreset: (id: string | null) => void }) {
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const snapshot = useTrading(presetId);
   const presets = useTradingPresets();
   const artifacts = useTradingArtifacts();
   const source = useTradingSource(sourceId);
+  const minuteSource = useQuery({ queryKey: ["intraday-run", sourceRunId], queryFn: () => api<IntradayRun>(`/intraday/runs/${encodeURIComponent(sourceRunId!)}`), enabled: sourceRunId !== null });
+  const minuteRequest = minuteSource.data?.status === "COMPLETED" && minuteSource.data.result ? minuteSource.data.result.request : null;
   const client = useQueryClient();
   const createRequestId = useRef<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [title, setTitle] = useState("");
+  const [submittedMinuteTitle, setSubmittedMinuteTitle] = useState<string | null>(null);
   const [draft, setDraft] = useState<TradingSetup | null>(null);
   const [initialCashKrw, setInitialCashKrw] = useState(PAPER_TRADING_INITIAL_CASH_KRW);
   const [initialized, setInitialized] = useState<string | null>(null);
@@ -102,6 +117,7 @@ function TradingSession({ sourceId, presetId, selectPreset }: { sourceId: string
   const contextKey = deployment ? `deployment:${deployment.id}` : sourceId ? `source:${sourceId}` : "new";
   const contextChanged = initialized !== null && initialized !== contextKey;
   const openSettings = () => {
+    if (sourceRunId && !deployment) { openNew(); return; }
     if (!data || (!artifacts.data && !minuteDeployment)) return;
     setCreating(false);
     setTitle(deployment?.title ?? "");
@@ -118,10 +134,23 @@ function TradingSession({ sourceId, presetId, selectPreset }: { sourceId: string
     setSettingsOpen(true);
   };
   const openNew = () => {
-    if (!data || !artifacts.data || (sourceId && !source.data?.setup)) return;
+    if (!data || (!sourceRunId && !artifacts.data) || (sourceId && !source.data?.setup) || (sourceRunId && !minuteRequest)) return;
     const first = list.find((a) => a.latest);
-    createRequestId.current = crypto.randomUUID();
-    setCreating(true); setTitle(""); setDraft(sourceId && source.data?.setup ? source.data.setup : first ? baseSetup(first) : null);
+    const stored = sourceRunId ? sessionStorage.getItem(`intraday-paper-request:${sourceRunId}`) : null;
+    let restoredTitle: string | null = stored && !stored.startsWith("{") ? "" : null;
+    let restoredId = stored;
+    if (stored?.startsWith("{")) {
+      try {
+        const saved: unknown = JSON.parse(stored);
+        if (saved && typeof saved === "object" && "requestId" in saved && typeof saved.requestId === "string" && "title" in saved && typeof saved.title === "string") {
+          restoredId = saved.requestId;
+          restoredTitle = saved.title;
+        } else restoredId = null;
+      } catch { restoredId = null; }
+    }
+    createRequestId.current = restoredId ?? crypto.randomUUID();
+    setSubmittedMinuteTitle(restoredTitle);
+    setCreating(true); setTitle(restoredTitle ?? ""); setDraft(sourceRunId ? null : sourceId && source.data?.setup ? source.data.setup : first ? baseSetup(first) : null);
     setInitialCashKrw(PAPER_TRADING_INITIAL_CASH_KRW); setDraftRevision(0); setInitialized(contextKey); setError(null); setSettingsOpen(true);
   };
   const write = useMutation({ mutationFn: async ({ path, method, body, create }: { path: string; method: string; body: unknown; create?: boolean }) => create ? api<{ id: string; snapshot: TradingSnapshot }>(path, { method, body: JSON.stringify(body) }) : api<TradingSnapshot>(tradingPath(path, presetId), { method, body: JSON.stringify(body) }), onSuccess: async (result, variables) => {
@@ -130,6 +159,7 @@ function TradingSession({ sourceId, presetId, selectPreset }: { sourceId: string
       client.setQueryData(tradingKey(created.id), created.snapshot);
       void client.invalidateQueries({ queryKey: tradingPresetsKey });
       void client.invalidateQueries({ queryKey: tradingKey(null), exact: true });
+      if (sourceRunId) sessionStorage.removeItem(`intraday-paper-request:${sourceRunId}`);
       if (mounted.current) selectPreset(created.id);
       return;
     }
@@ -150,6 +180,14 @@ function TradingSession({ sourceId, presetId, selectPreset }: { sourceId: string
   const validation = draft ? tradingSetupSchema.safeParse(draft) : null;
   const paramError = draft ? parameterError(artifact, draft.parameters) : null;
   const save = () => {
+    if (creating && sourceRunId) {
+      if (!minuteRequest || !data || contextChanged || write.isPending || !createRequestId.current) return;
+      const savedTitle = submittedMinuteTitle ?? title.trim();
+      sessionStorage.setItem(`intraday-paper-request:${sourceRunId}`, JSON.stringify({ requestId: createRequestId.current, title: savedTitle }));
+      setSubmittedMinuteTitle(savedTitle);
+      submit("/trading/intraday-presets", "POST", { sourceRunId, requestId: createRequestId.current, ...(savedTitle ? { title: savedTitle } : {}) }, true);
+      return;
+    }
     if (!draft || !data || contextChanged || (!creating && !inactive)) return;
     const canEditCapital = creating || data.paperCapital?.canEdit;
     const capitalValidation = canEditCapital ? paperInitialCashSchema.safeParse(initialCashKrw) : null;
@@ -168,14 +206,15 @@ function TradingSession({ sourceId, presetId, selectPreset }: { sourceId: string
   };
   const setField = <K extends keyof TradingSetup>(key: K, value: TradingSetup[K]) => setDraft((old) => old ? { ...old, [key]: value } : old);
   const defaultPresetId = presets.data?.defaultAccountPresetId;
-  const accountSelector = <div className="flex flex-wrap items-center gap-2"><Label htmlFor="trading-preset">모의투자 선택</Label><select id="trading-preset" className="max-w-full rounded-md border bg-background px-3 py-2 text-sm" value={presetId ?? defaultPresetId ?? ""} disabled={write.isPending} onChange={(event) => selectPreset(event.target.value || null)}>{!defaultPresetId ? <option value="">기본 계좌</option> : null}{presets.data?.presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.title}</option>)}{presets.data?.archived?.map((preset) => <option key={preset.id} value={preset.id}>{preset.title} (전략 제거됨)</option>)}</select><Button variant="outline" disabled={!data || write.isPending || !artifacts.data || (!!sourceId && !source.data?.setup)} onClick={openNew}>새 모의투자</Button></div>;
+  const accountSelector = <div className="flex flex-wrap items-center gap-2"><Label htmlFor="trading-preset">모의투자 선택</Label><select id="trading-preset" className="max-w-full rounded-md border bg-background px-3 py-2 text-sm" value={presetId ?? defaultPresetId ?? ""} disabled={write.isPending} onChange={(event) => selectPreset(event.target.value || null)}>{!defaultPresetId ? <option value="">기본 계좌</option> : null}{presets.data?.presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.title}</option>)}{presets.data?.archived?.map((preset) => <option key={preset.id} value={preset.id}>{preset.title} (전략 제거됨)</option>)}</select><Button variant="outline" disabled={!data || write.isPending || (!sourceRunId && !artifacts.data) || (!!sourceId && !source.data?.setup) || (!!sourceRunId && !minuteRequest)} onClick={openNew}>새 모의투자</Button></div>;
   if (!data) return <div className="space-y-3"><h2 className="text-lg font-semibold">매매</h2>{accountSelector}<p role={snapshot.error ? "alert" : "status"}>{snapshot.error ? "매매 정보를 불러오지 못했습니다." : "불러오는 중…"}</p></div>;
   return <div className="space-y-4"><h2 className="text-lg font-semibold">매매</h2>
     {accountSelector}
     {snapshot.error ? <Alert variant="destructive"><AlertDescription>최신 상태를 불러오지 못했습니다.</AlertDescription></Alert> : null}
     <Card><CardHeader><CardTitle>모의 투자 현황</CardTitle>{data.broker.selectedAccountId && <CardDescription>모의계좌 · {data.broker.selectedAccountId}{minuteDeployment?.lastDecisionAtMs ? ` · 평가 기준 ${date(minuteDeployment.lastDecisionAtMs)} 확정 봉 종가` : ""}</CardDescription>}</CardHeader><CardContent className="space-y-2 text-sm"><p>초기 모의 자금 {money(data.paperCapital?.initialCashKrw)} · {minuteDeployment ? "확정된 1분 OHLCV로 모의 체결하며 수수료와 세금이 적용됩니다." : "최신 시세로 모의 체결하며 수수료와 세금이 적용됩니다."}</p><p>주문 가능 {money(data.account?.cashBuyingPower)} · 보유 평가액 {money(data.account?.marketValue)} · 평가손익 {money(data.account?.unrealizedPnl)} · 총 손익 {money(data.performance?.totalPnl)} · 추정 수익률 {data.performance?.returnPercent == null ? "—" : `${data.performance.returnPercent.toFixed(2)}%`}</p></CardContent></Card>
-    <Card><CardHeader><CardTitle>전략 상태</CardTitle><CardDescription>{deployment ? `${deployment.name} · ${deployment.version} · ${tradingStatusLabel[deployment.status]}${preparation ? "" : ` · ${deployment.activity}`}` : "등록된 전략이 없습니다."}</CardDescription></CardHeader><CardContent className="space-y-3">{preparation ? <Alert variant={preparation.status === "FAILED" ? "destructive" : "default"} role={preparation.status === "FAILED" ? "alert" : "status"}><AlertDescription className="flex min-w-0 items-start gap-2">{preparing ? <LoaderCircle aria-hidden="true" className="mt-0.5 size-4 shrink-0 animate-spin" /> : null}<span className="min-w-0 break-words"><strong>{preparing ? "데이터 준비 중" : preparation.status === "READY" ? "데이터 준비 완료" : "데이터 준비 실패"}</strong> · {preparation.message}{preparation.status === "READY" ? " 자동 매매를 켜려면 직접 ON을 선택하세요." : null}</span></AlertDescription></Alert> : null}{deployment?.lastError && deployment.lastError !== preparation?.message ? <p role="alert" className="break-words text-destructive">{deployment.lastError}</p> : null}{error && !settingsOpen && !dialog && !toggleMode ? <Alert variant="destructive" role="alert"><AlertDescription className="break-words">{error}</AlertDescription></Alert> : null}{data.blockers.map((b) => <p key={b} className="text-sm text-destructive">{b}</p>)}<div className="flex flex-wrap gap-2"><Button variant="outline" disabled={(!artifacts.data && !minuteDeployment) || (!!sourceId && !deployment && !source.data?.setup)} onClick={openSettings}>{deployment && <LockKeyhole aria-hidden="true" />}매매 설정</Button>{deployment ? <><Button aria-pressed={deployment.status === "ACTIVE"} className={deployment.status === "ACTIVE" ? "bg-emerald-100 text-emerald-900 hover:bg-emerald-200 dark:bg-emerald-950 dark:text-emerald-100 dark:hover:bg-emerald-900" : "bg-amber-100 text-amber-900 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-100 dark:hover:bg-amber-900"} disabled={write.isPending || deployment.status === "STOPPING" || (inactive && preparing)} onClick={() => { setError(null); setDialogRevision(data.revision); setToggleMode(inactive ? "on" : "off"); }}>{deployment.status === "ACTIVE" ? "자동 매매 ON" : "자동 매매 OFF"}</Button>{inactive && dailyDeployment ? <Button variant="outline" disabled={write.isPending || preparing} onClick={() => { setError(null); submit("/trading/prepare", "POST", { expectedRevision: data.revision }); }}>{preparing ? "데이터 준비 중" : preparation?.status === "FAILED" ? "데이터 복구 재시도" : "데이터 확인·복구"}</Button> : null}{dailyDeployment ? <Button variant="outline" disabled={!inactive || write.isPending || !latest || latest.artifactHash === dailyDeployment.artifactHash} onClick={() => { if (latest) setVersionParams({ ...defaults(latest), ...Object.fromEntries(Object.entries(dailyDeployment.parameters).filter(([key]) => key in properties(latest))) }); setError(null); setDialogRevision(data.revision); setDialog("version"); }}>최신 버전으로 변경</Button> : null}<Button variant="outline" disabled={(!creating && !inactive) || write.isPending} onClick={() => { setError(null); setDialogRevision(data.revision); setDialog("remove"); }}>전략 제거</Button></> : null}</div><p className="text-sm text-muted-foreground">{!inactive ? "설정 수정, 버전 변경 및 제거는 자동 매매를 끈 후 가능합니다." : "자동 매매가 꺼져 있으면 매수, 매도 및 손절이 실행되지 않습니다."}</p></CardContent></Card>
+    <Card><CardHeader><CardTitle>전략 상태</CardTitle><CardDescription>{deployment ? `${deployment.name} · ${deployment.version} · ${tradingStatusLabel[deployment.status]}${preparation ? "" : ` · ${deployment.activity}`}` : "등록된 전략이 없습니다."}</CardDescription></CardHeader><CardContent className="space-y-3">{preparation ? <Alert variant={preparation.status === "FAILED" ? "destructive" : "default"} role={preparation.status === "FAILED" ? "alert" : "status"}><AlertDescription className="flex min-w-0 items-start gap-2">{preparing ? <LoaderCircle aria-hidden="true" className="mt-0.5 size-4 shrink-0 animate-spin" /> : null}<span className="min-w-0 break-words"><strong>{preparing ? "데이터 준비 중" : preparation.status === "READY" ? "데이터 준비 완료" : "데이터 준비 실패"}</strong> · {preparation.message}{preparation.status === "READY" ? " 자동 매매를 켜려면 직접 ON을 선택하세요." : null}</span></AlertDescription></Alert> : null}{deployment?.lastError && deployment.lastError !== preparation?.message ? <p role="alert" className="break-words text-destructive">{deployment.lastError}</p> : null}{error && !settingsOpen && !dialog && !toggleMode ? <Alert variant="destructive" role="alert"><AlertDescription className="break-words">{error}</AlertDescription></Alert> : null}{data.blockers.map((b) => <p key={b} className="text-sm text-destructive">{b}</p>)}<div className="flex flex-wrap gap-2"><Button variant="outline" disabled={(!artifacts.data && !minuteDeployment && !(sourceRunId && !deployment && minuteRequest)) || (!!sourceId && !deployment && !source.data?.setup) || (!!sourceRunId && !deployment && !minuteRequest)} onClick={openSettings}>{deployment && <LockKeyhole aria-hidden="true" />}매매 설정</Button>{deployment ? <><Button aria-pressed={deployment.status === "ACTIVE"} className={deployment.status === "ACTIVE" ? "bg-emerald-100 text-emerald-900 hover:bg-emerald-200 dark:bg-emerald-950 dark:text-emerald-100 dark:hover:bg-emerald-900" : "bg-amber-100 text-amber-900 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-100 dark:hover:bg-amber-900"} disabled={write.isPending || deployment.status === "STOPPING" || (inactive && preparing)} onClick={() => { setError(null); setDialogRevision(data.revision); setToggleMode(inactive ? "on" : "off"); }}>{deployment.status === "ACTIVE" ? "자동 매매 ON" : "자동 매매 OFF"}</Button>{inactive && dailyDeployment ? <Button variant="outline" disabled={write.isPending || preparing} onClick={() => { setError(null); submit("/trading/prepare", "POST", { expectedRevision: data.revision }); }}>{preparing ? "데이터 준비 중" : preparation?.status === "FAILED" ? "데이터 복구 재시도" : "데이터 확인·복구"}</Button> : null}{dailyDeployment ? <Button variant="outline" disabled={!inactive || write.isPending || !latest || latest.artifactHash === dailyDeployment.artifactHash} onClick={() => { if (latest) setVersionParams({ ...defaults(latest), ...Object.fromEntries(Object.entries(dailyDeployment.parameters).filter(([key]) => key in properties(latest))) }); setError(null); setDialogRevision(data.revision); setDialog("version"); }}>최신 버전으로 변경</Button> : null}<Button variant="outline" disabled={(!creating && !inactive) || write.isPending} onClick={() => { setError(null); setDialogRevision(data.revision); setDialog("remove"); }}>전략 제거</Button></> : null}</div><p className="text-sm text-muted-foreground">{!inactive ? "설정 수정, 버전 변경 및 제거는 자동 매매를 끈 후 가능합니다." : "자동 매매가 꺼져 있으면 매수, 매도 및 손절이 실행되지 않습니다."}</p></CardContent></Card>
     {sourceId && source.isLoading ? <p>백테스트 설정을 불러오는 중…</p> : null}{sourceId && !source.isLoading && (source.error || !source.data?.setup) ? <Alert variant="destructive"><AlertDescription>{source.data?.error ?? "백테스트 설정을 불러오지 못했습니다."}</AlertDescription></Alert> : null}
+    {sourceRunId && minuteSource.isLoading ? <p>백테스트 설정을 불러오는 중…</p> : null}{sourceRunId && !minuteSource.isLoading && !minuteRequest ? <Alert variant="destructive"><AlertDescription>완료된 분봉 백테스트 설정을 불러오지 못했습니다.</AlertDescription></Alert> : null}
     {artifacts.error ? <Alert variant="destructive"><AlertDescription>전략 버전 목록을 불러오지 못했습니다.</AlertDescription></Alert> : null}
     <Dialog open={settingsOpen} onOpenChange={(open) => { setSettingsOpen(open); if (!open) setCreating(false); }}>
       <DialogContent className="flex max-h-[calc(100dvh-2rem)] min-w-0 flex-col overflow-hidden sm:max-w-3xl">
@@ -183,16 +222,17 @@ function TradingSession({ sourceId, presetId, selectPreset }: { sourceId: string
           <DialogTitle>매매 설정</DialogTitle>
         </DialogHeader>
         <div className="min-h-0 min-w-0 space-y-4 overflow-y-auto overscroll-contain">
-          <DialogDescription>{minuteDeployment && !creating ? "백테스트의 고정 설정을 그대로 사용합니다. 설정은 읽기 전용이며 저장과 활성화는 별도 단계입니다." : <>일봉 전략은 거래일 09:00~09:10(KST)에 전일 확정 봉으로 판단합니다. 실행창을 놓친 신호를 장중에 소급 주문하지 않습니다. 저장과 활성화는 별도 단계입니다. 손실 한도는 주문 중지 기준이며 보유 종목을 자동 청산하지 않습니다.</>}</DialogDescription>
+          <DialogDescription>{(minuteDeployment && !creating) || (creating && minuteRequest) ? "백테스트의 고정 설정을 그대로 사용합니다. 설정은 읽기 전용이며 저장과 활성화는 별도 단계입니다." : <>일봉 전략은 거래일 09:00~09:10(KST)에 전일 확정 봉으로 판단합니다. 실행창을 놓친 신호를 장중에 소급 주문하지 않습니다. 저장과 활성화는 별도 단계입니다. 손실 한도는 주문 중지 기준이며 보유 종목을 자동 청산하지 않습니다.</>}</DialogDescription>
           {error || contextChanged ? <Alert variant="destructive" role="alert"><AlertDescription>{error ?? "등록된 전략이 다른 화면에서 변경되었습니다. 작성 중인 입력은 유지했습니다. 최신 설정을 불러온 뒤 저장해 주세요."} {!creating ? <Button variant="outline" size="sm" disabled={snapshot.isFetching || snapshot.isError} onClick={openSettings}>최신 설정 불러오기</Button> : null}</AlertDescription></Alert> : null}
-          {minuteDeployment && !creating ? <div className="space-y-3 text-sm">
+          {creating && sourceRunId ? minuteRequest ? <div className="space-y-3 text-sm">
+            <div className="space-y-1"><Label htmlFor="minute-new-title">모의투자 이름 (선택)</Label><Input id="minute-new-title" maxLength={100} value={title} disabled={write.isPending || submittedMinuteTitle !== null} onChange={(e) => setTitle(e.target.value)} />{submittedMinuteTitle !== null ? <p>재시도에는 처음 제출한 이름을 사용합니다.</p> : null}</div>
+            <MinuteSettings request={minuteRequest} version={minuteSource.data!.result!.strategyVersion} />
+            <p>모의투자에는 현재 분봉 체결 엔진이 사용됩니다.</p>
+            <Button disabled={write.isPending || contextChanged} onClick={save}>설정 저장</Button>
+          </div> : <p role="alert">분봉 백테스트 설정을 불러올 수 없습니다.</p> : minuteDeployment && !creating ? <div className="space-y-3 text-sm">
             <div className="space-y-1"><Label htmlFor="minute-title">모의투자 이름 (선택)</Label><Input id="minute-title" maxLength={100} value={title} disabled={write.isPending} onChange={(e) => setTitle(e.target.value)} /><Button variant="outline" size="sm" disabled={write.isPending || contextChanged || title.trim() === (minuteDeployment.title ?? "")} onClick={() => submit("/trading/title", "PATCH", { deploymentId: minuteDeployment.id, expectedRevision: draftRevision, expectedTitle: minuteDeployment.title ?? "", title: title.trim() })}>이름 저장</Button></div>
-            <p>{minuteDeployment.name} · {minuteDeployment.version} · {minuteDeployment.request.symbol} · {minuteDeployment.timeframe}</p>
-            <p>원본 기간 {minuteDeployment.request.period.from} ~ {minuteDeployment.request.period.to} · 초기 자금 {money(minuteDeployment.request.initialCash)}</p>
+            <MinuteSettings request={minuteDeployment.request} version={minuteDeployment.version} />
             <p>원본 백테스트 {minuteDeployment.sourceRunId}</p>
-            <p>모의 체결에는 확정된 1분 OHLCV가 사용됩니다.</p>
-            <div><p className="font-medium">고정 전략 파라미터</p><dl className="space-y-1">{Object.entries(minuteDeployment.request.parameters).map(([key, value]) => <div key={key} className="flex gap-2"><dt>{[...INTRADAY_TRADE_CONTROL_FIELDS, ...getIntradayStrategy(minuteDeployment.strategyId).fields].find((field) => field.key === key)?.label ?? ({ allocationPct: "매수 비중 (%)", stopLossPct: "손절 기준 (%)", takeProfitPct: "익절 기준 (%)" } as Record<string, string>)[key] ?? key}</dt><dd>{String(value)}</dd></div>)}</dl></div>
-            <div><p className="font-medium">고정 체결 조건</p><p>당일 청산 시도 · 수수료 {minuteDeployment.request.execution.commissionBps}bps · 세금 {minuteDeployment.request.execution.taxBps}bps · 슬리피지 {minuteDeployment.request.execution.slippageBps}bps · 지연 {minuteDeployment.request.execution.latencyMs}ms · 주문 만료 {minuteDeployment.request.execution.orderExpiryMinutes}분 · 최대 참여율 {minuteDeployment.request.execution.maxParticipationPct}%</p></div>
           </div> : draft ? <div className="space-y-4">
             <div className="space-y-1">
               <Label htmlFor="preset-title">모의투자 이름 (선택)</Label>
