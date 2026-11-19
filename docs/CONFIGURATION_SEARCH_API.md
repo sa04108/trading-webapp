@@ -42,6 +42,8 @@ curl -H "Authorization: Bearer $QUANT_API_TOKEN" -H 'Content-Type: application/j
 
 응답 `experiment.id`와 `items`에는 영속 저장된 실제 조합이 들어 있습니다. 같은 사용자, 같은 `requestId`와 같은 본문으로 다시 요청하면 같은 미리보기를 반환합니다. 같은 UUID를 다른 본문이나 원본에 사용하면 409입니다. 미리보기는 실행하지 않습니다. 내용을 확인한 뒤 명시적으로 시작합니다.
 
+일봉 시장 탐색은 기존 키 `universeRule.markets.0`을 사용하며 `KOSPI+KOSDAQ`, `KOSPI`, `KOSDAQ` 중에서 선택합니다. 이 키는 시장 배열 전체를 바꿉니다. 예를 들어 `KOSPI+KOSDAQ`은 `["KOSPI", "KOSDAQ"]`, `KOSDAQ`은 `["KOSDAQ"]`으로 실행됩니다. 시장 설정을 생략하면 원본의 시장 배열을 그대로 유지합니다.
+
 ```sh
 curl -H "Authorization: Bearer $QUANT_API_TOKEN" -X POST https://example.test/api/v1/configuration-searches/SEARCH_ID/start
 curl -H "Authorization: Bearer $QUANT_API_TOKEN" https://example.test/api/v1/configuration-searches/SEARCH_ID

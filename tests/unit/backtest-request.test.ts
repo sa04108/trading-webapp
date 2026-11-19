@@ -83,12 +83,16 @@ describe('universeRule', () => {
     expect(backtestRequestSchema.safeParse(rest).success).toBe(false);
   });
 
-  it('markets 가 2개면 거부한다 — 워커가 단일 시장만 다룬다', () => {
-    const result = backtestRequestSchema.safeParse({
+  it.each([['KOSPI', 'KOSDAQ'], ['KOSPI'], ['KOSDAQ'], ['KOSDAQ', 'KOSPI']])('시장 선택 %j를 그대로 보존한다', (...markets) => {
+    const result = backtestRequestSchema.parse({
       ...baseRequest(),
-      universeRule: { ...validRule, markets: ['KOSPI', 'KOSDAQ'] },
+      universeRule: { ...validRule, markets },
     });
-    expect(result.success).toBe(false);
+    expect(result.universeRule.markets).toEqual(markets);
+  });
+
+  it.each([['KOSPI', 'KOSPI'], ['KOSDAQ', 'KOSDAQ'], ['KOSPI', 'KOSDAQ', 'KOSPI'], ['KONEX']])('중복되거나 지원하지 않는 시장 %j를 거부한다', (...markets) => {
+    expect(backtestRequestSchema.safeParse({ ...baseRequest(), universeRule: { ...validRule, markets } }).success).toBe(false);
   });
 
   it('markets 가 0개면 거부한다', () => {

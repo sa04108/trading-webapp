@@ -15,6 +15,11 @@ import { paperTradingAccountId, PAPER_TRADING_INITIAL_CASH_KRW, paperInitialCash
 import { kstDateOf } from "../../../../runtime/modules/market-data/domain/kst-date.js";
 import { BrokerHoldingsChangedError, BrokerRequestError, type BrokerHolding, type BrokerOrder, type TradingBroker } from "./broker-port.js";
 import { TradingDataRequired, type TradingDataNeed } from "./trading-data.js";
+import type { IntradayTradingSetup } from "../../../../shared/schemas/trading.js";
+import { advanceIntradaySession, cancelIntradayPending } from "../../../../runtime/modules/intraday/domain/session-engine.js";
+import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
+import { getIntradayStrategy } from "../../../../shared/schemas/intraday-strategies.js";
+import { minuteSetup, nextMinuteWindow, readMinuteCheckpoint, recordMinuteBalance, recordMinuteOrders, settleMinuteWindow, startMinuteCheckpoint, type IntradayPaperData } from "./intraday-paper-session.js";
 
 export interface StrategyArtifactStore {
   list(): TradingArtifact[];
@@ -64,6 +69,7 @@ export class TradingService {
   private brokerOperation: Promise<unknown> = Promise.resolve();
   private stopping = false;
   private acquired = false;
+  private retryMinuteAt = 0;
   private terminalSyncAt = 0;
   private readonly cancelRetry = new Map<string, { after: number; attempts: number }>();
   private readonly db;
@@ -73,6 +79,7 @@ export class TradingService {
     broker: TradingBroker;
     artifacts: StrategyArtifactStore;
     engine: TradingDecisionEngine;
+    intraday?: IntradayPaperData;
     prepareData?: (need: TradingDataNeed, onProgress: (message: string) => void, shouldStop: () => boolean) => Promise<string | void>;
     enabled?: boolean;
     now?: () => number;
@@ -89,6 +96,7 @@ export class TradingService {
   private hydratePaperSource() {
     this.deps.database.sqlite.transaction(() => {
       const row=this.current(); if(!row||row.mode!=="PAPER")return;
+      if (minuteSetup(row)) return;
       const setup=tradingSetupSchema.parse(JSON.parse(row.setupJson));
       if(!setup.sourceJobId||(setup.paperCommissionProfileId!==undefined&&setup.paperSlippageProfileId!==undefined))return;
       const job=this.db.select().from(backtestJobs).where(eq(backtestJobs.id,setup.sourceJobId)).get();
@@ -148,6 +156,7 @@ export class TradingService {
     return this.db.select().from(tradingOrders).where(and(inArray(tradingOrders.status,PENDING),id?eq(tradingOrders.deploymentId,id):undefined,this.isPaper?eq(tradingOrders.accountId,this.paperAccountId):undefined)).all();
   }
   private deployment(row: DeploymentRow): TradingDeployment {
+    if (minuteSetup(row)) throw new TradingError("분봉 모의투자의 종목·전략·체결 설정은 원본 백테스트에 고정됩니다.");
     const setup=tradingSetupSchema.parse(JSON.parse(row.setupJson));
     const latest=this.deps.artifacts.list().find(a=>a.strategyId===setup.strategyId&&a.latest);
     return {...setup,id:row.id,name:row.name,version:row.version,status:row.status,createdAtMs:row.createdAtMs,updatedAtMs:row.updatedAtMs,activatedAtMs:row.activatedAtMs,lastDecisionAtMs:row.lastDecisionAtMs,lastError:row.lastError,activity:row.activity,latestArtifactHash:latest?.artifactHash??null,latestVersion:latest?.version??null};
@@ -157,8 +166,8 @@ export class TradingService {
     if(!this.isPaper)return null;
     const account=this.db.select().from(paperTradingAccount).where(eq(paperTradingAccount.singleton,this.slot)).get();
     const filled=this.deps.database.sqlite.prepare("SELECT 1 FROM paper_trading_orders WHERE account_slot = ? AND json_extract(payload_json, '$.order.filledQuantity') > 0 LIMIT 1").get(this.slot);
-    const status=this.current()?.status;
-    return {initialCashKrw:account?.initialCash??PAPER_TRADING_INITIAL_CASH_KRW,canEdit:(!status||status==="INACTIVE")&&!filled&&!this.pending().length&&Object.keys(JSON.parse(account?.holdingsJson??"{}")).length===0};
+    const row=this.current(), status=row?.status;
+    return {initialCashKrw:account?.initialCash??PAPER_TRADING_INITIAL_CASH_KRW,canEdit:!minuteSetup(row)&&(!status||status==="INACTIVE")&&!filled&&!this.pending().length&&Object.keys(JSON.parse(account?.holdingsJson??"{}")).length===0};
   }
   private setInitialCash(value:number|undefined,actor:string) {
     if(value===undefined)return;
@@ -174,6 +183,7 @@ export class TradingService {
   }
   prepareData(expectedRevision: number, actor: string, initialNeed?: TradingDataNeed): TradingSnapshot {
     const before = this.requireInactive();
+    if (minuteSetup(before)) throw new TradingError("분봉 데이터는 확정 봉을 처리할 때 자동으로 준비합니다.");
     if (this.control().revision !== expectedRevision) throw new TradingError("매매 설정이 변경되었습니다.", "STALE_REVISION");
     if (!this.deps.prepareData) throw new TradingError("매매 데이터 수집기를 사용할 수 없습니다.");
     if (this.stopping) throw new TradingError("서버 종료 중에는 데이터 준비를 시작할 수 없습니다.");
@@ -247,6 +257,7 @@ export class TradingService {
   }
   snapshot(): TradingSnapshot {
     const control=this.control(); const row=this.current();
+    const minute = minuteSetup(row);
     const account=control.snapshotJson?JSON.parse(control.snapshotJson) as AccountSnapshot:null;
     const portfolio=row?this.portfolio(row):{};
     const positions=(account?.holdings??[]).map(h=>({...h,returnPercent:h.quantity*h.averagePrice>0?h.unrealizedPnl/(h.quantity*h.averagePrice)*100:null,deploymentId:portfolio[h.symbol]?.quantity===h.quantity?row!.id:null}));
@@ -271,10 +282,16 @@ export class TradingService {
       if(control.accountId&&!account)blockers.push("계좌 잔고를 먼저 동기화하세요.");
     }
     if(control.error)blockers.push(control.error);
-    if(row&&!this.artifacts().some(a=>a.strategyId===JSON.parse(row.setupJson).strategyId&&a.artifactHash===JSON.parse(row.setupJson).artifactHash))blockers.push("고정된 전략 실행 파일을 찾을 수 없습니다. 자동으로 다른 버전을 사용하지 않습니다.");
+    if (minute && row) {
+      const blocker = this.minuteBlocker(row, minute);
+      if (blocker) blockers.push(blocker);
+    } else if(row&&!this.artifacts().some(a=>a.strategyId===JSON.parse(row.setupJson).strategyId&&a.artifactHash===JSON.parse(row.setupJson).artifactHash))blockers.push("고정된 전략 실행 파일을 찾을 수 없습니다. 자동으로 다른 버전을 사용하지 않습니다.");
     if(this.pending().some(o=>o.status==="UNKNOWN"||o.status==="SENDING"))blockers.push("접수 여부가 불명확한 주문이 있습니다. 증권사 주문 내역 확인이 필요합니다.");
     return {
-      revision:control.revision,dataPreparation:this.preparation?.deploymentId===row?.id&&this.preparation?.revision===control.revision?this.preparation.state:null,paperCapital:this.paperCapital(),deployment:row?this.deployment(row):null,
+      revision:control.revision,dataPreparation:this.preparation?.deploymentId===row?.id&&this.preparation?.revision===control.revision?this.preparation.state:null,paperCapital:this.paperCapital(),
+      deployment:row && minute ? { ...minute, timeframe: minute.request.timeframe, strategyId: minute.request.strategyId,
+        id: row.id, name: row.name, version: row.version, status: row.status, activity: row.activity, createdAtMs: row.createdAtMs,
+        updatedAtMs: row.updatedAtMs, activatedAtMs: row.activatedAtMs, lastDecisionAtMs: row.lastDecisionAtMs, lastError: row.lastError } : row ? this.deployment(row) : null,
       broker:{provider:this.isPaper?"PAPER":"TOSS",configured:this.deps.broker.configured,accounts:JSON.parse(control.accountsJson),selectedAccountId:control.accountId,lastSyncAtMs:control.syncedAtMs,error:control.error},
       account:account?{cashBuyingPower:account.cashBuyingPower,marketValue,unrealizedPnl,unrealizedReturnPercent:cost>0?unrealizedPnl/cost*100:null}:null,
       performance,positions,
@@ -319,12 +336,13 @@ export class TradingService {
   async register(input:TradingSetup,expectedRevision:number,actor:string,initialCashKrw?:number) {
     return this.registerValidated(await this.validateRegistration(input),expectedRevision,actor,initialCashKrw);
   }
-  registerValidated({setup,artifact}: {setup:TradingSetup;artifact:TradingArtifact},expectedRevision:number,actor:string,initialCashKrw?:number,id: string = randomUUID()) {
+  registerValidated({setup,artifact}: {setup:TradingSetup | IntradayTradingSetup;artifact:Pick<TradingArtifact, "name" | "version">},expectedRevision:number,actor:string,initialCashKrw?:number,id: string = randomUUID()) {
     this.change(expectedRevision,()=>{
       if(this.current())throw new TradingError("이 계좌에는 이미 전략이 등록되어 있습니다.");
       if(this.pending().length)throw new TradingError("확인이 끝나지 않은 주문이 있어 새 전략을 등록할 수 없습니다.");
       const now=this.now();
-      this.db.insert(tradingDeployments).values({id,slot:this.slot,accountSlot:this.slot,mode:this.isPaper?"PAPER":"LIVE",setupJson:JSON.stringify(setup),name:artifact.name,version:artifact.version,status:"INACTIVE",createdAtMs:now,updatedAtMs:now,activity:"비활성 · 활성화 전 주문하지 않습니다.",returnBase:setup.budgetKrw}).run();
+      if ("kind" in setup && !this.isPaper) throw new TradingError("분봉 전략은 모의계좌에서만 실행할 수 있습니다.");
+      this.db.insert(tradingDeployments).values({id,slot:this.slot,accountSlot:this.slot,mode:this.isPaper?"PAPER":"LIVE",setupJson:JSON.stringify(setup),name:artifact.name,version:artifact.version,status:"INACTIVE",createdAtMs:now,updatedAtMs:now,activity:"비활성 · 활성화 전 주문하지 않습니다.",returnBase:"kind" in setup?setup.request.initialCash:setup.budgetKrw}).run();
       this.setInitialCash(initialCashKrw,actor);
       this.event(`전략 등록: ${artifact.name} v${artifact.version}`,actor,"INFO",id);
     });return this.snapshot();
@@ -335,7 +353,7 @@ export class TradingService {
       if (!this.isPaper || !row || row.id !== deploymentId || this.control().revision !== expectedRevision) {
         throw new TradingError("모의투자 상태가 변경되었습니다.", "STALE_REVISION");
       }
-      const setup = tradingSetupSchema.parse(JSON.parse(row.setupJson));
+      const setup = minuteSetup(row) ?? tradingSetupSchema.parse(JSON.parse(row.setupJson));
       if ((setup.title ?? "") !== expectedTitle) throw new TradingError("다른 화면에서 이름을 변경했습니다.", "STALE_REVISION");
       setup.title = title || undefined;
       this.db.update(tradingDeployments).set({ setupJson: JSON.stringify(setup), updatedAtMs: this.now() }).where(eq(tradingDeployments.id, row.id)).run();
@@ -361,6 +379,7 @@ export class TradingService {
   }
   async version(hash:string,parameters:Record<string,unknown>,expectedRevision:number,actor:string) {
     const before=this.current();if(!before)throw new TradingError("등록된 전략이 없습니다.");
+    if (minuteSetup(before)) throw new TradingError("분봉 실행 버전은 원본 백테스트에 고정됩니다.");
     const input={...tradingSetupSchema.parse(JSON.parse(before.setupJson)),artifactHash:hash,parameters};
     const {setup,artifact}=await this.validate(input);
     this.change(expectedRevision,()=>{
@@ -388,6 +407,7 @@ export class TradingService {
     });await this.refresh();return this.snapshot();
   }
   async refresh():Promise<TradingSnapshot> {
+    if (minuteSetup(this.current())) return this.snapshot();
     if(!this.deps.broker.configured)throw new TradingError("토스증권 API 자격 증명이 설정되지 않았습니다.","BROKER_NOT_CONFIGURED",503);
     if(!this.refreshing)this.refreshing=this.withPaperLedger(()=>this.sync()).finally(()=>{this.refreshing=null;});
     await this.refreshing;return this.snapshot();
@@ -479,6 +499,24 @@ export class TradingService {
     const before=this.requireInactive();
     if(this.control().revision!==expectedRevision)throw new TradingError("매매 설정이 변경되었습니다.","STALE_REVISION");
     if(!this.acquire())throw new TradingError("다른 실행기가 이 계좌를 처리하고 있습니다. 잠시 후 다시 시도하세요.");
+    const minute = minuteSetup(before);
+    if (minute) {
+      const blockers = this.snapshot().blockers;
+      if (blockers.length) throw new TradingError(blockers.join(" "));
+      this.change(expectedRevision, () => {
+        const row = this.requireInactive();
+        if (row.id !== before.id) throw new TradingError("등록 전략이 변경되었습니다.");
+        const now = this.now();
+        let checkpoint;
+        try { checkpoint = startMinuteCheckpoint(row, minute, now); }
+        catch (error) { throw new TradingError((error as Error).message); }
+        this.db.update(tradingDeployments).set({ status: "ACTIVE", checkpoint: JSON.stringify(checkpoint), updatedAtMs: now,
+          activatedAtMs: row.activatedAtMs ?? now, activity: "활성 · 다음 확정 분봉 대기", lastError: null }).where(eq(tradingDeployments.id,row.id)).run();
+        this.event("분봉 모의투자 ON · 활성화 이후의 신호부터 주문", actor);
+        this.retryMinuteAt = 0;
+      });
+      return this.snapshot();
+    }
     await this.refresh();
     const blockers=this.snapshot().blockers;if(blockers.length)throw new TradingError(blockers.join(" "));
     if(this.pending().length)throw new TradingError("기존 주문을 모두 확인한 후 활성화하세요.");
@@ -505,6 +543,14 @@ export class TradingService {
     this.change(expectedRevision,()=>{
       const row=this.current();if(!row)throw new TradingError("등록된 전략이 없습니다.");
       if(row.status==="INACTIVE")return;
+      const minute = minuteSetup(row);
+      if (minute) {
+        this.cancelMinuteOrder(row, minute);
+        this.db.update(tradingDeployments).set({ status: "INACTIVE",
+          updatedAtMs: this.now(), activity: "모의투자 · 자동매매 OFF · 포지션 유지", lastError: null }).where(eq(tradingDeployments.id, row.id)).run();
+        this.event("분봉 모의투자 OFF · 남은 미체결 수량 취소", actor);
+        return;
+      }
       this.db.update(tradingDeployments).set({status:"STOPPING",updatedAtMs:this.now(),activity:"중지 중 · 미체결 취소 및 최종 체결 확인",lastError:null}).where(eq(tradingDeployments.id,row.id)).run();
       for(const order of this.pending(row.id).filter(o=>o.status==="CREATED"))this.saveOrder(order,{status:"CANCELLED",error:null});
       if(this.isPaper&&!this.pending(row.id).length)this.db.update(tradingDeployments).set({status:"INACTIVE",activity:"모의투자 · 자동매매 OFF · 포지션 유지"}).where(eq(tradingDeployments.id,row.id)).run();
@@ -537,6 +583,8 @@ export class TradingService {
       const stopping=row.status==="STOPPING";
       const duplicate=(row.status==="ERROR"||stopping)&&row.lastError===message;
       if(duplicate)return;
+      const minute = minuteSetup(row);
+      if (minute) this.cancelMinuteOrder(row, minute, "모의투자 오류로 남은 주문 수량을 취소했습니다.");
       const paperStopped=this.isPaper&&!this.pending(row.id).length;
       this.db.update(tradingDeployments).set({status:paperStopped?"INACTIVE":stopping?"STOPPING":"ERROR",lastError:message,activity:paperStopped?"모의투자 · 자동매매 OFF · 오류 확인 필요":stopping?"중지 중 · 미체결 취소·체결 확인 재시도":"주문 중지 · 오류 확인 필요",updatedAtMs:this.now()}).where(eq(tradingDeployments.id,row.id)).run();
       this.db.update(tradingControl).set({revision:sql`${tradingControl.revision}+1`}).where(eq(tradingControl.singleton,this.slot)).run();
@@ -620,7 +668,7 @@ export class TradingService {
             this.saveOrder(order,saved?{brokerOrderId:order.id,status:"OPEN",error:null}:{status:"REJECTED",error:"모의 주문 전송 전 실행기 중단"});
           } else this.saveOrder(order,{status:"UNKNOWN",error:"이전 실행기 중단으로 접수 여부 확인 필요"});
         }
-        const row=this.current();if(row?.status==="ACTIVE")this.fail("실행기가 재시작되었습니다. 잔고·주문을 확인한 후 직접 다시 활성화하세요.");
+        const row=this.current();if(row?.status==="ACTIVE"&&!minuteSetup(row))this.fail("실행기가 재시작되었습니다. 잔고·주문을 확인한 후 직접 다시 활성화하세요.");
       }return true;
     }).immediate();
   }
@@ -628,6 +676,56 @@ export class TradingService {
     const control=this.control();const row=this.current();
     if(this.stopping||this.deps.enabled===false||control.executorToken!==this.token||!control.executorExpiresAtMs||control.executorExpiresAtMs<=this.now()||control.revision!==revision||row?.id!==id||row.status!=="ACTIVE"||!this.deps.engine.canTrade(this.now()))throw new TradingError("주문 허용 상태가 변경되어 전송을 차단했습니다.","ORDER_GATE_CLOSED");
     this.db.update(tradingControl).set({executorExpiresAtMs:this.now()+LEASE_MS}).where(and(eq(tradingControl.singleton,this.slot),eq(tradingControl.executorToken,this.token))).run();
+  }
+  private cancelMinuteOrder(row: DeploymentRow, setup: IntradayTradingSetup, reason?: string) {
+    const checkpoint = readMinuteCheckpoint(row);
+    if (!checkpoint.state.pending) return;
+    const cancelled = cancelIntradayPending(checkpoint.state, this.now(), reason);
+    recordMinuteOrders(this.db, this.slot, row, setup, [], [], cancelled.orderEvents, []);
+    this.db.update(tradingDeployments).set({ checkpoint: JSON.stringify({ ...checkpoint, state: cancelled.state }) }).where(eq(tradingDeployments.id, row.id)).run();
+  }
+
+  private minuteBlocker(row: DeploymentRow, setup: IntradayTradingSetup) {
+    if (!this.isPaper || !this.deps.intraday?.paperDataConfigured) return "확정 분봉을 수집할 토스 시세 연결이 필요합니다.";
+    if (setup.executionVersion !== readRuntimeVersions().executionVersion || getIntradayStrategy(setup.request.strategyId).version !== row.version) {
+      return "저장된 분봉 실행 버전이 변경되었습니다. 현재 버전으로 백테스트를 실행하고 새 모의투자를 생성해 주세요.";
+    }
+    return null;
+  }
+
+  private async tradeMinute(row: DeploymentRow, setup: IntradayTradingSetup) {
+    const revision = this.control().revision;
+    const gateOpen = () => {
+      const control = this.control(), current = this.current();
+      return !this.stopping && control.executorToken === this.token && (control.executorExpiresAtMs ?? 0) > this.now()
+        && control.revision === revision && current?.id === row.id && current.status === "ACTIVE" && current.checkpoint === row.checkpoint;
+    };
+    const blocker = this.minuteBlocker(row, setup);
+    if (this.deps.enabled === false || blocker) throw new TradingError(blocker ?? "서버 설정에서 자동매매가 비활성화되었습니다.");
+    const checkpoint = readMinuteCheckpoint(row);
+    const window = nextMinuteWindow(checkpoint, this.now());
+    if (!window || this.now() < this.retryMinuteAt) return;
+    try {
+      const day = kstDateOf(window.from);
+      const source = this.deps.intraday!;
+      const open = source.paperTradingDate?.(day) ?? true;
+      const bars = open ? await source.paperBars(setup.request.symbol, window.from, window.through) : [];
+      if (!gateOpen()) return;
+      const settled = open ? settleMinuteWindow(window.from, window.through, bars, this.now()) : { through: Date.parse(day + "T15:20:00+09:00"), missing: 0 };
+      if (settled.through < window.through) this.retryMinuteAt = this.now() + 15_000;
+      if (settled.through < window.from) return;
+      const output = advanceIntradaySession(setup.request, checkpoint.state, bars, { throughMs: settled.through, signalAfterMs: checkpoint.signalAfterMs });
+      this.deps.database.sqlite.transaction(() => {
+        if (!gateOpen()) return;
+        recordMinuteOrders(this.db, this.slot, row, setup, output.orders, output.fills, output.orderEvents, bars);
+        const missingBars = (checkpoint.gapDate === day ? checkpoint.missingBars ?? 0 : 0) + settled.missing;
+        recordMinuteBalance(this.db, this.slot, row, setup, { ...checkpoint, state: output.state, gapDate: day, missingBars }, this.now());
+        if (missingBars && settled.through === Date.parse(day + "T15:20:00+09:00")) this.event(`${day} 확정 분봉 ${missingBars}개 누락 · 해당 봉의 신호와 체결 생략`, "system", "WARNING");
+        if (output.state.stopped) this.fail(output.warnings.join(" ") || "당일 청산 기한까지 체결되지 않은 수량이 있습니다.");
+      }).immediate();
+    } catch (error) {
+      if (gateOpen()) throw error;
+    }
   }
   private async finishStop(row:DeploymentRow) {
     const account=this.control().accountId;if(!account)throw new TradingError("운용 계좌가 없습니다.");
@@ -834,6 +932,11 @@ export class TradingService {
     if(this.stopping||!this.acquire())return;
     try{
       const row=this.current();
+      const minute = minuteSetup(row);
+      if (minute && row) {
+        if (row.status === "ACTIVE") await this.tradeMinute(row, minute);
+        return;
+      }
       if(row?.status==="STOPPING"||(row?.status==="ERROR"&&this.pending(row.id).length))await this.finishStop(row);
       else if(row?.status==="ACTIVE")await this.trade(row);
       else if(this.control().accountId&&this.now()-(this.control().syncedAtMs??0)>30_000)await this.refresh();

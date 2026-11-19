@@ -3,6 +3,10 @@ import { isDeepStrictEqual } from "node:util";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import { paperTradingAccountId, paperInitialCashSchema, PAPER_TRADING_INITIAL_CASH_KRW, type TradingPresetSummary, type TradingSetup } from "../../../../shared/schemas/trading.js";
 import { TradingError, type TradingService } from "./trading-service.js";
+import type { IntradayRun } from "../../../../shared/schemas/intraday.js";
+import { getIntradayStrategy, intradayRunRequestSchema } from "../../../../shared/schemas/intraday-strategies.js";
+import type { IntradayTradingSetup, TradingSnapshot } from "../../../../shared/schemas/trading.js";
+import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
 
 /** 시세·원천 데이터는 공유하고 주문 허용 상태와 실행기는 모의계좌 단위로 보관한다. */
 export class TradingPresets {
@@ -15,6 +19,8 @@ export class TradingPresets {
     private readonly database: DatabaseHandle,
     private readonly createService: (slot: number) => TradingService,
     private readonly reportError: (error: unknown) => void,
+    private readonly getRun?: (ownerId: string, id: string) => IntradayRun,
+    private readonly verifyReplay?: (run: IntradayRun) => Promise<boolean>,
   ) {
     this.defaultAccount = this.account(1);
   }
@@ -70,6 +76,29 @@ export class TradingPresets {
     if (revision !== 0) throw new TradingError("새 모의투자의 초기 개정 번호는 0입니다.", "STALE_REVISION");
     const cash = paperInitialCashSchema.parse(initialCash ?? PAPER_TRADING_INITIAL_CASH_KRW);
     const validated = await this.defaultAccount.validateRegistration(input);
+    return this.createAccount(validated.setup, cash, requestId,
+      (account, revision) => account.registerValidated(validated, revision, actor, undefined, requestId));
+  }
+
+  async createIntraday(input: { sourceRunId: string; requestId: string; title?: string }, actor: string) {
+    if (!this.getRun) throw new TradingError("분봉 백테스트를 조회할 수 없습니다.");
+    const run = this.getRun(actor, input.sourceRunId);
+    if (run.status !== "COMPLETED" || !run.result) throw new TradingError("완료된 분봉 백테스트만 모의투자로 가져올 수 있습니다.");
+    const parsed = intradayRunRequestSchema.safeParse(run.result.request);
+    if (!parsed.success) throw new TradingError("현재 분봉 엔진에서 지원하지 않는 설정입니다. 백테스트를 복제해 지원 주기·설정으로 다시 실행해 주세요.", "UNSUPPORTED_EXECUTION", 422);
+    const request = parsed.data;
+    const artifact = getIntradayStrategy(request.strategyId);
+    const executionVersion = readRuntimeVersions().executionVersion;
+    if (run.result.strategyVersion !== artifact.version || (run.result.executionVersion !== executionVersion && !await this.verifyReplay?.(run))) {
+      throw new TradingError("실행 버전이 달라 동일 체결을 보장할 수 없습니다. 현재 버전으로 분봉 백테스트를 다시 실행해 주세요.", "UNSUPPORTED_EXECUTION", 422);
+    }
+    const setup: IntradayTradingSetup = { kind: "intraday", sourceRunId: run.id, executionVersion, request, title: input.title };
+    return this.createAccount(setup, request.initialCash, input.requestId,
+      (account, revision) => account.registerValidated({ setup, artifact }, revision, actor, undefined, input.requestId));
+  }
+
+  private createAccount(setup: TradingSetup | IntradayTradingSetup, cash: number, requestId: string,
+    register: (account: TradingService, revision: number) => TradingSnapshot) {
     const { sqlite } = this.database;
     // 계좌 할당, 잔고 생성, 전략 저장을 한 번에 커밋한다. 제거한 전략의 자금은 재사용하지 않는다.
     const created = sqlite.transaction(() => {
@@ -79,7 +108,7 @@ export class TradingPresets {
         LEFT JOIN paper_trading_account a ON a.singleton = d.account_slot WHERE d.id = ?
       `).get(requestId) as {slot: number | null; setup: string; cash: number | null} | undefined;
       if (previous) {
-        if (!previous.slot || previous.cash !== cash || !isDeepStrictEqual(JSON.parse(previous.setup), JSON.parse(JSON.stringify(validated.setup)))) {
+        if (!previous.slot || previous.cash !== cash || !isDeepStrictEqual(JSON.parse(previous.setup), JSON.parse(JSON.stringify(setup)))) {
           throw new TradingError("같은 생성 요청으로 저장한 모의투자의 설정이 다릅니다.", "CREATE_REQUEST_CONFLICT");
         }
         const account = this.account(previous.slot);
@@ -93,7 +122,7 @@ export class TradingPresets {
       sqlite.prepare("INSERT INTO paper_trading_account (singleton, initial_cash, cash) VALUES (?, ?, ?)").run(slot, cash, cash);
       sqlite.prepare("UPDATE trading_control SET snapshot_json = ? WHERE singleton = ?").run(JSON.stringify({ holdings: [], cashBuyingPower: cash }), slot);
       const account = virgin ? this.defaultAccount : this.createService(slot);
-      const snapshot = account.registerValidated(validated, account.snapshot().revision, actor, undefined, requestId);
+      const snapshot = register(account, account.snapshot().revision);
       return { slot, account, snapshot, id: snapshot.deployment!.id };
     }).immediate();
     this.services.set(created.slot, created.account);

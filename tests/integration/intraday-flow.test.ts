@@ -11,6 +11,7 @@ import {
   type IntradaySource,
   type IntradayTerminalEvent,
 } from "../../src/server/modules/intraday/application/intraday-service.js";
+import { runIntradayBacktest } from "../../src/runtime/modules/intraday/domain/engine.js";
 import { executeIntraday } from "../../src/server/modules/intraday/application/forked-intraday-engine.js";
 import { ParquetIntradayStore } from "../../src/server/modules/intraday/infrastructure/parquet-intraday-store.js";
 import { TossIntradaySource } from "../../src/server/modules/intraday/infrastructure/toss-intraday-source.js";
@@ -786,4 +787,66 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
       await service.close();
     } finally { release?.(bars); }
   });
+});
+
+// 실시간 조회는 저장된 봉을 보존하고 누락 봉만 공급자에서 채우며 동시 요청을 합친다.
+it("모의투자 분봉을 장 범위로 제한하고 누락과 동시 조회를 보존한다", async () => {
+  const fetchBars = vi.fn<IntradaySource["fetch"]>(async () => [
+    { ...bars[0]!, close: 999 }, bars[1]!, bars[3]!,
+  ]);
+  const { service, store } = await fixture(fetchBars);
+  await store.merge("005930", [bars[0]!], now);
+  const start = Date.parse(`${date}T08:59:00+09:00`);
+  const end = bars[3]!.endMs;
+  const [first, second] = await Promise.all([
+    service.paperBars("005930", start, end), service.paperBars("005930", start, end),
+  ]);
+  expect(service.paperDataConfigured).toBe(true);
+  expect(fetchBars).toHaveBeenCalledTimes(1);
+  expect(fetchBars.mock.calls[0]!.slice(0, 3)).toEqual(["005930", bars[1]!.endMs, end]);
+  expect(first).toEqual([bars[0], bars[1], bars[3]]);
+  expect(second).toEqual(first);
+  expect((await store.read("005930", start, end)).bars).toEqual(first);
+});
+
+// 휴장일에는 공급자를 호출하지 않고, 공식 달력이 없는 날은 추측하지 않는다.
+it("모의투자 분봉에 공식 거래일 판정을 적용한다", async () => {
+  const fetchBars = vi.fn<IntradaySource["fetch"]>(async () => []);
+  const { service } = await fixture(fetchBars, { classify: (day) => ({ state: day === date ? "CLOSED" : "UNKNOWN" }) });
+  expect(await service.paperBars("005930", bars[0]!.endMs, bars[1]!.endMs)).toEqual([]);
+  await expect(service.paperBars("005930", bars[0]!.endMs + 86_400_000, bars[1]!.endMs + 86_400_000)).rejects.toThrow("공식 거래일 달력");
+  expect(fetchBars).not.toHaveBeenCalled();
+});
+
+// 과거 전체 수집이 공급자를 기다리는 동안에도 확정된 실시간 봉을 별도로 준비한다.
+it("과거 수집 대기와 실시간 수집을 분리하고 상장일을 검증한다", async () => {
+  let entered!: () => void, release!: () => void;
+  const waiting = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  cleanups.unshift(async () => release());
+  let call = 0;
+  const fetchBars = vi.fn<IntradaySource["fetch"]>(async () => {
+    if (++call === 1) { entered(); await gate; return []; }
+    return [bars[0]!];
+  });
+  const validateSymbol = vi.fn(async () => ({ listDate: "2020-01-01", isinCode: "KR7005930003" }));
+  const { service } = await fixture(fetchBars, { validateSymbol });
+  service.collect("owner", { symbol: "005930", period: { from: date, to: date } });
+  await waiting;
+  expect(await service.paperBars("005930", bars[0]!.endMs, bars[0]!.endMs)).toEqual([bars[0]]);
+  expect(fetchBars).toHaveBeenCalledTimes(2);
+  expect(validateSymbol).toHaveBeenCalledTimes(2);
+  release();
+});
+
+it("이전 버전의 분봉 결과는 같은 원본 기간의 체결과 잔고를 재현해야 가져올 수 있다", async () => {
+  const { service, store } = await fixture();
+  await store.merge(request.symbol, bars, now);
+  const result = runIntradayBacktest({ request, bars, dataRevision: "원본", tradingDates: [date] });
+  result.executionVersion = "previous-version";
+  const run: IntradayRun = { id: randomUUID(), createdAtMs: now, updatedAtMs: now, request, result, error: null, status: "COMPLETED" };
+  expect(result.fills.length).toBeGreaterThan(0);
+  await expect(service.verifyPaperReplay(run)).resolves.toBe(true);
+  result.fills[0]!.price++;
+  await expect(service.verifyPaperReplay(run)).resolves.toBe(false);
 });

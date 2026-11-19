@@ -11,17 +11,18 @@ function todayIso(): string {
   return `${now.getFullYear()}-${month}-${day}`;
 }
 
-/** `iso` 에서 `days`일을 뺀 날짜(UTC 자정 기준 — SymbolMasterPanel 의 날짜 비교와 같은 기준) */
-function daysBeforeIso(iso: string, days: number): string {
+/** 지정한 일수 이전의 평일을 고른다. 주말에는 가짜 KRX도 거래 데이터를 주지 않는다. */
+function weekdayBeforeIso(iso: string, days: number): string {
   const [year, month, day] = iso.split('-').map(Number);
   const date = new Date(Date.UTC(year!, month! - 1, day!));
   date.setUTCDate(date.getUTCDate() - days);
+  while (date.getUTCDay() === 0 || date.getUTCDay() === 6) date.setUTCDate(date.getUTCDate() - 1);
   return date.toISOString().slice(0, 10);
 }
 
 /**
  * 과거의 임의의 하루 — 실제 날짜값 자체는 유니버스 구성에 의미가 없다.
- * 가짜 KRX 서버는 어느 날짜를 물어도 같은 종목·시가총액을 낸다
+ * 가짜 KRX 서버는 거래일마다 같은 종목·시가총액을 낸다
  * (scripts/e2e-server.ts 참고). 005930 의 일별 가격만은 날짜에 따라
  * 추세를 그리지만, 이 스펙은 가격을 보지 않으므로 무관하다.
  *
@@ -74,7 +75,7 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
   // 프로젝트는 이미 커버된 날짜를 만난다 — 프로젝트별로 다른 날을 써서 피한다.
   // 하루 차이로만 떨어뜨리면 mergeCoverage 가 두 프로젝트의 구간을 하나로 합쳐
   // "세그먼트가 하나 늘었는지" 판정이 깨진다 — 충분히 떨어뜨려 별개 구간으로 남긴다.
-  const target = daysBeforeIso(todayIso(), testInfo.project.name === 'mobile' ? 1 : 10);
+  const target = weekdayBeforeIso(todayIso(), testInfo.project.name === 'mobile' ? 1 : 10);
   await page.goto(`/datasets/master?date=${target}`);
   await expect(page.getByText(/데이터 미수집/)).toBeVisible();
   const syncThisDate = page.getByRole('button', { name: '이 날짜 동기화' });

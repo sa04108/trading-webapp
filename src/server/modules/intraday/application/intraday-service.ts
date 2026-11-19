@@ -1,5 +1,6 @@
 import { intradayRunRequestSchema } from "../../../../shared/schemas/intraday-strategies.js";
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { readRiskFreeRateHistory } from "../../../../runtime/modules/market-data/infrastructure/sqlite-risk-free-rate-store.js";
 import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
@@ -22,6 +23,7 @@ import {
   intradayPeriodMs,
   intradayRequestSchema,
   intradayRetentionDate,
+  intradaySymbolSchema,
   type IntradayBar,
   type IntradayChart,
   type IntradayCollection,
@@ -63,6 +65,7 @@ export interface IntradayStore {
     bars: IntradayBar[],
     nowMs: number,
   ): Promise<IntradaySymbolData>;
+  mergeMissing?(symbol: string, bars: IntradayBar[], nowMs: number): Promise<IntradaySymbolData>;
   prune(nowMs: number): Promise<void>;
 }
 export interface IntradaySource {
@@ -140,6 +143,8 @@ export class IntradayService {
   private recovered = false;
   private readonly tasks = new Set<Promise<void>>();
   private collectionQueue: Promise<void> = Promise.resolve();
+  private readonly paperRequests = new Map<string, Promise<IntradayBar[]>>();
+  private readonly paperControllers = new Set<AbortController>();
   private runQueue: Promise<void> = Promise.resolve();
   private closing = false;
   private pruneTask: Promise<void> | null = null;
@@ -371,6 +376,62 @@ export class IntradayService {
         .all()
         .map((row) => this.collection(row)),
     };
+  }
+  get paperDataConfigured(): boolean {
+    return this.options.source !== null;
+  }
+  paperTradingDate(date: string): boolean {
+    return this.tradingDates({ from: date, to: date }).length === 1;
+  }
+  async paperBars(symbol: string, fromMs: number, throughMs: number): Promise<IntradayBar[]> {
+    this.checkCapacity(true);
+    intradaySymbolSchema.parse(symbol);
+    if (!Number.isSafeInteger(fromMs) || !Number.isSafeInteger(throughMs) || fromMs > throughMs || intradayDate(fromMs) !== intradayDate(throughMs))
+      throw new IntradayError("모의투자 분봉 조회 범위가 올바르지 않습니다.", 400);
+    if (fromMs < this.now() - INTRADAY_RETENTION_DAYS * 86_400_000) throw new IntradayError("분봉은 최근 365일 범위에서 조회할 수 있습니다.", 400);
+    const date = intradayDate(fromMs);
+    if (!this.paperTradingDate(date)) return [];
+    const start = Math.max(fromMs, Date.parse(`${date}T09:01:00+09:00`));
+    const end = Math.min(throughMs, Date.parse(`${date}T15:20:00+09:00`), this.now() - MINUTE_MS);
+    if (start > end) return [];
+    const key = JSON.stringify([symbol, start, end]);
+    const existing = this.paperRequests.get(key);
+    if (existing) return existing.then((bars) => bars.map((bar) => ({ ...bar })));
+    const controller = new AbortController();
+    this.paperControllers.add(controller);
+    const task = (async () => {
+      controller.signal.throwIfAborted();
+      const stored = await this.options.store.read(symbol, start, end);
+      controller.signal.throwIfAborted();
+      const present = new Set(stored.bars.map((bar) => bar.endMs));
+      const missing: number[] = [];
+      for (let at = Math.ceil(start / MINUTE_MS) * MINUTE_MS; at <= end; at += MINUTE_MS)
+        if (!present.has(at)) missing.push(at);
+      if (missing.length) {
+        if (!this.options.source) throw new IntradayError("서버의 토스증권 API 연결 설정을 확인하세요.");
+        const instrument = await this.options.validateSymbol?.(symbol, controller.signal);
+        controller.signal.throwIfAborted();
+        if (instrument && date < instrument.listDate) throw new IntradayError("조회 기간은 현재 종목의 상장일 이전입니다.");
+        if (!this.options.store.mergeMissing) throw new IntradayError("확정 분봉 저장 기능을 사용할 수 없습니다.");
+        const fetched = await this.options.source.fetch(symbol, missing[0]!, missing.at(-1)!, { signal: controller.signal });
+        controller.signal.throwIfAborted();
+        const missingSet = new Set(missing);
+        const additions = fetched.filter((bar) => missingSet.has(bar.endMs));
+        if (additions.length) await this.options.store.mergeMissing(symbol, additions, this.now());
+      }
+      controller.signal.throwIfAborted();
+      const result = await this.options.store.read(symbol, start, end);
+      controller.signal.throwIfAborted();
+      return result.bars.sort((a, b) => a.endMs - b.endMs);
+    })();
+    this.paperRequests.set(key, task);
+    this.track(task.then(() => {}, () => {}));
+    try {
+      return (await task).map((bar) => ({ ...bar }));
+    } finally {
+      this.paperRequests.delete(key);
+      this.paperControllers.delete(controller);
+    }
   }
   async search(query: string): Promise<{ symbol: string; name: string }[]> {
     return this.options.search(query);
@@ -705,6 +766,37 @@ export class IntradayService {
     // 기간 검증은 봉뿐 아니라 Sharpe에 사용한 금리표도 동일하게 고정한다.
     return createHash("sha256").update(`${barRevision}:${rateVersion}`).digest("hex");
   }
+  private readonly paperReplays = new Map<string, Promise<boolean>>();
+
+  /** 이전 실행 버전은 원본 기간의 신호·체결·평가 곡선을 현재 엔진으로 재현한 경우에만 가져온다. */
+  async verifyPaperReplay(run: IntradayRun): Promise<boolean> {
+    const original = run.result;
+    if (!original || !original.executionVersion || !original.processedBars) return false;
+    const existing = this.paperReplays.get(run.id);
+    if (existing) return existing;
+    this.checkCapacity();
+    const key = randomUUID(), controller = new AbortController();
+    this.controllers.set(key, controller);
+    const replay = this.runQueue.then(async () => {
+      controller.signal.throwIfAborted();
+      const request = original.request;
+      const { fromMs, toMs } = this.bounds(request.period, true);
+      const { bars, revision } = await this.options.store.read(request.symbol, fromMs, toMs);
+      if (bars.length < original.processedBars) return false;
+      const result = await this.options.execute({ request, bars, dataRevision: revision,
+        tradingDates: this.tradingDates(request.period), riskFreeRates: readRiskFreeRateHistory(this.options.db) }, controller.signal);
+      return result.executionVersion === readRuntimeVersions().executionVersion &&
+        result.processedBars === original.processedBars && result.metrics.totalCosts === original.metrics.totalCosts &&
+        isDeepStrictEqual(result.position, original.position) && isDeepStrictEqual(result.signals, original.signals) &&
+        isDeepStrictEqual(result.orderEvents, original.orderEvents) && isDeepStrictEqual(result.fills, original.fills) &&
+        isDeepStrictEqual(result.equity, original.equity);
+    }).finally(() => { this.controllers.delete(key); this.paperReplays.delete(run.id); });
+    this.paperReplays.set(run.id, replay);
+    this.runQueue = replay.then(() => {}, () => {});
+    this.track(this.runQueue);
+    return replay;
+  }
+
   getRunState(ownerId: string, id: string): { status: string; error: string | null } {
     const row = this.options.db.select({ status: intradayRuns.status, error: intradayRuns.error }).from(intradayRuns).where(and(eq(intradayRuns.id, id), eq(intradayRuns.ownerId, ownerId))).get();
     if (!row) throw new IntradayError("분봉 백테스트를 찾을 수 없습니다.", 404);
@@ -848,6 +940,7 @@ export class IntradayService {
     this.chartCache.clear();
     clearInterval(this.timer);
     for (const controller of this.controllers.values()) controller.abort();
+    for (const controller of this.paperControllers) controller.abort();
     await Promise.allSettled([
       ...this.tasks,
       ...(this.pruneTask ? [this.pruneTask] : []),

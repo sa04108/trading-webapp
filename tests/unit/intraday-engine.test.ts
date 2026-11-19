@@ -429,3 +429,21 @@ describe("분봉 정보 시각과 주문 생명주기", () => {
   });
 
 });
+
+// 재시작 시 부분 체결, 지표 집계와 주문 시계를 보존하는지 검증한다.
+it("직렬화 후 이어 실행해도 단일 실행과 동일한 주문과 체결을 만든다", async () => {
+  const { initialIntradayState, advanceIntradaySession } = await import("../../src/runtime/modules/intraday/domain/session-engine.js");
+  const req = request();
+  const data = bars();
+  data[7]!.volume = 100;
+  const one = advanceIntradaySession(req, initialIntradayState(req), data, { throughMs: at("15:20") });
+  const first = advanceIntradaySession(req, initialIntradayState(req), data.slice(0, 8), { throughMs: data[7]!.endMs });
+  expect(first.state.pending).toMatchObject({ requestedQty: 94, remainingQty: 84 });
+  const second = advanceIntradaySession(req, JSON.parse(JSON.stringify(first.state)), data.slice(8), { throughMs: at("15:20") });
+  expect([...first.signals, ...second.signals]).toEqual(one.signals);
+  expect([...first.orders, ...second.orders]).toEqual(one.orders);
+  expect([...first.fills, ...second.fills]).toEqual(one.fills);
+  expect([...first.orderEvents, ...second.orderEvents]).toEqual(one.orderEvents);
+  expect([...first.equity, ...second.equity]).toEqual(one.equity);
+  expect(second.state).toEqual(one.state);
+});

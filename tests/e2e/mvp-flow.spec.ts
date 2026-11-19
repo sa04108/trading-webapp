@@ -13,7 +13,8 @@ import { advanceFromPeriod } from './backtest-wizard';
  * SEED_DATE(2024-12-30)와 겹치지 않는다 — 두 스펙이 같은 서버를
  * 공유해도(playwright.config workers:1) coverage 판정에서 서로 간섭하지 않는다.
  */
-const PERIOD = { from: '2026-01-05', to: '2026-03-31' };
+// 마지막 익절 이전의 거래일까지 실행해 미청산 포지션 표시도 함께 검증한다.
+const PERIOD = { from: '2026-01-05', to: '2026-03-26' };
 /** KOSPI 상위 1종목만 — 900010(상장폐지예정1호)은 시가총액이 더 낮아 순위 밖으로 빠진다 */
 const TOP_N = 1;
 
@@ -108,6 +109,18 @@ async function previewAndSyncUniverse(page: Page): Promise<void> {
   });
 }
 
+/** 완료 배지 대신 실제 작업 상태와 완료 결과 화면을 함께 확인한다. */
+async function waitForCompletedBacktest(page: Page): Promise<void> {
+  const jobPath = new URL(page.url()).pathname;
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/v1${jobPath}`);
+    expect(response.ok()).toBe(true);
+    const body = await response.json() as { job: { status: string } };
+    return body.job.status;
+  }, { timeout: 90_000 }).toBe('COMPLETED');
+  await expect(page.getByText('누적 수익률', { exact: true })).toBeVisible();
+}
+
 /** 스펙 §33 E2E 흐름: 로그인 → 생성 → 제출 → 완료 → 결과 → 거래 필터 → clone → 로그아웃 */
 test('full MVP flow', async ({ page }) => {
   // 종목명 소스를 스텁한다 — 테스트 환경엔 소스가 설정돼 있지 않아 이름이 항상
@@ -173,7 +186,9 @@ test('full MVP flow', async ({ page }) => {
     'aria-current',
     'step',
   );
-  await expect(page.getByLabel('시장')).toContainText('KOSPI');
+  await expect(page.getByLabel('시장')).toHaveText('코스피+코스닥');
+  await page.getByLabel('시장').click();
+  await page.getByRole('option', { name: '코스피', exact: true }).click();
   // 이 시나리오는 기본 단일 MARKET_CAP 단계만 사용한다.
   await page.getByLabel('N', { exact: true }).fill(String(TOP_N));
   await previewAndSyncUniverse(page);
@@ -225,8 +240,8 @@ test('full MVP flow', async ({ page }) => {
   await page.getByRole('button', { name: '백테스트 실행' }).click();
   await expect(page).toHaveURL(/\/backtests\/bt_/);
 
-  // 4. 완료 대기 (SSE 진행률 → 완료 badge)
-  await expect(page.getByText('완료', { exact: true })).toBeVisible({ timeout: 90_000 });
+  // 4. 서버 완료 상태와 결과 화면을 함께 확인한다.
+  await waitForCompletedBacktest(page);
 
   // 5. 결과 조회: 지표 카드 + 차트 + 거래 내역 (미청산 포지션은 거래 내역 상단 배지 행)
   await expect(page.getByText('누적 수익률', { exact: true })).toBeVisible();
@@ -255,6 +270,8 @@ test('full MVP flow', async ({ page }) => {
   const tradeRows = page.getByRole('row').filter({ hasText: '005930' });
   await expect(tradeRows.first()).toBeVisible();
 
+  // 주말을 제외한 작은 거래 픽스처에서도 두 페이지 이동을 검증한다.
+  await page.getByLabel('거래 내역 페이지당 표시 수').fill('3');
   const tradesPagination = page.getByRole('navigation', {
     name: '거래 내역 페이지 이동',
   });
@@ -314,6 +331,8 @@ test('full MVP flow', async ({ page }) => {
   await expect
     .poll(() => page.url(), { timeout: 10_000 })
     .not.toBe(originalUrl);
+  // 복제 작업도 끝내 다음 시나리오의 준비 작업과 DB 쓰기가 겹치지 않게 한다.
+  await waitForCompletedBacktest(page);
 
   // 7-1. 픽스처의 보통주 후보는 DART corp_code 매핑에 없으므로 재무 수집이
   // 차단 gap을 남긴다. 준비가 실패하고 해당 종목과 원인을 화면에 표시해야 한다.
@@ -467,6 +486,8 @@ test('backtest run completes using only KRX daily bars for a delisted stock', as
   await page.getByLabel('종료일').fill(period.to);
   await advanceFromPeriod(page); // 기간 → 유니버스
 
+  await page.getByLabel('시장', { exact: true }).click();
+  await page.getByRole('option', { name: '코스피', exact: true }).click();
   await page.getByLabel('N', { exact: true }).fill('2');
   await previewAndSyncUniverse(page);
 
@@ -483,7 +504,7 @@ test('backtest run completes using only KRX daily bars for a delisted stock', as
 
   await page.getByRole('button', { name: '백테스트 실행' }).click();
   await expect(page).toHaveURL(/\/backtests\/bt_/);
-  await expect(page.getByText('완료', { exact: true })).toBeVisible({ timeout: 90_000 });
+  await waitForCompletedBacktest(page);
 
   // 대시보드는 전략 한국어 이름을 보인다 — kebab-case 식별자가 새면 안 된다 (D-044)
   await page.goto('/');

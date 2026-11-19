@@ -714,11 +714,37 @@ test("분봉의 다른 전략 페이지 자동 보정은 기존 선택을 유지
   });
   await page.goto("/backtests/intraday?view=table&page.intraday-ema=2");
   const group = page.locator("section").filter({ has: page.getByRole("heading", { name: "시초가 범위 돌파", exact: true }) });
-  await page.getByRole("button", { name: "편집", exact: true }).click();
-  const checkbox = group.getByRole("checkbox");
+  await group.getByRole("button", { name: "편집", exact: true }).click();
+  const checkbox = group.getByRole("checkbox", { name: /백테스트 선택$/ });
   await checkbox.check();
   shrink = true;
   await page.clock.runFor(5_100);
   await expect(page).not.toHaveURL(/page\.intraday-ema=2/);
   await expect(checkbox).toBeChecked();
+});
+
+// 생성 응답 유실 뒤 재시도할 때 같은 요청 ID를 사용해야 중복 계좌가 생기지 않는다.
+test("완료된 분봉 결과로 모의투자를 만들고 실패 후 같은 요청을 재시도한다", async ({ page }) => {
+  await login(page);
+  await page.route("**/api/v1/intraday/runs/done", (route) => route.fulfill({ json: completed }));
+  await page.route("**/api/v1/intraday/chart?**", (route) => route.fulfill({ json: { symbol: request.symbol, timeframe: request.timeframe, bars: [], revision: "test", gaps: [], totalBars: 0, truncated: false } }));
+  const requests: { sourceRunId: string; requestId: string }[] = [];
+  await page.route("**/api/v1/trading/intraday-presets", (route) => {
+    requests.push(route.request().postDataJSON());
+    return requests.length === 1
+      ? route.fulfill({ status: 503, json: { error: "응답을 받지 못했습니다." } })
+      : route.fulfill({ status: 201, json: { id: "paper-minute", snapshot: {} } });
+  });
+  await page.goto("/backtests/intraday/done");
+  const card = page.getByText("분봉 모의투자", { exact: true }).locator("xpath=../..");
+  await expect(card).toContainText("005930");
+  await expect(card).toContainText("확정된 1분 OHLCV");
+  await page.getByRole("button", { name: "이 결과로 모의투자 만들기" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "응답을 받지 못했습니다." })).toBeVisible();
+  await page.reload();
+  await page.getByRole("button", { name: "이 결과로 모의투자 만들기" }).click();
+  await expect(page).toHaveURL(/\/trading\?presetId=paper-minute/);
+  expect(requests).toHaveLength(2);
+  expect(requests[0]).toEqual({ sourceRunId: "done", requestId: expect.any(String) });
+  expect(requests[1]).toEqual(requests[0]);
 });
