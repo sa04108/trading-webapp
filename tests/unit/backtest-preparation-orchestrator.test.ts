@@ -5,13 +5,15 @@ import { Worker } from 'node:worker_threads';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
-import { backtestPreparationJobs } from '../../src/runtime/shared/db/schema.js';
+import { backtestPreparationJobs, symbols } from '../../src/runtime/shared/db/schema.js';
 import {
   BacktestPreparationOrchestrator,
   type PreparationInput,
   type BacktestPreparationJobDto,
 } from '../../src/runtime/modules/backtest/application/backtest-preparation-orchestrator.js';
 import { backtestPreparationRequestHash } from '../../src/runtime/modules/backtest/application/backtest-preparation-plan.js';
+import { PreparationPreviewCache } from '../../src/runtime/modules/backtest/application/preparation-preview-cache.js';
+import { SqliteCorporateActionCoverageStore } from '../../src/runtime/modules/facts/application/corporate-action-coverage.js';
 import { preparationRuntimeVersionsJson } from '../../src/runtime/modules/backtest/application/preparation-runtime-versions.js';
 import { StrategyRegistry } from '../../src/runtime/modules/strategy/application/strategy-registry.js';
 import { KrxQuotaError } from '../../src/runtime/modules/market-data/application/ports.js';
@@ -499,7 +501,7 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
     ctx.handle.close();
   });
 
-  it('final sync 뒤 새 최종 멤버의 보정 불가 gap도 제외하고 다시 차순위를 고른다', async () => {
+  it('final sync 뒤 새 최종 멤버의 보정 불가 gap은 경고하고 유지한다', async () => {
     let resolveCalls = 0;
     const ctx = makeDeps({
       resolver: {
@@ -534,28 +536,25 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
           symbols.map((symbol) => [symbol, [2025, 2026]]),
         ),
         getGapYears: (symbols: readonly string[]) => new Map(
-          symbols.map((symbol) => [symbol, symbol === '000660' ? [2025] : []]),
+          symbols.map((symbol) => [symbol, symbol === '000660' ? [2026] : []]),
         ),
       },
     });
-    ctx.deps.symbolMaster.sharesChangesBetween = () => [
-      { shortCode: '000660', effectiveDate: '2026-01-05', ratio: 2 },
-    ];
     const orchestrator = trackedOrchestrator(ctx.deps as never);
 
     const job = orchestrator.start(INPUT);
     await waitFor(() => ['COMPLETED', 'FAILED'].includes(orchestrator.get(job.id)?.status ?? ''));
 
     expect(orchestrator.get(job.id)?.status).toBe('COMPLETED');
-    expect(orchestrator.getPreview(job.id)?.unionSymbols).toEqual(['035420']);
+    expect(orchestrator.getPreview(job.id)?.unionSymbols).toEqual(['000660']);
     expect(orchestrator.getPreview(job.id)?.warnings).toEqual([
-      expect.stringMatching(/종목 000660을 매매 대상에서 제외.*2025년.*상세 사유/),
+      expect.stringMatching(/종목 000660.*선정 또는 매매에 영향.*2026년.*상세 사유/),
     ]);
     await orchestrator.stop();
     ctx.handle.close();
   });
 
-  it('최종 유니버스의 KRX 정렬 불가 종목도 제외하고 차순위를 고른다', async () => {
+  it('최종 유니버스의 KRX 정렬 불가 종목은 경고하고 유지한다', async () => {
     const ctx = makeDeps({
       resolver: {
         resolveOrDescribeNeeds: async (
@@ -605,10 +604,10 @@ describe('BacktestPreparationOrchestrator 자본변동 gap 제외', () => {
     await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
 
     const preview = orchestrator.getPreview(job.id);
-    expect(preview?.unionSymbols).toEqual(['000660']);
+    expect(preview?.unionSymbols).toEqual(['005930']);
     expect(preview?.warnings).toEqual([
       expect.stringMatching(
-        /종목 005930을 매매 대상에서 제외.*2025-12-31.*KRX 상장주식수 변경일과 정렬할 수 없는/,
+        /종목 005930.*선정 또는 매매에 영향.*2025-12-31.*KRX 상장주식수 변경일과 정렬할 수 없는/,
       ),
     ]);
     await orchestrator.stop();
@@ -933,6 +932,9 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
       },
     ]).run();
 
+    const cache = new PreparationPreviewCache(ctx.handle);
+    cache.store('prep_latest_reusable', cache.revision(), ['005930']);
+
     expect(orchestrator.getCachedPreview(valueInput)?.warnings).toEqual(['latest reusable']);
     expect(await orchestrator.getReadyPreview(valueInput)).not.toBeNull();
 
@@ -983,24 +985,9 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
     ctx.handle.close();
   });
 
-  it('완료 뒤 관련 blocking action gap이 생기면 ready/cached preview를 재사용하지 않는다', async () => {
-    const gapDetails = new Map<string, readonly {
-      year: number;
-      periodKey: string;
-      reason: string;
-      severity: 'BLOCKING';
-    }[]>([['005930', []]]);
+  it('완료 뒤 새 blocking action gap이 생기면 오래된 preview를 재사용하지 않는다', async () => {
     const ctx = makeDeps({
       strategies: new StrategyRegistry(),
-      actionCoverage: {
-        getCoveredYears: (symbols: readonly string[]) => new Map(
-          symbols.map((symbol) => [symbol, [2025, 2026]]),
-        ),
-        getGapYears: () => new Map<string, readonly number[]>(),
-        getGapDetails: (symbols: readonly string[]) => new Map(
-          symbols.map((symbol) => [symbol, gapDetails.get(symbol) ?? []]),
-        ),
-      },
       factCoverage: {
         getCoverageState: (symbols: readonly string[]) => new Map(
           symbols.map((symbol) => [symbol, {
@@ -1009,30 +996,37 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
         ),
       },
     });
-    ctx.deps.symbolMaster.sharesChangesBetween = () => [
-      { shortCode: '005930', effectiveDate: '2026-01-05', ratio: 2 },
-    ];
-    const orchestrator = trackedOrchestrator(ctx.deps as never);
+    ctx.handle.db.insert(symbols).values({ code: '005930', market: 'KR', createdAtMs: 1 }).run();
+    const coverage = new SqliteCorporateActionCoverageStore(ctx.handle.db);
+    coverage.addCoverageResult('005930', [2025, 2026], [], 1);
+    const orchestrator = trackedOrchestrator({ ...ctx.deps, actionCoverage: coverage } as never);
 
     const job = orchestrator.start(valueInput);
     await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
     expect(await orchestrator.getReadyPreview(valueInput)).not.toBeNull();
     expect(orchestrator.getCachedPreview(valueInput)).not.toBeNull();
 
-    gapDetails.set('005930', [{
-      year: 2025,
-      periodKey: '2025-12-31',
-      reason: '비율을 계산할 수 없습니다.',
-      severity: 'BLOCKING',
-    }]);
+    coverage.addCoverageResult('005930', [2026], [2026], 2);
     expect(await orchestrator.getReadyPreview(valueInput)).toBeNull();
-    expect(orchestrator.getCachedPreview(valueInput)).toBeNull();
+    expect(orchestrator.getCachedPreview(valueInput, job.id)).toBeNull();
+    expect(await orchestrator.getCachedPreviewIsolated(valueInput, job.id)).toBeNull();
+    ctx.setNow(Date.parse('2026-01-05T00:00:01Z'));
+    const affected = orchestrator.start(valueInput);
+    await waitFor(() => orchestrator.get(affected.id)?.status === 'COMPLETED');
+    expect(orchestrator.getCachedPreview(valueInput, affected.id)?.warnings).toEqual([
+      expect.stringMatching(/005930.*선정 또는 매매에 영향.*2026년/),
+    ]);
+
+    coverage.addCoverageResult('005930', [2026], [], 3);
+    expect(orchestrator.getCachedPreview(valueInput, affected.id)).toBeNull();
+    expect(await orchestrator.getCachedPreviewIsolated(valueInput, affected.id)).toBeNull();
+    expect(await orchestrator.getReadyPreview(valueInput)).toBeNull();
 
     await orchestrator.stop();
     ctx.handle.close();
   });
 
-  it('최종 종목의 blocking action gap은 전 기간에서 제외하고 차순위와 사유를 고정한다', async () => {
+  it('최종 종목의 blocking action gap은 전 기간 제외 없이 사유를 고정한다', async () => {
     const seenExcludedSymbols: string[][] = [];
     const gap = {
       year: 2025,
@@ -1080,12 +1074,12 @@ describe('BacktestPreparationOrchestrator 완료 preview coverage 불변식', ()
     await waitFor(() => orchestrator.get(job.id)?.status === 'COMPLETED');
 
     const preview = orchestrator.getPreview(job.id);
-    expect(preview?.unionSymbols).toEqual(['000660']);
+    expect(preview?.unionSymbols).toEqual(['005930']);
     expect(preview?.warnings).toEqual([
-      '자본변동 정보를 온전히 확보할 수 없어 종목 005930을 매매 대상에서 제외했습니다 — '
+      '자본변동 정보를 온전히 확보할 수 없어 종목 005930의 선정 또는 매매에 영향을 줄 수 있습니다 — '
         + '2025년/2025-12-31: 분류할 수 없는 발행형태: -.',
     ]);
-    expect(seenExcludedSymbols).toContainEqual(['005930']);
+    expect(seenExcludedSymbols).not.toContainEqual(['005930']);
     const readyPreview = await orchestrator.getReadyPreview(valueInput);
     expect(readyPreview?.scheduleHash).toBe(preview?.scheduleHash);
     expect(readyPreview?.warnings).toEqual(preview?.warnings);

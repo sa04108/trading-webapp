@@ -43,7 +43,8 @@ describe("고정 전략 데이터 준비", () => {
   });
   it("형식 오류 결손의 종목, 기간과 원인을 전달한다", async () => {
     const f = fixture();
-    f.deps.facts.syncCorporateActions.mockResolvedValueOnce({ savedFacts: 0, gapCount: 1, gaps: [{ symbol: "005930", periodKey: "2024-Q1", reason: "잘못된 비율", severity: "BLOCKING", kind: "INVALID" }], stoppedAtSymbol: null, stopReason: null, failureMessage: null });
+    f.deps.facts.syncCorporateActions.mockResolvedValue({ savedFacts: 0, gapCount: 1, gaps: [{ symbol: "005930", periodKey: "2024-Q1", reason: "잘못된 비율", severity: "BLOCKING", kind: "INVALID" }], stoppedAtSymbol: null, stopReason: null, failureMessage: null });
+    await expect(f.preparer.prepare({ ...emptyNeed, actions: need.actions }, f.progress, f.shouldStop)).resolves.toContain("005930 2024-Q1: 잘못된 비율");
     await expect(f.preparer.prepare({ ...emptyNeed, repairs: [{ kind: "CORPORATE_ACTION", symbol: "005930", year: 2024 }] }, f.progress, f.shouldStop)).rejects.toThrow("005930 2024-Q1: 잘못된 비율");
   });
   it("수집 실패와 취소를 호출자에게 전달한다", async () => {

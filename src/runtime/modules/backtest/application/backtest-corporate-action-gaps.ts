@@ -1,3 +1,4 @@
+import type { ActionGapPeriod } from "../domain/action-gap.js";
 import type {
   CorporateActionCoverageStore,
   CorporateActionGapDetail,
@@ -6,7 +7,7 @@ import {
   CORPORATE_ACTION_ALIGNMENT_WINDOW,
   type SharesChange,
 } from "../../facts/domain/corporate-action-effective-date.js";
-import { addCalendarDays } from "../../market-data/domain/kst-date.js";
+import { addCalendarDays, isWeekendDate } from "../../market-data/domain/kst-date.js";
 
 export interface RelevantCorporateActionGap extends CorporateActionGapDetail {
   readonly symbol: string;
@@ -49,71 +50,22 @@ export function readCorporateActionGapDetails(
   );
 }
 
-/**
- * DART gap 중 KRX 상장주식수 변경과 날짜상 연결되는 것만 매매 대상 제외 사유로 고른다.
- *
- * 상장 전 기준 주식수나 사건 없는 연도의 빈 앵커는 KRX 변경이 없으므로 제외된다.
- * 반대로 일자·발행형태가 깨진 행 주변에 실제 KRX 변경이 있으면 보정 비율을 만들
- * 근거가 부족한 것이므로 해당 종목을 제외한다. KRX 비율만으로 유상/무상을 추측하지 않는다.
- */
+/** DECLINE 순위 계산에 사용되는 날짜에도 매매와 동일한 자본변동 경계를 적용한다. */
 export function findRelevantCorporateActionGaps(
   detailsBySymbol: ReadonlyMap<string, readonly CorporateActionGapDetail[]>,
   sharesChanges: readonly SharesChange[],
   window: CorporateActionGapWindow,
 ): RelevantCorporateActionGap[] {
-  const changesBySymbol = new Map<string, SharesChange[]>();
-  for (const change of sharesChanges) {
-    if (
-      change.effectiveDate < window.executionFrom ||
-      change.effectiveDate > window.executionTo
-    ) {
-      continue;
-    }
-    const changes = changesBySymbol.get(change.shortCode) ?? [];
-    changes.push(change);
-    changesBySymbol.set(change.shortCode, changes);
-  }
-  const rawFromYear = Number(window.rawFrom.slice(0, 4));
-  const rawToYear = Number(window.rawTo.slice(0, 4));
+  if (window.executionFrom > window.executionTo) return [];
+  const selected = new Map([...detailsBySymbol].map(([symbol, rows]) => [symbol, rows.filter(row => {
+    const raw = normalizedExactDate(row.periodKey);
+    return !raw || (raw >= window.rawFrom && raw <= window.rawTo);
+  })]));
+  const years = new Map([...selected].map(([symbol, rows]) => [symbol, [...new Set(rows.map(row => row.year))]]));
   const relevant: RelevantCorporateActionGap[] = [];
-
-  for (const [symbol, details] of detailsBySymbol) {
-    const changes = changesBySymbol.get(symbol) ?? [];
-    if (changes.length === 0) continue;
-    for (const detail of details) {
-      if (detail.severity !== "BLOCKING") continue;
-      const rawDate = normalizedExactDate(detail.periodKey);
-      if (rawDate === null) {
-        if (detail.year < rawFromYear || detail.year > rawToYear) continue;
-      } else {
-        if (rawDate < window.rawFrom || rawDate > window.rawTo) continue;
-        const firstMatchingChange = addCalendarDays(
-          rawDate,
-          -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
-        );
-        const lastMatchingChange = addCalendarDays(
-          rawDate,
-          CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays,
-        );
-        if (
-          !changes.some(
-            (change) =>
-              change.effectiveDate >= firstMatchingChange &&
-              change.effectiveDate <= lastMatchingChange,
-          )
-        )
-          continue;
-      }
-      relevant.push({ symbol, ...detail });
-    }
-  }
-  return relevant.sort(
-    (left, right) =>
-      left.symbol.localeCompare(right.symbol) ||
-      left.year - right.year ||
-      left.periodKey.localeCompare(right.periodKey) ||
-      left.reason.localeCompare(right.reason),
-  );
+  corporateActionGapPeriods({ getGapYears: () => years, getGapDetails: () => selected }, [...selected.keys()], [], sharesChanges,
+    true, { from: window.executionFrom, to: window.executionTo }, [], gap => relevant.push(gap));
+  return relevant.sort((a, b) => a.symbol.localeCompare(b.symbol) || a.year - b.year || a.periodKey.localeCompare(b.periodKey) || a.reason.localeCompare(b.reason));
 }
 
 function normalizedExactDate(periodKey: string): string | null {
@@ -125,4 +77,90 @@ function normalizedExactDate(periodKey: string): string | null {
     parsed.toISOString().slice(0, 10) !== normalized
     ? null
     : normalized;
+}
+
+type MasterCoverage = boolean | readonly { startDate: string; endDate: string }[];
+
+/** KRX가 확인된 날짜는 실제 주식수 변경일에만 경계를 두고, 미확인 날짜에는 공시의 정렬 가능 구간을 보존한다. */
+export function corporateActionGapPeriods(
+  coverage: GapCoverageReader,
+  symbols: readonly string[],
+  unaligned: readonly { symbol: string; periodKey: string }[],
+  sharesChanges: readonly SharesChange[],
+  verified: MasterCoverage,
+  window: { from: string; to: string },
+  selectionGaps: readonly RelevantCorporateActionGap[] = [],
+  onRelevant?: (gap: RelevantCorporateActionGap) => void,
+): Map<string, ActionGapPeriod[]> {
+  const result = new Map<string, ActionGapPeriod[]>();
+  function add(symbol: string, from: string, to: string, year: number) {
+    if (from > window.to || to < window.from || from > to) return false;
+    const period = { from: Date.parse(from), to: Date.parse(to), year };
+    const periods = result.get(symbol) ?? [];
+    if (!periods.some(item => item.year === year && item.from === period.from && item.to === period.to)) periods.push(period);
+    result.set(symbol, periods);
+    return true;
+  }
+  const details = readCorporateActionGapDetails(coverage, symbols);
+  const gapYears = coverage.getGapYears(symbols);
+  const evidence = typeof verified === "boolean" ? [] : verified;
+  const changes = new Map<string, SharesChange[]>();
+  for (const change of sharesChanges) {
+    const rows = changes.get(change.shortCode) ?? [];
+    rows.push(change);
+    changes.set(change.shortCode, rows);
+  }
+  // KRX가 토·일요일에 주식수를 발표하지 않아 생긴 빈 구간은 미확인 거래일이 아니다.
+  function addUnverified(symbol: string, from: string, to: string, year: number) {
+    if (from > window.to || to < window.from || from > to) return false;
+    while (isWeekendDate(from)) from = addCalendarDays(from, 1);
+    while (isWeekendDate(to)) to = addCalendarDays(to, -1);
+    return add(symbol, from, to, year);
+  }
+  function record(gap: RelevantCorporateActionGap) {
+    if (gap.severity !== "BLOCKING") return;
+    const { symbol, year } = gap;
+    const raw = normalizedExactDate(gap.periodKey);
+    let relevant = false;
+    if (!raw) {
+      relevant = add(symbol, `${year}-01-01`, `${year}-12-31`, year);
+    } else {
+      const from = addCalendarDays(raw, -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays);
+      const to = addCalendarDays(raw, CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays);
+      for (const row of changes.get(symbol) ?? []) {
+        if (row.effectiveDate >= from && row.effectiveDate <= to && add(symbol, row.effectiveDate, row.effectiveDate, year)) relevant = true;
+      }
+      if (verified !== true) {
+        let cursor = from;
+        for (const range of evidence) {
+          if (range.endDate < cursor) continue;
+          if (range.startDate > to) break;
+          if (addUnverified(symbol, cursor, addCalendarDays(range.startDate, -1), year)) relevant = true;
+          cursor = addCalendarDays(range.endDate, 1);
+          if (cursor > to) break;
+        }
+        if (addUnverified(symbol, cursor, to, year)) relevant = true;
+      }
+    }
+    if (relevant) onRelevant?.(gap);
+  }
+  for (const symbol of symbols) {
+    for (const year of gapYears.get(symbol) ?? []) {
+      const gaps = details.get(symbol)?.filter(gap => gap.year === year) ?? [];
+      if (!gaps.length) record({ symbol, year, periodKey: "-", severity: "BLOCKING", reason: "상세 사유가 저장되지 않은 자본변동 gap" });
+      for (const gap of gaps) record({ symbol, ...gap });
+    }
+  }
+  for (const gap of selectionGaps) if (symbols.includes(gap.symbol)) record(gap);
+  for (const action of unaligned) {
+    // 비율 자체를 KRX 변경에 연결할 수 없으므로 임의의 주식수 변경일에 귀속시키지 않는다.
+    const raw = normalizedExactDate(action.periodKey);
+    if (!raw) continue;
+    const year = Number(raw.slice(0, 4));
+    if (add(action.symbol, addCalendarDays(raw, -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays),
+      addCalendarDays(raw, CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays), year)) {
+      onRelevant?.({ symbol: action.symbol, year, periodKey: action.periodKey, reason: "KRX 상장주식수 변경일과 정렬할 수 없는 자본변동", severity: "BLOCKING" });
+    }
+  }
+  return result;
 }

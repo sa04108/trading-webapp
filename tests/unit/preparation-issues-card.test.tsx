@@ -12,6 +12,17 @@ const warnings = [
 const groups = groupPreparationIssues(splitPreparationWarnings(warnings).issues);
 
 describe('준비 확인사항 표', () => {
+  it('자본변동 경고를 전 기간 제외가 아닌 안내로 분류한다', () => {
+    const result = splitPreparationWarnings([
+      '자본변동 정보를 온전히 확보할 수 없어 종목 000001의 선정 또는 매매에 영향을 줄 수 있습니다 — 2025년/2025-01-03: 분류할 수 없는 발행형태: 원문값.',
+    ]);
+    expect(result.otherWarnings).toEqual([]);
+    expect(result.issues).toEqual([{
+      source: 'DART_CORPORATE_ACTION', reason: '발행형태 분류 불가', disposition: 'NOTICE',
+      symbol: '000001', period: '2025년/2025-01-03', detail: '분류할 수 없는 발행형태: 원문값',
+    }]);
+  });
+
   it('요약은 종목 코드 없이 고유 종목 수를 오른쪽 끝에 표시하고 상세 버튼을 하나만 둔다', () => {
     const html = renderToStaticMarkup(<PreparationIssuesCard warnings={warnings} />);
     expect(html).toContain('종목 수</th></tr>');

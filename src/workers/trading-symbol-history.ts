@@ -16,6 +16,7 @@ export function bootstrapTradingSymbolHistory(input: {
   histories: ReadonlyMap<string, readonly Candle[]>;
   actions: ReadonlyMap<string, readonly CorporateAction[]>;
   lastSeen?: Readonly<Record<string, number>>;
+  cleanAfter?: (symbol: string) => number;
 }): void {
   const { strategy, parameters, histories, actions, beforeTsMs } = input;
   if (!['range-breakout', 'ema-trend-switch', 'rsi-reversion'].includes(strategy.id)) throw new Error('가격 지표 재생을 지원하지 않는 전략입니다');
@@ -30,7 +31,7 @@ export function bootstrapTradingSymbolHistory(input: {
     if (!previous || (!previous.entryFilter.wasHeld && previous.entryFilter.cooldown === 0)) continue;
     const lastSeen = input.lastSeen?.[symbol];
     const history = histories.get(symbol)!;
-    if (!Number.isFinite(lastSeen) || !history.some(bar => bar.tsMs === lastSeen)) throw new Error(`${symbol}의 이전 처리 시각을 확인할 수 없어 재편입을 재생할 수 없습니다`);
+    if (!Number.isFinite(lastSeen) || (!history.some(bar => bar.tsMs === lastSeen) && lastSeen! > (input.cleanAfter?.(symbol) ?? -Infinity))) throw new Error(`${symbol}의 이전 처리 시각을 확인할 수 없어 재편입을 재생할 수 없습니다`);
     const filter = newEntryFilter();
     filter.wasHeld = previous.entryFilter.wasHeld;
     filter.cooldown = previous.entryFilter.cooldown;

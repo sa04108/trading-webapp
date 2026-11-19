@@ -1,8 +1,8 @@
-import { weightLimitedBuyQuantity } from "../../../../runtime/modules/backtest/domain/execution.js";
+import { buyCashWithCommission, sizeDailyBuyAtOpen } from "../../../../runtime/modules/backtest/domain/execution.js";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
-import { priorVolumeCapacity } from "../../../../runtime/modules/strategy/domain/daily-decision.js";
+import { DailyPositionSlots, priorVolumeCapacity } from "../../../../runtime/modules/strategy/domain/daily-decision.js";
 import type { AnyTradingStrategy } from "../../../../runtime/modules/strategy/domain/strategy.js";
 import { paperFillPrice, paperTradingCostProfile } from "./paper-trading-cost.js";
 import { getCostProfile, getKrxExecutionRules, getSlippageProfile, sellTaxAmount } from "../../../../runtime/modules/backtest/domain/cost-profiles.js";
@@ -25,10 +25,10 @@ export interface StrategyArtifactStore {
 export interface ManagedPosition { quantity: number; cost: number; enteredAtMs: number }
 export type ManagedPortfolio = Record<string, ManagedPosition>;
 interface EntryHold { symbol: string; bars: number; requiredBars: number }
-function entryHoldSummary(holds: readonly EntryHold[] = []): string {
-  if (!holds.length) return "";
+function entryHoldSummary(holds: readonly EntryHold[] = [], actionGaps: readonly string[] = []): string {
   const shown = holds.slice(0, 5).map(hold => `${hold.symbol} ${hold.bars}/${hold.requiredBars}봉`);
-  return ` · 이력 부족 매수 보류 ${holds.length}종목 (${shown.join(", ")}${holds.length > shown.length ? " 외" : ""})`;
+  const history = holds.length ? ` · 이력 부족 매수 보류 ${holds.length}종목 (${shown.join(", ")}${holds.length > shown.length ? " 외" : ""})` : "";
+  return history + (actionGaps.length ? ` · 자본변동 결손 매수 보류 ${actionGaps.length}종목 (${actionGaps.slice(0, 5).join(", ")}${actionGaps.length > 5 ? " 외" : ""})` : "");
 }
 export interface TradingDecisionEngine {
   /** 장 시작 후 한정된 실행 창만 허용한다. 휴장·미확인 달력에서는 주문하지 않는다. */
@@ -39,7 +39,7 @@ export interface TradingDecisionEngine {
     cashKrw: number;
     checkpoint: string | null;
     warmupOnly: boolean;
-  }): Promise<{ checkpoint: string; barTsMs: number; orders: readonly OrderIntent[]; entryHolds?: readonly EntryHold[]; priorVolumes?: Record<string, number>; venues?: Record<string, "KOSPI" | "KOSDAQ"> }>;
+  }): Promise<{ checkpoint: string; barTsMs: number; orders: readonly OrderIntent[]; entryHolds?: readonly EntryHold[]; actionGapHolds?: readonly string[]; priorVolumes?: Record<string, number>; venues?: Record<string, "KOSPI" | "KOSDAQ"> }>;
   close(): Promise<void>;
 }
 
@@ -222,7 +222,7 @@ export class TradingService {
         try {
           const ready = await this.deps.engine.evaluate({ deployment: this.deployment(before), portfolio: this.portfolio(before), cashKrw: this.strategyCash(before), checkpoint: before.checkpoint, warmupOnly: true });
           if (shouldStop()) throw new Error("서버 종료 또는 매매 설정 변경으로 데이터 준비를 중단했습니다.");
-          progress("매매 데이터 준비 완료 · 자동매매를 켜면 다시 확인 후 시작합니다." + entryHoldSummary(ready.entryHolds), "READY");
+          progress("매매 데이터 준비 완료 · 자동매매를 켜면 다시 확인 후 시작합니다." + entryHoldSummary(ready.entryHolds, ready.actionGapHolds), "READY");
           return;
         } catch (error) {
           if (!(error instanceof TradingDataRequired)) throw error;
@@ -471,7 +471,7 @@ export class TradingService {
     }
     this.change(expectedRevision,()=>{
       const row=this.requireInactive();if(row.id!==before.id)throw new TradingError("등록 전략이 변경되었습니다.");
-      this.db.update(tradingDeployments).set({status:"ACTIVE",checkpoint:prepared.checkpoint,lastDecisionAtMs:prepared.barTsMs,activatedAtMs:row.activatedAtMs??this.now(),updatedAtMs:this.now(),lastError:null,activity:"활성 · 다음 거래일의 유효한 신호를 기다립니다." + entryHoldSummary(prepared.entryHolds)}).where(eq(tradingDeployments.id,row.id)).run();
+      this.db.update(tradingDeployments).set({status:"ACTIVE",checkpoint:prepared.checkpoint,lastDecisionAtMs:prepared.barTsMs,activatedAtMs:row.activatedAtMs??this.now(),updatedAtMs:this.now(),lastError:null,activity:"활성 · 다음 거래일의 유효한 신호를 기다립니다." + entryHoldSummary(prepared.entryHolds, prepared.actionGapHolds)}).where(eq(tradingDeployments.id,row.id)).run();
       this.event("사용자가 매매 활성화 · 기존 포지션 유지, 새 판단부터 주문 허용",actor);
     });return this.snapshot();
   }
@@ -682,8 +682,9 @@ export class TradingService {
     const heldValue=snapshot.positions.filter(p=>p.deploymentId===row.id).reduce((n,p)=>n+p.marketValue,0);
     let equity=this.strategyCash(strategyRow)+heldValue;
     let cash=Math.min(snapshot.account!.cashBuyingPower,this.strategyCash(strategyRow));
-    const buyCostFactor=1+(this.isPaper?(getCostProfile(deployment.paperCommissionProfileId??paperTradingCostProfile.id)?.buyCommissionRate??paperTradingCostProfile.buyCommissionRate):0.01);
-    const planned:TradingOrder[]=[];const symbols=new Set(Object.keys(portfolio));const seen=new Set<string>();
+    const commissionRate=this.isPaper?(getCostProfile(deployment.paperCommissionProfileId??paperTradingCostProfile.id)?.buyCommissionRate??paperTradingCostProfile.buyCommissionRate):0.01;
+    const buyCostFactor=1+commissionRate;
+    const planned:TradingOrder[]=[];const slots=new DailyPositionSlots(Object.keys(portfolio),deployment.maxPositions);const seen=new Set<string>();
     for(const intent of (this.isPaper?intents:[...intents].sort((a,b)=>a.side===b.side?0:a.side==="SELL"?-1:1))){
       if(seen.has(intent.symbol))throw new TradingError("같은 판단에서 한 종목의 중복 주문이 생성되었습니다.");seen.add(intent.symbol);
       if(!Number.isSafeInteger(intent.quantity)||intent.quantity<=0||!/^\d{6}$/.test(intent.symbol))throw new TradingError("전략이 유효하지 않은 주문을 생성했습니다.");
@@ -706,19 +707,22 @@ export class TradingService {
           if(fillPrice>=price){
             const profile=getCostProfile(deployment.paperCommissionProfileId??paperTradingCostProfile.id)!;
             const gross=quantity*fillPrice;
-            const proceeds=gross*(1-profile.sellCommissionRate)-sellTaxAmount(profile,gross,this.now(),result.venues?.[intent.symbol]);
+            const proceeds=gross-gross*profile.sellCommissionRate-sellTaxAmount(profile,gross,this.now(),result.venues?.[intent.symbol]);
             cash+=proceeds;equity+=proceeds-quantity*quote.price;
           }
         }
       } else {
-        if(!symbols.has(intent.symbol)&&symbols.size>=deployment.maxPositions)continue;
+        if(!slots.allows(intent.symbol))continue;
         const existing=snapshot.positions.find(p=>p.symbol===intent.symbol)?.marketValue??0;
         const fillPrice=this.isPaper?paperFillPrice(deployment,"BUY",intent.symbol,quote.price,this.now(),result.venues?.[intent.symbol]):price;
         const weight=deployment.maxPositionPercent/100;
-        quantity=Math.min(quantity,this.isPaper?weightLimitedBuyQuantity(equity,existing,quote.price,fillPrice,buyCostFactor,weight):Math.floor(Math.max(0,equity*weight-existing)/price),Math.floor(Math.max(0,cash)/(fillPrice*buyCostFactor)));
-        cash-=quantity*fillPrice*buyCostFactor;
-        if(this.isPaper)equity-=quantity*(fillPrice*buyCostFactor-quote.price);
-        if(quantity>0)symbols.add(intent.symbol);
+        quantity=this.isPaper ? sizeDailyBuyAtOpen({ quantity, cash, equity, heldValue:existing, basePrice:quote.price,
+          fillPrice, commissionRate, weight }).quantity
+          : Math.min(quantity,Math.floor(Math.max(0,equity*weight-existing)/price),Math.floor(Math.max(0,cash)/(fillPrice*buyCostFactor)));
+        const outlay=buyCashWithCommission(quantity*fillPrice,commissionRate);
+        cash-=outlay;
+        if(this.isPaper)equity-=outlay-quantity*quote.price;
+        if(quantity>0)slots.reserve(intent.symbol);
       }
       if(quantity<=0)continue;
       planned.push({id:randomUUID(),deploymentId:row.id,brokerOrderId:null,symbol:intent.symbol,side:intent.side,quantity,price,filledQuantity:0,averageFillPrice:null,status:"CREATED",reason:intent.reason??"전략 신호",error:null,createdAtMs:this.now(),updatedAtMs:this.now()});
@@ -726,7 +730,7 @@ export class TradingService {
     this.deps.database.sqlite.transaction(()=>{
       this.assertSend(row.id,control.revision);
       for(const [index,order] of planned.entries())this.db.insert(tradingOrders).values({id:order.id,deploymentId:row.id,accountId:control.accountId!,decisionKey:`${result.barTsMs}:${index}`,payloadJson:JSON.stringify(order),status:order.status,createdAtMs:order.createdAtMs,updatedAtMs:order.updatedAtMs}).run();
-      this.db.update(tradingDeployments).set({checkpoint:result.checkpoint,lastDecisionAtMs:result.barTsMs,activity:(planned.length ? `${planned.length}건 주문 계획 저장` : "신호 확인 완료 · 주문 없음") + entryHoldSummary(result.entryHolds),updatedAtMs:this.now()}).where(eq(tradingDeployments.id,row.id)).run();
+      this.db.update(tradingDeployments).set({checkpoint:result.checkpoint,lastDecisionAtMs:result.barTsMs,activity:(planned.length ? `${planned.length}건 주문 계획 저장` : "신호 확인 완료 · 주문 없음") + entryHoldSummary(result.entryHolds, result.actionGapHolds),updatedAtMs:this.now()}).where(eq(tradingDeployments.id,row.id)).run();
     }).immediate();
     for(const order of planned){
       const stored=this.db.select().from(tradingOrders).where(eq(tradingOrders.id,order.id)).get()!;
@@ -752,8 +756,14 @@ export class TradingService {
           if(order.side==="BUY"){
             if(!holding&&currentSnapshot.positions.filter(p=>p.deploymentId===row.id).length>=deployment.maxPositions)throw new TradingError("주문 직전 보유 종목 한도가 변경되었습니다.");
             const pendingSymbolValue=pendingBuys.filter(p=>p.symbol===order.symbol).reduce((n,p)=>n+(p.quantity-p.filledQuantity)*p.price,0);
-            const weightExceeded=this.isPaper?order.quantity>weightLimitedBuyQuantity(equity,(holding?.quantity??0)*modelQuote,modelQuote,modelPrice,buyCostFactor,deployment.maxPositionPercent/100):(holding?.marketValue??0)+pendingSymbolValue+value>equity*deployment.maxPositionPercent/100;
-            if(value*buyCostFactor>currentSnapshot.account.cashBuyingPower||pendingValue*buyCostFactor+value*buyCostFactor>strategyCash||weightExceeded||order.price*10_000>modelQuote*(10_000+deployment.maxSlippageBps))throw new TradingError("주문 직전 매수 가능 금액·보유 한도·가격 조건이 변경되었습니다.");
+            const reservedCash=buyCashWithCommission(pendingValue,commissionRate);
+            const exceedsBudget=this.isPaper ? order.quantity>sizeDailyBuyAtOpen({quantity:order.quantity,
+              cash:Math.min(currentSnapshot.account.cashBuyingPower,strategyCash-reservedCash),equity,
+              heldValue:(holding?.quantity??0)*modelQuote,basePrice:modelQuote,fillPrice:modelPrice,commissionRate,
+              weight:deployment.maxPositionPercent/100}).quantity
+              : value*buyCostFactor>currentSnapshot.account.cashBuyingPower||reservedCash+value*buyCostFactor>strategyCash||
+                (holding?.marketValue??0)+pendingSymbolValue+value>equity*deployment.maxPositionPercent/100;
+            if(exceedsBudget||order.price*10_000>modelQuote*(10_000+deployment.maxSlippageBps))throw new TradingError("주문 직전 매수 가능 금액·보유 한도·가격 조건이 변경되었습니다.");
           }else if(!holding||order.quantity>holding.quantity||order.quantity>(sellable??holding.availableQuantity??0)||order.price*10_000<quote.price*(10_000-deployment.maxSlippageBps))throw new TradingError("주문 직전 매도 가능 수량·가격 조건이 변경되었습니다.");
           const liveDay=this.current()?.dailyBaseJson;
           if(liveDay&&currentSnapshot.performance){const baseline=JSON.parse(liveDay) as {date:string;pnl:number};if(baseline.date===kstDateOf(this.now())&&(currentSnapshot.performance.totalPnl-baseline.pnl)/deployment.budgetKrw*100<=-deployment.dailyLossLimitPercent)throw new TradingError("일일 손실 한도에 도달했습니다.","DAILY_LOSS_LIMIT");}

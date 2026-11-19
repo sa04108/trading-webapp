@@ -7,8 +7,8 @@ export type BacktestDataExclusionCategory =
 
 /**
  * 외부 API 요청은 정상적으로 끝났지만 종목 하나의 입력을 완전하게 만들 수 없었던 경우.
- * 준비 단계는 이 종목을 전 기간 후보에서 제외해 순위를 다시 계산하고, 이 원인을
- * preview와 최종 backtest warning에 그대로 고정한다.
+ * 준비 단계는 결손 유형에 따라 전 기간 후보 또는 해당 선정 시점에 적용하고,
+ * 이 원인을 preview와 최종 backtest warning에 그대로 고정한다.
  */
 export interface BacktestDataExclusion {
   readonly symbol: string;
@@ -44,12 +44,17 @@ function categoryLabel(category: BacktestDataExclusionCategory): string {
   }
 }
 
+export const MISSING_ACTION_COVERAGE_REASON = "필요 연도의 DART 자본변동 coverage를 확보하지 못함";
+export const ACTION_WARNING_PREFIX = "자본변동 정보를 온전히 확보할 수 없어 종목 ";
+
 export function backtestDataExclusionWarnings(
   exclusions: readonly BacktestDataExclusion[],
 ): string[] {
   const grouped = new Map<string, BacktestDataExclusion[]>();
   for (const exclusion of exclusions) {
-    const key = `${exclusion.symbol}\0${exclusion.category}`;
+    const actionCoverage = exclusion.category === "DART_CORPORATE_ACTION" &&
+      exclusion.reason === MISSING_ACTION_COVERAGE_REASON;
+    const key = `${exclusion.symbol}\0${exclusion.category}\0${actionCoverage}`;
     const values = grouped.get(key) ?? [];
     if (
       !values.some(
@@ -78,6 +83,10 @@ export function backtestDataExclusionWarnings(
         )
         .map((value) => `${value.periodKey}: ${value.reason}`)
         .join("; ");
+      if (first.category === "DART_CORPORATE_ACTION" &&
+          first.reason !== MISSING_ACTION_COVERAGE_REASON) {
+        return `${ACTION_WARNING_PREFIX}${first.symbol}의 선정 또는 매매에 영향을 줄 수 있습니다 — ${causes}.`;
+      }
       return (
         `${categoryLabel(first.category)} 정보를 온전히 확보할 수 없어 종목 ` +
         `${first.symbol}을 매매 대상에서 제외했습니다 — ${causes}.`

@@ -1,7 +1,8 @@
-import { findRelevantCorporateActionGaps } from "../runtime/modules/backtest/application/backtest-corporate-action-gaps.js";
+import { ActionGapEntryGate, type ActionGapPeriods, latestActionGap, holdingActionGap, resetUnheldPriceState } from "../runtime/modules/backtest/domain/action-gap.js";
+import { corporateActionGapPeriods } from "../runtime/modules/backtest/application/backtest-corporate-action-gaps.js";
 import { blockingFinancialGapExamples } from "../runtime/modules/backtest/application/backtest-financial-coverage.js";
 import { bootstrapTradingSymbolHistory } from "./trading-symbol-history.js";
-import { BUY_PRIORITY_SEED_SALT, evaluateDailyBar, markedEquity, membershipExits, prioritizeDailyOrders, requiredDailyBars } from "../runtime/modules/strategy/domain/daily-decision.js";
+import { BUY_PRIORITY_SEED_SALT, evaluateDailyBar, adjustDailyOrderUnits, eligibleDailyOrders, markedEquity, membershipExits, prioritizeDailyOrders, requiredDailyBars } from "../runtime/modules/strategy/domain/daily-decision.js";
 import { readMarketIndex } from "../runtime/modules/market-data/application/market-index-history.js";
 import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
@@ -44,6 +45,7 @@ interface Checkpoint {
   originBar?: number;
   lastSeen?: Record<string, number>;
   tracked?: string[];
+  actionCutoffs?: Record<string, number>;
   pendingSells?: Array<{ symbol: string; reason?: string; target: number }>;
   firstDecision: boolean;
   rebalanceDate: string;
@@ -52,7 +54,7 @@ interface Checkpoint {
 class DecisionDataRequired extends Error { constructor(message: string, readonly need: TradingDataNeed) { super(message); } }
 interface Bundle { formatVersion: number; nodeMajor: number; lifecycleAbi: number; getStrategy(id: string): AnyTradingStrategy | null; reconcileState(id: string, state: unknown, input: { interrupted: boolean; positions: readonly string[]; symbols: readonly string[] }): void; }
 
-export async function calculate(message: { input: Input; date: string; bundlePath: string }, database: DatabaseHandle, bundle: Bundle, testRuntime?: ReturnType<typeof createUniverseRuntime>): Promise<Output> {
+export async function calculate(message: { input: Input; date: string; executionDate?: string; bundlePath: string }, database: DatabaseHandle, bundle: Bundle, testRuntime?: ReturnType<typeof createUniverseRuntime>): Promise<Output> {
   const { deployment, portfolio, warmupOnly } = message.input;
   if (!Number.isFinite(message.input.cashKrw)) throw new Error("전략 현금을 확인할 수 없습니다");
   const strategy = bundle.getStrategy(deployment.strategyId);
@@ -65,7 +67,6 @@ export async function calculate(message: { input: Input; date: string; bundlePat
   const latest = Date.parse(`${message.date}T00:00:00Z`);
   if (checkpoint && checkpoint.lastBar > latest) throw new Error("전략 상태가 최근 확정 봉보다 앞서 있습니다");
   if (checkpoint && checkpoint.lastBar === latest) {
-    if (!warmupOnly) return { checkpoint: message.input.checkpoint!, barTsMs: latest, orders: [] };
     if (!Array.isArray(checkpoint.members)) throw new Error("저장된 유니버스 상태가 올바르지 않습니다");
     // 같은 확정 봉이라도 활성화·복구 전에는 현재 coverage와 결손을 다시 확인한다.
   }
@@ -95,7 +96,8 @@ export async function calculate(message: { input: Input; date: string; bundlePat
   const from = checkpoint ? Math.max(originBar, Math.min(warmupFrom, checkpoint.lastBar)) : originBar;
   let fromDate = new Date(from).toISOString().slice(0, 10);
   let actionFromYear = Number(addCalendarDays(fromDate, -CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays).slice(0, 4));
-  const actionToYear = Number(addCalendarDays(message.date, CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays).slice(0, 4));
+  const executionDate = message.executionDate ?? message.date;
+  const actionToYear = Number(addCalendarDays(executionDate, CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays).slice(0, 4));
   const lookback = Math.max(strategy.dataRequirements?.fundamentalLookbackQuarters ?? 0, deployment.universeRule.stages.some((stage) => stage.criterion === "PER" || stage.criterion === "ROE") ? 4 : 0);
   const financialYears = derivePreparationFactYearRange({ from: fromDate, to: message.date }, lookback);
   const needsFinancial = strategy.requiresFundamentals === true || lookback > 0;
@@ -109,7 +111,7 @@ export async function calculate(message: { input: Input; date: string; bundlePat
     for (;;) {
       resolution = await runtime.resolver.resolveOrDescribeNeeds(deployment.universeRule, period, { excludedSymbols });
       if (resolution.kind !== "READY") break;
-      const gaps = [...resolution.dataExclusions, ...resolution.corporateActionExclusions];
+      const gaps = resolution.dataExclusions.filter(gap => gap.category !== "DART_CORPORATE_ACTION");
       if (gaps.some(gap => held.includes(gap.symbol))) break;
       const newlyExcluded = gaps.filter(gap => !excludedSymbols.has(gap.symbol));
       if (!newlyExcluded.length) break;
@@ -137,13 +139,14 @@ export async function calculate(message: { input: Input; date: string; bundlePat
     };
     throw new DecisionDataRequired("유니버스 선정 데이터가 준비되지 않았습니다", need);
   }
-  if (resolution.dataExclusions.length || resolution.corporateActionExclusions.length) {
-    const repairs: NonNullable<TradingDataNeed["repairs"]> = resolution.corporateActionExclusions.map((gap) => ({ kind: "CORPORATE_ACTION", symbol: gap.symbol, year: gap.year }));
-    for (const gap of resolution.dataExclusions) {
-      if (gap.category !== "DART_FINANCIAL" && gap.category !== "DART_CORPORATE_ACTION") continue;
-      for (const year of new Set(gap.periodKey.match(/(?:19|20)\d{2}/g) ?? [])) repairs.push({ kind: gap.category === "DART_FINANCIAL" ? "FINANCIAL" : "CORPORATE_ACTION", symbol: gap.symbol, year: Number(year) });
+  const otherExclusions = resolution.dataExclusions.filter(gap => gap.category !== "DART_CORPORATE_ACTION");
+  if (otherExclusions.length) {
+    const repairs: NonNullable<TradingDataNeed["repairs"]> = [];
+    for (const gap of otherExclusions) {
+      if (gap.category !== "DART_FINANCIAL") continue;
+      for (const year of new Set(gap.periodKey.match(/(?:19|20)\d{2}/g) ?? [])) repairs.push({ kind: "FINANCIAL", symbol: gap.symbol, year: Number(year) });
     }
-    const details = resolution.dataExclusions.slice(0, 5).map((gap) => `${gap.symbol} ${gap.periodKey}: ${gap.reason}`).join("; ");
+    const details = otherExclusions.slice(0, 5).map((gap) => `${gap.symbol} ${gap.periodKey}: ${gap.reason}`).join("; ");
     if (repairs.length) throw new DecisionDataRequired(`유니버스 입력 결손을 복구합니다: ${details}`, { masterDates: [], priceRange: null, financial: null, actions: null, entries: [...resolution.unionEntries.values()], repairs });
     throw new Error(`유니버스 입력에 확인되지 않은 데이터 결손이 있습니다: ${details}`);
   }
@@ -166,6 +169,31 @@ export async function calculate(message: { input: Input; date: string; bundlePat
   const previousSymbols = new Set(checkpoint?.tracked ?? checkpoint?.members.map(member => member.symbol));
   const swing = ["range-breakout", "ema-trend-switch", "rsi-reversion"].includes(strategy.id);
   const entrants = new Set(checkpoint && swing ? symbols.filter(symbol => !previousSymbols.has(symbol)) : []);
+  const actions = (await runtime.facts.getFacts({ scope: "SYMBOL", keys: symbols, fields: [CORPORATE_ACTION_FIELD] })).filter(fact => fact.field === CORPORATE_ACTION_FIELD);
+  const range = corporateActionRawDateRange(actions);
+  const changes = range ? runtime.symbolMaster.sharesChangesBetween(addCalendarDays(range.from, -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays), addCalendarDays(range.to, CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays), symbols) : [];
+  const aligned = alignCorporateActionEffectiveDates(actions, changes);
+  const gapFrom = kstDateOf(Math.min(originBar, ...held.map(symbol => portfolio[symbol]!.enteredAtMs)));
+  const resolutionGaps = resolution.corporateActionExclusions;
+  // 주문일에 새로 확인한 변경은 전일 종가 신호의 입력과 분리한다.
+  function periodsFor(from: string, to: string) {
+    const verified = runtime.symbolMaster?.coverageRanges?.() ?? runtime.symbolMaster?.isRangeCovered?.(from, to) ?? false;
+    const rows = runtime.symbolMaster?.sharesChangesBetween?.(from, to, symbols) ?? [];
+    return corporateActionGapPeriods(runtime.actionCoverage, symbols, aligned.unaligned, rows, verified, { from, to }, resolutionGaps);
+  }
+  const periods = periodsFor(gapFrom, message.date);
+  const nextOpenPeriods: ActionGapPeriods = executionDate > message.date ? periodsFor(addCalendarDays(message.date, 1), executionDate) : new Map();
+  const executionTs = Date.parse(executionDate);
+  const changedPriceHistory = new Set<string>();
+  if (checkpoint && swing) {
+    for (const symbol of symbols) {
+      const cutoff = latestActionGap(periods.get(symbol) ?? [], checkpoint.lastBar)?.to ?? -Infinity;
+      if (!held.includes(symbol) && cutoff !== (checkpoint.actionCutoffs?.[symbol] ?? -Infinity)) {
+        changedPriceHistory.add(symbol);
+        entrants.add(symbol);
+      }
+    }
+  }
   const candles = await runtime.candles.getCandlesArray({ market: "KR", timeframe: "1d", symbols, fromTsMs: from, toTsMs: latest });
   const histories = new Map<string, Candle[]>(symbols.map(symbol => [symbol, []]));
   function addHistory(batch: readonly Candle[]) {
@@ -227,24 +255,24 @@ export async function calculate(message: { input: Input; date: string; bundlePat
   }
   const firstYear = actionFromYear, lastYear = actionToYear;
   const years = Array.from({ length: lastYear - firstYear + 1 }, (_, i) => firstYear + i);
-  const actionCoverage = runtime.actionCoverage.getCoveredYears(symbols), actionGaps = runtime.actionCoverage.getGapYears(symbols);
+  const actionCoverage = runtime.actionCoverage.getCoveredYears(symbols);
   const repairs: NonNullable<TradingDataNeed["repairs"]> = [];
-  const details = runtime.actionCoverage.getGapDetails?.(symbols);
-  const gapFrom = kstDateOf(Math.max(originBar, Date.parse(`${fromDate}T00:00:00Z`)));
-  const verifiedChanges = details?.size && runtime.symbolMaster?.isRangeCovered?.(gapFrom, message.date)
-    ? runtime.symbolMaster.sharesChangesBetween(gapFrom, message.date) : undefined;
-  const relevant = details && verifiedChanges && findRelevantCorporateActionGaps(details, verifiedChanges, {
-    executionFrom: gapFrom, executionTo: message.date,
-    rawFrom: addCalendarDays(gapFrom, -CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays),
-    rawTo: addCalendarDays(message.date, CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays),
-  });
-  for (const symbol of symbols) {
-    for (const year of years) {
-      if (!actionGaps.get(symbol)?.includes(year)) continue;
-      const gaps = details?.get(symbol)?.filter(gap => gap.year === year);
-      if (relevant && gaps?.length && gaps.every(gap => /^\d{4}-\d{2}-\d{2}$/.test(gap.periodKey)) &&
-          !relevant.some(gap => gap.symbol === symbol && gap.year === year)) continue;
-      repairs.push({ kind: "CORPORATE_ACTION", symbol, year });
+  for (const symbol of held) {
+    const entered = portfolio[symbol]!.enteredAtMs;
+    for (const source of [periods, nextOpenPeriods]) {
+      for (const gap of source.get(symbol) ?? []) {
+        if (gap.from <= executionTs && gap.to >= entered && !repairs.some(repair => repair.symbol === symbol && repair.year === gap.year)) {
+          repairs.push({ kind: "CORPORATE_ACTION", symbol, year: gap.year });
+        }
+      }
+    }
+  }
+  for (const symbol of held) {
+    const firstHeldYear = Number(addCalendarDays(kstDateOf(portfolio[symbol]!.enteredAtMs), -CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays).slice(0, 4));
+    for (let year = firstHeldYear; year < firstYear; year++) {
+      if (!actionCoverage.get(symbol)?.includes(year) && !repairs.some(repair => repair.symbol === symbol && repair.year === year)) {
+        repairs.push({ kind: "CORPORATE_ACTION", symbol, year });
+      }
     }
   }
   if (strategy.requiresFundamentals || (strategy.dataRequirements?.fundamentalLookbackQuarters ?? 0) > 0) {
@@ -262,7 +290,8 @@ export async function calculate(message: { input: Input; date: string; bundlePat
   }
   if (repairs.length) {
     const details = repairs.slice(0, 10).map((repair) => `${repair.symbol} ${repair.year}년 ${repair.kind === "CORPORATE_ACTION" ? "자본변동" : "재무"}`).join(", ");
-    throw new DecisionDataRequired(`이력에 결손이 있습니다: ${details}`, { masterDates: [], priceRange: null, financial: null, actions: null, entries: need.entries, repairs });
+    const cause = repairs.some(repair => repair.kind === "CORPORATE_ACTION") ? "보유 종목의 자본변동 수량·정산을 확인해야 합니다" : "재무 이력에 결손이 있습니다";
+    throw new DecisionDataRequired(`${cause}: ${details}`, { masterDates: [], priceRange: null, financial: null, actions: null, entries: need.entries, repairs });
   }
   for (const symbol of symbols) if (years.some((year) => !actionCoverage.get(symbol)?.includes(year))) throw new DecisionDataRequired(`자본변동 이력이 준비되지 않았습니다: ${symbol}`, need);
   if (strategy.requiresFundamentals || (strategy.dataRequirements?.fundamentalLookbackQuarters ?? 0) > 0) {
@@ -272,31 +301,44 @@ export async function calculate(message: { input: Input; date: string; bundlePat
     }
   }
   const facts = needsFinancial ? await runtime.facts.getFacts({ scope: "SYMBOL", keys: symbols, asOfMaxTsMs: latest }) : [];
-  const actions = (await runtime.facts.getFacts({ scope: "SYMBOL", keys: symbols, fields: [CORPORATE_ACTION_FIELD] })).filter(fact => fact.field === CORPORATE_ACTION_FIELD);
-  const range = corporateActionRawDateRange(actions);
-  const changes = range ? runtime.symbolMaster.sharesChangesBetween(addCalendarDays(range.from, -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays), addCalendarDays(range.to, CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays)) : [];
-  const aligned = alignCorporateActionEffectiveDates(actions, changes);
-  if (aligned.unaligned.some(action => action.periodKey >= addCalendarDays(fromDate, -CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays) && action.periodKey <= addCalendarDays(message.date, CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays))) throw new Error("자본변동의 거래일 정렬을 확인할 수 없습니다");
-  const factsView = new PitFactView([...facts.filter((fact) => fact.field !== CORPORATE_ACTION_FIELD), ...aligned.facts]);
+  const factsView = new PitFactView([...facts.filter((fact) => fact.field !== CORPORATE_ACTION_FIELD), ...aligned.matchedFacts]);
   const rawRng = createRng(deployment.randomSeed); let calls = 0;
   for (; calls < (checkpoint?.rngCalls ?? 0); calls++) rawRng();
   const rng = () => { calls++; return rawRng(); };
   const state = checkpoint?.state ?? strategy.initialize({ symbols, initialCash: deployment.budgetKrw, rng });
   const positions = new Map<string, Position>();
   for (const [symbol, position] of Object.entries(portfolio)) positions.set(symbol, { symbol, quantity: position.quantity, avgEntryPrice: position.cost / position.quantity, entryCosts: 0, entryTsMs: position.enteredAtMs });
-  if (checkpoint && entrants.size) {
-    const bootstrap = new Map<string, Candle[]>();
-    for (const symbol of entrants) {
-      const prior = histories.get(symbol)!.filter(bar => bar.tsMs >= originBar && bar.tsMs <= checkpoint.lastBar);
-      if (prior.length) bootstrap.set(symbol, prior);
-    }
-    bootstrapTradingSymbolHistory({ strategy, state, parameters, initialCash: deployment.budgetKrw, beforeTsMs: checkpoint.lastBar + 1,
-      histories: bootstrap, lastSeen: checkpoint.lastSeen, actions: new Map([...bootstrap.keys()].map(symbol =>
-        [symbol, factsView.corporateActions(symbol, checkpoint.lastBar).filter(action => action.effectiveTsMs >= originBar)])) });
-  }
   const timeline = [...new Set([...histories.values()].flatMap((history) => history.map((bar) => bar.tsMs)))].sort((a, b) => a - b);
   const barsBySymbol = new Map(symbols.map((symbol) => [symbol, new Map(histories.get(symbol)!.map((bar) => [bar.tsMs, bar]))]));
   const first = checkpoint?.lastBar ?? -Infinity;
+  const gate = new ActionGapEntryGate(periods, minimumBars);
+  const barsAt = (ts: number) => {
+    const result = new Map<string, Candle>();
+    for (const symbol of symbols) {
+      const bar = barsBySymbol.get(symbol)!.get(ts);
+      if (bar) result.set(symbol, bar);
+    }
+    return result;
+  };
+  if (checkpoint && (periods.size || changedPriceHistory.size)) {
+    for (const ts of timeline) {
+      if (ts > first) break;
+      gate.advance(ts, barsAt(ts));
+    }
+    if (!timeline.includes(first)) gate.advance(first, new Map());
+    // 과거 공시가 정정되면 변경된 미보유 종목만 최초 준비 경계부터 다시 계산한다.
+    for (const symbol of changedPriceHistory) resetUnheldPriceState(state, symbol);
+  }
+  if (checkpoint && entrants.size) {
+    const bootstrap = new Map<string, Candle[]>();
+    for (const symbol of entrants) {
+      const prior = histories.get(symbol)!.filter(bar => bar.tsMs >= originBar && bar.tsMs > gate.priceCutoff(symbol) && bar.tsMs <= checkpoint.lastBar);
+      if (prior.length) bootstrap.set(symbol, prior);
+    }
+    bootstrapTradingSymbolHistory({ strategy, state, parameters, initialCash: deployment.budgetKrw, beforeTsMs: checkpoint.lastBar + 1,
+      histories: bootstrap, cleanAfter: symbol => gate.priceCutoff(symbol), lastSeen: checkpoint.lastSeen, actions: new Map([...bootstrap.keys()].map(symbol =>
+        [symbol, factsView.corporateActions(symbol, checkpoint.lastBar).filter(action => action.effectiveTsMs >= originBar && action.effectiveTsMs > gate.priceCutoff(symbol))])) });
+  }
   const timelineToRun = timeline.filter((ts) => ts > first && ts <= latest);
   const priorityCalls = checkpoint?.priorityCalls ?? 0;
   if (!Number.isSafeInteger(priorityCalls) || priorityCalls < 0 || priorityCalls > 10_000_000) throw new Error("저장된 매수 우선순위 상태가 올바르지 않습니다");
@@ -326,8 +368,10 @@ export async function calculate(message: { input: Input; date: string; bundlePat
   for (const ts of timelineToRun) {
     const isLast = ts === latest;
     const activePositions = checkpoint ? positions : new Map<string, Position>();
-    const bars = new Map<string, Candle>();
-    for (const symbol of symbols) { const bar = barsBySymbol.get(symbol)!.get(ts); if (bar) bars.set(symbol, bar); }
+    const bars = barsAt(ts);
+    gate.advance(ts, bars, symbol => {
+      if (!activePositions.has(symbol)) resetUnheldPriceState(state, symbol);
+    });
     for (const [symbol, bar] of bars) {
       lastSeen[symbol] = ts;
       counts.set(symbol, (counts.get(symbol) ?? 0) + 1);
@@ -341,6 +385,7 @@ export async function calculate(message: { input: Input; date: string; bundlePat
       if (ratio !== 1) {
         const holding = portfolio[symbol];
         if (holding && holding.enteredAtMs < ts) throw new Error(`보유 종목 ${symbol}에 자본변동이 있습니다. 변경 수량과 단주 정산 대금을 대조해야 합니다.`);
+        deferredBuys = adjustDailyOrderUnits(deferredBuys, symbol, ratio);
         strategy.onCorporateAction?.(symbol, ratio, state);
       }
     }
@@ -377,7 +422,7 @@ export async function calculate(message: { input: Input; date: string; bundlePat
     if (!interrupted) for (const symbol of pendingExits) {
       if (!positions.has(symbol)) strategy.onForcedExit?.(symbol, state);
     }
-    const decision = evaluateDailyBar(strategy, state, parameters, ctx, minimumBars, counts, interrupted);
+    const decision = evaluateDailyBar(strategy, state, parameters, ctx, minimumBars, counts, interrupted, gate);
     if (!interrupted) {
       const exits = membershipExits(positions, targets);
       const newExit = exits.some(exit => !pendingExits.has(exit.symbol));
@@ -385,7 +430,7 @@ export async function calculate(message: { input: Input; date: string; bundlePat
       const prioritized = prioritizeDailyOrders(decision.orders.filter(order => !pendingExits.has(order.symbol)), nextPriority);
       const currentBuys = prioritized.filter(order => order.side === "BUY");
       const currentBuySymbols = new Set(currentBuys.map(order => order.symbol));
-      deferredBuys = deferredBuys.filter(order => tradable.has(order.symbol) && !currentBuySymbols.has(order.symbol));
+      deferredBuys = eligibleDailyOrders(deferredBuys, gate.atClose).filter(order => tradable.has(order.symbol) && !currentBuySymbols.has(order.symbol));
       if (newExit) {
         deferredBuys = [...deferredBuys, ...currentBuys];
         orders = [...exits, ...prioritized.filter(order => order.side === "SELL")];
@@ -418,17 +463,37 @@ export async function calculate(message: { input: Input; date: string; bundlePat
     }
   }
   if (warmupOnly || (!checkpoint && held.length)) bundle.reconcileState(strategy.id, state, { interrupted: true, positions: held, symbols });
-  const next: Checkpoint = { abi: 1, hash: deployment.artifactHash, strategyId: strategy.id, state, lastBar: latest, rngCalls: calls, priorityCalls: priorityCount, pendingExits: [...pendingExits], deferredBuys, originBar, lastSeen, tracked: symbols, pendingSells, firstDecision: firstDecision || activeRebalanceDate !== latestSchedule.rebalanceDate, rebalanceDate: latestSchedule.rebalanceDate, members: [...members] };
+  if (latest > first && !timeline.includes(latest)) gate.advance(latest, new Map(), symbol => {
+    if (!positions.has(symbol)) resetUnheldPriceState(state, symbol);
+  });
+  const blockedAtOpen = new Set([...nextOpenPeriods.keys()].filter(symbol => holdingActionGap(nextOpenPeriods, symbol, latest + 1, executionTs)));
+  orders = eligibleDailyOrders(orders, blockedAtOpen);
+  deferredBuys = eligibleDailyOrders(deferredBuys, new Set([...blockedAtOpen, ...gate.atClose]));
+  if (executionTs > latest) {
+    for (const symbol of new Set([...held, ...orders.map(order => order.symbol)])) {
+      const due = factsView.corporateActions(symbol, executionTs).filter(action => action.effectiveTsMs > latest);
+      if (!due.length) continue;
+      if (portfolio[symbol] && due.some(action => portfolio[symbol]!.enteredAtMs < action.effectiveTsMs)) {
+        throw new Error(`보유 종목 ${symbol}에 자본변동이 있습니다. 변경 수량과 단주 정산 대금을 대조해야 합니다.`);
+      }
+      const ratio = due.reduce((value, action) => value * action.ratio, 1);
+      orders = adjustDailyOrderUnits(orders, symbol, ratio);
+      if (priorVolumes[symbol] !== undefined) priorVolumes[symbol] *= ratio;
+    }
+  }
+  const actionCutoffs = Object.fromEntries(symbols.filter(symbol => Number.isFinite(gate.priceCutoff(symbol))).map(symbol => [symbol, gate.priceCutoff(symbol)]));
+  const actionGapHolds = members.map(member => member.symbol).filter(symbol => gate.atClose.has(symbol) || blockedAtOpen.has(symbol)).sort();
+  const next: Checkpoint = { abi: 1, hash: deployment.artifactHash, strategyId: strategy.id, state, actionCutoffs, lastBar: latest, rngCalls: calls, priorityCalls: priorityCount, pendingExits: [...pendingExits], deferredBuys, originBar, lastSeen, tracked: symbols, pendingSells, firstDecision: firstDecision || activeRebalanceDate !== latestSchedule.rebalanceDate, rebalanceDate: latestSchedule.rebalanceDate, members: [...members] };
   const entryHolds = members.flatMap(({ symbol }) => {
     const bars = counts.get(symbol) ?? 0;
     return bars < minimumBars && !retired.has(symbol) ? [{ symbol, bars, requiredBars: minimumBars }] : [];
   });
-  return { checkpoint: serialize(next).toString("base64"), barTsMs: latest, orders, priorVolumes, venues, entryHolds };
+  return { checkpoint: serialize(next).toString("base64"), barTsMs: latest, orders, priorVolumes, venues, entryHolds, actionGapHolds };
 }
 
 const isChildEntry = process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isChildEntry) process.on("disconnect", () => process.exit(1));
-if (isChildEntry) process.once("message", async (message: { input: Input; date: string; bundlePath: string }) => {
+if (isChildEntry) process.once("message", async (message: { input: Input; date: string; executionDate?: string; bundlePath: string }) => {
   let sqlite: Database.Database | undefined;
   try {
     const { deployment } = message.input;

@@ -1,4 +1,5 @@
-import { BUY_PRIORITY_SEED_SALT, evaluateDailyBar, markedEquity, membershipExits, prioritizeDailyOrders, priorVolumeCapacity, requiredDailyBars } from "../../strategy/domain/daily-decision.js";
+import { ActionGapEntryGate, holdingActionGap, resetUnheldPriceState, type ActionGapPeriods } from "./action-gap.js";
+import { BUY_PRIORITY_SEED_SALT, adjustDailyOrderUnits, eligibleDailyOrders, evaluateDailyBar, DailyPositionSlots, markedEquity, membershipExits, prioritizeDailyOrders, priorVolumeCapacity, requiredDailyBars } from "../../strategy/domain/daily-decision.js";
 import type { MarketIndexPoint } from "../../market-data/domain/market-index.js";
 import type { Candle } from "../../market-data/domain/candle.js";
 import type {
@@ -11,7 +12,7 @@ import { adjustForRatio } from "./corporate-action-adjust.js";
 import {
   proceedsFromSell,
   requiredCashForBuy,
-  weightLimitedBuyQuantity,
+  sizeDailyBuyAtOpen,
   simulateFill,
 } from "./execution.js";
 import {
@@ -43,6 +44,7 @@ import type {
 } from "./types.js";
 
 export interface BacktestRunInput {
+  readonly actionGapPeriods?: ActionGapPeriods;
   readonly marketIndex?: readonly MarketIndexPoint[];
   readonly riskFreeRates?: RiskFreeRateHistory;
   /** 기간·심볼 필터가 끝난 확정 봉 전체 (임의 순서 허용 — 엔진이 정렬) */
@@ -181,9 +183,10 @@ export interface BacktestRunResult {
  * 2.11.0: 단주 현금정산 뒤 남은 포지션에 매수수수료 원가를 비례 배분한다.
  * 2.12.0: 실행 경고에서 개별 종목 코드를 빼고 사유별 주문·종목 수로 요약한다.
  * 2.13.0: 날짜별 단기금리로 일 수익률을 차감하여 Sharpe를 계산한다.
+ * 2.15.0: 미확인 자본변동의 날짜별 진입 제한과 지표 재준비를 적용한다.
  * 2.14.0: 종목별 진입 준비와 주문 판단을 일봉 매매 실행기와 공유한다.
  */
-export const ENGINE_VERSION = "2.14.0";
+export const ENGINE_VERSION = "2.15.0";
 
 const PROGRESS_INTERVAL_BARS = 500;
 const MS_PER_DAY = 86_400_000;
@@ -456,9 +459,12 @@ function* runBacktestSteps(
     recentHistoryBySymbol?.get(symbol)?.asArray() ??
     historyBySymbol?.get(symbol) ?? [];
   const minimumBars = requiredDailyBars(strategy, input.parameters);
+  const actionGapGate = new ActionGapEntryGate(input.actionGapPeriods ?? new Map(), minimumBars);
+  const actionGapWarned = new Set<string>();
   const counts = new Map<string, number>();
   const lastCloseBySymbol = new Map<string, number>();
   let currentExecutionBars: ReadonlyMap<string, Candle> = new Map();
+  let currentOrderTsMs = 0;
   const positions = new Map<string, Position>();
   // Candle과 주문은 단축코드만 가지므로, 한 번 폐지 경계를 지난 코드를 새 발행사와
   // 안전하게 구분할 수 없다. 해당 실행의 남은 기간에는 신규 주문을 fail-closed한다.
@@ -468,6 +474,7 @@ function* runBacktestSteps(
   let cash = input.initialCash;
   let pendingOrders: OrderIntent[] = [];
   let deferredRebalanceBuys: OrderIntent[] = [];
+  let overflowBuys: OrderIntent[] = [];
   const unresolvedForcedExitSymbols = new Set<string>();
   // 새 이탈 청산이 다음 거래일에 한 번 체결을 시도할 때까지만 신규 매수보다 우선한다.
   // 거래정지로 매도가 오래 남아도 이 장벽까지 계속 유지하면 포트폴리오 전체가 잠긴다.
@@ -689,6 +696,27 @@ function* runBacktestSteps(
     const allBarCount = allBarCountByTs.get(tsMs) ?? 0;
     const bars = executionBars(tsMs);
     currentExecutionBars = bars;
+    currentOrderTsMs = tsMs;
+    for (const position of positions.values()) {
+      const gap = holdingActionGap(actionGapGate.periods, position.symbol, position.entryTsMs, tsMs);
+      if (gap) throw new Error(`보유 중 자본변동 보정 정보를 확인할 수 없습니다: ${position.symbol} (${new Date(gap.from).toISOString().slice(0, 10)}~${new Date(gap.to).toISOString().slice(0, 10)}).`);
+    }
+    actionGapGate.advance(tsMs, bars, (symbol) => {
+      resetUnheldPriceState(state, symbol);
+      counts.delete(symbol);
+      historyBySymbol?.set(symbol, []);
+      if (recentHistoryBySymbol && retainedHistoryBars !== undefined)
+        recentHistoryBySymbol.set(symbol, new RecentCandleHistory(symbol, retainedHistoryBars));
+      lastCloseBySymbol.delete(symbol);
+      if (!actionGapWarned.has(symbol)) {
+        actionGapWarned.add(symbol);
+        warnings.push(`자본변동 보정 정보를 확인할 수 없는 구간과 이후 지표 준비 기간에 ${symbol}의 신규 매수를 제한했습니다.`);
+      }
+    });
+    pendingOrders = eligibleDailyOrders(pendingOrders, actionGapGate.atOpen);
+    deferredRebalanceBuys = eligibleDailyOrders(deferredRebalanceBuys, actionGapGate.atOpen);
+    let overflowForOpen = bars.size > 0 ? overflowBuys : [];
+    if (bars.size > 0) overflowBuys = [];
     nonTradingNow = input.nonTradingSymbolsByTsMs?.get(tsMs);
     const delistingSymbolsThisBar = new Set<string>();
     while (
@@ -904,7 +932,7 @@ function* runBacktestSteps(
     // (`rsi-reversion` 의 허위 과매도, `range-breakout` 의 기준선 고착).
     // 그래서 봉이 있는 종목이면 보유 여부와 무관하게 훅을 부른다.
     const pendingSymbols = new Set(
-      [...pendingOrders, ...deferredRebalanceBuys].map((order) => order.symbol),
+      [...pendingOrders, ...deferredRebalanceBuys, ...overflowForOpen, ...overflowBuys].map((order) => order.symbol),
     );
     for (const [symbol, bar] of bars) {
       if (retiredSymbols.has(symbol)) continue;
@@ -934,26 +962,10 @@ function* runBacktestSteps(
       // 이 종목을 겨냥한 대기 주문을 같은 비율로 스케일한다.
       // 발행 시점에 캡처된 수량을 그대로 체결하면 분할 이후 수량이 어긋난다.
       // BUY 도 같은 값 보존 규칙을 적용해야 의도한 투입 금액이 유지된다.
-      pendingOrders = pendingOrders
-        .map((order) =>
-          order.symbol === symbol
-            ? {
-                ...order,
-                quantity: adjustForRatio(order.quantity, 0, ratio, 0).quantity,
-              }
-            : order,
-        )
-        .filter((order) => order.quantity > 0);
-      deferredRebalanceBuys = deferredRebalanceBuys
-        .map((order) =>
-          order.symbol === symbol
-            ? {
-                ...order,
-                quantity: adjustForRatio(order.quantity, 0, ratio, 0).quantity,
-              }
-            : order,
-        )
-        .filter((order) => order.quantity > 0);
+      pendingOrders = adjustDailyOrderUnits(pendingOrders, symbol, ratio);
+      deferredRebalanceBuys = adjustDailyOrderUnits(deferredRebalanceBuys, symbol, ratio);
+      overflowForOpen = adjustDailyOrderUnits(overflowForOpen, symbol, ratio);
+      overflowBuys = adjustDailyOrderUnits(overflowBuys, symbol, ratio);
 
       const position = positions.get(symbol);
       if (!position) continue; // 대기 주문만 있었다 — 주문은 이미 위에서 스케일했다
@@ -1046,9 +1058,28 @@ function* runBacktestSteps(
       promoteDeferredBuys(promotedBuySymbolsThisBar);
     }
 
+    // 같은 신호에서 자리를 기다린 후보는 시가에서 앞선 주문의 실제 결과를 보고 배정한다.
+    const overflowCandidates = new Set<OrderIntent>();
+    for (const order of eligibleDailyOrders(overflowForOpen, actionGapGate.atOpen)) {
+      if (retiredSymbols.has(order.symbol) ||
+          (activeMembershipSymbols !== null && !activeMembershipSymbols.has(order.symbol))) continue;
+      const validated = validateOrder(order, { ignoreNonTrading: true, ignorePositionCap: true });
+      if (validated) {
+        pendingOrders.push(validated);
+        overflowCandidates.add(validated);
+      }
+    }
+
     // 2~3. 대기 주문 체결 + 현금·포지션 갱신
+    const slots = new DailyPositionSlots(positions.keys(), input.maxPositions);
     const stillPending: OrderIntent[] = [];
     for (const order of pendingOrders) {
+      if (overflowCandidates.has(order) && !buysAwaitingForcedExitAttempt && !slots.allows(order.symbol)) continue;
+      if (overflowCandidates.has(order)) {
+        const dropped = buysDroppedByCap.get(order.symbol) ?? 0;
+        if (dropped <= 1) buysDroppedByCap.delete(order.symbol);
+        else buysDroppedByCap.set(order.symbol, dropped - 1);
+      }
       if (order.side === "BUY" && buysAwaitingForcedExitAttempt) {
         deferBuy(order);
         continue;
@@ -1057,16 +1088,21 @@ function* runBacktestSteps(
         // 발행 뒤 거래정지된 BUY도 다음 거래 가능 봉까지 보존한다. deferred 승격은
         // 이미 현재 시가가 지난 뒤 일어나므로, 이 방어가 있어야 다음 정지 봉에도
         // 잘못 체결되지 않으면서 주문 자체는 재개일까지 살아 있다.
+        if (order.side === "BUY") slots.reserve(order.symbol);
         stillPending.push(order);
         continue;
       }
       const bar = bars.get(order.symbol);
       if (!bar) {
+        if (order.side === "BUY") slots.reserve(order.symbol);
         stillPending.push(order); // 다음 거래 가능 봉까지 대기 (§9.1)
         continue;
       }
       const executed = executeOrder(order, bar, tsMs);
-      if (executed) fills.push(executed);
+      if (executed) {
+        fills.push(executed);
+        if (executed.side === "BUY") slots.reserve(executed.symbol);
+      }
       if (order.side === "SELL" && positions.has(order.symbol)) {
         const remainingQuantity =
           order.reason === "REBALANCE_EXIT"
@@ -1107,7 +1143,7 @@ function* runBacktestSteps(
 
     // 봉 이력·마지막 종가 갱신
     for (const [symbol, bar] of bars) {
-      if (contextRetiredSymbols.has(symbol)) continue;
+      if (contextRetiredSymbols.has(symbol) || tsMs <= actionGapGate.priceCutoff(symbol)) continue;
       if (recentHistoryBySymbol !== undefined)
         recentHistoryBySymbol.get(symbol)!.append(bar);
       else
@@ -1162,7 +1198,7 @@ function* runBacktestSteps(
       // event-only 시각은 strategyTimeline의 실제 봉이 아니므로 RNG·2단계 신호 상태도
       // 소비하지 않는다.
       if (strategyBars.size > 0)
-        evaluateDailyBar(strategy, state, input.parameters, context, minimumBars, counts, true);
+        evaluateDailyBar(strategy, state, input.parameters, context, minimumBars, counts, true, actionGapGate);
       if (visitedBars % CANCEL_YIELD_INTERVAL_BARS < allBarCount) yield;
       continue;
     }
@@ -1177,7 +1213,7 @@ function* runBacktestSteps(
     equityPoints.push({ tsMs, equity: context.portfolio.equity });
     maxConcurrentPositions = Math.max(maxConcurrentPositions, positions.size);
 
-    const decision = evaluateDailyBar(strategy, state, input.parameters, context, minimumBars, counts, false);
+    const decision = evaluateDailyBar(strategy, state, input.parameters, context, minimumBars, counts, false, actionGapGate);
 
     // 7~8. 리스크 검증 후 다음 봉 대기열 등록
     //
@@ -1203,6 +1239,8 @@ function* runBacktestSteps(
         (isRebalanceBar || buysAwaitingForcedExitAttempt);
       const validated = validateOrder(order, {
         ignorePositionCap: shouldDeferBuy,
+        retainOverflow: true,
+        orderTsMs: tsMs,
       });
       if (!validated) continue;
       if (order.side === "BUY" && promotedBuySymbolsThisBar.has(order.symbol)) {
@@ -1556,7 +1594,7 @@ function* runBacktestSteps(
     for (const order of deferred) {
       // 승격은 이미 지난 시가 뒤이거나, 앞선 event-only 시각에서 다음 시가를 기다리는
       // 주문이다. 당일 거래정지를 이유로 폐기하지 않고 pending에 보존한다.
-      const validated = validateOrder(order, { ignoreNonTrading: true });
+      const validated = validateOrder(order, { ignoreNonTrading: true, retainOverflow: true, orderTsMs: currentOrderTsMs });
       if (validated) {
         pendingOrders.push(validated);
         promotedSymbols.add(validated.symbol);
@@ -1578,6 +1616,8 @@ function* runBacktestSteps(
     options: {
       readonly ignorePositionCap?: boolean;
       readonly ignoreNonTrading?: boolean;
+      readonly retainOverflow?: boolean;
+      readonly orderTsMs?: number;
     } = {},
   ): OrderIntent | null {
     if (
@@ -1633,15 +1673,14 @@ function* runBacktestSteps(
     // 대기 중인 신규 매수도 슬롯을 소비한다 — 같은 봉에서 여러 심볼이 동시에
     // 신호를 내면 보유 수만으로는 상한이 뚫린다.
     if (!options.ignorePositionCap && !positions.has(order.symbol)) {
-      const pendingNewBuySymbols = new Set(
-        pendingOrders
-          .filter((o) => o.side === "BUY" && !positions.has(o.symbol))
-          .map((o) => o.symbol),
-      );
-      if (
-        !pendingNewBuySymbols.has(order.symbol) &&
-        positions.size + pendingNewBuySymbols.size >= input.maxPositions
-      ) {
+      const slots = new DailyPositionSlots(positions.keys(), input.maxPositions);
+      for (const pending of pendingOrders) if (pending.side === "BUY") slots.reserve(pending.symbol);
+      if (!slots.allows(order.symbol)) {
+        if (options.retainOverflow) {
+          overflowBuys.push({ ...order, quantity });
+          if (!quantityBasisTsMsBySymbol.has(order.symbol))
+            quantityBasisTsMsBySymbol.set(order.symbol, options.orderTsMs ?? currentOrderTsMs);
+        }
         // 조용히 버리지 않는다 — 폐기 사실을 기록해 실행 경고로 접어 올린다
         buysDroppedByCap.set(
           order.symbol,
@@ -1692,49 +1731,20 @@ function* runBacktestSteps(
         input.execution,
         bar.venue,
       );
-      if (requiredCashForBuy(fill) > cash) {
-        // 현금 부족: 감당 가능한 수량으로 축소, 최소 수량 미만이면 거부
-        // fill.price 는 이미 체결가라 basePrice 와 다르다 — 그대로 쓴다
-        const affordable = Math.floor(
-          cash / (fill.price * (1 + input.execution.cost.buyCommissionRate)),
-        );
-        if (affordable < input.execution.rules.minOrderQty) {
-          cashRejectedOrderCount += 1;
-          return null;
-        }
-        fill = simulateFill(
-          { ...volumeLimitedOrder, quantity: affordable },
-          basePrice,
-          tsMs,
-          input.execution,
-          bar.venue,
-        );
+      // 당일 종가 대신 시가로 평가한다. 거래 봉이 없는 보유분은 마지막 종가로 평가한다.
+      const equityAtOpen = maxPositionWeight === undefined ? cash : markedEquity(cash, positions, symbol =>
+        currentExecutionBars.get(symbol)?.open ?? lastCloseBySymbol.get(symbol) ?? positions.get(symbol)?.avgEntryPrice);
+      const sized = sizeDailyBuyAtOpen({ quantity: fill.quantity, cash, equity: equityAtOpen,
+        heldValue: (positions.get(fill.symbol)?.quantity ?? 0) * basePrice, basePrice, fillPrice: fill.price,
+        commissionRate: input.execution.cost.buyCommissionRate, weight: maxPositionWeight });
+      if (sized.quantity < input.execution.rules.minOrderQty) {
+        if (sized.cashQuantity < input.execution.rules.minOrderQty) cashRejectedOrderCount++;
+        else weightRejectedOrderCount++;
+        return null;
       }
-
-      if (maxPositionWeight !== undefined) {
-        // 당일 종가는 아직 알 수 없다. 자본변동 반영 후 현재 시가로 평가하고,
-        // 거래 봉이 없는 보유분만 마지막 종가를 사용한다.
-        let equityAtOpen = cash;
-        for (const position of positions.values()) {
-          const price = currentExecutionBars.get(position.symbol)?.open
-            ?? lastCloseBySymbol.get(position.symbol) ?? position.avgEntryPrice;
-          equityAtOpen += position.quantity * price;
-        }
-        const heldValue = (positions.get(fill.symbol)?.quantity ?? 0) * basePrice;
-        // 매수 후 평가액 = 매수 전 평가액 - 수수료 - 시가 대비 체결 비용이다.
-        const allowedQuantity = weightLimitedBuyQuantity(equityAtOpen, heldValue, basePrice,
-          fill.price, 1 + input.execution.cost.buyCommissionRate, maxPositionWeight);
-        if (allowedQuantity < input.execution.rules.minOrderQty) {
-          weightRejectedOrderCount += 1;
-          return null;
-        }
-        if (allowedQuantity < fill.quantity) {
-          weightLimitedOrderCount += 1;
-          fill = simulateFill(
-            { ...volumeLimitedOrder, quantity: allowedQuantity },
-            basePrice, tsMs, input.execution, bar.venue,
-          );
-        }
+      if (sized.quantity < sized.cashQuantity) weightLimitedOrderCount++;
+      if (sized.quantity < fill.quantity) {
+        fill = simulateFill({ ...volumeLimitedOrder, quantity: sized.quantity }, basePrice, tsMs, input.execution, bar.venue);
       }
 
       cash -= requiredCashForBuy(fill);

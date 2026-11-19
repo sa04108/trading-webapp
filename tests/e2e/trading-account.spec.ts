@@ -53,6 +53,14 @@ test("전략이 외부에서 교체되어도 초안을 유지하고 명시적 �
   await expect(page.getByText(/초기 모의 자금 100,000,000원/)).toBeVisible();
   await page.getByRole("button", { name: "매매 설정" }).click();
   const capital = page.getByLabel("초기 모의자금 (원)", { exact: true });
+  const dialog = page.getByRole("dialog", { name: "매매 설정" });
+  const close = dialog.getByRole("button", { name: "Close", exact: true });
+  const save = dialog.getByRole("button", { name: "설정 저장", exact: true });
+  await expect(dialog).toBeInViewport({ ratio: 1 });
+  await expect(close).toBeInViewport({ ratio: 1 });
+  await save.scrollIntoViewIfNeeded();
+  await expect(save).toBeInViewport({ ratio: 1 });
+  await expect(close).toBeInViewport({ ratio: 1 });
   await expect(capital).toHaveValue("100000000");
   await capital.fill("150000000");
   const budget = page.getByLabel("운용 예산 (원)", { exact: true });

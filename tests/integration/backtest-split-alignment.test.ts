@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import type { TestApp } from '../helpers/test-app.js';
 import { authenticatedTest as base } from '../helpers/test-fixtures.js';
-import { prepareSubmission } from '../helpers/backtest-preparation.js';
+import { prepareSubmission, type PreparedSubmission } from '../helpers/backtest-preparation.js';
 import { installEmptyDartSyncStub, withSparseQueuePreparation } from '../helpers/backtest-preparation-stubs.js';
 import { registerSymbols, seedCorporateActionCoverage, seedDailyBars, yearRange } from '../helpers/seed.js';
 import { seedSymbolMasterUniverse } from '../helpers/symbol-master-seed.js';
@@ -88,7 +88,7 @@ async function waitFor(condition: () => boolean, timeoutMs: number): Promise<voi
 }
 
 describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
-  type Scenario = { ctx: TestApp; cookie: string; prepare(payload: BacktestRequest): Promise<void> };
+  type Scenario = { ctx: TestApp; cookie: string; prepare(payload: BacktestRequest): Promise<PreparedSubmission> };
   const it = base.extend<{ scenario: Scenario }>({
     scenario: async ({ ctx, cookie, signal }, use) => {
       const restoreDart = installEmptyDartSyncStub(ctx);
@@ -112,8 +112,8 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
           ctx,
           cookie,
           async prepare(payload) {
-            await withSparseQueuePreparation(ctx, payload, async () => {
-              await prepareSubmission(ctx, cookie, payload, { signal });
+            return await withSparseQueuePreparation(ctx, payload, async () => {
+              return await prepareSubmission(ctx, cookie, payload, { signal });
             });
           },
         });
@@ -176,6 +176,7 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
   async function submitBacktest(
     scenario: Scenario,
     afterCreate?: (jobId: string) => void | Promise<void>,
+    onPreview?: (prepared: PreparedSubmission) => void,
   ): Promise<string> {
     const { ctx, cookie } = scenario;
     const payload: BacktestRequest = {
@@ -207,7 +208,8 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
       randomSeed: 1,
     };
 
-    await scenario.prepare(payload);
+    const prepared = await scenario.prepare(payload);
+    onPreview?.(prepared);
     const created = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',
@@ -262,6 +264,24 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
   }
 
   it(
+    '정렬하지 못한 자본변동이 있어도 준비와 제출은 종목을 유지하고 사유를 알린다',
+    { timeout: 90_000 },
+    async ({ scenario }) => {
+      let previewWarnings: readonly string[] = [];
+      const jobId = await submitBacktest(scenario, undefined, ({ preview }) => {
+        expect(preview.unionSymbols).toEqual([SYMBOL]);
+        previewWarnings = preview.warnings;
+      });
+      expect(previewWarnings).toEqual(expect.arrayContaining([
+        expect.stringMatching(/SPLIT의 선정 또는 매매에 영향을 줄 수 있습니다.*정렬할 수 없는 자본변동/),
+      ]));
+      const row = scenario.ctx.container.database.db.select().from(backtestJobs)
+        .where(eq(backtestJobs.id, jobId)).get();
+      expect(JSON.parse(row?.submitWarningsJson ?? '[]')).toEqual(expect.arrayContaining([...previewWarnings]));
+    },
+  );
+
+  it(
     '기준일과 변경상장일이 달라도 자산곡선이 튀지 않는다',
     { timeout: 90_000 },
     async ({ scenario }) => {
@@ -288,38 +308,33 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
   );
 
   it(
-    '짝이 될 상장주식수 변경이 없으면 왜곡된 결과를 만들지 않고 실패한다',
+    '짝이 될 상장주식수 변경이 없으면 해당 기간 신규 매수를 막는다',
     { timeout: 90_000 },
     async ({ scenario }) => {
       const { ctx } = scenario;
-      // 정상 preparation은 정렬 불가 종목을 제외한다. 이 테스트는 제출 뒤 KRX
-      // 변경 이력이 사라진 drift를 만들어 worker의 마지막 fail-closed만 검증한다.
+      // 제출 뒤 KRX 변경 이력이 사라진 경우에도 불확실한 가격으로 진입하지 않는다.
       seedSharesChange(ctx);
       const jobId = await submitBacktest(scenario, () => removeSharesChange(ctx));
       const job = ctx.container.jobQueue.getJob(jobId)!;
 
-      expect(job.status).toBe('FAILED');
-      expect(job.error).toContain('실제 효력일을 KRX 상장주식수 변경과 정렬할 수 없는 상태');
-      expect(job.error).toContain(SYMBOL);
+      expect(job.status).toBe('COMPLETED');
       const full = ctx.container.resultsService.getFullExport(jobId);
-      expect(full.run).toBeNull();
-      expect(full.metrics).toBeNull();
-      expect(full.equityPoints).toEqual([]);
       expect(full.trades).toEqual([]);
-      expect(full.monthlyReturns).toEqual([]);
-      expect(ctx.container.resultsService.getChartSeries(jobId).drawdown).toEqual([]);
+      expect(JSON.parse(full.run?.openPositionsJson ?? '[]')).toEqual([]);
+      expect(JSON.parse(full.run?.warningsJson ?? '[]')).toEqual(expect.arrayContaining([
+        expect.stringContaining('SPLIT의 신규 매수를 제한했습니다'),
+      ]));
     },
   );
 
   it(
-    '같은 기준일의 상충 비율 공시가 있으면 KRX와 한쪽이 맞아도 실패한다',
+    '상충 비율 공시의 불확실한 기간에는 신규 매수를 막는다',
     { timeout: 90_000 },
     async ({ scenario }) => {
       const { ctx } = scenario;
       seedSharesChange(ctx);
       const jobId = await submitBacktest(scenario, async () => {
-        // preparation 완료 뒤 상충 fact가 추가된 drift에서 worker가 pin을 임의로
-        // 재선정하지 않고 실패하는지 확인한다.
+        // preparation 완료 뒤 상충 fact가 추가돼도 불확실한 기간에 진입하지 않는다.
         await ctx.container.factRepository.saveFacts([{
           ...splitFact(),
           asOfTsMs: Date.parse('2026-04-20T09:00:00Z'),
@@ -328,39 +343,37 @@ describe('액면분할 효력발생일 정렬 (워커 → 엔진)', () => {
       });
       const job = ctx.container.jobQueue.getJob(jobId)!;
 
-      expect(job.status).toBe('FAILED');
-      expect(job.error).toContain('실제 효력일을 KRX 상장주식수 변경과 정렬할 수 없는 상태');
-      expect(job.error).toContain(SYMBOL);
-      expect(ctx.container.resultsService.getFullExport(jobId).run).toBeNull();
+      expect(job.status).toBe('COMPLETED');
+      const full = ctx.container.resultsService.getFullExport(jobId);
+      expect(full.trades).toEqual([]);
+      expect(JSON.parse(full.run?.openPositionsJson ?? '[]')).toEqual([]);
+      expect(JSON.parse(full.run?.warningsJson ?? '[]')).toEqual(expect.arrayContaining([
+        expect.stringContaining('SPLIT의 신규 매수를 제한했습니다'),
+      ]));
     },
   );
 
   it(
-    'DART가 자본변동 행을 보았지만 비율을 만들지 못한 gap이면 raw fact가 없어도 실패한다',
+    'DART 연도별 gap이 있으면 해당 기간 신규 매수를 막는다',
     { timeout: 90_000 },
     async ({ scenario }) => {
       const { ctx } = scenario;
-      // 파서가 fact를 만들지 못한 실제 경로를 재현한다. 기존 정상 fact는 지우지 않아도
-      // gap 자체가 다른 미표현 사건일 수 있으므로 worker는 결과 생성을 막아야 한다.
+      // 연도만 알려진 gap은 해당 연도의 신규 매수를 제한한다.
       seedSharesChange(ctx);
 
       const jobId = await submitBacktest(scenario, () => {
-        // preparation 완료 뒤 worker 시작 전에 gap이 새로 생기는 drift/원격 bundle
-        // 경로를 재현해 마지막 실행 경계가 독립적으로 막는지 검증한다.
+        // preparation 완료 뒤 worker 시작 전에 gap이 생긴 경로를 재현한다.
         ctx.container.actionCoverageStore.addGapYears(SYMBOL, [2025], ctx.container.clock.now());
       });
       const job = ctx.container.jobQueue.getJob(jobId)!;
 
-      expect(job.status).toBe('FAILED');
-      expect(job.error).toContain('준비 완료 후 자본변동 보정 정보가 손상된 종목');
-      expect(job.error).toContain(SYMBOL);
+      expect(job.status).toBe('COMPLETED');
       const full = ctx.container.resultsService.getFullExport(jobId);
-      expect(full.run).toBeNull();
-      expect(full.metrics).toBeNull();
-      expect(full.equityPoints).toEqual([]);
       expect(full.trades).toEqual([]);
-      expect(full.monthlyReturns).toEqual([]);
-      expect(ctx.container.resultsService.getChartSeries(jobId).drawdown).toEqual([]);
+      expect(JSON.parse(full.run?.openPositionsJson ?? '[]')).toEqual([]);
+      expect(JSON.parse(full.run?.warningsJson ?? '[]')).toEqual(expect.arrayContaining([
+        expect.stringContaining('SPLIT의 신규 매수를 제한했습니다'),
+      ]));
     },
   );
 });
