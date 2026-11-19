@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { DEFAULT_UNIVERSE_MARKETS } from "@shared/universe-markets";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Link,
@@ -100,7 +101,7 @@ interface SlippageProfileSummary {
 // 마크업 테스트(universe-stage-editor-markup.test.tsx)도 이 두 값을 그대로 임포트해
 // "신규 진입 기본값" 계약을 고정한다 — 위저드 밖에서 다시 선언하면 두 곳이 어긋날 수 있다.
 export const DEFAULT_UNIVERSE_RULE: UniverseRule = {
-  markets: ["KOSPI"],
+  markets: [...DEFAULT_UNIVERSE_MARKETS],
   stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 200 }],
   rebalanceInterval: { value: 1, unit: "MONTH" },
 };

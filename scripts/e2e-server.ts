@@ -11,6 +11,8 @@ import { createContainer, type Container } from '../src/server/bootstrap/contain
 import { buildServer } from '../src/server/bootstrap/server.js';
 import { newId } from '../src/runtime/shared/ids.js';
 import { SqliteDartRawSnapshotStore } from '../src/server/modules/facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
+import { createKrxHistoricalUniverseSource } from '../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
+import { SqliteKrxRawSnapshotStore } from '../src/server/modules/market-data/infrastructure/krx/sqlite-krx-raw-snapshot-store.js';
 
 export const E2E_USERNAME = 'e2e-operator';
 export const E2E_PASSWORD = 'correct-horse-battery-staple';
@@ -283,21 +285,20 @@ function seedCorporateActionCoverageOnRegistration(container: Container): void {
 
 /**
  * 리밸런스 적용 거래일 표기 e2e(Task 4, 2026-08-06 스펙, `tests/e2e/mvp-flow.spec.ts`
- * `holidayPeriodFor`)가 정확히 이 두 날짜만 휴장 리밸런스로 쓴다 — mobile·desktop
+ * `holidayPeriodFor`)가 아래 두 평일을 휴장 리밸런스로 쓴다 — mobile·desktop
  * 프로젝트가 같은 서버 상태를 공유해도(playwright.config workers:1) 부딪히지
  * 않도록 연도를 갈랐다.
  *
- * "1월 1일이면 무조건 휴장" 같은 패턴 매칭 대신 이 정확한 날짜 집합만 겨냥한다 —
- * 패턴으로 두면 `tests/e2e/symbol-master.spec.ts` 가 쓰는 "오늘 기준 상대 날짜"
- * (`daysBeforeIso(todayIso(), 1|10)`)가 매년 1월 2일·1월 11일에 이 스위트를 돌릴 때
- * 우연히 1월 1일과 겹쳐, 그 스펙의 "가짜 KRX 는 어느 날짜를 물어도 같은 유니버스
- * 구성을 낸다"는 전제를 깨뜨린다(리뷰에서 지적된 회귀). 고정 날짜 집합은 상대 날짜를
- * 쓰는 스펙과 영원히 부딪히지 않는다.
+ * 일반 주말도 실제 KRX처럼 휴장으로 처리한다. 주말에 가짜 거래 봉을 만들면
+ * 준비 범위 첫날이 주말일 때 거래일 앵커 검증과 충돌한다.
+ * 공휴일은 상대 날짜 테스트와 충돌하지 않도록 고정된 두 날짜만 사용한다.
  */
 const HOLIDAY_BAS_DATES = new Set(['20250101', '20180101']);
 
 function isHolidayBasDd(basDd: string | undefined): boolean {
-  return basDd !== undefined && HOLIDAY_BAS_DATES.has(basDd);
+  if (basDd === undefined) return false;
+  const day = new Date(Date.UTC(Number(basDd.slice(0, 4)), Number(basDd.slice(4, 6)) - 1, Number(basDd.slice(6, 8)))).getUTCDay();
+  return day === 0 || day === 6 || HOLIDAY_BAS_DATES.has(basDd);
 }
 
 /**
@@ -306,7 +307,7 @@ function isHolidayBasDd(basDd: string | undefined): boolean {
  * 기본정보(base_info)는 요청한 날짜와 무관하게 항상 같은 값을 돌려준다. 일별시세
  * (daily_trd) 도 원칙은 같지만 두 가지 예외가 있다.
  *
- * 하나는 HOLIDAY_BAS_DATES 에 속한 날짜의 빈 배열이다. 두 시장 모두 거래가 없는
+ * 하나는 주말과 HOLIDAY_BAS_DATES 에 속한 날짜의 빈 배열이다. 두 시장 모두 거래가 없는
  * 날로 잡혀야 SymbolMasterService.ingestDate 가 휴장으로 분류한다. 그래야
  * ensureTradingDay 의 소급 수집도 재현할 수 있다.
  *
@@ -379,6 +380,32 @@ async function startFakeKrxServer(): Promise<void> {
   await app.listen({ host: '127.0.0.1', port: KRX_FAKE_PORT });
 }
 
+/** 백테스트 시나리오의 준비 구간 원문만 시드한다. 종목·봉·커버리지는 실제 준비 작업이 만든다. */
+async function seedKrxRawSnapshots(container: Container): Promise<void> {
+  const source = createKrxHistoricalUniverseSource(
+    { baseUrl: container.config.krxBaseUrl, apiKey: KRX_API_KEY, approvalExpiry: null },
+    container.clock,
+    container.logger,
+    {
+      // 로컬 가짜 공급자의 원문 준비에는 실제 외부 API의 호출 간격을 적용하지 않는다.
+      sleep: async () => {},
+      rawSnapshotStore: new SqliteKrxRawSnapshotStore(container.database.db),
+    },
+  );
+  // 휴장일 시나리오(2018·2025)와 실행 시나리오(2026)의 과거 준비 기간까지 포함한다.
+  const ranges = [['2016-11-01', '2018-02-01'], ['2023-11-01', '2026-09-05']] as const;
+  for (const [from, to] of ranges) {
+    for (let ts = Date.parse(from); ts <= Date.parse(to); ts += DAY) {
+      const date = new Date(ts).toISOString().slice(0, 10);
+      for (const market of ['KOSPI', 'KOSDAQ'] as const) {
+        await source.fetchIssueBaseInfo(market, date);
+        await source.fetchDailyTrades(market, date);
+        await source.fetchBenchmarkClose!(market, date);
+      }
+    }
+  }
+}
+
 async function main(): Promise<void> {
   const root = path.resolve('.e2e-data');
   fs.rmSync(root, { recursive: true, force: true });
@@ -407,6 +434,7 @@ async function main(): Promise<void> {
     DART_BASE_URL: `http://127.0.0.1:${KRX_FAKE_PORT}`,
   });
   const container = createContainer(config);
+  await seedKrxRawSnapshots(container);
 
   container.userRepository.create(
     {

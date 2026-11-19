@@ -152,6 +152,21 @@ describe('UniverseRuleResolver.resolve', () => {
 
   });
 
+  it('두 시장을 합쳐 상위 N개를 고르고 각 종목의 시장을 보존한다', async ({ krxApps }) => {
+    const ctx = await setup(krxApps);
+    await ingestFixtureUniverse(ctx);
+
+    const result = await ctx.resolver.resolve({ ...marketCapRule(2), markets: ['KOSPI', 'KOSDAQ'] }, ['2023-01-02']);
+
+    expect(result.schedule).toEqual([{
+      rebalanceDate: '2023-01-02', effectiveTradingDate: '2023-01-02',
+      symbols: ['000040', '000010'], excludedNonTradingCount: 0,
+    }]);
+    expect(result.unionSymbols).toEqual(['000010', '000040']);
+    expect(result.unionEntries.get('000010')).toMatchObject({ market: 'KOSPI' });
+    expect(result.unionEntries.get('000040')).toMatchObject({ market: 'KOSDAQ' });
+  });
+
   it('시가총액 LOW는 작은 시가총액부터 N개를 고른다', async ({ krxApps }) => {
     const ctx = await setup(krxApps);
     await ingestFixtureUniverse(ctx);

@@ -54,6 +54,7 @@ test("전략이 외부에서 교체되어도 초안을 유지하고 명시적 �
   await page.getByRole("button", { name: "매매 설정" }).click();
   const capital = page.getByLabel("초기 모의자금 (원)", { exact: true });
   const dialog = page.getByRole("dialog", { name: "매매 설정" });
+  await expect(dialog.getByLabel("유니버스 시장")).toHaveText("코스피");
   const close = dialog.getByRole("button", { name: "Close", exact: true });
   const save = dialog.getByRole("button", { name: "설정 저장", exact: true });
   await expect(dialog).toBeInViewport({ ratio: 1 });
@@ -202,8 +203,13 @@ test("모의투자를 만들고 계좌별 자금과 설정을 분리한다", asy
   const first = `첫 계좌 ${suffix}`;
   const second = `둘째 계좌 ${suffix}`;
   await page.goto("/trading");
-  const create = async (title: string, capital: string) => {
+  const create = async (title: string, capital: string, market = "코스피+코스닥") => {
     await page.getByRole("button", { name: "새 모의투자" }).click();
+    const marketSelect = page.getByLabel("유니버스 시장");
+    await expect(marketSelect).toHaveText("코스피+코스닥");
+    await marketSelect.click();
+    await expect(page.getByRole("option")).toHaveText(["코스피+코스닥", "코스피", "코스닥"]);
+    await page.getByRole("option", { name: market, exact: true }).click();
     await page.getByLabel("모의투자 이름 (선택)").fill(title);
     await page.getByLabel("초기 모의자금 (원)").fill(capital);
     const response = page.waitForResponse((res) => res.url().endsWith("/api/v1/trading/presets") && res.request().method() === "POST");
@@ -216,7 +222,7 @@ test("모의투자를 만들고 계좌별 자금과 설정을 분리한다", asy
   };
   const firstId = await create(first, "11000000");
   await expect(page.getByText(/초기 모의 자금 11,000,000원/)).toBeVisible();
-  const secondId = await create(second, "22000000");
+  const secondId = await create(second, "22000000", "코스닥");
   await expect(page.getByText(/초기 모의 자금 22,000,000원/)).toBeVisible();
   await page.goto("/");
   const firstLink = page.getByRole("link", { name: `${first} · 꺼짐` });
@@ -239,8 +245,8 @@ test("모의투자를 만들고 계좌별 자금과 설정을 분리한다", asy
   expect(new URL(result.url()).searchParams.get("presetId")).toBe(secondId);
   const firstSnapshot = await (await page.request.get(`/api/v1/trading?presetId=${firstId}`)).json() as TradingSnapshot;
   const secondSnapshot = await (await page.request.get(`/api/v1/trading?presetId=${secondId}`)).json() as TradingSnapshot;
-  expect(firstSnapshot.deployment).toMatchObject({ title: first, budgetKrw: 10_000_000 });
-  expect(secondSnapshot.deployment).toMatchObject({ title: second, budgetKrw: 9_000_000 });
+  expect(firstSnapshot.deployment).toMatchObject({ title: first, budgetKrw: 10_000_000, universeRule: { markets: ["KOSPI", "KOSDAQ"] } });
+  expect(secondSnapshot.deployment).toMatchObject({ title: second, budgetKrw: 9_000_000, universeRule: { markets: ["KOSDAQ"] } });
   expect(firstSnapshot.paperCapital?.initialCashKrw).toBe(11_000_000);
   expect(secondSnapshot.paperCapital?.initialCashKrw).toBe(22_000_000);
   const defaultSnapshot = await (await page.request.get("/api/v1/trading")).json() as TradingSnapshot;

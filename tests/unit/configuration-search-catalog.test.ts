@@ -30,6 +30,31 @@ describe("설정 탐색의 유효 조합 추출", () => {
     expect(() => sampleConfigurations(source, catalog, { count: 1, settings: { "parameters.stopAtrMultiplier": { kind: "RANGE", min: 0, max: 1 } } }, registry)).toThrow("범위");
   });
 
+  // 첫 시장만 변경하면 통합 시장에서 기존 두 번째 시장이 남거나 중복된다.
+  it("시장 탐색은 통합·단일 선택을 전체 배열에 적용하고 원본을 보존한다", () => {
+    const source = backtestRequestSchema.parse({ ...daily, universeRule: { ...daily.universeRule, markets: ["KOSPI", "KOSDAQ"] } });
+    const original = structuredClone(source);
+    const catalog = dailySearchCatalog("original", source, registry);
+    expect(catalog.fields.find(field => field.key === "universeRule.markets.0")).toMatchObject({
+      current: "KOSPI+KOSDAQ",
+      options: [
+        { value: "KOSPI+KOSDAQ", label: "코스피+코스닥" },
+        { value: "KOSPI", label: "코스피" },
+        { value: "KOSDAQ", label: "코스닥" },
+      ],
+    });
+    const samples = sampleConfigurations(source, catalog, { count: 3, settings: {
+      "universeRule.markets.0": { kind: "CHOICE", values: ["KOSPI+KOSDAQ", "KOSPI", "KOSDAQ"] },
+    } }, registry);
+    const marketsByChoice = Object.fromEntries(samples.map(({ request, values }) => {
+      if (request.mode === "intraday") throw new Error("일봉 요청이어야 합니다.");
+      return [String(values["universeRule.markets.0"]), request.universeRule.markets];
+    }));
+    expect(marketsByChoice).toEqual({ "KOSPI+KOSDAQ": ["KOSPI", "KOSDAQ"], KOSPI: ["KOSPI"], KOSDAQ: ["KOSDAQ"] });
+    expect(source).toEqual(original);
+    expect(dailySearchCatalog("original", daily, registry).fields.find(field => field.key === "universeRule.markets.0")).toMatchObject({ current: "KOSPI" });
+  });
+
   it("유니버스 단계 순서·기준 중복·topN 상한을 함께 검증한다", () => {
     const source = backtestRequestSchema.parse({ ...daily, strategyId: "cross-sectional-momentum", parameters: registry.get("cross-sectional-momentum")!.parameterSchema.parse({ topN: 10 }),
       universeRule: { ...daily.universeRule, stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 20 }, { criterion: "ROE", direction: "HIGH", limit: 10 }] } });

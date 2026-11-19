@@ -45,9 +45,9 @@ function renderRuleStep(
 }
 
 describe('신규 진입 기본값', () => {
-  it('KOSPI / 시가총액 200 / 1개월 / maxPositions 40 이다', () => {
+  it('KOSPI+KOSDAQ / 시가총액 200 / 1개월 / maxPositions 40 이다', () => {
     expect(DEFAULT_UNIVERSE_RULE).toEqual({
-      markets: ['KOSPI'],
+      markets: ['KOSPI', 'KOSDAQ'],
       stages: [{ criterion: 'MARKET_CAP', direction: 'HIGH', limit: 200 }],
       rebalanceInterval: { value: 1, unit: 'MONTH' },
     });

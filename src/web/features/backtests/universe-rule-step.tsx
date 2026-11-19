@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { UniverseMarketSelect } from "@/components/universe-market-select";
 import {
   Select,
   SelectContent,
@@ -620,20 +621,12 @@ export function UniverseRuleStep({
         <CardContent className="space-y-3">
           <div className="space-y-1">
             <Label htmlFor="universe-market">시장</Label>
-            <Select
-              value={value.markets[0]}
-              onValueChange={(next) =>
-                onChange({ ...value, markets: [next as "KOSPI" | "KOSDAQ"] })
-              }
-            >
-              <SelectTrigger id="universe-market" className="h-11 w-32">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="KOSPI">KOSPI</SelectItem>
-                <SelectItem value="KOSDAQ">KOSDAQ</SelectItem>
-              </SelectContent>
-            </Select>
+            <UniverseMarketSelect
+              id="universe-market"
+              className="h-11 w-44"
+              value={value.markets}
+              onChange={(markets) => onChange({ ...value, markets })}
+            />
           </div>
 
           <UniverseStageEditor

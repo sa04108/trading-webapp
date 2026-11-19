@@ -55,6 +55,34 @@ test('새 전략 목록에 이익 가속·저PER·고ROE 순위가 있고 기본
   await expect(page.getByLabel('보유 종목 수', { exact: true })).toHaveValue('40');
 });
 
+test('시장은 코스피+코스닥이 기본이며 세 선택을 저장하고 다시 불러온다', async ({ page }) => {
+  await login(page);
+  await page.goto('/backtests/new');
+  await page.getByRole('button', { name: /전고점 돌파/ }).click();
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await page.getByLabel('시작일').fill('2026-01-01');
+  await page.getByLabel('종료일').fill('2026-12-31');
+  await advanceFromPeriod(page);
+
+  const market = page.getByLabel('시장', { exact: true });
+  await expect(market).toHaveText('코스피+코스닥');
+  const wizardId = new URL(page.url()).searchParams.get('wizard')!;
+  for (const [label, markets] of [
+    ['코스피', ['KOSPI']], ['코스닥', ['KOSDAQ']], ['코스피+코스닥', ['KOSPI', 'KOSDAQ']],
+  ] as const) {
+    await market.click();
+    await expect(page.getByRole('option')).toHaveText(['코스피+코스닥', '코스피', '코스닥']);
+    await page.getByRole('option', { name: label, exact: true }).click();
+    await expect.poll(async () => {
+      const response = await page.request.get(`/api/v1/backtests/wizard-draft/universe?wizardId=${wizardId}`);
+      const body = await response.json();
+      return body.draft?.payload.universeRule.markets;
+    }).toEqual(markets);
+    await page.reload();
+    await expect(market).toHaveText(label);
+  }
+});
+
 test('리밸런스 주기 입력은 편집 중 임시값을 허용하고 blur에서 보정한다', async ({
   page,
 }) => {

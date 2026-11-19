@@ -1,4 +1,5 @@
 import { randomInt } from "node:crypto";
+import { UNIVERSE_MARKET_OPTIONS, getUniverseMarketSelection, getUniverseMarkets } from "../../../../shared/universe-markets.js";
 import { backtestRequestSchema, MAX_RANDOM_SEED, type BacktestRequest } from "../../../../shared/schemas/backtest-request.js";
 import type { IntradayRequest } from "../../../../shared/schemas/intraday.js";
 import { getIntradayStrategy, INTRADAY_TRADE_CONTROL_FIELDS, intradayRunRequestSchema } from "../../../../shared/schemas/intraday-strategies.js";
@@ -50,7 +51,7 @@ export function dailySearchCatalog(sourceJobId: string, request: BacktestRequest
     }
   }
   const criteria: [SearchValue, string][] = [["MARKET_CAP", "시가총액"], ["VOLUME", "거래량"], ["TRADING_VALUE", "거래대금"], ["PER", "PER"], ["ROE", "ROE"], ["DECLINE", "하락률"]];
-  fields.push(choice("universeRule.markets.0", "시장", "universe", request.universeRule.markets[0]!, [["KOSPI", "KOSPI"], ["KOSDAQ", "KOSDAQ"]]));
+  fields.push(choice("universeRule.markets.0", "시장", "universe", getUniverseMarketSelection(request.universeRule.markets), UNIVERSE_MARKET_OPTIONS.map(({ value, label }) => [value, label])));
   request.universeRule.stages.forEach((stage, index) => {
     const prefix = `universeRule.stages.${index}`, label = `${index + 1}단계`;
     fields.push(choice(`${prefix}.criterion`, `${label} 선별 기준`, "universe", stage.criterion, criteria, "단계 순서는 유지하며 기준이 중복되는 조합은 제외합니다."));
@@ -82,6 +83,10 @@ export function intradaySearchCatalog(sourceJobId: string, request: IntradayRequ
 }
 
 function setValue(request: ConfigurationSearchRequest, key: string, value: SearchValue): void {
+  if (key === "universeRule.markets.0" && request.mode !== "intraday") {
+    request.universeRule.markets = getUniverseMarkets(String(value));
+    return;
+  }
   const path = key.split(".");
   let target: Record<string, unknown> = request as unknown as Record<string, unknown>;
   for (const part of path.slice(0, -1)) target = target[part] as Record<string, unknown>;
@@ -89,6 +94,7 @@ function setValue(request: ConfigurationSearchRequest, key: string, value: Searc
   if (value === null) delete target[last]; else target[last] = value;
 }
 function getValue(request: ConfigurationSearchRequest, key: string): SearchValue {
+  if (key === "universeRule.markets.0" && request.mode !== "intraday") return getUniverseMarketSelection(request.universeRule.markets);
   let value: unknown = request;
   for (const part of key.split(".")) value = (value as Record<string, unknown> | undefined)?.[part];
   return value === undefined ? null : value as SearchValue;

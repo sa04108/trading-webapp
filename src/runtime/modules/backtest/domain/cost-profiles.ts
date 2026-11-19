@@ -60,7 +60,7 @@ export const DEFAULT_EXECUTION_RULES: ExecutionRules = {
 
 /**
  * KRX 보통주 호가단위. 2023-01-25 전에는 고가 구간이 시장별로 달랐고 이후 통합됐다.
- * universeRule의 단일 요청 시장을 fallback으로 고정하고, 실제 봉의 venue가 있으면
+ * universeRule의 첫 요청 시장을 fallback으로 고정하고, 실제 봉의 venue가 있으면
  * 체결부가 그 값을 우선한다.
  */
 export function getKrxExecutionRules(

@@ -90,7 +90,10 @@ export type RebalanceInterval = z.infer<typeof rebalanceIntervalSchema>;
 
 export const universeRuleSchema = z
   .object({
-    markets: z.array(z.enum(["KOSPI", "KOSDAQ"])).length(1),
+    markets: z.array(z.enum(["KOSPI", "KOSDAQ"])).min(1).max(2).refine(
+      (markets) => new Set(markets).size === markets.length,
+      "같은 시장은 한 번만 선택할 수 있습니다.",
+    ),
     stages: z.array(universeStageSchema).min(1).max(6),
     rebalanceInterval: rebalanceIntervalSchema,
   })
