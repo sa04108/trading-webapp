@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { login } from "./login";
 import type { TradingArtifact, TradingSnapshot } from "../../src/shared/schemas/trading";
 
@@ -22,6 +22,22 @@ const snapshot: TradingSnapshot = {
   events: [],
   blockers: [],
 };
+
+async function expectResponsiveGroups(page: Page, dialog: Locator, first: string, second: string) {
+  const a = await dialog.getByRole("heading", { name: first, exact: true }).boundingBox();
+  const b = await dialog.getByRole("heading", { name: second, exact: true }).boundingBox();
+  expect(a).not.toBeNull();
+  expect(b).not.toBeNull();
+  if (page.viewportSize()!.width >= 1024) {
+    expect(b!.x).toBeGreaterThan(a!.x + a!.width);
+    expect(b!.y).toBeLessThan(a!.y + a!.height);
+    expect(a!.y).toBeLessThan(b!.y + b!.height);
+  } else {
+    expect(b!.y).toBeGreaterThan(a!.y + a!.height);
+    expect(b!.x).toBeLessThan(a!.x + a!.width);
+    expect(a!.x).toBeLessThan(b!.x + b!.width);
+  }
+}
 
 // 모달을 연 뒤 주기적인 상태 조회가 작성 중인 설정을 덮지 않아야 한다.
 test("전략이 외부에서 교체되어도 초안을 유지하고 명시적 새로 불러오기 뒤 저장한다", async ({ page }) => {
@@ -59,7 +75,9 @@ test("전략이 외부에서 교체되어도 초안을 유지하고 명시적 �
   const save = dialog.getByRole("button", { name: "설정 저장", exact: true });
   await expect(dialog).toBeInViewport({ ratio: 1 });
   await expect(close).toBeInViewport({ ratio: 1 });
-  await save.scrollIntoViewIfNeeded();
+  await expect(save).toBeInViewport({ ratio: 1 });
+  await expectResponsiveGroups(page, dialog, "전략 및 유니버스", "자금 및 운용 한도");
+  await dialog.getByLabel("난수 시드").scrollIntoViewIfNeeded();
   await expect(save).toBeInViewport({ ratio: 1 });
   await expect(close).toBeInViewport({ ratio: 1 });
   await expect(capital).toHaveValue("100000000");
@@ -280,6 +298,9 @@ test("분봉 모의투자는 고정 설정을 표시하고 확인 후 켠다", a
   await expect(page.getByRole("button", { name: "최신 버전으로 변경" })).toHaveCount(0);
   await page.getByRole("button", { name: "매매 설정" }).click();
   const dialog = page.getByRole("dialog", { name: "매매 설정" });
+  await expectResponsiveGroups(page, dialog, "고정 전략 파라미터", "고정 체결 조건");
+  await expect(dialog.getByRole("button", { name: "이름 저장" })).toBeInViewport({ ratio: 1 });
+  await expect(dialog).toBeInViewport({ ratio: 1 });
   await expect(dialog).toContainText("005930");
   await expect(dialog).toContainText("2026-01-02");
   await expect(dialog).toContainText("수수료 1.5bps");
