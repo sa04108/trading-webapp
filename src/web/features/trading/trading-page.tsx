@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { LoaderCircle, LockKeyhole } from "lucide-react";
 import { HoldingPriceDialog } from "./holding-price-dialog";
-import { useSearchParams } from "react-router";
+import { useLocation, useSearchParams } from "react-router";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -109,10 +109,14 @@ export function TradingPage() {
   const sourceId = search.get("sourceJobId");
   const presetId = search.get("presetId");
   const sourceRunId = search.get("sourceRunId");
-  return <TradingSession key={JSON.stringify([sourceId, sourceRunId, presetId])} sourceId={sourceId} sourceRunId={sourceRunId} presetId={presetId} selectPreset={(id) => setSearch(id === null ? {} : { presetId: id })} />;
+  // 결과 버튼에서 만든 브라우저 이력 상태는 새로고침 후에도 같은 요청을 가리킨다.
+  const state = useLocation().state as { tradingRequestId?: string } | null;
+  const requestId = state?.tradingRequestId ?? null;
+  const autoOpen = search.get("settings") === "open";
+  return <TradingSession key={JSON.stringify([sourceId, sourceRunId, presetId, requestId])} sourceId={sourceId} sourceRunId={sourceRunId} presetId={presetId} requestId={requestId} autoOpen={autoOpen} selectPreset={(id, open = false) => setSearch(id === null ? {} : { presetId: id, ...(open ? { settings: "open" } : {}) }, { replace: open })} clearAutoOpen={() => setSearch(presetId ? { presetId } : {}, { replace: true })} />;
 }
 
-function TradingSession({ sourceId, sourceRunId, presetId, selectPreset }: { sourceId: string | null; sourceRunId: string | null; presetId: string | null; selectPreset: (id: string | null) => void }) {
+function TradingSession({ sourceId, sourceRunId, presetId, requestId, autoOpen, selectPreset, clearAutoOpen }: { sourceId: string | null; sourceRunId: string | null; presetId: string | null; requestId: string | null; autoOpen: boolean; selectPreset: (id: string | null, open?: boolean) => void; clearAutoOpen: () => void }) {
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const snapshot = useTrading(presetId);
@@ -135,6 +139,8 @@ function TradingSession({ sourceId, sourceRunId, presetId, selectPreset }: { sou
   const [error, setError] = useState<string | null>(null);
   const [dialog, setDialog] = useState<"remove" | "version" | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const handoffStarted = useRef(false);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
   const [toggleMode, setToggleMode] = useState<"on" | "off" | null>(null);
   const [holding, setHolding] = useState<{ symbol: string; name: string } | null>(null);
   const [versionParams, setVersionParams] = useState<Record<string, unknown>>({});
@@ -187,6 +193,30 @@ function TradingSession({ sourceId, sourceRunId, presetId, selectPreset }: { sou
     setCreating(true); setTitle(restoredTitle ?? ""); setDraft(sourceRunId ? null : sourceId && source.data?.setup ? source.data.setup : first ? baseSetup(first) : null);
     setInitialCashKrw(PAPER_TRADING_INITIAL_CASH_KRW); setDraftRevision(0); setInitialized(contextKey); setError(null); setSettingsOpen(true);
   };
+  const handoff = async () => {
+    if (!requestId || handoffStarted.current || (!sourceRunId && !source.data?.setup)) return;
+    handoffStarted.current = true;
+    setHandoffError(null);
+    try {
+      const body = sourceRunId ? { sourceRunId, requestId } : { ...source.data!.setup, initialCashKrw: source.data!.setup!.budgetKrw, expectedRevision: 0, requestId };
+      const result = await api<{ id: string; snapshot: TradingSnapshot }>(sourceRunId ? "/trading/intraday-presets" : "/trading/presets", { method: "POST", body: JSON.stringify(body) });
+      client.setQueryData(tradingKey(result.id), result.snapshot);
+      void client.invalidateQueries({ queryKey: tradingPresetsKey });
+      if (mounted.current) selectPreset(result.id, true);
+    } catch (e) {
+      handoffStarted.current = false;
+      if (mounted.current) setHandoffError(e instanceof Error ? e.message : "모의투자를 만들지 못했습니다.");
+    }
+  };
+  useEffect(() => {
+    if (requestId && ((sourceRunId && minuteRequest) || (sourceId && source.data?.setup))) void handoff();
+  }, [requestId, sourceRunId, minuteRequest, sourceId, source.data?.setup]);
+  useEffect(() => {
+    if (autoOpen && data && (artifacts.data || minuteDeployment)) {
+      openSettings();
+      clearAutoOpen();
+    }
+  }, [autoOpen, data, artifacts.data, minuteDeployment]);
   const write = useMutation({ mutationFn: async ({ path, method, body, create }: { path: string; method: string; body: unknown; create?: boolean }) => create ? api<{ id: string; snapshot: TradingSnapshot }>(path, { method, body: JSON.stringify(body) }) : api<TradingSnapshot>(tradingPath(path, presetId), { method, body: JSON.stringify(body) }), onSuccess: async (result, variables) => {
     if (variables.create) {
       const created = result as { id: string; snapshot: TradingSnapshot };
@@ -241,6 +271,10 @@ function TradingSession({ sourceId, sourceRunId, presetId, selectPreset }: { sou
   const setField = <K extends keyof TradingSetup>(key: K, value: TradingSetup[K]) => setDraft((old) => old ? { ...old, [key]: value } : old);
   const defaultPresetId = presets.data?.defaultAccountPresetId;
   const accountSelector = <div className="flex flex-wrap items-center gap-2"><Label htmlFor="trading-preset">모의투자 선택</Label><select id="trading-preset" className="max-w-full rounded-md border bg-background px-3 py-2 text-sm" value={presetId ?? defaultPresetId ?? ""} disabled={write.isPending} onChange={(event) => selectPreset(event.target.value || null)}>{!defaultPresetId ? <option value="">기본 계좌</option> : null}{presets.data?.presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.title}</option>)}{presets.data?.archived?.map((preset) => <option key={preset.id} value={preset.id}>{preset.title} (전략 제거됨)</option>)}</select><Button variant="outline" disabled={!data || write.isPending || (!sourceRunId && !artifacts.data) || (!!sourceId && !source.data?.setup) || (!!sourceRunId && !minuteRequest)} onClick={openNew}>새 모의투자</Button></div>;
+  if (requestId) {
+    const sourceFailed = sourceId ? source.isError || (source.isSuccess && !source.data?.setup) : sourceRunId ? minuteSource.isError || (minuteSource.isSuccess && !minuteRequest) : true;
+    return <div className="space-y-3"><h2 className="text-lg font-semibold">매매</h2>{handoffError ? <Alert variant="destructive" role="alert"><AlertDescription>{handoffError} <Button variant="outline" size="sm" onClick={() => void handoff()}>다시 시도</Button></AlertDescription></Alert> : sourceFailed ? <Alert variant="destructive" role="alert"><AlertDescription>{source.data?.error ?? "완료된 백테스트 설정을 불러오지 못했습니다."} <Button variant="outline" size="sm" onClick={() => void (sourceId ? source.refetch() : minuteSource.refetch())}>다시 시도</Button></AlertDescription></Alert> : <p role="status">백테스트 설정으로 모의투자를 준비하는 중…</p>}</div>;
+  }
   if (!data) return <div className="space-y-3"><h2 className="text-lg font-semibold">매매</h2>{accountSelector}<p role={snapshot.error ? "alert" : "status"}>{snapshot.error ? "매매 정보를 불러오지 못했습니다." : "불러오는 중…"}</p></div>;
   const minuteMode = creating ? !!sourceRunId : !!minuteDeployment;
   const minute = creating

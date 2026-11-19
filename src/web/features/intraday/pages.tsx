@@ -908,7 +908,7 @@ function IntradayResult({ id }: { id: string }) {
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="text-lg font-semibold">{getIntradayStrategy(r.request.strategyId).name}</h2>
           {r.status !== "COMPLETED" ? <span className="text-sm text-muted-foreground">{statusLabel[r.status]}</span> : null}
-          {completed && result ? <Button variant="outline" onClick={() => void navigate(`/trading?sourceRunId=${encodeURIComponent(id)}`)}>이 설정으로 매매 준비</Button> : null}
+          {completed && result ? <Button variant="outline" onClick={() => void navigate(`/trading?sourceRunId=${encodeURIComponent(id)}`, { state: { tradingRequestId: crypto.randomUUID() } })}>이 설정으로 매매 준비</Button> : null}
           <div className={cn("flex flex-wrap items-center gap-2", active(r.status) ? "ml-auto" : "w-full justify-end sm:ml-auto sm:w-auto")}>
             {active(r.status) ? <Button variant="outline" className="h-11" disabled={cancel.isPending} onClick={() => cancel.mutate()}>실행 취소</Button> :
               <ResultActions onClone={() => clone.mutate()} clonePending={clone.isPending} searchHref={`/backtests/intraday/${encodeURIComponent(id)}/search`}

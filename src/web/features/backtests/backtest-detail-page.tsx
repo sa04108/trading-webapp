@@ -559,7 +559,7 @@ export function BacktestDetailPage() {
           {strategyName ?? job.strategyId}
         </h2>
         <StatusBadge status={job.status} />
-        {completed ? <Button variant="outline" onClick={() => void navigate(`/trading?sourceJobId=${encodeURIComponent(id)}`)}>이 설정으로 매매 준비</Button> : null}
+        {completed ? <Button variant="outline" onClick={() => void navigate(`/trading?sourceJobId=${encodeURIComponent(id)}`, { state: { tradingRequestId: crypto.randomUUID() } })}>이 설정으로 매매 준비</Button> : null}
         <div
           className={cn(
             "flex flex-wrap items-center gap-2",

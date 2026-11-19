@@ -729,47 +729,48 @@ const paperRequest = {
 };
 const paperSource = { ...completed, request: paperRequest, result: { ...result, request: paperRequest, strategyVersion: "2.0.0" } };
 
-// 생성 응답 유실 뒤 재시도할 때 같은 요청 ID를 사용해야 중복 계좌가 생기지 않는다.
-test("완료된 분봉 결과로 모의투자를 만들고 실패 후 같은 요청을 재시도한다", async ({ page }) => {
+// 응답 유실과 새로고침에도 같은 생성 요청을 재사용하고 원본 설정을 표시한다.
+test("완료된 분봉 결과에서 모의투자 설정을 자동으로 연다", async ({ page }) => {
   await login(page);
   await page.route("**/api/v1/intraday/runs/done", (route) => route.fulfill({ json: paperSource }));
   await page.route("**/api/v1/intraday/chart?**", (route) => route.fulfill({ json: { symbol: request.symbol, timeframe: request.timeframe, bars: [], revision: "test", gaps: [], totalBars: 0, truncated: false } }));
-  const requests: { sourceRunId: string; requestId: string; title?: string }[] = [];
+  const requests: { sourceRunId: string; requestId: string }[] = [];
+  const deployment = { id: "paper-minute", name: "분봉 전략", strategyId: paperRequest.strategyId, version: "2.0.0", status: "INACTIVE", timeframe: paperRequest.timeframe,
+    request: paperRequest, sourceRunId: "done", lastDecisionAtMs: null, lastError: null, activity: "대기" };
+  const snapshot = { revision: 1, deployment, dataPreparation: null, paperCapital: { initialCashKrw: paperRequest.initialCash, canEdit: true },
+    broker: { provider: "PAPER", configured: true, accounts: [], selectedAccountId: "PAPER", lastSyncAtMs: null, error: null },
+    account: null, performance: null, positions: [], orders: [], events: [], blockers: [] };
   await page.route("**/api/v1/trading/intraday-presets", (route) => {
     requests.push(route.request().postDataJSON());
-    return requests.length === 1
-      ? route.fulfill({ status: 503, json: { error: "응답을 받지 못했습니다." } })
-      : route.fulfill({ status: 201, json: { id: "paper-minute", snapshot: { revision: 0, deployment: null, dataPreparation: null, paperCapital: { initialCashKrw: 10000000, canEdit: true }, broker: { provider: "PAPER", configured: true, accounts: [], selectedAccountId: "PAPER", lastSyncAtMs: null, error: null }, account: null, performance: null, positions: [], orders: [], events: [], blockers: [] } } });
+    return requests.length === 1 ? route.fulfill({ status: 503, json: { error: "응답을 받지 못했습니다." } })
+      : route.fulfill({ status: 201, json: { id: "paper-minute", snapshot } });
   });
-  await page.route("**/api/v1/trading", (route) => route.fulfill({ json: {
-    revision: 0, deployment: null, dataPreparation: null, paperCapital: { initialCashKrw: 100000000, canEdit: true },
-    broker: { provider: "PAPER", configured: true, accounts: [], selectedAccountId: "PAPER", lastSyncAtMs: null, error: null },
-    account: null, performance: null, positions: [], orders: [], events: [], blockers: [],
-  } }));
-  await page.route("**/api/v1/trading/presets", (route) => route.fulfill({ json: { presets: [] } }));
+  await page.route("**/api/v1/trading?**", (route) => route.fulfill({ json: snapshot }));
+  await page.route("**/api/v1/trading", (route) => route.fulfill({ json: { ...snapshot, deployment: null } }));
+  await page.route("**/api/v1/trading/presets", (route) => route.fulfill({ json: { presets: [{ id: "paper-minute", title: "분봉 전략", status: "INACTIVE" }] } }));
   await page.route("**/api/v1/trading/strategies", (route) => route.fulfill({ json: { strategies: [] } }));
   await page.goto("/backtests/intraday/done");
   await page.getByRole("button", { name: "이 설정으로 매매 준비" }).click();
-  await expect(page).toHaveURL(/\/trading\?sourceRunId=done/);
-  expect(requests).toHaveLength(0);
-  await page.getByRole("button", { name: "매매 설정" }).click();
+  await expect(page.getByRole("alert")).toContainText("응답을 받지 못했습니다.");
+  const sourceUrl = page.url();
+  await page.reload();
+  await expect(page).toHaveURL(/presetId=paper-minute/);
   const dialog = page.getByRole("dialog", { name: "매매 설정" });
   await expect(dialog).toContainText("005930");
-  await expect(dialog).toContainText("확정된 1분 OHLCV");
   await expect(dialog).toContainText("2.0.0");
   await expect(dialog).toContainText("2024-01-02 ~ 2024-12-20");
-  await expect(dialog).toContainText("현재 분봉 체결 엔진");
-  await dialog.getByLabel("모의투자 이름 (선택)").fill("분봉 실험");
-  await dialog.getByRole("button", { name: "설정 저장" }).click();
-  await expect(dialog.getByRole("alert")).toContainText("응답을 받지 못했습니다.");
-  await page.reload();
-  await page.getByRole("button", { name: "새 모의투자" }).click();
-  await expect(page.getByLabel("모의투자 이름 (선택)")).toHaveValue("분봉 실험");
-  await page.getByRole("dialog", { name: "매매 설정" }).getByRole("button", { name: "설정 저장" }).click();
-  await expect(page).toHaveURL(/\/trading\?presetId=paper-minute/);
   expect(requests).toHaveLength(2);
-  expect(requests[0]).toEqual({ sourceRunId: "done", requestId: expect.any(String), title: "분봉 실험" });
+  expect(requests[0]).toEqual({ sourceRunId: "done", requestId: expect.any(String) });
   expect(requests[1]).toEqual(requests[0]);
+  await page.keyboard.press("Escape");
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole("button", { name: "자동 매매 OFF" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "자동 매매 OFF" })).toBeVisible();
+  expect(requests).toHaveLength(2);
+  await page.goto(sourceUrl);
+  await expect(page.getByRole("button", { name: "새 모의투자" })).toBeVisible();
+  expect(requests).toHaveLength(2);
 });
 
 // 기존 일봉 또는 분봉 계좌가 있어도 새 계좌에는 선택한 분봉 원본을 사용해야 한다.
