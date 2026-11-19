@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 import * as tablePreferences from '../../src/web/features/backtests/history-table-preferences.js';
+import { newerBacktestJob } from '../../src/web/features/backtests/api.js';
 import { TooltipProvider } from '../../src/web/components/ui/tooltip.js';
 import {
   BacktestsPage,
@@ -76,6 +77,15 @@ function job(id: string, status: JobSummary['status']): JobSummary {
 }
 
 describe('백테스트 목록', () => {
+  it('완료 응답을 이전 실행 진행률보다 우선하고 늦은 실행 응답으로 되돌리지 않는다', () => {
+    const running = { ...job('same', 'RUNNING'), progressEpoch: 'epoch', progressRevision: 9 };
+    const completed = { ...job('same', 'COMPLETED'), progressEpoch: 'epoch', progressRevision: 1 };
+    expect(newerBacktestJob(running, completed)).toEqual(completed);
+    expect(newerBacktestJob(completed, running)).toEqual(completed);
+    expect(newerBacktestJob(running, { ...running, progressRevision: 8 })).toEqual(running);
+    expect(newerBacktestJob(running, { ...running, progressRevision: 10 }).progressRevision).toBe(10);
+  });
+
   it('완료 항목에 CAGR을 표시한다', () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>

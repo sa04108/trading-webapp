@@ -66,7 +66,10 @@ export function newerBacktestJob(
   incoming: JobSummary,
 ): JobSummary {
   if (!current || current.id !== incoming.id) return incoming;
-  if (isTerminal(current.status) && !isTerminal(incoming.status)) return current;
+  // 서버가 완료 후 진행 번호를 초기화해도 같은 작업의 종료 상태를 우선한다.
+  const currentTerminal = isTerminal(current.status);
+  const incomingTerminal = isTerminal(incoming.status);
+  if (currentTerminal !== incomingTerminal) return incomingTerminal ? incoming : current;
   if (current.progressEpoch !== incoming.progressEpoch) return incoming;
   return (incoming.progressRevision ?? 0) >= (current.progressRevision ?? 0)
     ? incoming
