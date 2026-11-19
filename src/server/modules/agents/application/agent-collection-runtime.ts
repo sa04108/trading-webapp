@@ -45,6 +45,7 @@ type CollectionConfig = Pick<
 
 /** 수집 버전 그래프의 진입점. 서버가 실제 사용하는 구현과 데이터 요구 처리기를 함께 조립한다. */
 export function createAgentCollectionRuntime(input: {
+  krxSleep?: (ms: number) => Promise<void>;
   database: DatabaseHandle;
   config: CollectionConfig;
   clock: Clock;
@@ -118,7 +119,7 @@ export function createAgentCollectionRuntime(input: {
       : null,
     clock,
     logger,
-    { usage: externalApiUsage, requestPolicy, tradingCalendar: createOfficialKrxTradingCalendar(), rawNamespace: config.krxBaseUrl,
+    { sleep: input.krxSleep, usage: externalApiUsage, requestPolicy, tradingCalendar: createOfficialKrxTradingCalendar(), rawNamespace: config.krxBaseUrl,
       rawSnapshotStore: new SqliteKrxRawSnapshotStore(database.db) },
   );
   // 종목 마스터 (설계 2026-08-05-symbol-master-core).

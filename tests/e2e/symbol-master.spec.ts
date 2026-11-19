@@ -3,38 +3,22 @@ import { login } from './login';
 
 /** 종목 마스터 화면의 동기화·필터·검색·페이징을 검증한다. */
 
-/** SymbolMasterPanel 의 `todayIso()` 와 같은 계산 — 로컬 달력 기준 오늘 */
-function todayIso(): string {
-  const now = new Date();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${now.getFullYear()}-${month}-${day}`;
-}
+const SEED_DATE = '2019-01-02';
 
-/** 지정한 일수 이전의 평일을 고른다. 주말에는 가짜 KRX도 거래 데이터를 주지 않는다. */
-function weekdayBeforeIso(iso: string, days: number): string {
-  const [year, month, day] = iso.split('-').map(Number);
-  const date = new Date(Date.UTC(year!, month! - 1, day!));
-  date.setUTCDate(date.getUTCDate() - days);
-  while (date.getUTCDay() === 0 || date.getUTCDay() === 6) date.setUTCDate(date.getUTCDate() - 1);
-  return date.toISOString().slice(0, 10);
+/** 고정된 과거 평일 중 기존 커버리지와 인접하지 않는 날짜를 고른다. */
+function uncoveredWeekday(ranges: { startDate: string; endDate: string }[]): string {
+  for (const iso of ['2020-06-01', '2020-06-08', '2020-06-15', '2020-06-22', '2020-07-06', '2020-07-13', '2020-07-20', '2020-07-27']) {
+    const date = new Date(`${iso}T00:00:00Z`);
+    const previous = new Date(date.getTime() - 86_400_000).toISOString().slice(0, 10);
+    const next = new Date(date.getTime() + 86_400_000).toISOString().slice(0, 10);
+    if (ranges.every((range) => range.endDate < previous || range.startDate > next)) return iso;
+  }
+  throw new Error('고정 후보 중 기존 커버리지와 떨어진 미수집 평일이 없습니다.');
 }
-
-/**
- * 과거의 임의의 하루 — 실제 날짜값 자체는 유니버스 구성에 의미가 없다.
- * 가짜 KRX 서버는 거래일마다 같은 종목·시가총액을 낸다
- * (scripts/e2e-server.ts 참고). 005930 의 일별 가격만은 날짜에 따라
- * 추세를 그리지만, 이 스펙은 가격을 보지 않으므로 무관하다.
- *
- * 이 값이 하는 일은 딱 하나: mvp-flow.spec.ts 가 쓰는 2026년 리밸런스 날짜들과
- * 겹치지 않는 것. "오늘"보다 충분히 이전이어야 타임라인이 폭을 가진다(아래
- * 본문 주석 참고).
- */
-const SEED_DATE = '2024-12-30';
 
 test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와 타임라인이 갱신된다', async ({
   page,
-}, testInfo) => {
+}) => {
   await login(page);
 
   /**
@@ -51,6 +35,7 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
   // ── 기본 화면 확인 — /datasets 로 들어가면 종목 마스터로 이어진다.
   await page.goto('/datasets');
   await expect(page).toHaveURL(/\/datasets\/master$/);
+  await page.goto(`/datasets/master?date=${SEED_DATE}`);
   await expect(page.getByText(/기준 5종목/)).toBeVisible();
   // exact — '삼성전자우' 도 '삼성전자' 를 부분 문자열로 포함해 strict-mode 위반이 난다
   await expect(page.getByText('삼성전자', { exact: true })).toBeVisible();
@@ -64,26 +49,22 @@ test('종목 마스터 기본 탭 — 미커버 날짜를 동기화하면 표와
   // 이름 없는 role 이나 role 이 없는 이 래퍼 자체엔 못 쓴다).
   const timelineSlider = page.locator('[aria-label="커버리지 타임라인"]');
   await expect(timelineSlider).toHaveAttribute('aria-disabled', 'false');
-  // 다른 스펙(mvp-flow.spec.ts)이 이미 만들어 둔 구간이 있을 수 있어 절대 개수 대신
-  // 이 테스트가 만드는 변화량(+1)만 본다 — 실행 순서에 기대지 않기 위해서다.
+  const coverageResponse = await page.request.get('/api/v1/symbol-master/coverage');
+  expect(coverageResponse.ok()).toBe(true);
+  const coverage = await coverageResponse.json() as { ranges: { startDate: string; endDate: string }[] };
+  const target = uncoveredWeekday(coverage.ranges);
   const coveredSegments = page.locator('span[class*="bg-primary/60"]');
   const segmentsBeforeSync = await coveredSegments.count();
 
-  // ── 미커버 날짜로 이동 → 빈 상태 → [이 날짜 동기화] → 표 렌더 → 타임라인 반영 ──
-  // mobile·desktop 두 프로젝트가 같은 서버를 공유하고(playwright.config workers:1)
-  // 이 스펙을 각자 한 번씩 돌리므로, 둘 다 "오늘"을 타깃으로 쓰면 나중에 도는
-  // 프로젝트는 이미 커버된 날짜를 만난다 — 프로젝트별로 다른 날을 써서 피한다.
-  // 하루 차이로만 떨어뜨리면 mergeCoverage 가 두 프로젝트의 구간을 하나로 합쳐
-  // "세그먼트가 하나 늘었는지" 판정이 깨진다 — 충분히 떨어뜨려 별개 구간으로 남긴다.
-  const target = weekdayBeforeIso(todayIso(), testInfo.project.name === 'mobile' ? 1 : 10);
+  // 실제 기존 구간과 하루 이상 떨어진 날짜를 사용해 동기화 전후 변화를 확인한다.
   await page.goto(`/datasets/master?date=${target}`);
   await expect(page.getByText(/데이터 미수집/)).toBeVisible();
   const syncThisDate = page.getByRole('button', { name: '이 날짜 동기화' });
   await expect(syncThisDate).toBeVisible();
   // 이미 커버해 둔 실제 거래일이 있으니 "가장 가까운 수집일로 이동" 도 함께 뜬다.
   // findNearestTradingDate 는 tradingDates 가 비어 있을 때만 null 이다. 어느 날짜가
-  // 뜨는지는 SEED_DATE 라고 단정하지 않는다 — 다른 스펙(mvp-flow.spec.ts)이 이미 만든
-  // 구간이 target(오늘)에 더 가까울 수 있어(그쪽이 이기면 그 날짜가 뜬다) 정확한 날짜
+  // 뜨는지는 SEED_DATE 라고 단정하지 않는다 — 다른 스펙이 더 가까운 날짜를
+  // 수집했을 수 있으므로 정확한 날짜
   // 대신 버튼이 뜨는 사실과 형태만 본다. 눌러서 실제로 어떤 커버된 날짜로든 점프하는지
   // 확인한 뒤, 미커버 시나리오를 이어가려고 타깃 날짜로 되돌아온다.
   const nearestButton = page.getByRole('button', { name: /가장 가까운 수집일\(\d{4}-\d{2}-\d{2}\)로 이동/ });

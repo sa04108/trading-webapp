@@ -1,5 +1,5 @@
 /**
- * E2E 테스트 서버: 임시 데이터 디렉터리에 관리자·데이터셋을 시드하고
+ * E2E 테스트 서버: 임시 데이터 디렉터리에 운영자를 만들고
  * 빌드된 SPA(dist/public)를 서빙하는 실제 서버를 3100 포트에 띄운다.
  * 실행 전 `pnpm build` 가 필요하다 (package.json test:e2e 참고).
  */
@@ -7,12 +7,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Fastify from 'fastify';
 import { loadConfig } from '../src/server/bootstrap/config.js';
-import { createContainer, type Container } from '../src/server/bootstrap/container.js';
+import { createContainer } from '../src/server/bootstrap/container.js';
 import { buildServer } from '../src/server/bootstrap/server.js';
 import { newId } from '../src/runtime/shared/ids.js';
 import { SqliteDartRawSnapshotStore } from '../src/server/modules/facts/infrastructure/dart/sqlite-dart-raw-snapshot-store.js';
-import { createKrxHistoricalUniverseSource } from '../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
-import { SqliteKrxRawSnapshotStore } from '../src/server/modules/market-data/infrastructure/krx/sqlite-krx-raw-snapshot-store.js';
 
 export const E2E_USERNAME = 'e2e-operator';
 export const E2E_PASSWORD = 'correct-horse-battery-staple';
@@ -20,7 +18,6 @@ export const E2E_PASSWORD = 'correct-horse-battery-staple';
 const DAY = 86_400_000;
 
 // 종목 마스터·유니버스 규칙 e2e(스펙 2026-08-05) — 가짜 KRX Open API 서버가 쓰는 고정값.
-const KRX_FAKE_PORT = 3101;
 const KRX_API_KEY = 'e2e-krx-key';
 
 function krxEnvelope(rows: readonly Record<string, unknown>[]): {
@@ -238,52 +235,6 @@ const KOSDAQ_DAILY_ROWS = [
 ];
 
 /**
- * 자본변동 미수집 게이트(Task 6, 설계 2026-08-08-corporate-action-continuity)가
- * e2e 제출을 막지 않도록, 종목이 등록될 때마다 자본변동 커버리지를 함께 심는다.
- *
- * 가짜 DART 서버를 새로 만드는 대신 이 방법을 골랐다.
- * 이 스위트는 DART 응답 파싱이 아니라 위저드 흐름을 검증한다.
- * `corp_code` 매핑과 재무제표 형식까지 갖춘 가짜 DART 서버는 유지 비용만 키운다.
- * 자본변동 수집 자체의 정확성은 `src/server/modules/facts` 의
- * 단위·통합 테스트가 맡는다.
- *
- * 부팅 시점에 한 번만 심지 않고 등록 시점마다 심는 이유는 등록·해제가
- * 반복되기 때문이다.
- * `mvp-flow.spec.ts` 의 상장폐지 시나리오는 900010 을 등록했다가 시나리오
- * 끝에서 지운다.
- * `symbols` 삭제는 외래키 `cascade` 로 `symbol_facts_state` 행도 함께 지운다.
- * 부팅 시점에만 심으면 그 삭제로 커버리지도 같이 사라진다.
- * 그러면 다음 프로젝트(desktop)가 같은 종목을 다시 등록해 제출할 때
- * 게이트가 다시 막는다 — 실제로 이 순서로 재현된 실패다.
- * `addSymbol` 호출마다 다시 심으면 등록·해제를 몇 번 반복해도 커버리지가
- * 항상 함께 붙는다.
- *
- * 연도 범위(2000~2035)는 이 저장소 e2e 시나리오가 쓰는 모든 기간을 덮는다.
- * 새 시나리오가 이 범위 밖 기간으로 백테스트를 제출하면 범위도 함께 넓혀야 한다.
- */
-function seedCorporateActionCoverageOnRegistration(container: Container): void {
-  const years = Array.from({ length: 36 }, (_, index) => 2000 + index);
-  const raw = new SqliteDartRawSnapshotStore(container.database.db);
-  const originalAddSymbol = container.symbolService.addSymbol.bind(container.symbolService);
-  container.symbolService.addSymbol = (code, market, name = null, standardCode = null) => {
-    const summary = originalAddSymbol(code, market, name, standardCode);
-    container.database.db.transaction(() => {
-      // 완료된 자본변동 자료는 공유 주식수 원문도 보유한 정상 무자료로 구성한다.
-      for (const businessYear of years) {
-        for (const reportCode of ['11013', '11012', '11014', '11011'] as const) {
-          for (const endpoint of ['SHARE_STATUS', 'ISSUANCE_STATUS'] as const) {
-            const key = {symbol:code, businessYear, reportCode, endpoint, fsDiv:'NONE' as const};
-            if (raw.get(key) === null) raw.put(key, {status:'013',message:'조회된 데이타가 없습니다.'}, container.clock.now());
-          }
-        }
-      }
-      container.actionCoverageStore.addCoveredYears(code, years, container.clock.now());
-    });
-    return summary;
-  };
-}
-
-/**
  * 리밸런스 적용 거래일 표기 e2e(Task 4, 2026-08-06 스펙, `tests/e2e/mvp-flow.spec.ts`
  * `holidayPeriodFor`)가 아래 두 평일을 휴장 리밸런스로 쓴다 — mobile·desktop
  * 프로젝트가 같은 서버 상태를 공유해도(playwright.config workers:1) 부딪히지
@@ -321,7 +272,7 @@ function isHolidayBasDd(basDd: string | undefined): boolean {
  * 에서 데이터셋·스냅샷과 함께 제거됐다. 그래서 소급은 이제 ensureTradingDay
  * 쪽 책임이고, 이 스텁은 "그 날이 휴장이었다"는 사실 하나만 재현하면 된다.
  */
-async function startFakeKrxServer(): Promise<void> {
+async function startFakeKrxServer(): Promise<string> {
   const app = Fastify({ logger: false });
   app.get('/svc/apis/sto/stk_isu_base_info', async () => krxEnvelope(KOSPI_BASE_ROWS));
   app.get('/svc/apis/sto/ksq_isu_base_info', async () => krxEnvelope(KOSDAQ_BASE_ROWS));
@@ -351,20 +302,7 @@ async function startFakeKrxServer(): Promise<void> {
     }]);
   });
 
-  /**
-   * DART 무자료 응답(§013) — corp_code 매핑 없이도 "조회된 데이터가 없다"는 뜻이라
-   * 파서가 gap 하나로만 남기고 실행을 막지 않는다(dart-fact-source.ts NO_DATA_STATUS
-   * 참고). `preparation-routes.ts` 의 `needsDart` 사전 판정을 통과시키는 것이 목적이라
-   * `DART_API_KEY` 를 설정해 그 판정을 여는 쪽이 주 해결책이다(아래 main() 참고) — 이
-   * 라우트들은 대부분 호출될 일이 없다: `seedCorporateActionCoverageOnRegistration`
-   * 이 등록 시점에 이미 전체 연도 커버리지(자본변동)를 심어 두므로, 준비 작업이 자본
-   * 변동을 요청할 시점엔 `FactSyncService.runSync` 가 남은 연도가 0건임을 보고 이
-   * 라우트를 부르지 않고 건너뛴다(fact-sync-service.ts 주석 "받을 것이 없다 — 호출도
-   * 이력 갱신도 하지 않는다" 참고). 다만 **재무**(fnlttSinglAcntAll)는 별도 커버리지
-   * 저장소(factCoverageStore)를 쓰고 등록 시점에 같이 심지 않으므로(D-043 이후 자동
-   * 수집 전용 경로), 재무 이력을 요구하는 전략(예: 밸류·퀄리티 랭킹)의 준비 작업은
-   * 실제로 이 경로를 탄다 — 그래서 무자료로 안전하게 응답해 실행이 막히지 않게 한다.
-   */
+  // 재무와 자본변동의 미수집 원문 요청에는 DART의 무자료 응답을 제공한다.
   const dartNoData = async () => ({ status: '013', message: '조회된 데이타가 없습니다.' });
   app.get('/api/list.json', dartNoData);
   app.get('/api/fnlttSinglAcntAll.json', dartNoData);
@@ -377,33 +315,7 @@ async function startFakeKrxServer(): Promise<void> {
     return fixtureCorpCodeZip();
   });
 
-  await app.listen({ host: '127.0.0.1', port: KRX_FAKE_PORT });
-}
-
-/** 백테스트 시나리오의 준비 구간 원문만 시드한다. 종목·봉·커버리지는 실제 준비 작업이 만든다. */
-async function seedKrxRawSnapshots(container: Container): Promise<void> {
-  const source = createKrxHistoricalUniverseSource(
-    { baseUrl: container.config.krxBaseUrl, apiKey: KRX_API_KEY, approvalExpiry: null },
-    container.clock,
-    container.logger,
-    {
-      // 로컬 가짜 공급자의 원문 준비에는 실제 외부 API의 호출 간격을 적용하지 않는다.
-      sleep: async () => {},
-      rawSnapshotStore: new SqliteKrxRawSnapshotStore(container.database.db),
-    },
-  );
-  // 휴장일 시나리오(2018·2025)와 실행 시나리오(2026)의 과거 준비 기간까지 포함한다.
-  const ranges = [['2016-11-01', '2018-02-01'], ['2023-11-01', '2026-09-05']] as const;
-  for (const [from, to] of ranges) {
-    for (let ts = Date.parse(from); ts <= Date.parse(to); ts += DAY) {
-      const date = new Date(ts).toISOString().slice(0, 10);
-      for (const market of ['KOSPI', 'KOSDAQ'] as const) {
-        await source.fetchIssueBaseInfo(market, date);
-        await source.fetchDailyTrades(market, date);
-        await source.fetchBenchmarkClose!(market, date);
-      }
-    }
-  }
+  return app.listen({ host: '127.0.0.1', port: 0 });
 }
 
 async function main(): Promise<void> {
@@ -411,7 +323,7 @@ async function main(): Promise<void> {
   fs.rmSync(root, { recursive: true, force: true });
 
   // KRX 과거 유니버스 e2e(Task 15) — 앱 서버가 뜨기 전에 가짜 KRX 서버를 먼저 올린다.
-  await startFakeKrxServer();
+  const providerUrl = await startFakeKrxServer();
 
   const config = loadConfig({
     NODE_ENV: 'test',
@@ -424,17 +336,17 @@ async function main(): Promise<void> {
     SESSION_SECRET: 'e2e-'.repeat(12),
     LOG_LEVEL: 'warn',
     KRX_API_KEY,
-    KRX_BASE_URL: `http://127.0.0.1:${KRX_FAKE_PORT}`,
+    KRX_BASE_URL: providerUrl,
     // DART 키를 열어 둔다 — 준비 API의 사전 판정(`needsDart`, backtest-preparation-routes.ts)은
     // 키 존재 여부만 보고 503을 가른다. 위 가짜 KRX 서버가 DART 무자료(§013) 라우트도
     // 함께 서빙한다(`startFakeKrxServer` 주석 참고) — corporate-action 을 요구하는
     // 전략(예: 전고점 돌파)이 이 키 없이는 시가총액 단일 단계 유니버스조차 준비를
     // 시작하지 못한다(리뷰에서 재현된 회귀, task-12-report.md 참고).
     DART_API_KEY: 'e2e-dart-key',
-    DART_BASE_URL: `http://127.0.0.1:${KRX_FAKE_PORT}`,
+    DART_BASE_URL: providerUrl,
   });
-  const container = createContainer(config);
-  await seedKrxRawSnapshots(container);
+  // 앱이 실제 요청한 날짜와 자료만 로컬 공급자에서 읽는다.
+  const container = createContainer(config, { krxSleep: async () => {} });
 
   container.userRepository.create(
     {
@@ -456,12 +368,22 @@ async function main(): Promise<void> {
   // 종목 등록도 그 미리보기 응답이 자동으로 한다.
   // 그 등록 로직은 backtest-routes.ts 의 registerUniverseSymbols 다.
   // 위저드를 통과하는 e2e 흐름은 별도 등록이 필요 없다.
-  //
-  // 다만 그 등록 경로에 자본변동 커버리지 심기를 여기서 붙인다
-  // (seedCorporateActionCoverageOnRegistration 주석 참고).
-  // 붙이지 않으면 Task 6 게이트가 모든 e2e 백테스트 제출을 400 으로 막는다.
-  seedCorporateActionCoverageOnRegistration(container);
   const app = await buildServer(container);
+  // 각 브라우저 사례가 필요한 원문만 준비한다. 커버리지는 실제 수집이 기록한다.
+  app.post<{ Body: { symbols: string[]; years: number[] } }>('/__e2e/dart-action-fixture', async (request) => {
+    const raw = new SqliteDartRawSnapshotStore(container.database.db);
+    for (const symbol of request.body.symbols) {
+      for (const businessYear of request.body.years) {
+        for (const reportCode of ['11013', '11012', '11014', '11011'] as const) {
+          for (const endpoint of ['SHARE_STATUS', 'ISSUANCE_STATUS'] as const) {
+            const key = { symbol, businessYear, reportCode, endpoint, fsDiv: 'NONE' as const };
+            if (raw.get(key) === null) raw.put(key, { status: '013', message: '조회된 데이타가 없습니다.' }, container.clock.now());
+          }
+        }
+      }
+    }
+    return { ok: true };
+  });
   await app.listen({ host: config.bindAddress, port: config.port });
   container.jobOrchestrator.start();
   // 운영 진입점과 동일하게 서버 계산 실행기도 시작한다.

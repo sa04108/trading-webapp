@@ -1,10 +1,8 @@
 import { asc, eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
-import { SymbolMasterService, type SymbolMasterServiceDeps } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
-import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
+import { SymbolMasterService } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 import { symbolMasterVersions } from '../../src/runtime/shared/db/schema.js';
-import type { TestApp } from '../helpers/test-app.js';
-import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
+import { test as it, type KrxUnitContext, type KrxUnitFactory } from '../helpers/krx-test-fixtures.js';
 import {
   baseInfoFixture,
   dailyFixture,
@@ -13,30 +11,19 @@ import {
 } from '../helpers/krx-fixtures.js';
 
 const API_KEY = 'SYMBOL_MASTER_VERSION_TEST_KEY';
-const NOOP_SLEEP = async () => undefined;
 const STANDARD_CODE = 'KR7005930003';
 
 interface Ctx {
-  readonly t: TestApp;
+  readonly db: KrxUnitContext['db'];
+  readonly clock: KrxUnitContext['clock'];
+  readonly logger: KrxUnitContext['logger'];
   readonly fake: KrxFakeServer;
   readonly service: SymbolMasterService;
 }
 
-async function setup(krxApps: KrxTestFactory): Promise<Ctx> {
-  const { t, fake } = await krxApps.create();
-  const source = createKrxHistoricalUniverseSource(
-    { baseUrl: fake.baseUrl, apiKey: API_KEY, approvalExpiry: null },
-    t.container.clock,
-    t.container.logger,
-    { sleep: NOOP_SLEEP },
-  );
-  const deps: SymbolMasterServiceDeps = {
-    db: t.container.database.db,
-    source,
-    clock: t.container.clock,
-    logger: t.container.logger,
-  };
-  return { t, fake, service: new SymbolMasterService(deps) };
+async function setup(krxUnits: KrxUnitFactory): Promise<Ctx> {
+  const context = await krxUnits.create(API_KEY);
+  return { ...context, service: context.svc };
 }
 
 function setTradingDay(
@@ -54,7 +41,7 @@ function setTradingDay(
 }
 
 function versionsOf(ctx: Ctx) {
-  return ctx.t.container.database.db
+  return ctx.db
     .select()
     .from(symbolMasterVersions)
     .where(eq(symbolMasterVersions.standardCode, STANDARD_CODE))
@@ -63,8 +50,8 @@ function versionsOf(ctx: Ctx) {
 }
 
 describe('SymbolMasterService — SCD 버전 저장', () => {
-  it('변경 없는 다음 거래일은 버전 행을 늘리지 않는다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('변경 없는 다음 거래일은 버전 행을 늘리지 않는다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     setTradingDay(ctx, '2023-01-02');
     setTradingDay(ctx, '2023-01-03');
 
@@ -84,8 +71,8 @@ describe('SymbolMasterService — SCD 버전 저장', () => {
     });
   });
 
-  it('같은 날 여러 상태 필드가 바뀌어도 새 버전은 한 행만 만든다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('같은 날 여러 상태 필드가 바뀌어도 새 버전은 한 행만 만든다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     setTradingDay(ctx, '2023-01-02');
     setTradingDay(ctx, '2023-01-03', baseInfoFixture({
       ISU_SRT_CD: '005931',
@@ -138,8 +125,8 @@ describe('SymbolMasterService — SCD 버전 저장', () => {
     expect(new Set(events.map((event) => event.id))).toHaveProperty('size', events.length);
   });
 
-  it('동일 상태의 과거 날짜를 prepend하면 인접 구간을 한 버전으로 합친다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('동일 상태의 과거 날짜를 prepend하면 인접 구간을 한 버전으로 합친다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     setTradingDay(ctx, '2023-01-03');
     setTradingDay(ctx, '2023-01-02');
 

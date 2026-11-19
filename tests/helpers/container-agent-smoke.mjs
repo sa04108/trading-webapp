@@ -9,7 +9,7 @@ import { setTimeout, clearTimeout } from 'node:timers';
 // 최종 이미지 안에서 실제 CLI·환경변수·네이티브 모듈·WSS 프로토콜을 확인한다.
 const require = createRequire('/opt/quant-agent/package.json');
 const { WebSocketServer } = require('ws');
-const { AGENT_PROTOCOL_VERSION } = await import('/opt/quant-agent/dist/shared/agent-protocol.js');
+const { AGENT_PROTOCOL_VERSION, agentMessageSchema } = await import('/opt/quant-agent/dist/shared/agent-protocol.js');
 const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
 await new Promise(resolve => server.once('listening', resolve));
 const token = 'container-smoke-token-'.padEnd(48, 't');
@@ -23,9 +23,10 @@ child.stderr.on('data', chunk => { logs += chunk; });
 const timeout = setTimeout(() => { child.kill('SIGKILL'); console.error('Container agent connection timed out'); process.exit(1); }, 20_000);
 try {
   await new Promise((resolve, reject) => {
-    child.once('exit', code => { if (code !== 0) reject(new Error(`Agent exited ${code}: ${logs}`)); });
+    child.once('exit', code => reject(new Error(`Agent exited before advertising capacity (code ${code})`)));
     server.on('connection', (socket, request) => {
       try { assert.equal(request.headers.authorization, `Bearer ${token}`); } catch (error) { reject(error); return; }
+      let welcomed = false;
       socket.on('message', raw => {
         try {
           const message = JSON.parse(raw);
@@ -34,8 +35,14 @@ try {
             assert.equal(message.runnerVersion, versions.agentVersion);
             assert.equal(message.protocolVersion, AGENT_PROTOCOL_VERSION);
             socket.send(JSON.stringify({ type: 'WELCOME', runnerVersion: versions.agentVersion }));
+            welcomed = true;
           }
-          if (message.type === 'CAPACITY') resolve();
+          if (message.type === 'CAPACITY') {
+            assert.ok(welcomed, '같은 연결에서 버전 합의가 먼저 끝나야 한다');
+            const capacity = agentMessageSchema.parse(message);
+            assert.equal(capacity.datasetVersion, 0, '빈 상태 볼륨의 데이터셋 버전');
+            resolve();
+          }
         } catch (error) { reject(error); }
       });
     });

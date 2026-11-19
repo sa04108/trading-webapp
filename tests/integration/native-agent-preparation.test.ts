@@ -17,7 +17,7 @@ async function waitUntil(read: () => boolean, timeout = 60_000): Promise<void> {
   const start = Date.now(); while (!read()) { if (Date.now() - start > timeout) throw new Error('에이전트 작업 대기 시간 초과'); await new Promise((resolve) => setTimeout(resolve, 50)); }
 }
 async function seed(ctx: TestApp): Promise<void> {
-  seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [{ standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '1000000000' }]);
+  seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [{ standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '1000000000' }], [{ startDate: '2024-11-17', endDate: '2026-01-05' }]);
   registerSymbols(ctx.container, 'KR', ['005930']);
   seedDailyBars(ctx.container.database.db, [{ symbol: '005930', market: 'KR', timeframe: '1d', tsMs: Date.parse('2026-01-05T00:00:00Z'), open: 100, high: 110, low: 90, close: 105, volume: 1000 }]);
 }

@@ -1,12 +1,9 @@
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import { describe, expect } from 'vitest';
-import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import {
   SymbolMasterService,
-  type SymbolMasterServiceDeps,
 } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
-import type { TestApp } from '../helpers/test-app.js';
-import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
+import { test as it, type KrxUnitContext, type KrxUnitFactory } from '../helpers/krx-test-fixtures.js';
 import {
   symbolMasterCoverage,
   symbolMasterTradingDays,
@@ -19,29 +16,17 @@ import {
 } from '../helpers/krx-fixtures.js';
 
 const API_KEY = 'SYMBOL_MASTER_TRADING_DAYS_TEST_KEY';
-const NOOP_SLEEP = async () => undefined;
 
 interface Ctx {
-  readonly t: TestApp;
+  readonly db: KrxUnitContext['db'];
+  readonly clock: KrxUnitContext['clock'];
+  readonly logger: KrxUnitContext['logger'];
   readonly fake: KrxFakeServer;
   readonly svc: SymbolMasterService;
 }
 
-async function setup(krxApps: KrxTestFactory): Promise<Ctx> {
-  const { t, fake } = await krxApps.create();
-  const source = createKrxHistoricalUniverseSource(
-    { baseUrl: fake.baseUrl, apiKey: API_KEY, approvalExpiry: null },
-    t.container.clock,
-    t.container.logger,
-    { sleep: NOOP_SLEEP },
-  );
-  const deps: SymbolMasterServiceDeps = {
-    db: t.container.database.db,
-    source,
-    clock: t.container.clock,
-    logger: t.container.logger,
-  };
-  return { t, fake, svc: new SymbolMasterService(deps) };
+async function setup(krxUnits: KrxUnitFactory): Promise<Ctx> {
+  return krxUnits.create(API_KEY);
 }
 
 function setTradingDay(fake: KrxFakeServer, basDd: string): void {
@@ -50,8 +35,8 @@ function setTradingDay(fake: KrxFakeServer, basDd: string): void {
 }
 
 describe('SymbolMasterService.effectiveTradingDate', () => {
-  it('거래일 수집은 거래일로 기록한다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('거래일 수집은 거래일로 기록한다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     setTradingDay(ctx.fake, '20230102');
 
     await ctx.svc.ingestDate('2023-01-02');
@@ -59,8 +44,8 @@ describe('SymbolMasterService.effectiveTradingDate', () => {
     expect(ctx.svc.effectiveTradingDate('2023-01-02')).toBe('2023-01-02');
   });
 
-  it('휴장일 수집은 거래일로 기록하지 않는다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('휴장일 수집은 거래일로 기록하지 않는다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
 
     const result = await ctx.svc.ingestDate('2023-01-01');
 
@@ -68,8 +53,8 @@ describe('SymbolMasterService.effectiveTradingDate', () => {
     expect(ctx.svc.effectiveTradingDate('2023-01-01')).toBeUndefined();
   });
 
-  it('휴장일의 적용 거래일은 직전 거래일이다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('휴장일의 적용 거래일은 직전 거래일이다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     setTradingDay(ctx.fake, '20230102');
     await ctx.svc.ingestDate('2023-01-02');
 
@@ -79,8 +64,8 @@ describe('SymbolMasterService.effectiveTradingDate', () => {
     expect(ctx.svc.effectiveTradingDate('2023-01-03')).toBe('2023-01-02');
   });
 
-  it('거래일 이전 날짜는 적용 거래일이 없다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('거래일 이전 날짜는 적용 거래일이 없다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     setTradingDay(ctx.fake, '20230102');
 
     await ctx.svc.ingestDate('2023-01-02');
@@ -88,25 +73,25 @@ describe('SymbolMasterService.effectiveTradingDate', () => {
     expect(ctx.svc.effectiveTradingDate('2023-01-01')).toBeUndefined();
   });
 
-  it('legacy 주말 경계를 적용 거래일로 사용하지 않는다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
-    ctx.t.container.database.db.insert(symbolMasterTradingDays).values([
+  it('legacy 주말 경계를 적용 거래일로 사용하지 않는다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
+    ctx.db.insert(symbolMasterTradingDays).values([
       { date: '2016-03-18' }, // 금요일
       { date: '2016-03-20' }, // legacy 이벤트에서 유입된 일요일
     ]).run();
-    ctx.t.container.database.db.insert(symbolMasterCoverage).values({
+    ctx.db.insert(symbolMasterCoverage).values({
       startDate: '2016-03-18',
       endDate: '2016-03-20',
-      collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.t.container.clock.now(),
+      collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: ctx.clock.now(),
     }).run();
 
     expect(ctx.svc.effectiveTradingDate('2016-03-20')).toBe('2016-03-18');
     expect(ctx.svc.effectiveTradingDateWithinCoverage('2016-03-20')).toBe('2016-03-18');
   });
 
-  it('legacy 이행에서 섞인 주말은 화면용 실제 거래일 목록에서 제외한다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
-    ctx.t.container.database.db.insert(symbolMasterTradingDays).values([
+  it('legacy 이행에서 섞인 주말은 화면용 실제 거래일 목록에서 제외한다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
+    ctx.db.insert(symbolMasterTradingDays).values([
       { date: '2016-03-20' },
       { date: '2016-03-21' },
     ]).run();

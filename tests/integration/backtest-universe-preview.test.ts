@@ -279,7 +279,7 @@ describe('POST /backtests/universe-preview', () => {
     expect(typeof body.scheduleHash).toBe('string');
     expect(body.scheduleHash.length).toBeGreaterThan(0);
     expect(body.uncoveredDates).toEqual([]);
-    // seedSymbolMasterUniverse 는 넓은 고정 구간([2000-01-01, 2099-12-31])으로 커버한다
+    // 이 하루짜리 요청의 기준일을 종목 마스터 fixture에 기록했다.
     expect(body.periodCovered).toBe(true);
     // 봉이 있는 종목이라 missingCandleSymbols 는 비어 있어야 한다
     expect(body.missingCandleSymbols).toEqual([]);

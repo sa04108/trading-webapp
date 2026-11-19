@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { login } from './login';
+import { prepareActionRawFixture } from './dart-fixture';
 
 /**
  * 화면 단계 URL(설계 2026-08-07-step-urls-design) — 페이지 단위로 화면이 바뀌는
@@ -105,6 +106,7 @@ test('두 위저드는 독립적으로 저장되고 작업 목록에서 선택�
 });
 
 test('새로고침 뒤에도 현재 단계와 단계별 입력·미리보기를 복원한다', async ({ page }) => {
+  await prepareActionRawFixture(page, ['005930', '035720'], [2024, 2025, 2026]);
   await login(page);
 
   await page.goto('/backtests/new');

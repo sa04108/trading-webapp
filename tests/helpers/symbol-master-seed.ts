@@ -26,13 +26,14 @@ export interface SymbolMasterFixtureEntry {
  * 태울 수 있게 종목 마스터를 직접 채운다 (HTTP 를 거치는 fake KRX 서버 왕복 대신
  * DB 를 직접 채우는 편이 테스트당 필요한 배선을 훨씬 줄인다).
  *
- * coverage 는 아주 넓은 고정 구간으로 한 번만 잡고, 종목당 열린 SCD 버전 하나를
- * 심는다. 그래서 여러 리밸런스 날짜가 필요해도 시총 캐시만 각 날짜별로 채우면 된다.
+ * 기본 coverage는 지정한 리밸런스 날짜만 포함한다. 연속 구간이 필요한 호출자는
+ * 실제로 확인된 범위를 명시한다. 종목당 열린 SCD 버전 하나를 심는다.
  */
 export function seedSymbolMasterUniverse(
   container: Container,
   rebalanceDates: readonly string[],
   entries: readonly SymbolMasterFixtureEntry[],
+  coverageRanges: readonly { startDate: string; endDate: string }[] = [],
 ): void {
   if (entries.length > 0) {
     container.database.db.insert(symbolMasterVersions).values(
@@ -61,10 +62,14 @@ export function seedSymbolMasterUniverse(
     }
   }
 
-  container.database.db
-    .insert(symbolMasterCoverage)
-    .values({ startDate: '2000-01-01', endDate: '2099-12-31', collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: container.clock.now() })
-    .run();
+  const ranges = [...coverageRanges, ...[...new Set(rebalanceDates)]
+    .filter((date) => !coverageRanges.some((range) => range.startDate <= date && date <= range.endDate))
+    .map((date) => ({ startDate: date, endDate: date }))];
+  if (ranges.length > 0) {
+    container.database.db.insert(symbolMasterCoverage).values(ranges.map((range) => ({
+      ...range, collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: container.clock.now(),
+    }))).run();
+  }
 
   // resolver 는 이제 effectiveTradingDate(date) 도 함께 확인한다 — 각 리밸런스 날짜를
   // 거래일로 기록해 둬야 이 픽스처를 쓰는 기존 테스트들이 커버 밖으로 튕기지 않는다.

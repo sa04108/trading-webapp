@@ -46,8 +46,7 @@ const DAY = 86_400_000;
 const STRATEGY_ID = 'range-breakout';
 /** range-breakout 은 rebalanceMonths 가 없다 — 리밸런스는 늘 period.from 하나뿐이다 */
 const MAIN_DATE = '2026-01-05';
-/** "봉이 전혀 없는 기간" 시나리오 전용 — 종목 마스터는 커버하되(coverage 는 넓은 고정 구간)
- *  가격 데이터가 없는 시점을 재현한다. 커버 밖(uncovered) 날짜와 구분하려고 별도로 캐시한다. */
+/** "봉이 전혀 없는 기간"의 기준일 — 종목 마스터에 이 날짜를 기록하되 가격 봉은 넣지 않는다. */
 const NO_CANDLE_DATE = '2020-01-01';
 const REBALANCE_DATES = [
   MAIN_DATE,
@@ -1123,8 +1122,7 @@ describe('backtest job queue (스펙 §10, §14)', () => {
 
   it('가격 봉이 없는 기간의 신규 제출도 미리보기 완료를 요구한다', async ({ scenario }) => {
     const { ctx, cookie } = scenario;
-    // 종목 마스터는 이 날짜를 커버하지만(coverage 는 넓은 고정 구간) 가격 데이터는
-    // 2026-01-05 부터다 — 그보다 훨씬 앞선 구간은 확실히 0봉이다
+    // 종목 마스터에 기준일을 기록했지만 가격 봉은 2026-01-05부터다.
     const noData = await ctx.app.inject({
       method: 'POST',
       url: '/api/v1/backtests',

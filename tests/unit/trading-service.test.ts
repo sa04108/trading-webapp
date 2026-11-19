@@ -41,11 +41,11 @@ function fixture(paper = false) {
   const strategy: AnyTradingStrategy = { id: "alpha", version: "1", name: "알파", description: "", parameterSchema: z.object({}).strict(), initialize: () => ({}), onBars: () => ({ orders: [] }) };
   const artifacts: StrategyArtifactStore = { list: () => list, load: async () => strategy, bundlePath: () => "" };
   const engine: TradingDecisionEngine = { canTrade: () => true, evaluate: vi.fn<TradingDecisionEngine["evaluate"]>(async ({ warmupOnly }) => ({ checkpoint: "checkpoint", barTsMs: warmupOnly ? 1 : 2, orders: warmupOnly ? [] : [{ symbol: "005930", side: "BUY", quantity: 10 }] })), close: async () => {} };
-  const executionBroker = paper ? createPaperTradingBroker({ database, marketData: broker, now: () => now }) : broker;
+  const executionBroker: TradingBroker = paper ? createPaperTradingBroker({ database, marketData: broker, now: () => now }) : broker;
   const prepareData = vi.fn(async (_need: TradingDataNeed, _progress: (message: string) => void, _shouldStop: () => boolean): Promise<string | void> => {});
   const service = new TradingService({ database, broker: executionBroker, artifacts, engine, prepareData, now: () => now });
   cleanup.push(async () => { await service.close(); database.close(); });
-  return { service, broker, database, engine, prepareData, artifacts, now: () => now, advance: (ms: number) => { now += ms; }, setArtifacts: (next: TradingArtifact[]) => { list = next; }, setHoldings: (next: BrokerHolding[]) => { holdings = next; }, setRemote: (next: BrokerOrder[]) => { remote = next; }, getRemote: () => remote };
+  return { service, broker, executionBroker, database, engine, prepareData, artifacts, now: () => now, advance: (ms: number) => { now += ms; }, setArtifacts: (next: TradingArtifact[]) => { list = next; }, setHoldings: (next: BrokerHolding[]) => { holdings = next; }, setRemote: (next: BrokerOrder[]) => { remote = next; }, getRemote: () => remote };
 }
 async function prepare(f: ReturnType<typeof fixture>, config: TradingSetup = setup) {
   await f.service.tick();
@@ -269,11 +269,15 @@ describe("모의투자 실행 경계", () => {
     await f.service.register({ ...setup, budgetKrw: 10_000, maxPositions: 2, paperCommissionProfileId: "zero-cost", paperSlippageProfileId: "zero-slippage" }, f.service.snapshot().revision, "user", 10_000);
     await f.service.activate(f.service.snapshot().revision, "user");
     await f.service.tick(); await f.service.refresh();
-    let calls = 0;
-    vi.mocked(f.engine.evaluate).mockImplementationOnce(async () => {
-      f.broker.quotes.mockImplementation(async symbols => { calls++; return symbols.map(symbol => ({ symbol, price: calls === 5 && symbol === "005930" ? 900 : 1000, timestampMs: f.now() })); });
-      return { checkpoint: "rotate", barTsMs: 3, orders: [{ symbol: "005930", side: "SELL", quantity: 10 }, { symbol: "000660", side: "BUY", quantity: 10 }] };
+    const place = f.executionBroker.place.bind(f.executionBroker);
+    vi.spyOn(f.executionBroker, "place").mockImplementation(async (account, request, beforeSend) => {
+      if (request.side !== "SELL") return place(account, request, beforeSend);
+      const originalQuotes = f.broker.quotes.getMockImplementation()!;
+      f.broker.quotes.mockImplementation(async symbols => symbols.map(symbol => ({ symbol, price: 900, timestampMs: f.now() })));
+      try { return await place(account, request, beforeSend); }
+      finally { f.broker.quotes.mockImplementation(originalQuotes); }
     });
+    vi.mocked(f.engine.evaluate).mockResolvedValueOnce({ checkpoint: "rotate", barTsMs: 3, orders: [{ symbol: "005930", side: "SELL", quantity: 10 }, { symbol: "000660", side: "BUY", quantity: 10 }] });
     await f.service.tick(); await f.service.refresh();
     expect(f.service.snapshot().positions).toEqual([expect.objectContaining({ symbol: "005930", quantity: 10 })]);
     expect(f.service.snapshot().orders).toEqual(expect.arrayContaining([expect.objectContaining({ symbol: "005930", side: "SELL", filledQuantity: 0, status: "REJECTED" }), expect.objectContaining({ symbol: "000660", side: "BUY", filledQuantity: 0, status: "REJECTED" })]));

@@ -151,7 +151,7 @@ describe('Docker 이미지 내부 Agent 런타임', () => {
     try {
     seedSymbolMasterUniverse(container, ['2026-01-05'], [{
       standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '1000000000',
-    }]);
+    }], [{ startDate: '2024-11-17', endDate: '2026-01-05' }]);
     registerSymbols(container, 'KR', ['005930']);
     seedDailyBars(container.database.db, [{
       symbol: '005930', market: 'KR', timeframe: '1d', tsMs: Date.parse('2026-01-05T00:00:00Z'),
@@ -225,6 +225,7 @@ describe('Docker 이미지 내부 Agent 런타임', () => {
     const warningDetails = [...container.resultsService.iterateWarningDetails(backtest.id)];
     expect(warningDetails.slice(0, submitWarnings.length)).toEqual(submitWarnings);
     const warningSummary = JSON.parse(container.resultsService.getRun(backtest.id)!.warningsJson!) as string[];
+    expect(warningSummary).toEqual(expect.arrayContaining(['준비 경고 0', '준비 경고 1092']));
     expect(warningSummary.length).toBeLessThanOrEqual(1000);
     expect(warningSummary.every((warning) => warning.length <= 4000)).toBe(true);
     expect(container.resultsService.getMetrics(backtest.id)).not.toBeNull();

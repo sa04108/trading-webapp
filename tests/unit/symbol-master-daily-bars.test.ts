@@ -1,12 +1,9 @@
 import { describe, expect, vi } from 'vitest';
-import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import {
   SymbolMasterService,
-  type SymbolMasterServiceDeps,
 } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
 import { krxDailyBars } from '../../src/runtime/shared/db/schema.js';
-import type { TestApp } from '../helpers/test-app.js';
-import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
+import { test as it, type KrxUnitContext, type KrxUnitFactory } from '../helpers/krx-test-fixtures.js';
 import {
   baseInfoFixture,
   dailyFixture,
@@ -15,33 +12,21 @@ import {
 } from '../helpers/krx-fixtures.js';
 
 const API_KEY = 'SYMBOL_MASTER_DAILY_BARS_TEST_KEY';
-const NOOP_SLEEP = async () => undefined;
 
 interface Ctx {
-  readonly t: TestApp;
+  readonly db: KrxUnitContext['db'];
+  readonly clock: KrxUnitContext['clock'];
+  readonly logger: KrxUnitContext['logger'];
   readonly fake: KrxFakeServer;
   readonly svc: SymbolMasterService;
 }
 
-async function setup(krxApps: KrxTestFactory): Promise<Ctx> {
-  const { t, fake } = await krxApps.create();
-  const source = createKrxHistoricalUniverseSource(
-    { baseUrl: fake.baseUrl, apiKey: API_KEY, approvalExpiry: null },
-    t.container.clock,
-    t.container.logger,
-    { sleep: NOOP_SLEEP },
-  );
-  const deps: SymbolMasterServiceDeps = {
-    db: t.container.database.db,
-    source,
-    clock: t.container.clock,
-    logger: t.container.logger,
-  };
-  return { t, fake, svc: new SymbolMasterService(deps) };
+async function setup(krxUnits: KrxUnitFactory): Promise<Ctx> {
+  return krxUnits.create(API_KEY);
 }
 
 function allBars(ctx: Ctx) {
-  return ctx.t.container.database.db
+  return ctx.db
     .select()
     .from(krxDailyBars)
     .all()
@@ -49,8 +34,8 @@ function allBars(ctx: Ctx) {
 }
 
 describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
-  it('최초 baseline 수집에서 두 시장의 일봉을 함께 저장한다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('최초 baseline 수집에서 두 시장의 일봉을 함께 저장한다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     const date = '2023-01-02';
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
@@ -104,8 +89,8 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     ]);
   });
 
-  it('둘째 날 일반 diff 경로에서도 그 날의 일봉이 저장된다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('둘째 날 일반 diff 경로에서도 그 날의 일봉이 저장된다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { body: krxEnvelope([dailyFixture()]) });
     ctx.fake.setResponse('stk_isu_base_info', '20230102', { body: krxEnvelope([baseInfoFixture()]) });
     await ctx.svc.ingestDate('2023-01-02');
@@ -119,14 +104,14 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     const result = await ctx.svc.ingestDate('2023-01-03');
 
     expect(result.kind).toBe('TRADING_DAY');
-    const row = ctx.t.container.database.db
+    const row = ctx.db
       .select()
       .from(krxDailyBars)
       .all()
       .find((r) => r.date === '2023-01-03');
     expect(row).toMatchObject({ shortCode: '005930', date: '2023-01-03', close: 71_900 });
     // 첫날 행도 그대로 남아 있어야 한다 — 둘째 날 저장이 첫날 행을 건드리면 안 된다.
-    const day1Row = ctx.t.container.database.db
+    const day1Row = ctx.db
       .select()
       .from(krxDailyBars)
       .all()
@@ -134,15 +119,15 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     expect(day1Row).toMatchObject({ shortCode: '005930', date: '2023-01-02', close: 71_800 });
   });
 
-  it('미검증 일봉은 재조회한 응답으로 갱신한다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('미검증 일봉은 재조회한 응답으로 갱신한다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     const date = '2023-01-02';
 
     // 현재 수집 버전으로 검증하지 않은 일봉이 남은 상태를 흉내낸다.
     // 재조회한 응답과 함께 종목 버전·coverage·일봉을 같은 트랜잭션에서 갱신한다.
     expect(ctx.svc.isCovered(date)).toBe(false);
     // 이전 수집기가 남긴 서로 다른 종목의 낡은 일봉을 갱신 대상으로 심는다.
-    ctx.t.container.database.db
+    ctx.db
       .insert(krxDailyBars)
       .values([
         { shortCode: '005930', date, market: 'KOSPI', open: 1, high: 1, low: 1, close: 1, volume: 1 },
@@ -183,10 +168,10 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     ]);
   });
 
-  it('가격 4개나 거래량 중 하나라도 null 인 행은 건너뛰고 건수를 warn 으로 남긴다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('가격 4개나 거래량 중 하나라도 null 인 행은 건너뛰고 건수를 warn 으로 남긴다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     const date = '2023-01-02';
-    const warnSpy = vi.spyOn(ctx.t.container.logger, 'warn');
+    const warnSpy = vi.spyOn(ctx.logger, 'warn');
     ctx.fake.setResponse('stk_bydd_trd', '20230102', {
       body: krxEnvelope([
         dailyFixture(),
@@ -206,8 +191,8 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     );
   });
 
-  it('high < low 인 행을 저장하지 않는다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('high < low 인 행을 저장하지 않는다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     const date = '2023-01-02';
     ctx.fake.setResponse('stk_bydd_trd', '20230102', {
       body: krxEnvelope([
@@ -231,10 +216,10 @@ describe('SymbolMasterService.ingestDate — 일봉 적재', () => {
     expect(rows[0]).toMatchObject({ shortCode: '005930' });
   });
 
-  it('어긋난 행 건수를 로그에 남긴다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('어긋난 행 건수를 로그에 남긴다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     const date = '2023-01-02';
-    const warnSpy = vi.spyOn(ctx.t.container.logger, 'warn');
+    const warnSpy = vi.spyOn(ctx.logger, 'warn');
     ctx.fake.setResponse('stk_bydd_trd', '20230102', {
       body: krxEnvelope([
         dailyFixture(),

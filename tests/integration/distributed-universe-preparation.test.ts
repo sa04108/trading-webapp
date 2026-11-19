@@ -29,14 +29,15 @@ const it = base.extend({ appOptions: { agentPreparation: true } });
 
 describe('분산 유니버스 준비', () => {
   it('두 에이전트가 실제 보조 프로세스를 거쳐 월별 결과를 합친다', { timeout: 120_000 }, async ({ ctx }) => {
+    const coverageFrom = '2023-11-08';
     const dates: string[] = [];
-    for (let ts = Date.parse('2023-10-02T00:00:00Z'); ts <= Date.parse('2025-01-01T00:00:00Z'); ts += 86_400_000) {
+    for (let ts = Date.parse(`${coverageFrom}T00:00:00Z`); ts <= Date.parse('2025-01-01T00:00:00Z'); ts += 86_400_000) {
       const date = new Date(ts);
       if (date.getUTCDay() !== 0 && date.getUTCDay() !== 6) dates.push(date.toISOString().slice(0, 10));
     }
     seedSymbolMasterUniverse(ctx.container, dates, [{
       standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '1000000000',
-    }]);
+    }], [{ startDate: coverageFrom, endDate: '2025-01-01' }]);
     registerSymbols(ctx.container, 'KR', ['005930']);
     seedDailyBars(ctx.container.database.db, dates.map((date) => ({
       symbol: '005930', market: 'KR', timeframe: '1d', tsMs: Date.parse(`${date}T00:00:00Z`),

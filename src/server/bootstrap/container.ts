@@ -175,6 +175,8 @@ function readAppVersion(): string {
 }
 
 export interface CreateContainerOptions {
+  /** 로컬 공급자를 쓰는 테스트에서 KRX 요청 사이의 대기를 제어한다. */
+  readonly krxSleep?: (ms: number) => Promise<void>;
   /** 계산 규칙 단위 테스트만 같은 프로세스에 의존성을 주입한다. */
   readonly inlinePreparation?: boolean;
   /** 의존성을 바꾸는 규칙 테스트에만 사용한다. 운영 기본값은 프로세스 격리다. */
@@ -301,6 +303,7 @@ export function createContainer(
   // 봉 수집·CSV 가져오기·슬라이스 커버리지는 이 커밋(Task 5,
   // 2026-08-07-price-data-removal)이 걷어냈다. 그래서 이제 봉 저장소를 주입받지 않는다.
   const collection = createAgentCollectionRuntime({
+    krxSleep: options.krxSleep,
     database,
     config,
     clock,

@@ -139,7 +139,7 @@ describe('워커(backtest-child.ts) 의 팩트 배선 — 실제 자식 프로�
       { standardCode: 'KR7000001000', shortCode: 'CHEAP', name: 'CHEAP', market: 'KOSPI', marketCapKrw: '300000000000' },
       { standardCode: 'KR7000002000', shortCode: 'RICH', name: 'RICH', market: 'KOSPI', marketCapKrw: '200000000000' },
       { standardCode: 'KR7000003000', shortCode: 'NOFACTS', name: 'NOFACTS', market: 'KOSPI', marketCapKrw: '100000000000' },
-      ]);
+      ], [{ startDate: '2024-12-15', endDate: '2025-03-01' }]);
       seedDailyBars(ctx.container.database.db, candles(40));
     // 실제 변경일 역투영 창이 기간 시작보다 90일 앞까지 보므로 인접 2024년도 닫는다.
       await seedCorporateActionCoverage(ctx.container, ['CHEAP', 'RICH'], yearRange(2024, 2025));

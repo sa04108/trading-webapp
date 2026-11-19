@@ -14,6 +14,7 @@ import {
   krxNonTradingCoverage,
   krxNonTradingDays,
   symbolFactsState,
+  symbolMasterCoverage,
   symbolMasterTradingDays,
   symbolMasterVersions,
 } from '../../src/runtime/shared/db/schema.js';
@@ -260,6 +261,11 @@ describe('유니버스 규칙 백테스트 실행 (D-024)', () => {
       ...buildRequest(1),
       period: { from: '2025-09-01', to: '2025-10-31' },
     };
+    // 10봉 워밍업의 보수적 달력 범위는 34일 전부터다.
+    ctx.container.database.db.insert(symbolMasterCoverage).values({
+      startDate: '2025-07-29', endDate: '2025-10-31',
+      collectionVersion: readRuntimeVersions().collectionVersion, syncedAtMs: 0,
+    }).run();
     await scenario.prepare(request);
     const created = await ctx.app.inject({
       method: 'POST',
@@ -685,7 +691,7 @@ describe('POST /backtests/:id/clone — 유니버스 자동 등록 (미리보기
           market: 'KOSPI',
           marketCapKrw: '500000000000000',
         },
-      ]);
+      ], [{ startDate: '2025-12-02', endDate: '2026-01-05' }]);
 
       // 005930 은 예전에 미리보기를 거쳐 이미 등록·커버리지가 있다고 가정한다.
       registerSymbols(ctx.container, 'KR', ['005930']);
