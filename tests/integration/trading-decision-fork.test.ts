@@ -43,7 +43,12 @@ describe("daily decision worker integration", () => {
       expect(decision.orders).toMatchObject([{ symbol: "005930", side: "BUY" }]);
       const coverage = new SqliteCorporateActionCoverageStore(database.db, { collectionVersion });
       coverage.addCoverageResult("005930", [2026], [2026], Date.now());
-      await expect(engine.evaluate({ deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: true } as never)).rejects.toMatchObject({
+      const excluded = await engine.evaluate({ deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint: warm.checkpoint, warmupOnly: false } as never);
+      expect(excluded.orders).toEqual([]);
+      expect(excluded.actionGapHolds).toEqual(["005930"]);
+      await expect(engine.evaluate({ deployment, cashKrw: deployment.budgetKrw,
+        portfolio: { "005930": { quantity: 1, cost: 100, enteredAtMs: deployment.createdAtMs } },
+        checkpoint: warm.checkpoint, warmupOnly: true } as never)).rejects.toMatchObject({
         constructor: TradingDataRequired,
         need: { repairs: [{ kind: "CORPORATE_ACTION", symbol: "005930", year: 2026 }], priceRange: null },
       });

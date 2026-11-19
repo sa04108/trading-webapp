@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resetUnheldPriceState } from '../../src/runtime/modules/backtest/domain/action-gap.js';
 import { runBacktest } from '../../src/runtime/modules/backtest/domain/engine.js';
 import { CORPORATE_ACTION_FIELD } from '../../src/runtime/modules/facts/domain/fact.js';
 import { rangeBreakoutStrategy } from '../../src/runtime/modules/strategy/strategies/range-breakout.js';
@@ -47,5 +48,9 @@ describe('new and returning swing symbol history', () => {
     expect(state.bySymbol.get('000660')).toBe(other);
     expect(state.groupOf).toBe(group);
     if (state.warmup) expect(state.warmup.closesBySymbol.get(symbol)).toEqual(reference.warmup!.closesBySymbol.get(symbol));
+    resetUnheldPriceState(state, symbol);
+    expect(state.bySymbol.get(symbol)?.entryFilter).toMatchObject({ wasHeld: false, cooldown: 5 });
+    expect(state.bySymbol.get(symbol)?.atr.atr).toBeNull();
+    expect(state.bySymbol.get('000660')).toBe(other);
   });
 });

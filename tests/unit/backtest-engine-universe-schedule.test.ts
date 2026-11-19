@@ -294,6 +294,51 @@ describe('runBacktest — 멤버십 일정 기반 거래 대상 제한 (스펙 2
     expect((aSell?.tsMs ?? Infinity) < (bBuy?.tsMs ?? -Infinity)).toBe(true);
   });
 
+  it('결손으로 우선 매수가 취소돼도 편출된 차순위는 체결하지 않는다', () => {
+    const strategy: TradingStrategy<unknown, null> = {
+      ...alwaysBuyBothStrategy(),
+      onBars(context) {
+        return { orders: context.tsMs === START + HOUR
+          ? [{ symbol: 'B', side: 'BUY', quantity: 1 }, { symbol: 'A', side: 'BUY', quantity: 1 }]
+          : [] };
+      },
+    };
+    const input = {
+      candles: [0, 1, 2].flatMap((i) => [bar(i, 100), bar(i, 100, { symbol: 'B' })]),
+      initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 1, maxPositions: 1,
+      universeSchedule: [
+        { fromTsMs: START, members: [member('A'), member('B')] },
+        { fromTsMs: START + 2 * HOUR, members: [member('A')] },
+      ],
+    };
+    expect(runBacktest(strategy as never, input).fills.map((fill) => fill.symbol)).toEqual(['A']);
+    const result = runBacktest(strategy as never, {
+      ...input, actionGapPeriods: new Map([['A', [{ from: START + 2 * HOUR, to: START + 2 * HOUR, year: 2026 }]]]),
+    });
+    expect(result.fills).toEqual([]);
+  });
+
+  it('우선 매수 취소 뒤 차순위 수량이 부족하면 다음 후보가 체결된다', () => {
+    const strategy: TradingStrategy<unknown, null> = {
+      ...alwaysBuyBothStrategy(),
+      onBars(context) {
+        return { orders: context.tsMs === START + HOUR
+          ? ['C', 'A', 'B'].map((symbol) => ({ symbol, side: 'BUY' as const, quantity: 1 }))
+          : [] };
+      },
+    };
+    const input = {
+      candles: [0, 1, 2].flatMap((i) => [bar(i, 100), bar(i, 20_000, { symbol: 'B' }), bar(i, 100, { symbol: 'C' })]),
+      initialCash: 10_000, execution: ZERO_COST, parameters: {}, randomSeed: 1, maxPositions: 1,
+      universeSchedule: [{ fromTsMs: START, members: [member('A'), member('B'), member('C')] }],
+    };
+    expect(runBacktest(strategy as never, input).fills.map((fill) => fill.symbol)).toEqual(['A']);
+    const result = runBacktest(strategy as never, {
+      ...input, actionGapPeriods: new Map([['A', [{ from: START + 2 * HOUR, to: START + 2 * HOUR, year: 2026 }]]]),
+    });
+    expect(result.fills.map((fill) => ({ symbol: fill.symbol, quantity: fill.quantity }))).toEqual([{ symbol: 'C', quantity: 1 }]);
+  });
+
   it('일정 밖 심볼의 BUY 의도는 거부되고 종목당 한 번만 warning 이 쌓인다', () => {
     const candles = [
       bar(0, 100),

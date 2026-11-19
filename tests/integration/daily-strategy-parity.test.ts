@@ -216,3 +216,69 @@ it('executes the worker decision through the paper service and matches the backt
     expect(await broker.holdings('PAPER')).toMatchObject([{ symbol: member.symbol, quantity: 25, marketValue: 2750 }]);
   } finally { await service.close(); database.close(); }
 });
+
+it('keeps an action-gap entry out of both backtest fills and paper decisions while a healthy peer trades', async () => {
+  const p = rangeBreakoutStrategy.parameterSchema.parse({ lookbackBars: 2, atrPeriod: 2, breakoutBufferAtr: 0, minAverageTradingValueKrw: 0, trendSmaBars: 0 });
+  const dates = longDays.slice(35, 45);
+  const affected = member, peer = { ...member, symbol: '000660' };
+  const first = dates[3]!, event = dates[4]!;
+  const source = dates.flatMap((tsMs, i) => [affected, peer].map(({ symbol }) => {
+    const close = i < 3 ? 100 : symbol === affected.symbol && i >= 7 ? 120 : 110;
+    return { ...bars[0]!, symbol, tsMs, open: close, high: close + 1, low: close - 1, close };
+  }));
+  const schedule = [{ fromTsMs: dates[2]!, rebalanceDate: day(dates[2]!), members: [affected, peer] }];
+  const execution = { cost: { id: 'zero', version: '1', buyCommissionRate: 0, sellCommissionRate: 0, sellTaxRate: 0 }, slippage: { id: 'zero', version: '1', bps: 0, fixed: 0 }, rules: { tickSize: 0, minOrderQty: 1 } };
+  const input = { candles: source, initialCash: 100000, parameters: p, randomSeed: 1, maxPositions: 2, tradeFromTsMs: first, universeSchedule: schedule, execution,
+    actionGapPeriods: new Map([[affected.symbol, [{ from: event, to: event, year: 2026 }]]]) };
+  const backtest = runBacktest(rangeBreakoutStrategy, input);
+  const peerFill = backtest.fills.find(fill => fill.symbol === peer.symbol && fill.side === 'BUY');
+  expect(peerFill).toMatchObject({ tsMs: event, price: 110 });
+  expect(backtest.fills.filter(fill => fill.tsMs === event && fill.symbol === affected.symbol)).toEqual([]);
+  expect(backtest.fills.filter(fill => fill.side === 'SELL')).toEqual([]);
+  expect(backtest.fills.find(fill => fill.symbol === affected.symbol && fill.side === 'BUY')).toMatchObject({ tsMs: dates[8], price: 120 });
+  expect(() => runBacktest(rangeBreakoutStrategy, { ...input, actionGapPeriods: new Map([[affected.symbol, [{ from: dates[5]!, to: dates[5]!, year: 2026 }]]]) })).toThrow(/005930/);
+
+  const split = { scope: 'SYMBOL' as const, key: peer.symbol, field: 'SPLIT_RATIO' as const, periodKey: day(event), asOfTsMs: event, value: 2, unit: 'ratio' };
+  let peerSplits = false;
+  const paperRuntime = { ...runtime, facts: { getFacts: async () => peerSplits ? [split] : [] },
+    resolver: { resolveOrDescribeNeeds: async () => ({ kind: 'READY', unionEntries: new Map(), schedule, dataExclusions: [], corporateActionExclusions: [] }) },
+    candles: { getCandlesArray: async (query: { symbols: string[]; fromTsMs: number; toTsMs: number }) => source.filter(bar => query.symbols.includes(bar.symbol) && bar.tsMs >= query.fromTsMs && bar.tsMs <= query.toTsMs) },
+    actionCoverage: { getCoveredYears: () => new Map([[affected.symbol, [2025, 2026]], [peer.symbol, [2025, 2026]]]),
+      getGapYears: () => new Map([[affected.symbol, [2026]]]),
+      getGapDetails: () => new Map([[affected.symbol, [{ year: 2026, periodKey: day(event), reason: '발행주식수 누락', severity: 'BLOCKING' }]]]) },
+    symbolMaster: { isRangeCovered: () => true, sharesChangesBetween: (from: string, to: string) => from <= day(event) && day(event) <= to ? (peerSplits ? [affected, peer] : [affected]).map(item => ({ shortCode: item.symbol, effectiveDate: day(event), ratio: 2 })) : [] },
+  };
+  const paperDeployment = { ...deployment, strategyId: rangeBreakoutStrategy.id, version: rangeBreakoutStrategy.version, parameters: p, createdAtMs: first };
+  const execute = (checkpoint: string | null, warmupOnly: boolean, ts: number, portfolio = {}, executionDate?: string) => calculate({ input: { deployment: paperDeployment,
+    portfolio, cashKrw: 100000, checkpoint, warmupOnly }, date: day(ts), executionDate, bundlePath: '' } as never, {} as never,
+    { ...bundle, getStrategy: () => rangeBreakoutStrategy } as never, paperRuntime as never);
+  const warm = await execute(null, true, dates[2]!);
+  const signal = await execute(warm.checkpoint, false, first);
+  expect(signal.orders.map(order => order.symbol).sort()).toEqual([peer.symbol, affected.symbol]);
+  const nextOpen = await execute(warm.checkpoint, false, first, {}, day(event));
+  expect(nextOpen.orders.map(order => order.symbol)).toEqual([peer.symbol]);
+  // 한 자리에서는 결손이 없으면 첫 후보가 체결되고, 주문일 결손이면 같은 신호의 차순위가 체결된다.
+  const capped = { ...input, maxPositions: 1 };
+  expect(runBacktest(rangeBreakoutStrategy, { ...capped, actionGapPeriods: undefined }).fills[0]?.symbol).toBe(affected.symbol);
+  const available = runBacktest(rangeBreakoutStrategy, capped).fills.filter(fill => fill.tsMs === event);
+  expect(available.map(({ symbol, quantity }) => ({ symbol, quantity }))).toEqual(nextOpen.orders.map(({ symbol, quantity }) => ({ symbol, quantity })));
+  peerSplits = true;
+  const afterSplit = source.map(bar => bar.symbol === peer.symbol && bar.tsMs >= event
+    ? { ...bar, open: bar.open / 2, high: bar.high / 2, low: bar.low / 2, close: bar.close / 2 } : bar);
+  const splitFills = runBacktest(rangeBreakoutStrategy, { ...capped, candles: afterSplit, facts: [split] }).fills.filter(fill => fill.tsMs === event);
+  const splitOpen = await execute(warm.checkpoint, false, first, {}, day(event));
+  expect(splitFills).toMatchObject([{ symbol: peer.symbol, price: 55, quantity: peerFill!.quantity * 2 }]);
+  expect(splitOpen.orders).toMatchObject([{ symbol: peer.symbol, quantity: splitFills[0]!.quantity }]);
+  peerSplits = false;
+  expect(nextOpen.actionGapHolds).toEqual([affected.symbol]);
+  const atEvent = await execute(signal.checkpoint, false, event, { [peer.symbol]: { quantity: peerFill!.quantity, cost: peerFill!.grossAmount, enteredAtMs: event } });
+  expect(atEvent.actionGapHolds).toEqual([affected.symbol]);
+  expect(atEvent.orders.filter(order => order.symbol === affected.symbol)).toEqual([]);
+  let checkpoint = atEvent.checkpoint;
+  for (const ts of dates.slice(5, 7)) checkpoint = (await execute(checkpoint, false, ts, { [peer.symbol]: { quantity: peerFill!.quantity, cost: peerFill!.grossAmount, enteredAtMs: event } })).checkpoint;
+  const recovered = await execute(checkpoint, false, dates[7]!, { [peer.symbol]: { quantity: peerFill!.quantity, cost: peerFill!.grossAmount, enteredAtMs: event } });
+  expect(recovered.orders).toContainEqual(expect.objectContaining({ symbol: affected.symbol, side: 'BUY' }));
+  await expect(execute(signal.checkpoint, false, event, { [affected.symbol]: { quantity: 1, cost: 110, enteredAtMs: first } })).rejects.toMatchObject({
+    need: { repairs: expect.arrayContaining([{ kind: 'CORPORATE_ACTION', symbol: affected.symbol, year: 2026 }]) },
+  });
+});

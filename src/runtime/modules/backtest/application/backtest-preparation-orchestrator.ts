@@ -54,8 +54,7 @@ import {
   financialFactCutoffsFromCoverage,
 } from "./backtest-financial-execution-window.js";
 import {
-  findRelevantCorporateActionGaps,
-  readCorporateActionGapDetails,
+  corporateActionGapPeriods,
   type RelevantCorporateActionGap,
 } from "./backtest-corporate-action-gaps.js";
 import { financialCoverageGapMessage, findFinancialCoverageGap } from "./backtest-financial-coverage.js";
@@ -65,9 +64,12 @@ import {
   buildBacktestPreparationPlan,
   type BacktestPreparationPlan,
 } from "./backtest-preparation-plan.js";
+import { getBacktestCandleWindow } from "./backtest-input-bars.js";
 import { PreparationPreviewCache } from "./preparation-preview-cache.js";
 import { UniverseResolutionCancelledError } from "./universe-rule-resolver.js";
 import {
+  ACTION_WARNING_PREFIX,
+  MISSING_ACTION_COVERAGE_REASON,
   backtestDataExclusionKey,
   backtestDataExclusionWarnings,
   type BacktestDataExclusion,
@@ -286,7 +288,7 @@ interface PreparationDependencies {
     | "delistedEventsBetween"
     | "sharesChangesBetween"
   > &
-    Partial<Pick<SymbolMasterService, "tradingDaysBetween">>;
+    Partial<Pick<SymbolMasterService, "tradingDaysBetween" | "coverageRanges">>;
   readonly strategies: Pick<StrategyRegistry, "get">;
   readonly symbolService: Pick<
     SymbolService,
@@ -516,22 +518,8 @@ export class BacktestPreparationOrchestrator {
     const hash = backtestPreparationRequestHash(input, strategy);
     const completedId = preparationJobId ?? this.latestCompletedPreviewId(hash);
     if (completedId === null) return null;
-    const row = this.getRow(completedId);
-    if (row?.status !== "COMPLETED" || row.requestHash !== hash || row.runtimeVersionsJson !== preparationRuntimeVersionsJson()) return null;
-    const preview = this.getPreview(completedId);
-    if (
-      !preview ||
-      this.financialCoverageGap(input, strategy, preview.unionSymbols, preview.schedule) !==
-        null ||
-      this.corporateActionCoverageFailure(
-        input,
-        strategy,
-        preview.unionSymbols,
-      ) !== null
-    ) {
-      return null;
-    }
-    return preview;
+    const preview = this.previewCache.get(hash, completedId)?.preview;
+    return preview && this.previewCoverageReady(input, strategy, preview) ? preview : null;
   }
 
   /** 복제는 게시된 검증 결과와 현재 데이터 revision을 확인한다. */
@@ -539,7 +527,24 @@ export class BacktestPreparationOrchestrator {
     input: PreparationInput,
     preparationJobId?: string,
   ): Promise<BacktestUniversePreview | null> {
-    return this.getCachedPreview(input, preparationJobId);
+    const current = this.getCachedPreview(input, preparationJobId);
+    if (current || this.deps.agentManaged || !preparationJobId) return current;
+    const strategy = this.requireStrategy(input);
+    const hash = backtestPreparationRequestHash(input, strategy);
+    if (this.previewCache.unavailabilityReason(hash, preparationJobId) !== "DATA_REVISION_CHANGED") return null;
+    // 복제는 원본 선정 일정을 고정한다. 다른 자료가 변경돼도 실제 실행 입력과 경고는 다시 검증한다.
+    const revision = this.previewCache.revision();
+    const preview = this.getPreview(preparationJobId);
+    if (!preview || !this.marketIndexReady(input, strategy) || !this.previewCoverageReady(input, strategy, preview)) return null;
+    const exclusions = await this.executionActionWarnings(input, strategy, preview.unionSymbols);
+    const pinned = preview.warnings.filter(warning => warning.startsWith(ACTION_WARNING_PREFIX));
+    const warnings = backtestDataExclusionWarnings(exclusions);
+    return this.previewCache.revision() === revision && JSON.stringify(warnings) === JSON.stringify(pinned) ? preview : null;
+  }
+
+  private previewCoverageReady(input: PreparationInput, strategy: AnyTradingStrategy, preview: BacktestUniversePreview): boolean {
+    return this.corporateActionCoverageFailure(input, strategy, preview.unionSymbols) === null &&
+      this.financialCoverageGap(input, strategy, preview.unionSymbols, preview.schedule) === null;
   }
 
   /** HTTP 미리보기 조회는 resolver를 예약하거나 child 작업을 기다리지 않는다. */
@@ -629,6 +634,9 @@ export class BacktestPreparationOrchestrator {
     // 수 있다. 이전 union에만 full facts/actions를 준비했으므로 다른 schedule을 완료
     // 결과처럼 돌려주지 않고 새 durable job을 시작하게 한다.
     if (storedPreview.scheduleHash !== currentPreview.scheduleHash) return null;
+    const actionWarnings = (preview: BacktestUniversePreview) =>
+      preview.warnings.filter((warning) => warning.startsWith(ACTION_WARNING_PREFIX));
+    if (JSON.stringify(actionWarnings(storedPreview)) !== JSON.stringify(actionWarnings(currentPreview))) return null;
     // 완료 뒤 coverage가 삭제·손상됐으면 캐시된 200을 계속 돌려 재준비 진입을 막지
     // 않는다. null을 돌려 라우트가 새 durable preparation을 시작하게 한다.
     if (
@@ -700,17 +708,14 @@ export class BacktestPreparationOrchestrator {
               "VALIDATING_RESULT",
             );
       if (attempt.kind !== "READY") return null;
-      if (
-        this.recordDataExclusions(
-          attempt.dataExclusions ??
-            corporateActionDataExclusions(
-              attempt.corporateActionExclusions ?? [],
-            ),
-          excludedSymbols,
-          exclusions,
-        )
-      )
-        continue;
+      const resolvedExclusions = attempt.dataExclusions ??
+        corporateActionDataExclusions(attempt.corporateActionExclusions ?? []);
+      this.recordActionWarnings(resolvedExclusions, exclusions);
+      if (this.recordDataExclusions(
+        resolvedExclusions.filter((item) => item.category !== "DART_CORPORATE_ACTION"),
+        excludedSymbols,
+        exclusions,
+      )) continue;
 
       const plan = buildBacktestPreparationPlan({
         request: preparationRequest(input),
@@ -734,17 +739,13 @@ export class BacktestPreparationOrchestrator {
         )
       )
         continue;
+      this.recordActionWarnings(
+        await this.executionActionWarnings(input, strategy, plan.actions.symbols),
+        exclusions,
+      );
       if (
         this.recordDataExclusions(
           [
-            ...corporateActionDataExclusions(
-              this.corporateActionGapsForPlan(plan.actions),
-            ),
-            ...corporateActionDataExclusions(
-              await this.corporateActionAlignmentExclusionsForPlan(
-                plan.actions,
-              ),
-            ),
             ...(await this.financialDataExclusions(
               input,
               strategy,
@@ -1100,14 +1101,6 @@ export class BacktestPreparationOrchestrator {
 
           const finalDataExclusions = [
             ...this.corporateActionCoverageExclusions(finalPlan.actions),
-            ...corporateActionDataExclusions(
-              this.corporateActionGapsForPlan(finalPlan.actions),
-            ),
-            ...corporateActionDataExclusions(
-              await this.corporateActionAlignmentExclusionsForPlan(
-                finalPlan.actions,
-              ),
-            ),
             ...(await this.financialDataExclusions(
               input,
               strategy,
@@ -1345,11 +1338,11 @@ export class BacktestPreparationOrchestrator {
     for (;;) {
       if (this.finishCancelledIfRequested(jobId)) return null;
       if (attempt.kind === "READY") {
+        const resolvedExclusions = attempt.dataExclusions ??
+          corporateActionDataExclusions(attempt.corporateActionExclusions ?? []);
+        this.recordActionWarnings(resolvedExclusions, dataExclusions);
         const addedSymbol = this.recordDataExclusions(
-          attempt.dataExclusions ??
-            corporateActionDataExclusions(
-              attempt.corporateActionExclusions ?? [],
-            ),
+          resolvedExclusions.filter((item) => item.category !== "DART_CORPORATE_ACTION"),
           excludedSymbols,
           dataExclusions,
         );
@@ -1597,7 +1590,7 @@ export class BacktestPreparationOrchestrator {
         symbol,
         category: "DART_CORPORATE_ACTION",
         periodKey: `${actions.fromYear}~${actions.toYear}`,
-        reason: "필요 연도의 DART 자본변동 coverage를 확보하지 못함",
+        reason: MISSING_ACTION_COVERAGE_REASON,
       }),
     );
   }
@@ -1612,75 +1605,63 @@ export class BacktestPreparationOrchestrator {
         `사라진 종목이 있습니다: ${missing.join(", ")}. 미리보기를 다시 준비하세요.`
       );
     }
-    const relevantGaps = this.corporateActionGapsForPlan(actions);
-    if (relevantGaps.length === 0) return null;
-    const affected = [...new Set(relevantGaps.map((gap) => gap.symbol))].sort();
-    const causes = relevantGaps
-      .map((gap) => `${gap.symbol}(${gap.periodKey}: ${gap.reason})`)
-      .join("; ");
-    return (
-      `완료된 미리보기에 자본변동 보정 정보가 손상된 종목이 있습니다 — 대상: ` +
-      `${affected.join(", ")}. 확인된 원인: ${causes}. ` +
-      "미리보기를 다시 준비하세요."
-    );
+    return null;
   }
 
-  private corporateActionGapsForPlan(
-    actions: BacktestPreparationPlan["actions"],
-  ): RelevantCorporateActionGap[] {
-    if (actions.symbols.length === 0) return [];
-    const detailsBySymbol = readCorporateActionGapDetails(
-      this.deps.actionCoverage,
-      actions.symbols,
-    );
-    if ([...detailsBySymbol.values()].every((details) => details.length === 0))
-      return [];
-    const executionFrom = `${actions.fromYear}-01-01`;
-    const executionTo = `${actions.toYear}-12-31`;
-    return findRelevantCorporateActionGaps(
-      detailsBySymbol,
-      this.deps.symbolMaster.sharesChangesBetween(executionFrom, executionTo),
-      {
-        executionFrom,
-        executionTo,
-        rawFrom: executionFrom,
-        rawTo: executionTo,
-      },
-    );
-  }
-
-  private async corporateActionAlignmentExclusionsForPlan(
-    actions: BacktestPreparationPlan["actions"],
-  ): Promise<RelevantCorporateActionGap[]> {
-    const exclusions: RelevantCorporateActionGap[] = [];
-    const symbols = [...new Set(actions.symbols)].sort();
-    const rawFrom = `${actions.fromYear}-01-01`;
-    const rawTo = `${actions.toYear}-12-31`;
-    // 종목별 매칭은 독립이므로 최종 선정 검증도 전체 원본을 한꺼번에 읽지 않는다.
+  /** 실행 워커와 같은 워밍업 기간과 변경일 판정으로 최종 종목의 보류 사유를 수집한다. */
+  private async executionActionWarnings(
+    input: PreparationInput,
+    strategy: AnyTradingStrategy,
+    symbols: readonly string[],
+  ): Promise<BacktestDataExclusion[]> {
+    if (!symbols.length) return [];
+    const unaligned: { symbol: string; periodKey: string }[] = [];
     for (let index = 0; index < symbols.length; index += 32) {
       const batch = symbols.slice(index, index + 32);
-      const rawFacts = await this.deps.facts.getFacts({
+      const facts = await this.deps.facts.getFacts({
         scope: "SYMBOL", keys: batch, fields: [CORPORATE_ACTION_FIELD],
       });
-      const rawRange = corporateActionRawDateRange(rawFacts);
-      if (rawRange === null) continue;
-      const sharesChanges = this.deps.symbolMaster.sharesChangesBetween(
-        addCalendarDays(rawRange.from, -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays),
-        addCalendarDays(rawRange.to, CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays),
-        batch,
+      const range = corporateActionRawDateRange(facts);
+      if (!range) continue;
+      const changes = this.deps.symbolMaster.sharesChangesBetween(
+        addCalendarDays(range.from, -CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays),
+        addCalendarDays(range.to, CORPORATE_ACTION_ALIGNMENT_WINDOW.afterDays), batch,
       );
-      for (const action of alignCorporateActionEffectiveDates(rawFacts, sharesChanges).unaligned) {
-        if (action.periodKey < rawFrom || action.periodKey > rawTo) continue;
-        exclusions.push({
-          symbol: action.symbol,
-          year: Number(action.periodKey.slice(0, 4)),
-          periodKey: action.periodKey,
-          reason: "KRX 상장주식수 변경일과 정렬할 수 없는 자본변동",
-          severity: "BLOCKING",
-        });
-      }
+      unaligned.push(...alignCorporateActionEffectiveDates(facts, changes).unaligned);
     }
-    return exclusions;
+    const gapYears = this.deps.actionCoverage.getGapYears(symbols);
+    if (!unaligned.length && ![...gapYears.values()].some(years => years.length > 0)) return [];
+    const parsed = strategy.parameterSchema.safeParse(input.parameters);
+    if (!parsed.success) throw new PreparationInputError("전략 파라미터가 올바르지 않습니다.");
+    const { warmupFromDate } = getBacktestCandleWindow(
+      this.deps.database.db, preparationRequest(input), strategy, parsed.data,
+    );
+    const to = input.period.to;
+    const rows = this.deps.candleCoverage?.getCoverageBetween(symbols, Date.parse(warmupFromDate), Date.parse(to));
+    const firstBar = rows?.reduce((first, row) => Math.min(first, row.firstTsMs ?? Infinity), Infinity);
+    const from = firstBar !== undefined && Number.isFinite(firstBar) ? kstDateOf(firstBar) : warmupFromDate;
+    const relevant: RelevantCorporateActionGap[] = [];
+    corporateActionGapPeriods(
+      {
+        getGapYears: () => gapYears,
+        getGapDetails: this.deps.actionCoverage.getGapDetails?.bind(this.deps.actionCoverage),
+      },
+      symbols, unaligned,
+      this.deps.symbolMaster.sharesChangesBetween(from, to, symbols),
+      this.deps.symbolMaster.coverageRanges?.() ?? this.deps.symbolMaster.isRangeCovered?.(from, to) ?? false,
+      { from, to }, [], (gap) => relevant.push(gap),
+    );
+    return corporateActionDataExclusions(relevant);
+  }
+
+  private recordActionWarnings(
+    exclusions: readonly BacktestDataExclusion[],
+    recorded: Map<string, BacktestDataExclusion>,
+  ): void {
+    for (const exclusion of exclusions) {
+      if (exclusion.category === "DART_CORPORATE_ACTION")
+        recorded.set(backtestDataExclusionKey(exclusion), exclusion);
+    }
   }
 
   private recordDataExclusions(

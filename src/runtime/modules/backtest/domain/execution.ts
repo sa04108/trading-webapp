@@ -93,3 +93,28 @@ export function weightLimitedBuyQuantity(equity: number, heldValue: number, base
   );
   return Math.max(0, Math.floor(rawQuantity + tolerance));
 }
+
+/** 체결 원장과 같은 순서로 총 매수 금액에 수수료를 더한다. */
+export function buyCashWithCommission(gross: number, commissionRate: number): number {
+  return gross + gross * commissionRate;
+}
+
+/** 동일 시가·가용 현금·평가액에서 두 실행기가 주문할 수 있는 수량을 계산한다. */
+export function sizeDailyBuyAtOpen(input: {
+  quantity: number; cash: number; equity: number; heldValue: number; basePrice: number;
+  fillPrice: number; commissionRate: number; weight?: number;
+}): { quantity: number; cashQuantity: number } {
+  const factor = 1 + input.commissionRate;
+  const outlay = (quantity: number) => buyCashWithCommission(quantity * input.fillPrice, input.commissionRate);
+  let cashQuantity = input.quantity;
+  if (outlay(cashQuantity) > input.cash) {
+    cashQuantity = Math.min(cashQuantity, Math.max(0, Math.floor(input.cash / outlay(1))));
+    // 나눗셈이 정수 경계에서 한 주를 벗어나면 실제 원장 차감액으로 확인한다.
+    if (cashQuantity < input.quantity && outlay(cashQuantity + 1) <= input.cash) cashQuantity++;
+    if (cashQuantity > 0 && outlay(cashQuantity) > input.cash) cashQuantity--;
+  }
+  const quantity = input.weight === undefined ? cashQuantity : Math.min(cashQuantity, weightLimitedBuyQuantity(
+    input.equity, input.heldValue, input.basePrice, input.fillPrice, factor, input.weight,
+  ));
+  return { quantity, cashQuantity };
+}

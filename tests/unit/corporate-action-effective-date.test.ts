@@ -152,7 +152,8 @@ describe('alignCorporateActionEffectiveDates', () => {
   });
 
   it('짝이 될 주식수 변경이 없으면 DART 기준일을 그대로 둔다', () => {
-    const { facts, unaligned } = alignCorporateActionEffectiveDates([splitFact()], []);
+    const { facts, matchedFacts, unaligned } = alignCorporateActionEffectiveDates([splitFact()], []);
+    expect(matchedFacts).toEqual([]);
 
     expect(facts[0]?.periodKey).toBe('2024-09-27');
     expect(unaligned).toHaveLength(1);

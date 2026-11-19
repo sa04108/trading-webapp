@@ -86,12 +86,12 @@ describe("daily decision", () => {
     history.splice(history.findIndex(bar => bar.symbol === ipo), 1);
     await expect(execute(date, warm.checkpoint)).rejects.toMatchObject({ need: { priceRange: { to: date }, financial: null, actions: null } });
   });
-  it("이미 수집한 자본변동 결손은 해당 종목·연도만 복구 요청하며 같은 봉의 재활성화도 검사한다", async () => {
+  it("보유 종목의 자본변동 결손은 같은 봉의 재활성화도 복구 요청한다", async () => {
     const warm = await run(null, true);
     const incomplete = { ...runtime, actionCoverage: { ...runtime.actionCoverage, getGapYears: () => new Map([["005930", [2025, 2026]]]) } };
     for (const checkpoint of [null, warm.checkpoint]) {
       await expect(calculate(
-        { input: { deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint, warmupOnly: true }, date, bundlePath: "" } as never,
+        { input: { deployment, cashKrw: deployment.budgetKrw, portfolio: { "005930": { quantity: 1, cost: 100, enteredAtMs: ts - 86_400_000 } }, checkpoint, warmupOnly: true }, date, bundlePath: "" } as never,
         {} as never, bundle as never, incomplete as never,
       )).rejects.toMatchObject({
         message: expect.stringContaining("005930 2026년 자본변동"),
@@ -106,26 +106,77 @@ describe("daily decision", () => {
       factCoverage: { getCoverageState: () => new Map([["005930", { verifiedYears: [2025, 2026], blockingGapYears: [2026] }]]) },
     };
     await expect(calculate(
-      { input: { deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint: null, warmupOnly: true }, date, bundlePath: "" } as never,
+      { input: { deployment, cashKrw: deployment.budgetKrw, portfolio: { "005930": { quantity: 1, cost: 100, enteredAtMs: ts - 86_400_000 } }, checkpoint: null, warmupOnly: true }, date, bundlePath: "" } as never,
       {} as never, { ...bundle, getStrategy: () => financialStrategy } as never, incomplete as never,
     )).rejects.toMatchObject({ need: { repairs: [
       { kind: "CORPORATE_ACTION", symbol: "005930", year: 2026 },
       { kind: "FINANCIAL", symbol: "005930", year: 2026 },
     ] } });
   });
-  it("유니버스 선정에서 제외된 자본변동 결손도 종목을 버리지 않고 복구 요청한다", async () => {
+  it("유니버스 선정에서 보유 종목의 자본변동 결손을 복구 요청한다", async () => {
     const result = await runtime.resolver.resolveOrDescribeNeeds();
     const incomplete = { ...runtime, resolver: { resolveOrDescribeNeeds: async () => ({ ...result,
       corporateActionExclusions: [{ symbol: "005930", year: 2026, periodKey: "2026-03-01", reason: "발행주식수 누락", severity: "BLOCKING" }],
       dataExclusions: [{ symbol: "005930", category: "DART_CORPORATE_ACTION", periodKey: "2026년/2026-03-01", reason: "발행주식수 누락" }],
     }) } };
-    await expect(calculate(
-      { input: { deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint: null, warmupOnly: true }, date, bundlePath: "" } as never,
-      {} as never, bundle as never, incomplete as never,
-    )).rejects.toMatchObject({ message: expect.stringContaining("발행주식수 누락"), need: {
-      priceRange: null,
+    await expect(calculate({ input: { deployment, cashKrw: deployment.budgetKrw,
+      portfolio: { "005930": { quantity: 1, cost: 100, enteredAtMs: Date.parse("2026-02-01") } }, checkpoint: null, warmupOnly: true }, date, bundlePath: "" } as never,
+      {} as never, bundle as never, incomplete as never)).rejects.toMatchObject({ need: {
       repairs: expect.arrayContaining([{ kind: "CORPORATE_ACTION", symbol: "005930", year: 2026 }]),
     } });
+  });
+  it("확인된 자본변동 결손은 미보유 종목의 진입만 보류하고 복구 후 다시 허용한다", async () => {
+    const peer = "000660", affected = "005930";
+    const history = bars.flatMap(bar => [bar, { ...bar, symbol: peer }]);
+    let gap = false;
+    const custom = { ...runtime,
+      candles: { getCandlesArray: async () => history },
+      actionCoverage: { getCoveredYears: () => new Map([[affected, years], [peer, years]]),
+        getGapYears: () => gap ? new Map([[affected, [2026]]]) : new Map() },
+      resolver: { resolveOrDescribeNeeds: async () => ({ kind: "READY", unionEntries: new Map(), dataExclusions: [], corporateActionExclusions: [],
+        schedule: [{ rebalanceDate: date, members: [affected, peer].map(symbol => ({ symbol })) }] }) },
+    };
+    const probe = { ...strategy, onBars: () => ({ orders: [affected, peer].map(symbol => ({ symbol, side: "BUY", quantity: 1 })) }) };
+    const execute = (checkpoint: string | null, warmupOnly: boolean, day = date) => calculate({ input: {
+      deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint, warmupOnly }, date: day, bundlePath: "" } as never,
+      {} as never, { ...bundle, getStrategy: () => probe } as never, custom as never);
+    const warm = await execute(null, true);
+    gap = true;
+    const sameBar = await execute(warm.checkpoint, false);
+    expect(sameBar.orders).toEqual([]);
+    expect(sameBar.actionGapHolds).toEqual([affected]);
+    history.push(...history.slice(-2).map(bar => ({ ...bar, tsMs: ts + 86_400_000 })));
+    const held = await execute(warm.checkpoint, false, "2026-11-14");
+    expect(held.orders).toEqual([{ symbol: peer, side: "BUY", quantity: 1 }]);
+    expect(held.actionGapHolds).toEqual([affected]);
+    gap = false;
+    history.push(...history.slice(-2).map(bar => ({ ...bar, tsMs: ts + 2 * 86_400_000 })));
+    const recovered = await execute(held.checkpoint, false, "2026-11-15");
+    expect(recovered.orders).toContainEqual({ symbol: affected, side: "BUY", quantity: 1 });
+    expect(recovered.actionGapHolds ?? []).toEqual([]);
+  });
+  it.each(["2026-11-13", "2026.11.13"])("주식수 변경일 전에는 진입을 허용한다 (%s)", async periodKey => {
+    const custom = { ...runtime,
+      candles: { getCandlesArray: async ({ toTsMs }: { toTsMs: number }) => bars.filter(bar => bar.tsMs <= toTsMs) },
+      actionCoverage: { ...runtime.actionCoverage, getGapYears: () => new Map([["005930", [2026]]]),
+        getGapDetails: () => new Map([["005930", [{ year: 2026, periodKey, reason: "발행주식수 누락", severity: "BLOCKING" }]]]) },
+      symbolMaster: { isRangeCovered: () => true, sharesChangesBetween: (from: string, to: string) => from <= date && date <= to ? [{ shortCode: "005930", effectiveDate: date, ratio: 2 }] : [] },
+    };
+    const execute = (day: string, checkpoint: string | null) => calculate({ input: { deployment,
+      cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint, warmupOnly: checkpoint === null }, date: day, bundlePath: "" } as never,
+      {} as never, bundle as never, custom as never);
+    const before = await execute("2026-11-12", null);
+    expect(before.actionGapHolds ?? []).toEqual([]);
+    const effective = await execute(date, before.checkpoint);
+    expect(effective.orders).toEqual([]);
+    expect(effective.actionGapHolds).toEqual(["005930"]);
+  });
+  it("수집 여부가 확인되지 않은 자본변동 자료는 준비를 요청한다", async () => {
+    const incomplete = { ...runtime, actionCoverage: { ...runtime.actionCoverage, getCoveredYears: () => new Map() } };
+    await expect(calculate({ input: { deployment, cashKrw: deployment.budgetKrw, portfolio: {}, checkpoint: null, warmupOnly: true },
+      date, bundlePath: "" } as never, {} as never, bundle as never, incomplete as never)).rejects.toMatchObject({
+      need: { actions: expect.objectContaining({ symbols: ["005930"] }) },
+    });
   });
   it("워밍업 구간 중간의 거래 봉이 없으면 데이터 준비를 요구한다", async () => {
     const incomplete = { ...runtime, candles: { getCandlesArray: async () => [bars[0]!, bars[2]!] } };

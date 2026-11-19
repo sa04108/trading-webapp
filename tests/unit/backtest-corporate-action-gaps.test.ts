@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  findRelevantCorporateActionGaps,
+  findRelevantCorporateActionGaps, corporateActionGapPeriods,
 } from '../../src/runtime/modules/backtest/application/backtest-corporate-action-gaps.js';
 
 const DETAILS = new Map([['005930', [{
@@ -18,8 +18,9 @@ const WINDOW = {
 };
 
 describe('findRelevantCorporateActionGaps', () => {
-  it('DART gap 연도에 KRX 주식수 변경이 없으면 실행을 막지 않는다', () => {
-    expect(findRelevantCorporateActionGaps(DETAILS, [], WINDOW)).toEqual([]);
+  it('일자를 모르는 결손은 KRX 변경이 없어도 해당 연도에만 보류한다', () => {
+    expect(findRelevantCorporateActionGaps(DETAILS, [], WINDOW)).toEqual([{ symbol: '005930', ...DETAILS.get('005930')![0] }]);
+    expect(findRelevantCorporateActionGaps(DETAILS, [], { ...WINDOW, executionFrom: '2026-01-01', executionTo: '2026-02-01' })).toEqual([]);
   });
 
   it('일자를 모르는 DART gap 주변에 실제 KRX 변경이 있으면 차단 대상으로 남긴다', () => {
@@ -31,6 +32,15 @@ describe('findRelevantCorporateActionGaps', () => {
       symbol: '005930',
       ...DETAILS.get('005930')![0],
     }]);
+  });
+
+  it('확인된 금요일과 월요일 사이의 주말은 새 보류 구간을 만들지 않는다', () => {
+    const code = '006040';
+    const coverage = { getGapYears: () => new Map([[code, [2025]]]), getGapDetails: () => new Map([[code, [
+      { year: 2025, periodKey: '2025.07.14', reason: '분류할 수 없는 발행형태: -', severity: 'BLOCKING' as const },
+    ]]]) };
+    const ranges = [{ startDate: '2025-07-11', endDate: '2025-07-11' }, { startDate: '2025-07-14', endDate: '2025-07-14' }];
+    expect(corporateActionGapPeriods(coverage, [code], [], [], ranges, { from: '2025-07-11', to: '2025-07-14' }).size).toBe(0);
   });
 
   it('일자가 있는 gap은 정렬 허용 창 안의 KRX 변경과만 연결한다', () => {

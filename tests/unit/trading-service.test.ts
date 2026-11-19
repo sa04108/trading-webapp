@@ -196,6 +196,17 @@ describe("모의투자 실행 경계", () => {
     expect(f.service.snapshot().orders).toEqual([expect.objectContaining({ quantity: 10, price: 1005, averageFillPrice: 1000, filledQuantity: 10, status: "FILLED" })]);
     expect(f.service.snapshot().account?.cashBuyingPower).toBe(0);
   });
+  it("잔고가 매수 금액과 수수료의 합과 정확히 같으면 주문을 가능한 수량까지 체결한다", async () => {
+    const f = fixture(true); await f.service.tick();
+    await f.service.register({ ...setup, budgetKrw: 20_003, paperCommissionProfileId: "kr-equity-default",
+      paperSlippageProfileId: "zero-slippage" }, f.service.snapshot().revision, "user", 20_003);
+    await f.service.activate(f.service.snapshot().revision, "user");
+    vi.mocked(f.engine.evaluate).mockResolvedValueOnce({ checkpoint: "cash", barTsMs: 2,
+      orders: [{ symbol: "005930", side: "BUY", quantity: 21 }] });
+    await f.service.tick(); await f.service.refresh();
+    expect(f.service.snapshot().orders).toMatchObject([{ quantity: 20, filledQuantity: 20, status: "FILLED" }]);
+    expect(f.service.snapshot().account?.cashBuyingPower).toBe(0);
+  });
   it("모의 매도 체결 후 현금과 보유 한도를 확인해 같은 판단의 매수를 진행한다", async () => {
     const f = fixture(true); await f.service.tick();
     await f.service.register({ ...setup, budgetKrw: 10_000, maxPositions: 2, paperCommissionProfileId: "zero-cost", paperSlippageProfileId: "zero-slippage" }, f.service.snapshot().revision, "user", 10_000);

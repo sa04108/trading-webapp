@@ -42,11 +42,12 @@ export class DailyTradingEngine implements TradingDecisionEngine {
   }
   async evaluate(input: EvaluationInput): Promise<EvaluationOutput> {
     if (this.closed) throw new Error("전략 실행기가 종료되었습니다");
-    const date = latestClosedTradingDate(this.options.now());
+    const now = this.options.now();
+    const date = latestClosedTradingDate(now);
     const bundlePath = this.options.artifacts.bundlePath(input.deployment.artifactHash);
-    return this.run(input, date, bundlePath);
+    return this.run(input, date, bundlePath, !input.warmupOnly && this.canTrade(now) ? kstDateOf(now) : undefined);
   }
-  private run(input: EvaluationInput, date: string, bundlePath: string): Promise<EvaluationOutput> {
+  private run(input: EvaluationInput, date: string, bundlePath: string, executionDate?: string): Promise<EvaluationOutput> {
     const ts = import.meta.url.endsWith(".ts");
     return new Promise((resolve, reject) => {
       const child = fork(fileURLToPath(new URL(`../../../../workers/trading-decision-child.${ts ? "ts" : "js"}`, import.meta.url)), [], {
@@ -74,7 +75,7 @@ export class DailyTradingEngine implements TradingDecisionEngine {
         clearTimeout(timeout); if (killTimer) clearTimeout(killTimer); this.children.delete(child);
         if (failure) reject(failure); else if (code === 0 && output) resolve(output); else reject(new Error("전략 판단 프로세스가 종료되었습니다"));
       });
-      child.send({ input, date, bundlePath }, (error) => { if (error) terminate(error); });
+      child.send({ input, date, bundlePath, executionDate }, (error) => { if (error) terminate(error); });
     });
   }
   async close(): Promise<void> {

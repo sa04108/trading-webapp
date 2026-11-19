@@ -112,6 +112,7 @@ export function createPreparationWorkerRuntime(
     symbolMaster: {
       ensureTradingDay: symbolMaster.ensureTradingDay.bind(symbolMaster),
       ingestDate: symbolMaster.ingestDate.bind(symbolMaster),
+      coverageRanges: symbolMaster.coverageRanges.bind(symbolMaster),
       isRangeCovered: symbolMaster.isRangeCovered.bind(symbolMaster),
       nonTradingDaysBetween:
         symbolMaster.nonTradingDaysBetween.bind(symbolMaster),

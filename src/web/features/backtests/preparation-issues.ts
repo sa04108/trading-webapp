@@ -145,10 +145,12 @@ export function splitPreparationWarnings(warnings: readonly string[]): {
       /^(.*?) 정보를 온전히 확보할 수 없어 종목 ([A-Za-z0-9._-]+)을 매매 대상에서 제외했습니다 — ([\s\S]+)\.$/.exec(
         warning,
       );
-    const source = excluded?.[1] ? SOURCES[excluded[1]] : undefined;
-    if (excluded && source) {
+    const actionNotice = /^(자본변동) 정보를 온전히 확보할 수 없어 종목 ([A-Za-z0-9._-]+)의 선정 또는 매매에 영향을 줄 수 있습니다 — ([\s\S]+)\.$/.exec(warning);
+    const matched = excluded ?? actionNotice;
+    const source = matched?.[1] ? SOURCES[matched[1]] : undefined;
+    if (matched && source) {
       // 세미콜론은 뒤에 새 기간과 ': '가 있을 때만 경계다. 사유 원문 속 문장부호는 보존한다.
-      const causes = excluded[3]!.split(/; (?=(?:\d{4}|-)[^:;]*: )/);
+      const causes = matched[3]!.split(/; (?=(?:\d{4}|-)[^:;]*: )/);
       for (const cause of causes) {
         const separator = cause.indexOf(": ");
         const period =
@@ -166,8 +168,8 @@ export function splitPreparationWarnings(warnings: readonly string[]): {
           issues.push({
             source,
             reason: reasonLabel(source, actualDetail),
-            disposition: "EXCLUDED",
-            symbol: excluded[2]!,
+            disposition: actionNotice ? "NOTICE" : "EXCLUDED",
+            symbol: matched[2]!,
             period:
               innerSeparator < 0 ? period : example.slice(0, innerSeparator),
             detail: actualDetail,

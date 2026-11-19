@@ -77,7 +77,7 @@ export class TradingDataPreparation {
       const blocking = report.gaps.filter((gap) => gap.severity === "BLOCKING");
       const invalid = blocking.filter((gap) => gap.kind === "INVALID" || gap.kind === "CONFLICT");
       const details = (invalid.length ? invalid : blocking).slice(0, 5).map((gap) => `${gap.symbol} ${gap.periodKey}: ${gap.reason}`).join("; ");
-      if (invalid.length) throw new Error(`${label} 원문 재검증 후에도 결손이 남았습니다: ${details}`);
+      if (invalid.length && (kind === "FINANCIAL" || request.mode === "FULL")) throw new Error(`${label} 원문 재검증 후에도 결손이 남았습니다: ${details}`);
       if (blocking.length) {
         const message = `${label} 데이터 결손 확인: ${details}`;
         if (diagnostics.length < 5) diagnostics.push(message);

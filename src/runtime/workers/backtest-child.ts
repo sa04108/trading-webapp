@@ -44,8 +44,7 @@ import {
   calculatePinnedScheduleHash,
 } from "../modules/backtest/application/backtest-symbol-identity.js";
 import {
-  findRelevantCorporateActionGaps,
-  readCorporateActionGapDetails,
+  corporateActionGapPeriods,
 } from "../modules/backtest/application/backtest-corporate-action-gaps.js";
 import { ENGINE_VERSION } from "../modules/backtest/domain/engine.js";
 import {
@@ -739,11 +738,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
       request.period.to,
       CORPORATE_ACTION_ALIGNMENT_WINDOW.beforeDays,
     );
-    // 파서가 자본변동 행을 보았지만 비율을 만들지 못하면 raw fact 자체가 없다.
-    // aligner만 보면 "사건 없음"과 구분할 수 없으므로 coverage의 gap 연도를 마지막
-    // 실행 경계에서도 확인한다. 정상 제출은 preparation이 해당 종목을 제외하고 차순위까지
-    // 고정한다. 여기서 발견되는 것은 제출 뒤 drift·직접 enqueue이므로, pin을 워커가 다시
-    // 써서 순위를 바꾸지 않고 전체 실행을 막는다.
+    // 파서가 비율을 만들지 못한 행은 raw fact에 없으므로 coverage도 확인한다.
     const relevantActionFromYear = Number(potentiallyRelevantFrom.slice(0, 4));
     const relevantActionToYear = Number(potentiallyRelevantTo.slice(0, 4));
     const requiredActionYears: number[] = [];
@@ -771,64 +766,16 @@ async function main(input: { lease: AgentLease }): Promise<void> {
           "실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.",
       );
     }
-    const gapDetailsBySymbol = readCorporateActionGapDetails(
+    const actionGapPeriods = corporateActionGapPeriods(
       actionCoverage,
       unionSymbols,
+      aligned.unaligned,
+      symbolMaster.sharesChangesBetween(firstLoadedCandleDate, request.period.to, unionSymbols),
+      symbolMaster.coverageRanges(),
+      { from: firstLoadedCandleDate, to: request.period.to },
     );
-    const gapExecutionFrom = addCalendarDays(firstLoadedCandleDate, 1);
-    const gapSharesChanges =
-      gapExecutionFrom > request.period.to
-        ? []
-        : symbolMaster.sharesChangesBetween(
-            gapExecutionFrom,
-            request.period.to,
-          );
-    const relevantGaps = findRelevantCorporateActionGaps(
-      gapDetailsBySymbol,
-      gapSharesChanges,
-      {
-        executionFrom: gapExecutionFrom,
-        executionTo: request.period.to,
-        rawFrom: potentiallyRelevantFrom,
-        rawTo: potentiallyRelevantTo,
-      },
-    );
-    if (relevantGaps.length > 0) {
-      const actionGapSymbols = [
-        ...new Set(relevantGaps.map((gap) => gap.symbol)),
-      ].sort();
-      const causes = relevantGaps
-        .map((gap) => `${gap.symbol}(${gap.periodKey}: ${gap.reason})`)
-        .join("; ");
-      throw new Error(
-        "준비 완료 후 자본변동 보정 정보가 손상된 종목이 있습니다 — " +
-          `대상 ${actionGapSymbols.length}종목: ${actionGapSymbols.join(", ")}. ` +
-          `확인된 원인: ${causes}. ` +
-          "실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.",
-      );
-    }
-    const unalignedForExecution = aligned.unaligned.filter(
-      (action) =>
-        action.periodKey >= potentiallyRelevantFrom &&
-        action.periodKey <= potentiallyRelevantTo,
-    );
-    if (unalignedForExecution.length > 0) {
-      const unalignedSymbols = [
-        ...new Set(unalignedForExecution.map((action) => action.symbol)),
-      ].sort();
-      const shown = unalignedSymbols.slice(0, 10).join(", ");
-      throw new Error(
-        `준비 완료 후 자본변동 ${unalignedForExecution.length}건의 실제 효력일을 ` +
-          `KRX 상장주식수 변경과 정렬할 수 없는 상태가 됐습니다 — 대상 ${unalignedSymbols.length}종목: ${shown}` +
-          (unalignedSymbols.length > 10
-            ? ` 외 ${unalignedSymbols.length - 10}종목`
-            : "") +
-          ". DART 기준일로 그대로 실행하면 수량과 가격 단위가 어긋나 수익이 왜곡됩니다. " +
-          "실행 유니버스는 이미 고정되어 재순위할 수 없습니다. 미리보기를 다시 준비하세요.",
-      );
-    }
 
-    const corporateActionFacts = aligned.facts;
+    const corporateActionFacts = aligned.matchedFacts;
     const facts: Fact[] = [...financialFacts, ...corporateActionFacts];
     // 필수 계정을 선언한 전략은 공시가 없는 종목을 각 평가 시점에 건너뛴다.
     // 실제 데이터 삭제·손상은 위의 manifest 검사와 데이터 revision pin이 확인한다.
@@ -855,7 +802,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
 
     inputSize = {
       candleCount,
-      factCount: financialFactCount + corporateActionFacts.length,
+      factCount: financialFactCount + rawCorporateActionFacts.length,
       symbolCount: unionSymbols.length,
     };
     loadCompletedAtMs = Date.now();
@@ -894,6 +841,7 @@ async function main(input: { lease: AgentLease }): Promise<void> {
           maxPositionWeightPercent: request.risk.maxPositionWeightPercent,
         }),
         facts,
+        actionGapPeriods,
         ...(financialView ? { fundamentals: (symbol: string, tsMs: number) => financialView.fundamentals(symbol, tsMs) } : {}),
         tradeFromTsMs,
         // 조회 구간의 toTsMs는 23:59:59.999라 일봉 날짜와 중복된다. 성과 기간은

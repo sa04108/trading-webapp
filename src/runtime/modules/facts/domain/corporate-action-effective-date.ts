@@ -414,7 +414,7 @@ function matchSymbolActions(
 export function alignCorporateActionEffectiveDates(
   facts: readonly Fact[],
   sharesChanges: readonly SharesChange[],
-): { facts: Fact[]; unaligned: UnalignedAction[] } {
+): { facts: Fact[]; matchedFacts: Fact[]; unaligned: UnalignedAction[] } {
   // 같은 이벤트의 동일 비율 재공시를 정렬 전에 접는다. 비율이 다르면 어느 공시가
   // 실제 수량 배수인지 이 데이터만으로 판정할 수 없으므로 대표 하나를 보존하되
   // conflict로 표시해 아래 매칭에서 제외한다. 임의의 한 비율을 KRX 날짜에 붙이면
@@ -437,7 +437,7 @@ export function alignCorporateActionEffectiveDates(
     }
   }
   const actions = [...actionsByPeriod.values()];
-  if (actions.length === 0) return { facts: [...facts], unaligned: [] };
+  if (actions.length === 0) return { facts: [...facts], matchedFacts: [], unaligned: [] };
   const retainedActions = new Set(actions);
   const conflictedActions = new Set(
     actions.filter((fact) =>
@@ -477,6 +477,7 @@ export function alignCorporateActionEffectiveDates(
     }));
 
   return {
+    matchedFacts: [...movedTo].map(([fact, periodKey]) => ({ ...fact, periodKey })),
     facts: facts.flatMap((fact) => {
       if (fact.field === CORPORATE_ACTION_FIELD && !retainedActions.has(fact))
         return [];
