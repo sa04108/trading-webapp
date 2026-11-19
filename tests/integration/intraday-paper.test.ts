@@ -97,10 +97,13 @@ it("분봉 조회 도중 OFF하면 늦게 도착한 응답을 적용하지 않�
   f.intraday.paperBars.mockImplementationOnce(async (_symbol, from, through) => { entered(); await gate; return bars.filter(bar => bar.endMs >= from && bar.endMs <= through); });
   f.setNow(at("10:03"));
   const ticking = service.tick();
-  await waiting;
-  service.deactivate(service.snapshot().revision, "owner");
-  release();
-  await ticking;
+  try {
+    await waiting;
+    service.deactivate(service.snapshot().revision, "owner");
+  } finally {
+    release();
+    await ticking;
+  }
   const snapshot = service.snapshot();
   expect(snapshot.deployment?.status).toBe("INACTIVE");
   expect(snapshot.orders).toEqual([]);

@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 // 로그인과 테스트 간 위저드 초안 격리는 한 곳에서 관리한다.
 import { login } from './login';
 import { advanceFromPeriod } from './backtest-wizard';
+import { prepareActionRawFixture } from './dart-fixture';
 
 /**
  * 위저드가 실제로 실행하는 기간 — 가짜 KRX 서버가 005930 에 내는 추세
@@ -10,7 +11,7 @@ import { advanceFromPeriod } from './backtest-wizard';
  * 매수·매도가 반복된다.
  *
  * 종목 마스터 e2e(다른 스펙, tests/e2e/symbol-master.spec.ts)가 쓰는
- * SEED_DATE(2024-12-30)와 겹치지 않는다 — 두 스펙이 같은 서버를
+ * SEED_DATE(2019-01-02)와 겹치지 않는다 — 두 스펙이 같은 서버를
  * 공유해도(playwright.config workers:1) coverage 판정에서 서로 간섭하지 않는다.
  */
 // 마지막 익절 이전의 거래일까지 실행해 미청산 포지션 표시도 함께 검증한다.
@@ -18,30 +19,9 @@ const PERIOD = { from: '2026-01-05', to: '2026-03-26' };
 /** KOSPI 상위 1종목만 — 900010(상장폐지예정1호)은 시가총액이 더 낮아 순위 밖으로 빠진다 */
 const TOP_N = 1;
 
-/**
- * "기간 전체 동기화" 완주 대기 상한 — 백필은 날짜마다 KRX 를 최소 4회(KOSPI·KOSDAQ ×
- * 기본정보·일별매매) 부르고 그 사이 250ms 간격을 지킨다(krx-historical-universe-source.ts
- * `groupMinIntervalMs`). 실측(로컬, fake KRX 서버 기준): PERIOD(86일) 백필은 약 90초
- * 걸린다 — 예전 30초 상한은 Task 4 가 "날짜별 순차 POST" 를 "기간 전체 백그라운드
- * 백필"로 바꾸며(스펙 2026-08-06) 더는 맞지 않게 됐다(Task 4 는 `pnpm test:e2e` 를
- * 돌리지 않아 이 어긋남이 그때는 드러나지 않았다). 상한을 짧게 두면 이 대기만
- * 실패하는 게 아니라, 프런트가 포기해도 서버의 `SymbolMasterBackfill` 은 백그라운드에서
- * 계속 돌아 다음 테스트가 다른 기간을 요청할 때 "다른 구간 수집이 진행 중입니다" 로
- * 밀려나는 연쇄 실패로 번진다(리뷰에서 재현·확인).
- */
+/** 기간 전체 동기화가 완료되고 미리보기를 갱신할 때까지의 상한. */
 const BACKFILL_WAIT_TIMEOUT_MS = 150_000;
-/**
- * durable 준비 작업(Task 6) 완료 대기 상한. 재무·자본변동 DART 호출은 실제로 일어나지
- * 않는다(`seedCorporateActionCoverageOnRegistration` 이 등록 시점에 커버리지를 이미
- * 채워 `FactSyncService.runSync` 가 남은 연도 0건으로 건너뛴다 — scripts/e2e-server.ts
- * 주석 참고). 그런데도 시장 데이터 phase는 짧지 않다 — `range-breakout` 의
- * `priceWarmupBars` 요구 때문에 `syncMarketData` 가 price.from(≈ period.from - 36일)
- * ~ price.to(period.to) 전체를 하루 단위로 순회하며 `ingestDate` 를 부른다(옛
- * "기간 전체 동기화" 가 하던 일을 이 준비 작업이 그대로 흡수했다) — KOSPI·KOSDAQ ×
- * 기본정보·일별매매 최소 4호출을 250ms 간격으로 반복하므로(krx-historical-universe-source.ts
- * `groupMinIntervalMs`) 실측(로컬)으로 약 100~130초 걸린다. 기간 전체 백필
- * (`BACKFILL_WAIT_TIMEOUT_MS`)과 같은 일을 하므로 상한도 비슷하게 넉넉히 잡는다.
- */
+/** 실제 시장 데이터와 자본변동 준비 작업의 완료 대기 상한. */
 const PREPARATION_WAIT_TIMEOUT_MS = 200_000;
 
 /**
@@ -122,7 +102,8 @@ async function waitForCompletedBacktest(page: Page): Promise<void> {
 }
 
 /** 스펙 §33 E2E 흐름: 로그인 → 생성 → 제출 → 완료 → 결과 → 거래 필터 → clone → 로그아웃 */
-test('full MVP flow', async ({ page }) => {
+test('full MVP flow', async ({ page }, testInfo) => {
+  await prepareActionRawFixture(page, ['005930'], [2024, 2025, 2026]);
   // 종목명 소스를 스텁한다 — 테스트 환경엔 소스가 설정돼 있지 않아 이름이 항상
   // null 로 오는데, 그러면 '이름 없으면 코드만' 분기와 겹쳐 표시=value 바인딩
   // 버그(§아래 거래 필터 검증)를 절대 못 잡는다. 실제로 이름이 뜨게 만들어야
@@ -361,7 +342,7 @@ test('full MVP flow', async ({ page }) => {
   const capitalStep = page.getByRole('button', { name: '4. 자본·비용' });
   await expect(capitalStep).toHaveAttribute('aria-disabled', 'true');
   await expect(capitalStep).toHaveAttribute('title', /유니버스 규칙을 미리보기/);
-  await page.screenshot({ path: 'test-results/fundamentals-gate.png' });
+  await page.screenshot({ path: testInfo.outputPath('fundamentals-gate.png') });
 
   // 봉만 쓰는 전략으로 바꾸면 같은 유니버스가 통과한다 — 게이트가 전략에만 반응한다
   await page.getByRole('button', { name: '1. 전략' }).click();
@@ -391,12 +372,7 @@ test('full MVP flow', async ({ page }) => {
  * 공유해도(playwright.config workers:1) 서로 다른 연도를 쓰면 커버리지가 부딪히지
  * 않는다.
  *
- * 두 연도 모두 "오늘"보다 한참 과거를 쓴다 — SymbolMasterPanel 은 기본 화면(날짜
- * 쿼리 없음)에서 coverage 의 가장 늦은 날짜를 보여주되 "오늘"을 넘지 않게 자른다
- * (symbol-master-panel.tsx `rangeEnd`/committedDate 클램프). 미래 연도를 동기화해
- * 두면 그 클램프에 걸려 기본 화면이 "오늘"로 밀리는데, 오늘은 어느 스펙도 동기화해
- * 두지 않아 다른 스펙(symbol-master.spec.ts)의 "기본 화면은 커버된 날짜를 보여준다"
- * 전제를 깨뜨린다 — 실제로 그렇게 재현됐던 회귀다.
+ * 두 프로젝트는 서로 다른 과거 연도를 사용한다.
  */
 function holidayPeriodFor(projectName: string): { from: string; to: string } {
   // scripts/e2e-server.ts `HOLIDAY_BAS_DATES` 와 정확히 일치해야 한다 — 여기서
@@ -409,6 +385,7 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
   page,
 }, testInfo) => {
   const period = holidayPeriodFor(testInfo.project.name);
+  await prepareActionRawFixture(page, ['005930', '035720'], testInfo.project.name === 'mobile' ? [2023, 2024, 2025] : [2016, 2017, 2018]);
   // 1월 1일 리밸런스가 소급되면 닿는 직전 평일. 2017-12-31은 일요일이므로
   // 데스크톱 고정 연도는 12월 29일까지 더 소급된다.
   const previousTradingDate = testInfo.project.name === 'mobile'
@@ -461,9 +438,7 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
  * topN 을 2로 올려야 유니버스에 들어온다 — mvp-flow 의 다른 시나리오(TOP_N=1)는
  * 이 종목을 건드리지 않는다.
  *
- * 이 기간은 다른 시나리오의 PERIOD·holidayPeriodFor·SEED_DATE 와 겹치지 않는
- * 새 구간이다 — previewAndSyncUniverse 가 "기간 전체 동기화" 버튼을 실제로
- * 눌러야 하는 경로(이미 커버된 기간을 재사용하는 우회가 아니다)를 그대로 탄다.
+ * 이 기간은 다른 시나리오와 겹치지 않으며 준비 후 제출까지 확인한다.
  *
  * 검증 대상은 실행 완주 여부다: 900010 은 증권사 이름·봉을 전혀 갖지 않으므로
  * (등록은 유니버스 미리보기의 자동 등록이 전담한다), 미리보기가 이 종목을
@@ -473,6 +448,7 @@ test('rebalance schedule shows the applied trading day when a rebalance date fal
 test('backtest run completes using only KRX daily bars for a delisted stock', async ({ page }) => {
   // 기본 월간 리밸런스가 기간 안에 들어오도록 한 달 구간을 사용한다.
   const period = { from: '2026-04-01', to: '2026-04-30' };
+  await prepareActionRawFixture(page, ['005930', '900010'], [2024, 2025, 2026]);
 
   await login(page);
 

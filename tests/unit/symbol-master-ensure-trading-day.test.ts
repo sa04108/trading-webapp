@@ -1,11 +1,8 @@
 import { describe, expect } from 'vitest';
-import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import {
   SymbolMasterService,
-  type SymbolMasterServiceDeps,
 } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
-import type { TestApp } from '../helpers/test-app.js';
-import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
+import { test as it, type KrxUnitContext, type KrxUnitFactory } from '../helpers/krx-test-fixtures.js';
 import {
   baseInfoFixture,
   dailyFixture,
@@ -14,29 +11,17 @@ import {
 } from '../helpers/krx-fixtures.js';
 
 const API_KEY = 'SYMBOL_MASTER_ENSURE_TRADING_DAY_TEST_KEY';
-const NOOP_SLEEP = async () => undefined;
 
 interface Ctx {
-  readonly t: TestApp;
+  readonly db: KrxUnitContext['db'];
+  readonly clock: KrxUnitContext['clock'];
+  readonly logger: KrxUnitContext['logger'];
   readonly fake: KrxFakeServer;
   readonly svc: SymbolMasterService;
 }
 
-async function setup(krxApps: KrxTestFactory): Promise<Ctx> {
-  const { t, fake } = await krxApps.create();
-  const source = createKrxHistoricalUniverseSource(
-    { baseUrl: fake.baseUrl, apiKey: API_KEY, approvalExpiry: null },
-    t.container.clock,
-    t.container.logger,
-    { sleep: NOOP_SLEEP },
-  );
-  const deps: SymbolMasterServiceDeps = {
-    db: t.container.database.db,
-    source,
-    clock: t.container.clock,
-    logger: t.container.logger,
-  };
-  return { t, fake, svc: new SymbolMasterService(deps) };
+async function setup(krxUnits: KrxUnitFactory): Promise<Ctx> {
+  return krxUnits.create(API_KEY);
 }
 
 function setTradingDay(fake: KrxFakeServer, basDd: string): void {
@@ -45,8 +30,8 @@ function setTradingDay(fake: KrxFakeServer, basDd: string): void {
 }
 
 describe('SymbolMasterService.ensureTradingDay', () => {
-  it('휴장일 요청은 직전 거래일까지 소급 수집한다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('휴장일 요청은 직전 거래일까지 소급 수집한다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     // 2023-01-02 거래일, 2023-01-03·01-04 휴장 세팅 (01-03·01-04 는 기본값인 빈 응답으로 둔다)
     setTradingDay(ctx.fake, '20230102');
 
@@ -56,8 +41,8 @@ describe('SymbolMasterService.ensureTradingDay', () => {
     expect(result.ingestedDates).toEqual(['2023-01-04', '2023-01-03', '2023-01-02']);
   });
 
-  it('이미 거래일이면 소급하지 않는다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('이미 거래일이면 소급하지 않는다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     setTradingDay(ctx.fake, '20230102');
 
     const result = await ctx.svc.ensureTradingDay('2023-01-02');
@@ -66,8 +51,8 @@ describe('SymbolMasterService.ensureTradingDay', () => {
     expect(result.ingestedDates).toEqual(['2023-01-02']);
   });
 
-  it('커버는 됐지만 거래일 기록이 없으면 소급한다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('커버는 됐지만 거래일 기록이 없으면 소급한다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     setTradingDay(ctx.fake, '20230102');
     // 01-03 을 휴장으로 먼저 ingestDate — coverage 만 생기고 거래일 기록은 없다
     await ctx.svc.ingestDate('2023-01-03');
@@ -81,8 +66,8 @@ describe('SymbolMasterService.ensureTradingDay', () => {
     expect(result.ingestedDates).toEqual(['2023-01-02']);
   });
 
-  it('상한까지 못 찾으면 null 을 반환하고 던지지 않는다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('상한까지 못 찾으면 null 을 반환하고 던지지 않는다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     // 전 구간 휴장 세팅 (기본값이 이미 빈 응답이라 별도 세팅이 필요 없다)
 
     const result = await ctx.svc.ensureTradingDay('2023-01-10', 3);
@@ -91,8 +76,8 @@ describe('SymbolMasterService.ensureTradingDay', () => {
     expect(result.ingestedDates).toEqual(['2023-01-10', '2023-01-09', '2023-01-08', '2023-01-07']);
   });
 
-  it('서로 안 이어진 옛 coverage 섬의 거래일에 속지 않는다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('서로 안 이어진 옛 coverage 섬의 거래일에 속지 않는다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     // 2020-01-02 를 거래일로 수집해 둔다 — 아래 소급 대상(2023-01-10 근처)과 몇 년
     // 떨어진, 전혀 안 이어진 고립 coverage 섬이다.
     setTradingDay(ctx.fake, '20200102');

@@ -52,7 +52,7 @@ describe('backtest preparation HTTP/SSE', () => {
     standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자',
     market: 'KOSPI' as const, marketCapKrw: '500000000000000',
   }], withActionCoverage = true) => {
-    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], entries);
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], entries, [{ startDate: '2024-11-17', endDate: '2026-01-05' }]);
     seedDailyBars(ctx.container.database.db, entries.map((entry) => ({
       symbol: entry.shortCode,
       market: 'KR' as const,

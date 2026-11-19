@@ -1,14 +1,11 @@
 import { describe, expect, vi } from 'vitest';
 import type { Clock } from '../../src/runtime/shared/clock.js';
-import { createKrxHistoricalUniverseSource } from '../../src/server/modules/market-data/infrastructure/krx/krx-historical-universe-source.js';
 import type { KrxHistoricalUniverseSource } from '../../src/runtime/modules/market-data/application/ports.js';
 import { SymbolMasterBackfill } from '../../src/server/modules/market-data/application/symbol-master-backfill.js';
 import {
   SymbolMasterService,
-  type SymbolMasterServiceDeps,
 } from '../../src/runtime/modules/market-data/application/symbol-master-service.js';
-import type { TestApp } from '../helpers/test-app.js';
-import { test as it, type KrxTestFactory } from '../helpers/krx-test-fixtures.js';
+import { test as it, type KrxUnitContext, type KrxUnitFactory } from '../helpers/krx-test-fixtures.js';
 import {
   baseInfoFixture,
   dailyFixture,
@@ -17,7 +14,6 @@ import {
 } from '../helpers/krx-fixtures.js';
 
 const API_KEY = 'SYMBOL_MASTER_BACKFILL_TEST_KEY';
-const NOOP_SLEEP = async () => undefined;
 
 /**
  * 테스트가 "오늘" 을 임의로 앞뒤로 옮길 수 있게 하는 시계. 백필의 today 경계(cursor
@@ -37,29 +33,18 @@ function kstNoonMs(isoDate: string): number {
 }
 
 interface Ctx {
-  readonly t: TestApp;
+  readonly db: KrxUnitContext['db'];
+  readonly clock: KrxUnitContext['clock'];
+  readonly logger: KrxUnitContext['logger'];
   readonly fake: KrxFakeServer;
   readonly svc: SymbolMasterService;
   readonly source: KrxHistoricalUniverseSource;
   readonly sourceClock: MutableClock;
 }
 
-async function setup(krxApps: KrxTestFactory): Promise<Ctx> {
-  const { t, fake } = await krxApps.create();
+async function setup(krxUnits: KrxUnitFactory): Promise<Ctx> {
   const sourceClock = new MutableClock(kstNoonMs('2023-06-01'));
-  const source = createKrxHistoricalUniverseSource(
-    { baseUrl: fake.baseUrl, apiKey: API_KEY, approvalExpiry: null },
-    sourceClock,
-    t.container.logger,
-    { sleep: NOOP_SLEEP },
-  );
-  const deps: SymbolMasterServiceDeps = {
-    db: t.container.database.db,
-    source,
-    clock: t.container.clock,
-    logger: t.container.logger,
-  };
-  return { t, fake, svc: new SymbolMasterService(deps), source, sourceClock };
+  return { ...await krxUnits.create(API_KEY, sourceClock), sourceClock };
 }
 
 function setTradingDay(fake: KrxFakeServer, basDd: string): void {
@@ -68,11 +53,11 @@ function setTradingDay(fake: KrxFakeServer, basDd: string): void {
 }
 
 describe('SymbolMasterBackfill', () => {
-  it('마지막 날짜 수집 중 취소는 요청 종료까지 기다리며 새 작업을 보호한다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('마지막 날짜 수집 중 취소는 요청 종료까지 기다리며 새 작업을 보호한다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     let release!: () => void;
     const service = { ingestDate: vi.fn(() => new Promise<void>((resolve) => { release = resolve; })) } as unknown as SymbolMasterService;
-    const runner = new SymbolMasterBackfill({ service, source: ctx.source, clock: new MutableClock(kstNoonMs('2023-01-02')), logger: ctx.t.container.logger });
+    const runner = new SymbolMasterBackfill({ service, source: ctx.source, clock: new MutableClock(kstNoonMs('2023-01-02')), logger: ctx.logger });
     runner.start('2023-01-02', '2023-01-02');
     const id = runner.currentJob()!.id;
     expect(runner.cancelJob(id)).toBe(true);
@@ -87,8 +72,8 @@ describe('SymbolMasterBackfill', () => {
     await vi.waitFor(() => expect(runner.currentJob()?.status).toBe('COMPLETED'));
   });
 
-  it('3일 범위를 예산 안에서 끝까지 채우면 IDLE + cursorDate null 로 돌아온다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('3일 범위를 예산 안에서 끝까지 채우면 IDLE + cursorDate null 로 돌아온다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     setTradingDay(ctx.fake, '20230102');
     setTradingDay(ctx.fake, '20230103');
     setTradingDay(ctx.fake, '20230104');
@@ -98,7 +83,7 @@ describe('SymbolMasterBackfill', () => {
       service: ctx.svc,
       source: ctx.source,
       clock: backfillClock,
-      logger: ctx.t.container.logger,
+      logger: ctx.logger,
       dailyCallBudget: 100,
     });
 
@@ -117,8 +102,8 @@ describe('SymbolMasterBackfill', () => {
     expect(ctx.svc.isCovered('2023-01-04')).toBe(true);
   });
 
-  it('toDate 를 받으면 그 날짜까지만 채우고, 오늘이 더 뒤여도 거기서 멈춘다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('toDate 를 받으면 그 날짜까지만 채우고, 오늘이 더 뒤여도 거기서 멈춘다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     setTradingDay(ctx.fake, '20230102');
     setTradingDay(ctx.fake, '20230103');
     setTradingDay(ctx.fake, '20230104');
@@ -130,7 +115,7 @@ describe('SymbolMasterBackfill', () => {
       service: ctx.svc,
       source: ctx.source,
       clock: backfillClock,
-      logger: ctx.t.container.logger,
+      logger: ctx.logger,
       dailyCallBudget: 100,
     });
 
@@ -153,8 +138,8 @@ describe('SymbolMasterBackfill', () => {
 
   });
 
-  it('예산 소진으로 정지한 뒤 같은 fromDate 로 재개하면 이미 커버된 날은 공짜로 넘기고 완주한다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('예산 소진으로 정지한 뒤 같은 fromDate 로 재개하면 이미 커버된 날은 공짜로 넘기고 완주한다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     setTradingDay(ctx.fake, '20230102');
     setTradingDay(ctx.fake, '20230103');
 
@@ -165,7 +150,7 @@ describe('SymbolMasterBackfill', () => {
       service: ctx.svc,
       source: ctx.source,
       clock: backfillClock,
-      logger: ctx.t.container.logger,
+      logger: ctx.logger,
       dailyCallBudget: 1,
     });
 
@@ -187,8 +172,8 @@ describe('SymbolMasterBackfill', () => {
     expect(ctx.svc.isCovered('2023-01-03')).toBe(true);
   });
 
-  it('429 응답은 BUDGET_EXHAUSTED 로 취급하고 cursorDate 를 재개 지점으로 남긴다', async ({ krxApps }) => {
-    const ctx = await setup(krxApps);
+  it('429 응답은 BUDGET_EXHAUSTED 로 취급하고 cursorDate 를 재개 지점으로 남긴다', async ({ krxUnits }) => {
+    const ctx = await setup(krxUnits);
     ctx.fake.setResponse('stk_bydd_trd', '20230102', { status: 429, body: krxEnvelope([]) });
 
     const backfillClock = new MutableClock(kstNoonMs('2023-01-02'));
@@ -196,7 +181,7 @@ describe('SymbolMasterBackfill', () => {
       service: ctx.svc,
       source: ctx.source,
       clock: backfillClock,
-      logger: ctx.t.container.logger,
+      logger: ctx.logger,
       dailyCallBudget: 100,
     });
 

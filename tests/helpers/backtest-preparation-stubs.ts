@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { readRuntimeVersions } from '../../src/runtime/shared/runtime-versions.js';
 import type { BacktestRequest } from '../../src/shared/schemas/backtest-request.js';
 import { symbolMasterCoverage } from '../../src/runtime/shared/db/schema.js';
+import { buildBacktestPreparationPlan } from '../../src/runtime/modules/backtest/application/backtest-preparation-plan.js';
 import type { TestApp } from './test-app.js';
 
 export type RestorePreparationStub = () => void;
@@ -58,6 +59,19 @@ export async function withSparseQueuePreparation<T>(
   input: BacktestRequest,
   operation: () => Promise<T>,
 ): Promise<T> {
+  const strategy = ctx.container.strategyRegistry.get(input.strategyId);
+  if (!strategy) throw new Error(`등록되지 않은 전략: ${input.strategyId}`);
+  const plan = buildBacktestPreparationPlan({ request: input, strategy, finalUniverseSymbols: ['fixture'], resolutionNeeds: {
+    factSymbols: [], actionSymbols: [], priceSymbols: [], selectionMetricDates: [], priceRange: null,
+  } });
+  if (!ctx.container.symbolMasterService.isRangeCovered(plan.price.from, plan.price.to)) {
+    ctx.container.database.db.insert(symbolMasterCoverage).values({
+      startDate: plan.price.from,
+      endDate: plan.price.to,
+      collectionVersion: readRuntimeVersions().collectionVersion,
+      syncedAtMs: ctx.container.clock.now(),
+    }).run();
+  }
   const periods = new AsyncLocalStorage<BacktestRequest['period']>();
   const preparation = ctx.container.backtestPreparationOrchestrator;
   const coverage = ctx.container.candleCoverageService;
@@ -96,13 +110,6 @@ export async function withSparseQueuePreparation<T>(
         : [],
     ]));
   };
-
-  ctx.container.database.db.insert(symbolMasterCoverage).values({
-    startDate: input.period.from,
-    endDate: input.period.to,
-    collectionVersion: readRuntimeVersions().collectionVersion,
-    syncedAtMs: ctx.container.clock.now(),
-  }).run();
 
   try {
     return await periods.run(input.period, operation);

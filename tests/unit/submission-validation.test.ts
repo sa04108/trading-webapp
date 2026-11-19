@@ -91,6 +91,12 @@ const it = base.extend<{ prepared: TestApp['container'] }>({
 });
 
 describe('createSubmissionValidator', () => {
+  it('종목 마스터 fixture는 지정하지 않은 날짜를 수집 완료로 표시하지 않는다', ({ prepared }) => {
+    expect(prepared.symbolMasterService.isRangeCovered('2026-01-05', '2026-01-06')).toBe(true);
+    expect(prepared.symbolMasterService.isRangeCovered('2026-01-04', '2026-01-06')).toBe(false);
+    expect(prepared.symbolMasterService.isRangeCovered('2026-01-07', '2026-01-07')).toBe(false);
+  });
+
   it('gap 0 전략은 coverage를 요청 안에서 공유하고 타임라인을 읽지 않는다', async ({ prepared }) => {
     const coverage = prepared.candleCoverageService;
     const getCoverage = vi.spyOn(coverage, 'getCoverage');

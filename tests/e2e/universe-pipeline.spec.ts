@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 // 로그인과 테스트 간 위저드 초안 격리는 한 곳에서 관리한다.
 import { login } from './login';
 import { advanceFromPeriod } from './backtest-wizard';
+import { prepareActionRawFixture } from './dart-fixture';
 
 /**
  * Task 12 — 단계형 유니버스 편집기(Task 9)와 신규 재무전략 두 개(Task 8)의 위저드
@@ -10,12 +11,7 @@ import { advanceFromPeriod } from './backtest-wizard';
  * 통합 테스트(`backtest-universe-preview.test.ts`, `backtest-universe-rule-run.test.ts`)
  * 가 촘촘히 덮는다 — 여기서는 그 결과가 실제 화면에 그대로 나타나는지만 본다.
  *
- * mvp-flow.spec.ts 와 같은 서버를 공유한다(playwright.config workers:1) — 그 파일이
- * 쓰는 기간(PERIOD·holidayPeriodFor·delisted-stock 기간)과 겹치지 않는 새 구간을 쓴다.
- * 이 스펙은 새 데이터셋 카드나 별도 등록 종목을 만들지 않는다 — 위저드가 자동
- * 등록하는 종목은 005930 하나뿐이고, mvp-flow.spec.ts 도 같은 종목을 이미 등록해
- * 두므로 정리할 것이 없다(그 파일이 지우는 900010 과 달리 005930 은 여러 스펙이
- * 공유해도 되는 항상-존재 종목이다).
+ * 실제 서버에서 준비·제출하므로 각 프로젝트의 준비 기간을 분리한다.
  */
 /**
  * to는 적어도 한 달 뒤까지 — 되돌린 주기(매월 1회)가 이 기간 안에 최소 한 번은
@@ -231,6 +227,7 @@ test('단계 추가·N 기본 복사·cascade 안내·순서 변경·주기 초�
   page,
 }, testInfo) => {
   const period = pipelinePeriodFor(testInfo.project.name);
+  await prepareActionRawFixture(page, ['005930', '035720', '900010'], [2024, 2025, 2026]);
   await login(page);
   await page.goto('/backtests/new');
   await page.getByRole('button', { name: /전고점 돌파/ }).click();

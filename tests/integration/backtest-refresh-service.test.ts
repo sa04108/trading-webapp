@@ -61,9 +61,12 @@ describe('영속 데이터 업데이트 작업', () => {
   });
 
   it('재시작 후 새 준비 결과로 이어 실행한다', async () => {
+    const queue = new JobQueue(db, { now: () => 1000 });
+    db.sqlite.prepare("UPDATE backtest_jobs SET status='COMPLETED', completed_at_ms=1000 WHERE id=?").run(source);
     const job = service.create('alice', 'request', source, clone);
     await service.pump();
     expect(service.get('alice', job.id)).toMatchObject({ status: 'PREPARING', preparationJobId: 'fresh-prep' });
+    expect(queue.deleteJob(source)).toBe(false);
     await service.stop();
     prepStatus = 'COMPLETED';
     const resumed = makeService();
@@ -72,6 +75,8 @@ describe('영속 데이터 업데이트 작업', () => {
     expect(deps.buildSubmission).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ preparationJobId: 'fresh-prep' }));
     expect(startCount).toBe(1);
     expect(db.sqlite.prepare('SELECT preparation_job_id FROM backtest_jobs WHERE id=?').get(source)).toEqual({ preparation_job_id: 'original-prep' });
+    expect(queue.deleteJob(source)).toBe(true);
+    expect(queue.getJob(source)).toBeNull();
   });
 
   it('기존 최적화 홀드아웃 요청은 새 설정으로 재전송해도 같은 작업을 이어간다', async () => {

@@ -68,7 +68,7 @@ const it = agentBase.extend<{ scenario: Scenario }>({
       // 새 배정만 막고 이미 실행 중인 자식의 메모리 압력은 만들지 않는다.
       return { ...capacity, slots: localAvailable ? capacity.slots : running };
     });
-    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [{ standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '1000000000' }]);
+    seedSymbolMasterUniverse(ctx.container, ['2026-01-05'], [{ standardCode: 'KR7005930003', shortCode: '005930', name: '삼성전자', market: 'KOSPI', marketCapKrw: '1000000000' }], [{ startDate: '2024-11-17', endDate: '2026-01-05' }]);
     registerSymbols(ctx.container, 'KR', ['005930']);
     seedDailyBars(ctx.container.database.db, [{ symbol: '005930', market: 'KR', timeframe: '1d', tsMs: Date.parse('2026-01-05T00:00:00Z'), open: 100, high: 110, low: 90, close: 105, volume: 1000 }]);
     await seedCorporateActionCoverage(ctx.container, ['005930'], [2024, 2025, 2026]);

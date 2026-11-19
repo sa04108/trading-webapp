@@ -273,9 +273,11 @@ try {
   foreach ($scenario in @('unrelated', 'invalid-image')) {
     $script:Calls = @()
     $script:ExistingLabel = if ($scenario -eq 'unrelated') { 'other-app' } else { 'quant-agent' }
-    $script:OldImageId = 'invalid'
+    $script:OldImageId = if ($scenario -eq 'invalid-image') { 'invalid' } else { 'sha256:' + ('b' * 64) }
     $failedAsExpected = $false
     try { Invoke-InstallerFromHybrid $installerPath } catch { $failedAsExpected = $true }
+    if ((Find-CallIndex ' container inspect --format .*Config.Labels.app') -lt 0) { throw "The $scenario scenario must reach the existing container." }
+    if ($scenario -eq 'invalid-image' -and (Find-CallIndex ' container inspect --format .*Image') -lt 0) { throw 'The invalid image must be inspected.' }
     if (-not $failedAsExpected -or ($script:Calls | Where-Object { $_ -match ' (stop|rm|run) ' })) { throw "The $scenario container must be preserved." }
   }
   $script:ExistingLabel = 'quant-agent'

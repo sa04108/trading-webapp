@@ -78,7 +78,7 @@ describe('preparation reference lifecycle', () => {
         name: 'SK하이닉스',
         market: 'KOSPI',
         marketCapKrw: '100000000000000',
-      }]);
+      }], [{ startDate: '2024-11-17', endDate: '2026-01-05' }]);
       for (const symbol of ['005930', '000660']) {
         seedDailyBars(ctx.container.database.db, [{
           symbol,

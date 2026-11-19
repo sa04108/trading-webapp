@@ -124,6 +124,10 @@ describe('독립 구간 검증 실행', () => {
     await until(() => service.get(experiment.id)!.status === 'COMPLETED');
     expect(queue.listTopLevelJobs().map((job) => job.id)).toEqual([sourceId]);
     expect(new PreparationReferenceService(database).collect()).toBe(0);
+    expect(queue.deleteJob(sourceId)).toBe(false);
+    expect(queue.deleteJob(test.jobId!)).toBe(false);
+    expect(queue.getJob(sourceId)).not.toBeNull();
+    expect(queue.getJob(test.jobId!)).not.toBeNull();
     expect(service.delete(experiment.id)).toBe(true);
     expect(queue.getJob(sourceId)).not.toBeNull();
     expect(queue.getJob(test.jobId!)).toBeNull();

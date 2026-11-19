@@ -204,6 +204,7 @@ async function checkContractFields(
   }
 
   for (const [name, fields] of fieldsByEndpoint) {
+    if (fields.length === 0) failure ??= `${name} 원문 행이 없어 필드를 확인할 수 없습니다.`;
     console.log(`     ${name} 원문 필드: ${fields.join(', ') || '(행 없음)'}`);
   }
 
@@ -279,9 +280,10 @@ async function checkYearlyClassification(
   for (const year of years) {
     const date = `${year}-01-04`;
     try {
-      const rows = (
-        await Promise.all(MARKETS.map((market) => source.fetchIssueBaseInfo(market, date)))
-      ).flat();
+      const byMarket = await Promise.all(MARKETS.map((market) => source.fetchIssueBaseInfo(market, date)));
+      const missing = MARKETS.filter((_, index) => byMarket[index]!.length === 0);
+      if (missing.length > 0) throw new Error(`${missing.join(', ')} 분류 표본이 없습니다.`);
+      const rows = byMarket.flat();
       for (const row of rows) {
         uniqueBySection.securityGroup.add(row.securityGroupRaw);
         if (row.stockKindRaw !== null) uniqueBySection.stockKind.add(row.stockKindRaw);

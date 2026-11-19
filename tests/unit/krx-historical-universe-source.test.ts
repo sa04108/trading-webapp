@@ -141,6 +141,33 @@ function expectDetachedSafeError(
 }
 
 describe('KRX 과거 유니버스 어댑터', () => {
+  it('공식 개장일은 두 시장 모두 OPEN인 경우에만 확인한다', () => {
+    const { fetchImpl } = createFetch(() => krxJsonResponse(krxEnvelope([])));
+    const sourceFor = (kospi: 'OPEN' | 'CLOSED' | 'UNKNOWN', kosdaq: 'OPEN' | 'CLOSED' | 'UNKNOWN') =>
+      createKrxHistoricalUniverseSource({ baseUrl: BASE_URL, apiKey: API_KEY, approvalExpiry: null }, fixedClock(), createCapturingLogger().logger, {
+        fetchImpl, tradingCalendar: { classify: (_date, market) => ({ state: market === 'KOSPI' ? kospi : kosdaq, evidence: '테스트 달력' }) },
+      });
+    expect(sourceFor('OPEN', 'OPEN').isOfficialTradingDay?.('2026-08-03')).toBe(true);
+    expect(sourceFor('CLOSED', 'OPEN').isOfficialTradingDay?.('2026-08-03')).toBe(false);
+    expect(sourceFor('OPEN', 'CLOSED').isOfficialTradingDay?.('2026-08-03')).toBe(false);
+    expect(sourceFor('OPEN', 'UNKNOWN').isOfficialTradingDay?.('2026-08-03')).toBe(false);
+    expect(createConfiguredSource({ fetchImpl }).isOfficialTradingDay?.('2026-08-03')).toBe(false);
+  });
+
+  it('기존 원문이 필요한 복구 조회는 승인 정책 없이 새 HTTP 수집을 하지 않는다', async () => {
+    const { fetchImpl, calls } = createFetch(() => krxJsonResponse(krxEnvelope([])));
+    const source = createConfiguredSource({ fetchImpl });
+    for (const market of ['KOSPI', 'KOSDAQ'] as const) {
+      await expect(source.fetchIssueBaseInfo(market, '2026-08-01', { requireExisting: true }))
+        .rejects.toMatchObject({ reason: 'BLOCKED_SOURCE_REQUIREMENT' });
+      await expect(source.fetchDailyTrades(market, '2026-08-01', { requireExisting: true }))
+        .rejects.toMatchObject({ reason: 'BLOCKED_SOURCE_REQUIREMENT' });
+    }
+    expect(calls).toEqual([]);
+    await expect(source.fetchIssueBaseInfo('KOSPI', '2026-08-01')).resolves.toEqual([]);
+    expect(calls).toHaveLength(1);
+  });
+
   it('설정이 없으면 두 조회가 미설정 오류를 던지고 HTTP를 호출하지 않는다', async () => {
     const { fetchImpl, calls } = createFetch(() => krxJsonResponse(krxEnvelope([])));
     const source = createKrxHistoricalUniverseSource(null, fixedClock(), createCapturingLogger().logger, {
