@@ -429,7 +429,7 @@ export class TradingService {
     }
   }
   private async sync() {
-    const selected=this.control().accountId;
+    const { accountId: selected, executorToken } = this.control();
     try {
       const accounts=await this.deps.broker.accounts();
       this.db.update(tradingControl).set({accountsJson:JSON.stringify(accounts)}).where(eq(tradingControl.singleton,this.slot)).run();
@@ -448,8 +448,13 @@ export class TradingService {
     }catch(error){
       if(this.stopping)throw error;
       const message=error instanceof Error?error.message:"토스 계좌 동기화 실패";
-      this.db.update(tradingControl).set({error:message}).where(eq(tradingControl.singleton,this.slot)).run();
-      const row=this.current();if(row?.status==="ACTIVE")this.fail(message);
+      this.deps.database.sqlite.transaction(() => {
+        // 이전 실행기의 지연된 응답으로 인계가 끝난 모의계좌를 중지하지 않는다.
+        const owner = this.control().executorToken;
+        if (this.isPaper && (owner !== executorToken || (owner !== null && owner !== this.token))) return;
+        this.db.update(tradingControl).set({ error: message }).where(eq(tradingControl.singleton, this.slot)).run();
+        if (this.current()?.status === "ACTIVE") this.fail(message);
+      }).immediate();
       throw new TradingError(message,"BROKER_SYNC_FAILED",503);
     }
   }
@@ -576,9 +581,10 @@ export class TradingService {
       this.event(`사용자가 불명확한 주문을 ${found?"증권사 주문 번호와 연결":"미접수로 확인"} · 자동 재주문 없음`,actor,"WARNING",row.deploymentId);
     });return this.snapshot();
   }
-  private fail(message:string) {
+  private fail(message:string, expectedExecutor?: string) {
     let notify=false;
     this.deps.database.sqlite.transaction(()=>{
+      if (expectedExecutor !== undefined && this.control().executorToken !== expectedExecutor) return;
       const row=this.current();if(!row||row.status==="INACTIVE")return;
       const stopping=row.status==="STOPPING";
       const duplicate=(row.status==="ERROR"||stopping)&&row.lastError===message;
@@ -668,7 +674,18 @@ export class TradingService {
             this.saveOrder(order,saved?{brokerOrderId:order.id,status:"OPEN",error:null}:{status:"REJECTED",error:"모의 주문 전송 전 실행기 중단"});
           } else this.saveOrder(order,{status:"UNKNOWN",error:"이전 실행기 중단으로 접수 여부 확인 필요"});
         }
-        const row=this.current();if(row?.status==="ACTIVE"&&!minuteSetup(row))this.fail("실행기가 재시작되었습니다. 잔고·주문을 확인한 후 직접 다시 활성화하세요.");
+        const row = this.current();
+        if (row?.status === "ACTIVE" && !minuteSetup(row)) {
+          if (this.isPaper) {
+            // 저장된 판단은 다시 주문하지 않는다. 전송 전 의도를 닫고 첫 판단 전에 잔고와 체결을 대조한다.
+            for (const order of this.pending(row.id).filter(order => order.status === "CREATED")) {
+              this.saveOrder(order, { status: "CANCELLED", error: "전송 전 실행기 중단" });
+            }
+            this.db.update(tradingControl).set({ syncedAtMs: null }).where(eq(tradingControl.singleton, this.slot)).run();
+          } else {
+            this.fail("실행기가 재시작되었습니다. 잔고·주문을 확인한 후 직접 다시 활성화하세요.");
+          }
+        }
       }return true;
     }).immediate();
   }
@@ -765,7 +782,7 @@ export class TradingService {
   private async trade(row:DeploymentRow) {
     if(this.now()-(this.control().syncedAtMs??0)>20_000)await this.refresh();
     const control=this.control();const current=this.current();
-    if(current?.id!==row.id||current.status!=="ACTIVE")return;
+    if(control.executorToken!==this.token||current?.id!==row.id||current.status!=="ACTIVE")return;
     if(!control.accountId||!control.syncedAtMs||this.now()-control.syncedAtMs>SYNC_MAX_AGE_MS)throw new TradingError("계좌 잔고가 최신 상태가 아닙니다.");
     const deployment=this.deployment(current);const portfolio=this.portfolio(current);
     const perf=this.snapshot().performance;
@@ -940,7 +957,10 @@ export class TradingService {
       if(row?.status==="STOPPING"||(row?.status==="ERROR"&&this.pending(row.id).length))await this.finishStop(row);
       else if(row?.status==="ACTIVE")await this.trade(row);
       else if(this.control().accountId&&this.now()-(this.control().syncedAtMs??0)>30_000)await this.refresh();
-    }catch(error){if(this.stopping||(error instanceof TradingError&&error.code==="ORDER_GATE_CLOSED"))return;const message=error instanceof Error?error.message:"매매 처리 실패";this.fail(message);}
+    } catch (error) {
+      if (this.stopping || (error instanceof TradingError && error.code === "ORDER_GATE_CLOSED")) return;
+      this.fail(error instanceof Error ? error.message : "매매 처리 실패", this.token);
+    }
   }
   async close() {
     this.stopping=true;if(this.timer)clearInterval(this.timer);await this.running;await this.refreshing?.catch(()=>{});await this.deps.engine.close();await this.preparing;

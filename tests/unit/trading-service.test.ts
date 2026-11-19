@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { z } from "zod";
 import { openDatabase } from "../../src/runtime/shared/db/database.js";
 import type { AnyTradingStrategy } from "../../src/runtime/modules/strategy/domain/strategy.js";
@@ -18,8 +21,8 @@ const artifact = (artifactHash: string, version: string, latest: boolean): Tradi
 const cleanup: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0)) await close(); });
 
-function fixture(paper = false) {
-  const database = openDatabase(":memory:");
+function fixture(paper = false, databasePath = ":memory:") {
+  const database = openDatabase(databasePath);
   let now = 1_800_000_000_000;
   let list = [artifact(oldHash, "1", true)];
   let holdings: BrokerHolding[] = [];
@@ -466,19 +469,66 @@ describe("모의투자 실행 경계", () => {
     expect(f.service.snapshot().deployment).toMatchObject({status:"INACTIVE",lastError:null});
     expect(f.database.sqlite.prepare("SELECT count(*) AS n FROM paper_trading_orders").get()).toEqual({n:0});
   });
-  it("체결 직후 프로세스가 중단되어도 원장과 대조하여 중복 없이 복구한다", async () => {
-    const f=fixture(true);await paperActive(f);await f.service.tick();
-    const order=f.service.snapshot().orders[0]!;
-    f.database.sqlite.prepare("UPDATE trading_orders SET status = 'SENDING', broker_order_id = NULL, payload_json = ? WHERE id = ?").run(JSON.stringify({...order,status:"SENDING",brokerOrderId:null}),order.id);
+  it("임대를 넘긴 일봉 모의 실행기의 늦은 시세 오류는 재개된 계좌를 중지시키지 않는다", async () => {
+    const f = fixture(true);
+    await paperActive(f);
+    await f.service.tick();
+    const next = new TradingService({ database: f.database, artifacts: f.artifacts, engine: f.engine, now: f.now,
+      broker: createPaperTradingBroker({ database: f.database, marketData: f.broker, now: f.now }) });
+    cleanup.unshift(() => next.close());
+    let enter!: () => void, rejectQuote!: (error: Error) => void;
+    const entered = new Promise<void>(resolve => { enter = resolve; });
+    const quote = new Promise<never>((_resolve, reject) => { rejectQuote = reject; });
+    f.broker.quotes.mockImplementationOnce(async () => { enter(); return quote; });
+    f.advance(30_001);
+    const delayed = f.service.tick();
+    await entered;
+    try {
+      f.advance(120_001);
+      await next.tick();
+    } finally {
+      rejectQuote(new Error("이전 실행기의 시세 조회 실패"));
+      await delayed;
+    }
+    expect(next.snapshot()).toMatchObject({
+      broker: { error: null }, deployment: { status: "ACTIVE", lastError: null },
+      orders: [{ status: "FILLED", filledQuantity: 10 }], positions: [{ quantity: 10 }],
+    });
+  });
+  it("일봉 모의계좌 재시작 시 원장을 대조하고 다음 신호부터 자동매매를 이어간다", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "daily-paper-restart-"));
+    const path = join(dir, "operations.sqlite");
+    const f = fixture(true, path);
+    cleanup.push(() => rm(dir, { recursive: true, force: true }));
+    await paperActive(f);
+    await f.service.tick();
+    const order = f.service.snapshot().orders[0]!;
+    f.database.sqlite.prepare("UPDATE trading_orders SET status = 'SENDING', broker_order_id = NULL, payload_json = ? WHERE id = ?")
+      .run(JSON.stringify({ ...order, status: "SENDING", brokerOrderId: null }), order.id);
+    // 같은 판단에서 저장만 하고 아직 전송하지 못한 두 번째 주문을 남긴다.
+    const unsentId = "b346b960-11fb-4558-b040-d062ec3e5480";
+    f.database.sqlite.prepare("INSERT INTO trading_orders (id, deployment_id, account_id, decision_key, payload_json, status, created_at_ms, updated_at_ms) VALUES (?, ?, 'PAPER', '2:1', ?, 'CREATED', ?, ?)")
+      .run(unsentId, order.deploymentId, JSON.stringify({ ...order, id: unsentId, status: "CREATED", brokerOrderId: null }), f.now(), f.now());
     await f.service.close();
-    const broker=createPaperTradingBroker({database:f.database,marketData:f.broker,now:f.now});
-    const service=new TradingService({database:f.database,broker,artifacts:f.artifacts,engine:f.engine,now:f.now});
-    cleanup.unshift(()=>service.close());
-    await service.tick();await service.refresh();
-    expect(service.snapshot()).toMatchObject({deployment:{status:"INACTIVE"},positions:[{quantity:10}],orders:[{status:"FILLED"}]});
-    service.deactivate(service.snapshot().revision,"user");
+
+    const database = openDatabase(path);
+    const broker = createPaperTradingBroker({ database, marketData: f.broker, now: f.now });
+    const service = new TradingService({ database, broker, artifacts: f.artifacts, engine: f.engine, now: f.now });
+    cleanup.unshift(async () => { await service.close(); database.close(); });
+    await service.tick();
+    const resumed = service.snapshot();
+    expect(resumed.deployment).toMatchObject({ id: order.deploymentId, status: "ACTIVE", lastDecisionAtMs: 2, lastError: null });
+    expect(resumed.positions).toMatchObject([{ quantity: 10 }]);
+    expect(resumed.orders.find(o => o.id === order.id)).toMatchObject({ status: "FILLED", filledQuantity: 10 });
+    expect(resumed.orders.find(o => o.id === unsentId)?.status).toBe("CANCELLED");
+    expect(database.sqlite.prepare("SELECT count(*) AS n FROM paper_trading_orders").get()).toEqual({ n: 1 });
+
+    vi.mocked(f.engine.evaluate).mockResolvedValue({ checkpoint: "next", barTsMs: 3, orders: [{ side: "BUY", symbol: "005930", quantity: 1 }] });
+    await service.tick();
+    expect(await service.refresh()).toMatchObject({ deployment: { status: "ACTIVE", lastDecisionAtMs: 3 }, positions: [{ quantity: 11 }] });
+    expect(database.sqlite.prepare("SELECT count(*) AS n FROM paper_trading_orders").get()).toEqual({ n: 2 });
+    service.deactivate(service.snapshot().revision, "user");
     expect(service.snapshot().deployment?.status).toBe("INACTIVE");
-    expect(f.database.sqlite.prepare("SELECT count(*) AS n FROM paper_trading_orders").get()).toEqual({n:1});
   });
 });
 
