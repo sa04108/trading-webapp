@@ -12,7 +12,7 @@ function fixture() {
     source: vi.fn(async (id: string) => ({ id })),
     quote: vi.fn(async (symbol: string) => ({ symbol, price: 1000, timestampMs: 123 })),
     register: vi.fn(), update: vi.fn(), remove: vi.fn(), version: vi.fn(),
-    activate: vi.fn(), resolveOrder: vi.fn(), deactivate: vi.fn(), refresh: vi.fn(), selectAccount: vi.fn(), prepareData: vi.fn(),
+    requestToggle: vi.fn(), resolveOrder: vi.fn(), refresh: vi.fn(), selectAccount: vi.fn(), prepareData: vi.fn(),
   };
   registerTradingRoutes(app, { defaultAccount:service } as unknown as TradingPresets, async (request, reply) => {
     if (request.headers.authorization !== "test") { await reply.code(401).send({ error: "unauthorized" }); return; }
@@ -52,7 +52,7 @@ describe("거래 경로 인증과 요청 계약", () => {
       const response = await app.inject({ method, url, payload: {} });
       expect(response.statusCode, `${method} ${url}`).toBe(401);
     }
-    for (const method of [service.register, service.update, service.remove, service.version, service.activate, service.resolveOrder, service.deactivate, service.refresh, service.selectAccount, service.prepareData]) expect(method).not.toHaveBeenCalled();
+    for (const method of [service.register, service.update, service.remove, service.version, service.requestToggle, service.resolveOrder, service.refresh, service.selectAccount, service.prepareData]) expect(method).not.toHaveBeenCalled();
     await app.close();
   });
   it("데이터 복구는 리비전을 요구하고 서버가 결정한 대상만 비동기로 준비한다", async () => {
@@ -74,11 +74,17 @@ describe("거래 경로 인증과 요청 계약", () => {
       const response = await app.inject({ method: "POST", url: `/trading/${action}`, headers: auth, payload });
       expect(response.statusCode).toBe(400);
     }
-    expect(service[action]).not.toHaveBeenCalled();
-    service[action].mockReturnValue({ revision: 4 });
+    expect(service.requestToggle).not.toHaveBeenCalled();
+    service.requestToggle.mockResolvedValue({ revision: 4 });
     const response = await app.inject({ method: "POST", url: `/trading/${action}`, headers: auth, payload: { expectedRevision: 3, acknowledged: true } });
     expect(response.statusCode).toBe(200);
-    expect(service[action]).toHaveBeenCalledWith(3, "user-1");
+    expect(service.requestToggle).toHaveBeenCalledWith(action, 3, "user-1");
+    // 실행이 끝나지 않아도 브라우저는 접수 결과를 받고 페이지를 떠날 수 있다.
+    service.requestToggle.mockReturnValueOnce(new Promise<void>(() => {}));
+    const accepted = await app.inject({ method: "POST", url: `/trading/${action}`, headers: { ...auth, prefer: "respond-async" }, payload: { expectedRevision: 3, acknowledged: true } });
+    expect(accepted.statusCode).toBe(202);
+    expect(accepted.json()).toEqual({ revision: 3 });
+    expect(accepted.headers["preference-applied"]).toBe("respond-async");
     await app.close();
   });
   it("시세는 인증된 유효 종목만 조회하고 계좌 연결 경로는 제공하지 않는다", async () => {

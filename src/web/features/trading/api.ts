@@ -6,7 +6,7 @@ export const tradingKey = (presetId: string | null) => ["trading", "snapshot", p
 export const tradingPresetsKey = ["trading", "presets"] as const;
 export const tradingPath = (path: string, presetId: string | null) => presetId === null ? path : `${path}?presetId=${encodeURIComponent(presetId)}`;
 export function useTrading(presetId: string | null = null) {
-  return useQuery({ queryKey: tradingKey(presetId), queryFn: () => api<TradingSnapshot>(tradingPath("/trading", presetId)), refetchInterval: 5_000 });
+  return useQuery({ queryKey: tradingKey(presetId), queryFn: () => api<TradingSnapshot>(tradingPath("/trading", presetId)), refetchInterval: query => query.state.data?.toggleJob?.status === "RUNNING" ? 1_000 : 5_000 });
 }
 export function useTradingPresets() {
   return useQuery({ queryKey: tradingPresetsKey, queryFn: () => api<{ presets: TradingPresetSummary[]; archived?: TradingPresetSummary[]; defaultAccountPresetId?: string | null }>("/trading/presets"), refetchInterval: 5_000 });

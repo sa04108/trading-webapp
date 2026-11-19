@@ -41,6 +41,27 @@ export const tradingDeployments = sqliteTable("trading_deployments", {
   check("trading_deployment_status", sql`${table.status} IN ('INACTIVE', 'ACTIVE', 'STOPPING', 'ERROR')`),
 ]);
 
+/** 사용자가 요청한 자동매매 전환은 계좌별로 한 건씩 처리한다. */
+export const tradingToggleJobs = sqliteTable("trading_toggle_jobs", {
+  id: text("id").primaryKey(),
+  accountSlot: integer("account_slot").notNull(),
+  deploymentId: text("deployment_id").notNull(),
+  ownerId: text("owner_id").notNull(),
+  action: text("action", { enum: ["activate", "deactivate"] }).notNull(),
+  title: text("title").notNull(),
+  status: text("status", { enum: ["RUNNING", "COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED"] }).notNull(),
+  message: text("message").notNull(),
+  executorToken: text("executor_token").notNull(),
+  expectedRevision: integer("expected_revision").notNull(),
+  createdAtMs: integer("created_at_ms").notNull(),
+  updatedAtMs: integer("updated_at_ms").notNull(),
+  finishedAtMs: integer("finished_at_ms"),
+}, table => [
+  uniqueIndex("trading_toggle_active_slot").on(table.accountSlot).where(sql`${table.finishedAtMs} IS NULL`),
+  index("trading_toggle_deployment_created").on(table.deploymentId, table.createdAtMs),
+  index("trading_toggle_finished").on(table.finishedAtMs),
+]);
+
 export const tradingOrders = sqliteTable("trading_orders", {
   id: text("id").primaryKey(),
   deploymentId: text("deployment_id").notNull().references(() => tradingDeployments.id, { onDelete:"restrict" }),

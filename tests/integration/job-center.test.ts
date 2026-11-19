@@ -25,6 +25,35 @@ function preparation(container: Container, id: string, status: string, updatedAt
 }
 
 describe("작업 관찰·취소·이력 경계", () => {
+  // 개별 전환 API만으로는 작업 센터의 소유권, 실패 사유와 이력 삭제 계약을 검증할 수 없다.
+  it("자동 매매 전환 작업을 소유자별로 관찰하고 종료 이력만 숨긴다", async ({ ctx, cookie, admin }) => {
+    const now = Date.now();
+    const owner = ctx.container.userRepository.findByUsername(admin.username)!.id;
+    const insert = ctx.container.database.sqlite.prepare(`INSERT INTO trading_toggle_jobs
+      (id, deployment_id, owner_id, action, title, status, message, created_at_ms, updated_at_ms, finished_at_ms, executor_token, expected_revision, account_slot)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`);
+    insert.run("active", "account / 1", owner, "activate", "모의 계좌", "RUNNING", "연결 중", now, now, null, "token", 1);
+    insert.run("failed", "account / 1", owner, "deactivate", "모의 계좌", "FAILED", "연결 실패", now, now, now, "token", 1);
+    insert.run("foreign", "foreign", "other-owner", "activate", "다른 계좌", "FAILED", "비공개 오류", now, now, now, "token", 1);
+    const get = (path: string) => ctx.app.inject({ method: "GET", url: `/api/v1/jobs${path}`, cookies: { session: cookie } });
+    const list = (await get("?status=all")).json<JobsResponse>();
+    expect(list).toMatchObject({ total: 2, activeCount: 1, finishedCount: 1, selectionCount: 1 });
+    expect(list.jobs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "trading-toggle:active", kind: "trading-toggle", title: "모의 계좌 · 자동 매매 켜기", phase: "연결 중", cancellable: false, link: "/trading?presetId=account%20%2F%201" }),
+      expect.objectContaining({ id: "trading-toggle:failed", title: "모의 계좌 · 자동 매매 끄기", status: "FAILED", error: "연결 실패", cancellable: false }),
+    ]));
+    expect((await get("/trading-toggle:foreign")).statusCode).toBe(404);
+    expect((await get("?status=error")).json<JobsResponse>().jobs.map((job) => job.id)).toEqual(["trading-toggle:failed"]);
+    expect((await ctx.app.inject({ method: "POST", url: "/api/v1/jobs/trading-toggle:active/cancel", cookies: { session: cookie } })).statusCode).toBe(409);
+    const remove = (ids: string[]) => ctx.app.inject({ method: "DELETE", url: "/api/v1/jobs", cookies: { session: cookie }, payload: { ids } });
+    expect((await remove(["trading-toggle:active"])).statusCode).toBe(409);
+    expect((await remove(["trading-toggle:foreign"])).statusCode).toBe(404);
+    expect((await remove(["trading-toggle:failed"])).statusCode).toBe(204);
+    expect((await get("/trading-toggle:failed")).statusCode).toBe(404);
+    expect((await get("?status=all")).json<JobsResponse>()).toMatchObject({ total: 1, activeCount: 1, finishedCount: 0 });
+    expect(ctx.container.database.sqlite.prepare("SELECT status, message FROM trading_toggle_jobs WHERE id=?").get("failed")).toEqual({ status: "FAILED", message: "연결 실패" });
+  });
+
   it("분봉 검증의 완료와 미평가 수를 작업 센터에 표시한다", async ({ ctx, cookie, admin }) => {
     const now = Date.now(), ownerId = ctx.container.userRepository.findByUsername(admin.username)!.id;
     const db = ctx.container.database.db;

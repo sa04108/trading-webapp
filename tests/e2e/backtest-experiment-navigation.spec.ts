@@ -58,3 +58,32 @@ test("원본 요약에서 기간검증으로 이동하고 직접 열린 자식�
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(0);
   }
 });
+
+// 원본 자금과 설정을 새 계좌에 복사하고 취소나 새로고침이 추가 계좌를 만들지 않아야 한다.
+test("일봉 결과에서 새 모의투자의 설정을 자동으로 연다", async ({ page }) => {
+  await setup(page);
+  const artifact = { strategyId: request.strategyId, name: "횡단면 모멘텀", version: "1", artifactHash: "a".repeat(64), executionVersion: "b".repeat(64), latest: true, parameterSchema: { type: "object", properties: {} } };
+  const setupValue = { strategyId: request.strategyId, artifactHash: artifact.artifactHash, parameters: {}, universeRule: request.universeRule, timeframe: "1d", budgetKrw: 10_000_000, maxPositions: 5, maxPositionPercent: 100, dailyLossLimitPercent: 3, maxOrderKrw: 1_000_000, maxSlippageBps: 50, randomSeed: 42, sourceJobId: sourceId };
+  const deployment = { ...setupValue, id: "paper-daily", name: artifact.name, version: "1", status: "INACTIVE", lastError: null, activity: "대기" };
+  const snapshot = { revision: 1, deployment, dataPreparation: null, paperCapital: { initialCashKrw: 10_000_000, canEdit: true }, broker: { provider: "PAPER", configured: true, accounts: [], selectedAccountId: "PAPER", lastSyncAtMs: null, error: null }, account: null, performance: null, positions: [], orders: [], events: [], blockers: [] };
+  const requests: unknown[] = [];
+  await page.route(`**/api/v1/trading/source/${sourceId}`, (route) => route.fulfill({ json: { setup: setupValue, error: null } }));
+  await page.route("**/api/v1/trading/presets", (route) => {
+    if (route.request().method() === "POST") { requests.push(route.request().postDataJSON()); return route.fulfill({ status: 201, json: { id: "paper-daily", snapshot } }); }
+    return route.fulfill({ json: { presets: [{ id: "paper-daily", title: artifact.name, status: "INACTIVE" }] } });
+  });
+  await page.route("**/api/v1/trading/strategies", (route) => route.fulfill({ json: { strategies: [artifact] } }));
+  await page.route("**/api/v1/trading?**", (route) => route.fulfill({ json: snapshot }));
+  await page.route("**/api/v1/trading", (route) => route.fulfill({ json: { ...snapshot, deployment: null } }));
+  await page.goto(`/backtests/${sourceId}`);
+  await page.getByRole("button", { name: "이 설정으로 매매 준비" }).click();
+  const dialog = page.getByRole("dialog", { name: "매매 설정" });
+  await expect(dialog.getByLabel("초기 모의자금 (원)")).toHaveValue("10000000");
+  await expect(dialog.getByLabel("운용 예산 (원)")).toHaveValue("10000000");
+  expect(requests).toEqual([{ ...setupValue, initialCashKrw: 10_000_000, expectedRevision: 0, requestId: expect.any(String) }]);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "자동 매매 OFF" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "자동 매매 OFF" })).toBeVisible();
+  expect(requests).toHaveLength(1);
+});

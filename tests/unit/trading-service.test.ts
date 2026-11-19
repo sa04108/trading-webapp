@@ -111,6 +111,59 @@ describe("모의투자 실행 경계", () => {
     await f.service.register(setup, f.service.snapshot().revision, "user");
     await f.service.activate(f.service.snapshot().revision, "user");
   }
+  it("활성화가 처리 중인 동안 중복 요청을 합치고 뒤이은 OFF가 늦은 워밍업보다 우선한다", async () => {
+    const f = fixture(true);
+    const registered = await f.service.register(setup, f.service.snapshot().revision, "operator");
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const warming = new Promise<void>(resolve => { started = resolve; });
+    vi.mocked(f.engine.evaluate).mockImplementationOnce(async () => {
+      started();
+      await gate;
+      return { checkpoint: "late", barTsMs: 1, orders: [] };
+    });
+    const activation = f.service.requestToggle("activate", registered.revision, "operator");
+    try {
+      await warming;
+      const pending = f.service.snapshot().toggleJob!;
+      expect(pending).toMatchObject({ action: "activate", status: "RUNNING" });
+      expect(f.service.requestToggle("activate", registered.revision, "operator")).toBe(activation);
+      const stopped = await f.service.requestToggle("deactivate", registered.revision, "operator");
+      expect(stopped).toMatchObject({ deployment: { status: "INACTIVE" }, toggleJob: { action: "deactivate", status: "COMPLETED" } });
+    } finally { release(); }
+    await expect(activation).rejects.toThrow("변경");
+    expect(f.service.snapshot()).toMatchObject({ deployment: { status: "INACTIVE" }, orders: [] });
+    expect(f.database.sqlite.prepare("SELECT action, status FROM trading_toggle_jobs ORDER BY rowid").all()).toEqual([
+      { action: "activate", status: "CANCELLED" }, { action: "deactivate", status: "COMPLETED" },
+    ]);
+    expect(f.engine.evaluate).toHaveBeenCalledTimes(1);
+  });
+  it("이전 실행기가 임대를 다시 얻어도 이미 중단한 워밍업으로 켜지지 않는다", async () => {
+    const f = fixture(true);
+    const initial = await f.service.register(setup, f.service.snapshot().revision, "operator");
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const warming = new Promise<void>(resolve => { started = resolve; });
+    vi.mocked(f.engine.evaluate).mockImplementationOnce(async () => {
+      started();
+      await gate;
+      return { checkpoint: "old", barTsMs: 1, orders: [] };
+    });
+    const activation = f.service.requestToggle("activate", initial.revision, "operator");
+    const next = new TradingService({ database: f.database, broker: f.executionBroker, artifacts: f.artifacts, engine: f.engine, now: f.now });
+    try {
+      await warming;
+      f.advance(120_001);
+      await next.tick();
+      expect(next.snapshot().toggleJob).toMatchObject({ status: "INTERRUPTED" });
+      await next.close();
+      await f.service.tick();
+    } finally { release(); await next.close(); }
+    await expect(activation).rejects.toThrow("변경");
+    expect(f.service.snapshot()).toMatchObject({ deployment: { status: "INACTIVE", lastDecisionAtMs: null }, orders: [], toggleJob: { status: "INTERRUPTED" } });
+  });
   const repairNeed: TradingDataNeed = { masterDates: [], priceRange: null, financial: null, actions: null, entries: [], repairs: [{ kind: "CORPORATE_ACTION", symbol: "005930", year: 2025 }] };
   it("활성화 중 결손은 자동 수집·재검증하고 완료 후에도 OFF와 잔고를 유지한다", async () => {
     const f = fixture(true); await f.service.tick();
@@ -121,9 +174,10 @@ describe("모의투자 실행 경계", () => {
     const gate = { promise: new Promise<void>((resolve) => { release = resolve; }), resolve: () => release() };
     cleanup.unshift(async () => gate.resolve());
     f.prepareData.mockImplementationOnce(async (_need, progress) => { progress("005930 2025년 자본변동 복구 중"); await gate.promise; });
-    const started = await f.service.activate(f.service.snapshot().revision, "user");
+    const started = await f.service.requestToggle("activate", f.service.snapshot().revision, "user");
     expect(started.deployment?.status).toBe("INACTIVE");
     expect(started.dataPreparation?.status).toBe("RUNNING");
+    expect(started.toggleJob).toMatchObject({ action: "activate", status: "RUNNING" });
     await vi.waitFor(() => expect(f.service.snapshot().dataPreparation?.message).toContain("005930 2025년"));
     expect(f.prepareData.mock.calls[0]?.[0]).toEqual(repairNeed);
     expect(f.service.prepareData(f.service.snapshot().revision, "user").dataPreparation?.status).toBe("RUNNING");
@@ -134,8 +188,9 @@ describe("모의투자 실행 경계", () => {
     expect(evaluate.mock.calls.at(-1)?.[0].warmupOnly).toBe(true);
     expect(f.service.snapshot()).toMatchObject({ deployment: { status: "INACTIVE", lastDecisionAtMs: null, lastError: null }, orders: [], positions: [], account: { cashBuyingPower: 100_000_000 } });
     expect(f.broker.place).not.toHaveBeenCalled();
-    await f.service.activate(f.service.snapshot().revision, "user");
-    expect(f.service.snapshot().deployment?.status).toBe("ACTIVE");
+    expect(f.service.snapshot().toggleJob).toMatchObject({ status: "FAILED", message: expect.stringContaining("다시 ON") });
+    const enabled = await f.service.requestToggle("activate", f.service.snapshot().revision, "user");
+    expect(enabled).toMatchObject({ deployment: { status: "ACTIVE" }, toggleJob: { action: "activate", status: "COMPLETED" } });
   });
   it("동일 결손을 반복 수집하지 않으며 명시적 재시도에서 다시 검증한다", async () => {
     const f = fixture(true); await f.service.tick();
@@ -722,10 +777,11 @@ describe("실매매 전략 생명주기", () => {
   it("취소 접수 후 원주문이 열려 있으면 중지 상태를 유지하고 종료 확인 후 비활성화한다", async () => {
     const f = fixture(); await active(f); await f.service.tick();
     f.broker.cancel.mockImplementation(async () => {});
-    f.service.deactivate(f.service.snapshot().revision, "user"); await f.service.tick();
+    await f.service.requestToggle("deactivate", f.service.snapshot().revision, "user"); await f.service.tick();
     expect(f.broker.cancel).toHaveBeenCalledTimes(1);
     expect(f.service.snapshot().deployment?.status).toBe("STOPPING");
     expect(f.service.snapshot().orders[0]?.status).not.toBe("CANCELLED");
+    expect(f.service.snapshot().toggleJob).toMatchObject({ action: "deactivate", status: "RUNNING" });
     await f.service.tick();
     expect(f.service.snapshot().deployment?.status).toBe("STOPPING");
     expect(f.broker.place).toHaveBeenCalledTimes(1);
@@ -733,6 +789,7 @@ describe("실매매 전략 생명주기", () => {
     f.advance(15_001); await f.service.tick();
     expect(f.service.snapshot().deployment?.status).toBe("INACTIVE");
     expect(f.service.snapshot().orders[0]?.status).toBe("CANCELLED");
+    expect(f.service.snapshot().toggleJob).toMatchObject({ action: "deactivate", status: "COMPLETED" });
     expect(f.broker.place).toHaveBeenCalledTimes(1);
   });
 
