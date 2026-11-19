@@ -379,7 +379,7 @@ export class TradingService {
   }
   async version(hash:string,parameters:Record<string,unknown>,expectedRevision:number,actor:string) {
     const before=this.current();if(!before)throw new TradingError("등록된 전략이 없습니다.");
-    if (minuteSetup(before)) throw new TradingError("분봉 실행 버전은 원본 백테스트에 고정됩니다.");
+    if (minuteSetup(before)) throw new TradingError("분봉 실행 버전은 모의투자를 생성할 때 고정됩니다.");
     const input={...tradingSetupSchema.parse(JSON.parse(before.setupJson)),artifactHash:hash,parameters};
     const {setup,artifact}=await this.validate(input);
     this.change(expectedRevision,()=>{

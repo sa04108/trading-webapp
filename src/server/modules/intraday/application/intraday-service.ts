@@ -1,6 +1,5 @@
 import { intradayRunRequestSchema } from "../../../../shared/schemas/intraday-strategies.js";
 import { createHash, randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { readRiskFreeRateHistory } from "../../../../runtime/modules/market-data/infrastructure/sqlite-risk-free-rate-store.js";
 import { readRuntimeVersions } from "../../../../runtime/shared/runtime-versions.js";
 import { and, asc, count, desc, eq, inArray, sql } from "drizzle-orm";
@@ -765,36 +764,6 @@ export class IntradayService {
   private calculationRevision(barRevision: string, rateVersion = readRiskFreeRateHistory(this.options.db).version): string {
     // 기간 검증은 봉뿐 아니라 Sharpe에 사용한 금리표도 동일하게 고정한다.
     return createHash("sha256").update(`${barRevision}:${rateVersion}`).digest("hex");
-  }
-  private readonly paperReplays = new Map<string, Promise<boolean>>();
-
-  /** 이전 실행 버전은 원본 기간의 신호·체결·평가 곡선을 현재 엔진으로 재현한 경우에만 가져온다. */
-  async verifyPaperReplay(run: IntradayRun): Promise<boolean> {
-    const original = run.result;
-    if (!original || !original.executionVersion || !original.processedBars) return false;
-    const existing = this.paperReplays.get(run.id);
-    if (existing) return existing;
-    this.checkCapacity();
-    const key = randomUUID(), controller = new AbortController();
-    this.controllers.set(key, controller);
-    const replay = this.runQueue.then(async () => {
-      controller.signal.throwIfAborted();
-      const request = original.request;
-      const { fromMs, toMs } = this.bounds(request.period, true);
-      const { bars, revision } = await this.options.store.read(request.symbol, fromMs, toMs);
-      if (bars.length < original.processedBars) return false;
-      const result = await this.options.execute({ request, bars, dataRevision: revision,
-        tradingDates: this.tradingDates(request.period), riskFreeRates: readRiskFreeRateHistory(this.options.db) }, controller.signal);
-      return result.executionVersion === readRuntimeVersions().executionVersion &&
-        result.processedBars === original.processedBars && result.metrics.totalCosts === original.metrics.totalCosts &&
-        isDeepStrictEqual(result.position, original.position) && isDeepStrictEqual(result.signals, original.signals) &&
-        isDeepStrictEqual(result.orderEvents, original.orderEvents) && isDeepStrictEqual(result.fills, original.fills) &&
-        isDeepStrictEqual(result.equity, original.equity);
-    }).finally(() => { this.controllers.delete(key); this.paperReplays.delete(run.id); });
-    this.paperReplays.set(run.id, replay);
-    this.runQueue = replay.then(() => {}, () => {});
-    this.track(this.runQueue);
-    return replay;
   }
 
   getRunState(ownerId: string, id: string): { status: string; error: string | null } {

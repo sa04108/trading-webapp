@@ -20,7 +20,6 @@ export class TradingPresets {
     private readonly createService: (slot: number) => TradingService,
     private readonly reportError: (error: unknown) => void,
     private readonly getRun?: (ownerId: string, id: string) => IntradayRun,
-    private readonly verifyReplay?: (run: IntradayRun) => Promise<boolean>,
   ) {
     this.defaultAccount = this.account(1);
   }
@@ -89,8 +88,8 @@ export class TradingPresets {
     const request = parsed.data;
     const artifact = getIntradayStrategy(request.strategyId);
     const executionVersion = readRuntimeVersions().executionVersion;
-    if (run.result.strategyVersion !== artifact.version || (run.result.executionVersion !== executionVersion && !await this.verifyReplay?.(run))) {
-      throw new TradingError("실행 버전이 달라 동일 체결을 보장할 수 없습니다. 현재 버전으로 분봉 백테스트를 다시 실행해 주세요.", "UNSUPPORTED_EXECUTION", 422);
+    if (run.result.strategyVersion !== artifact.version) {
+      throw new TradingError("원본 분봉 전략 버전을 지원하지 않습니다. 현재 전략 버전으로 백테스트를 다시 실행해 주세요.", "UNSUPPORTED_EXECUTION", 422);
     }
     const setup: IntradayTradingSetup = { kind: "intraday", sourceRunId: run.id, executionVersion, request, title: input.title };
     return this.createAccount(setup, request.initialCash, input.requestId,
