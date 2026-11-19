@@ -1,5 +1,5 @@
+import { HistoryResultCard, HistoryResultDetails } from "./history-result-card";
 import { BacktestDeleteDialog } from "./backtest-delete-dialog";
-import { ExperimentLinks, hasExperimentRecords } from "./experiment-links";
 import { useHistoryQueries } from "./use-history-queries";
 import { useHistoryEditing } from "./history-editing";
 import {
@@ -7,7 +7,6 @@ import {
 } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
-import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { HistoryLayout, HistoryMetricCells, HistoryTable } from "./history-table";
@@ -30,8 +29,6 @@ import type { BacktestHistoryExtras } from "../../../shared/schemas/backtest-exp
 import { BacktestHeader, NewBacktestButton } from "./backtest-header";
 import {
   formatDateTime,
-  formatSignedPct,
-  pnlClass,
   timeframeLabel,
 } from "@/lib/format";
 import { resolveJobTimeframe } from "./job-timeframe";
@@ -77,107 +74,32 @@ export function BacktestJobCard({
   const activity = job.progress;
   const progress = activity ? executionProgressPercent(activity) : barsProgress;
 
-  const card = (
-    <Card className="relative transition-colors hover:bg-muted/40">
-      <CardContent className="space-y-2 py-4">
-        {job.status !== "COMPLETED" || (!editing && hasExperimentRecords(summary)) ? <div className="flex items-start justify-between gap-2">
-          <StatusBadge status={job.status} />
-          {!editing ? <ExperimentLinks jobId={job.id} summary={summary} /> : null}
-        </div> : null}
-        <div className="flex items-baseline justify-between gap-2 whitespace-nowrap">
-          {editing ? (
-            <p className="text-xs font-medium">{historyPeriod(job.request.period.from, job.request.period.to)}</p>
-          ) : (
-            <Link className="text-xs font-medium underline after:absolute after:inset-0" to={`/backtests/${job.id}`}>
-              {historyPeriod(job.request.period.from, job.request.period.to)}
-            </Link>
-          )}
-          <time
-            className="shrink-0 text-[11px] text-muted-foreground tabular-nums"
-            dateTime={new Date(job.completedAtMs ?? job.createdAtMs).toISOString()}
-            title={formatDateTime(job.completedAtMs ?? job.createdAtMs)}
-          >
-            {formatDateTime(job.completedAtMs ?? job.createdAtMs).replace(/^\d{2}/, "")}
-          </time>
-        </div>
-        <p className="text-xs text-muted-foreground">
-          {formatUniverseRuleSummary(job.request.universeRule)}
-          {timeframe ? ` · ${timeframeLabel(timeframe)}` : ""}
-        </p>
-        {running && (progress !== null || activity) ? (
-          <div className="space-y-1">
-            {progress !== null ? (
-              <>
-                <Progress value={progress} aria-label={`진행률 ${progress}%`} />
-                <p className="text-xs text-muted-foreground">{progress}%</p>
-              </>
-            ) : null}
-            {activity ? (
-              <ExecutionProgressSummary progress={activity} compact />
-            ) : null}
-          </div>
-        ) : null}
-        {job.status === "COMPLETED" && job.metrics ? (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <p className="text-xs text-muted-foreground">수익률</p>
-                <p
-                  className={`text-xl font-semibold tabular-nums ${pnlClass(job.metrics.totalReturnPct)}`}
-                >
-                  {formatSignedPct(job.metrics.totalReturnPct)}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">CAGR</p>
-                <p
-                  className={`text-xl font-semibold tabular-nums ${pnlClass(job.metrics.cagrPct)}`}
-                >
-                  {formatSignedPct(job.metrics.cagrPct)}
-                </p>
-              </div>
-            </div>
-            <div className="flex justify-between gap-2 border-t pt-2 text-xs text-muted-foreground">
-              <span>MDD {formatSignedPct(job.metrics.maxDrawdownPct)}</span>
-              <span>매도 체결 {job.metrics.tradeCount}건</span>
-            </div>
-          </div>
-        ) : null}
-        {job.error ? (
-          <p className="break-words text-xs text-destructive">{job.error}</p>
-        ) : null}
-      </CardContent>
-    </Card>
-  );
-
-  if (!editing) {
-    return card;
-  }
-
-  if (!(deletable ?? isTerminal(job.status))) {
-    return (
-      <div className="flex items-start gap-3">
-        <span className="mt-5 size-4 shrink-0" aria-hidden="true" />
-        <div className="min-w-0 flex-1">{card}</div>
-      </div>
-    );
-  }
-
-  const checkboxId = `backtest-${job.id}`;
   return (
-    <div className="flex items-start gap-3">
-      <Checkbox
-        id={checkboxId}
-        checked={selected}
-        disabled={selectionDisabled}
-        onCheckedChange={onToggle}
-        aria-label={`${formatDateTime(job.createdAtMs)} 백테스트 선택`}
-        className="mt-5"
-      />
-      <label htmlFor={checkboxId} className="min-w-0 flex-1 cursor-pointer">
-        {card}
-      </label>
-    </div>
+    <HistoryResultCard
+      id={job.id}
+      href={`/backtests/${job.id}`}
+      period={historyPeriod(job.request.period.from, job.request.period.to)}
+      date={job.completedAtMs ?? job.createdAtMs}
+      description={`${formatUniverseRuleSummary(job.request.universeRule)}${timeframe ? ` · ${timeframeLabel(timeframe)}` : ""}`}
+      status={job.status === "COMPLETED" ? null : <StatusBadge status={job.status} />}
+      summary={summary}
+      editing={editing}
+      selected={selected}
+      deletable={deletable ?? isTerminal(job.status)}
+      selectionDisabled={selectionDisabled}
+      onToggle={onToggle}
+      error={job.error}
+      metrics={job.status === "COMPLETED" && job.metrics ? {
+        returnPct: job.metrics.totalReturnPct, cagrPct: job.metrics.cagrPct,
+        mddPct: job.metrics.maxDrawdownPct, trades: job.metrics.tradeCount,
+      } : undefined}
+      progress={running && (progress !== null || activity) ? (
+        <div className="space-y-1">
+          {progress !== null ? <><Progress value={progress} aria-label={`진행률 ${progress}%`} /><p className="text-xs text-muted-foreground">{progress}%</p></> : null}
+          {activity ? <ExecutionProgressSummary progress={activity} compact /> : null}
+        </div>
+      ) : null}
+    />
   );
 }
 
@@ -217,7 +139,7 @@ export function BacktestsPage() {
     }),
   });
   const visibleJobs = pages.flatMap((query, index) =>
-    controls.collapsed(groups.data?.groups[index]?.strategyId ?? "") || query.isPlaceholderData
+    controls.collapsed(groups.data?.groups[index]?.strategyId ?? "")
       ? []
       : (query.data?.jobs ?? []),
   );
@@ -359,10 +281,12 @@ export function BacktestsPage() {
                                 </Link>
                               )}
                             </div>
-                            {job.status !== "COMPLETED" || (!editing && hasExperimentRecords(extrasBySource.get(job.id))) ? <div className="mt-1 flex items-center gap-1 text-muted-foreground">
-                              <StatusBadge status={job.status} />
-                              {!editing ? <ExperimentLinks jobId={job.id} summary={extrasBySource.get(job.id)} /> : null}
-                            </div> : null}
+                            <HistoryResultDetails
+                              id={job.id}
+                              status={job.status === "COMPLETED" ? null : <StatusBadge status={job.status} />}
+                              summary={extrasBySource.get(job.id)}
+                              editing={editing}
+                            />
                             {job.error ? (
                               <p className="text-destructive">
                                 {job.error}

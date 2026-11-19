@@ -1,3 +1,4 @@
+import { HistoryResultCard } from '../../src/web/features/backtests/history-result-card.js';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
@@ -77,6 +78,22 @@ function job(id: string, status: JobSummary['status']): JobSummary {
 }
 
 describe('백테스트 목록', () => {
+  it('분봉 결과 카드는 수익률과 기간 링크를 표시하고 실행 중 항목은 선택할 수 없다', () => {
+    const props = {
+      id: 'run 1', href: '/backtests/intraday/run%201', period: '2025.01.01 ~ 2025.02.01',
+      date: Date.UTC(2025, 1, 1), description: '005930 · 5m', status: null,
+      mode: 'intraday' as const, editing: false, selected: false, deletable: true, onToggle: () => {},
+      metrics: { returnPct: 12, cagrPct: null, mddPct: -5 },
+    };
+    const html = renderToStaticMarkup(<MemoryRouter><HistoryResultCard {...props} /></MemoryRouter>);
+    expect(html).toContain('href="/backtests/intraday/run%201"');
+    expect(html).toContain('+12.00%');
+    expect(html).toContain('005930 · 5m');
+    const editing = renderToStaticMarkup(<MemoryRouter><HistoryResultCard {...props} editing deletable={false} /></MemoryRouter>);
+    expect(editing).not.toContain('type="checkbox"');
+    expect(editing).not.toContain('href="/backtests/intraday/run%201"');
+  });
+
   it('완료 응답을 이전 실행 진행률보다 우선하고 늦은 실행 응답으로 되돌리지 않는다', () => {
     const running = { ...job('same', 'RUNNING'), progressEpoch: 'epoch', progressRevision: 9 };
     const completed = { ...job('same', 'COMPLETED'), progressEpoch: 'epoch', progressRevision: 1 };
