@@ -113,14 +113,22 @@ export function TradingPage() {
   const state = useLocation().state as { tradingRequestId?: string } | null;
   const requestId = state?.tradingRequestId ?? null;
   const autoOpen = search.get("settings") === "open";
-  return <TradingSession key={JSON.stringify([sourceId, sourceRunId, presetId, requestId])} sourceId={sourceId} sourceRunId={sourceRunId} presetId={presetId} requestId={requestId} autoOpen={autoOpen} selectPreset={(id, open = false) => setSearch(id === null ? {} : { presetId: id, ...(open ? { settings: "open" } : {}) }, { replace: open })} clearAutoOpen={() => setSearch(presetId ? { presetId } : {}, { replace: true })} />;
+  return <TradingSession key={JSON.stringify([sourceId, sourceRunId, presetId, requestId])} sourceId={sourceId} sourceRunId={sourceRunId} presetId={presetId} requestId={requestId} autoOpen={autoOpen} selectPreset={(id, options) => setSearch(id === null ? {} : { presetId: id, ...(options?.open ? { settings: "open" } : {}) }, { replace: options?.replace })} clearAutoOpen={() => setSearch(presetId ? { presetId } : {}, { replace: true })} />;
 }
 
-function TradingSession({ sourceId, sourceRunId, presetId, requestId, autoOpen, selectPreset, clearAutoOpen }: { sourceId: string | null; sourceRunId: string | null; presetId: string | null; requestId: string | null; autoOpen: boolean; selectPreset: (id: string | null, open?: boolean) => void; clearAutoOpen: () => void }) {
+function TradingSession({ sourceId, sourceRunId, presetId, requestId, autoOpen, selectPreset, clearAutoOpen }: { sourceId: string | null; sourceRunId: string | null; presetId: string | null; requestId: string | null; autoOpen: boolean; selectPreset: (id: string | null, options?: { open?: boolean; replace?: boolean }) => void; clearAutoOpen: () => void }) {
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const snapshot = useTrading(presetId);
   const presets = useTradingPresets();
+  const selectedId = presetId ?? presets.data?.defaultAccountPresetId;
+  const hasSelection = presets.data?.presets.some(preset => preset.id === selectedId) ?? false;
+  useEffect(() => {
+    if (!presets.data || presets.isFetching || sourceId || sourceRunId || requestId) return;
+    const available = presets.data.presets;
+    if (presetId && !available.some(preset => preset.id === presetId)) selectPreset(available[0]?.id ?? null, { replace: true });
+    else if (!presetId && !presets.data.defaultAccountPresetId && available[0]) selectPreset(available[0].id, { replace: true });
+  }, [presetId, sourceId, sourceRunId, requestId, presets.data, presets.isFetching, selectPreset]);
   const artifacts = useTradingArtifacts();
   const source = useTradingSource(sourceId);
   const minuteSource = useQuery({ queryKey: ["intraday-run", sourceRunId], queryFn: () => api<IntradayRun>(`/intraday/runs/${encodeURIComponent(sourceRunId!)}`), enabled: sourceRunId !== null });
@@ -206,7 +214,7 @@ function TradingSession({ sourceId, sourceRunId, presetId, requestId, autoOpen, 
       const result = await api<{ id: string; snapshot: TradingSnapshot }>(sourceRunId ? "/trading/intraday-presets" : "/trading/presets", { method: "POST", body: JSON.stringify(body) });
       client.setQueryData(tradingKey(result.id), result.snapshot);
       void client.invalidateQueries({ queryKey: tradingPresetsKey });
-      if (mounted.current) selectPreset(result.id, true);
+      if (mounted.current) selectPreset(result.id, { open: true, replace: true });
     } catch (e) {
       handoffStarted.current = false;
       if (mounted.current) setHandoffError(e instanceof Error ? e.message : "모의투자를 만들지 못했습니다.");
@@ -216,11 +224,11 @@ function TradingSession({ sourceId, sourceRunId, presetId, requestId, autoOpen, 
     if (requestId && ((sourceRunId && minuteRequest) || (sourceId && source.data?.setup))) void handoff();
   }, [requestId, sourceRunId, minuteRequest, sourceId, source.data?.setup]);
   useEffect(() => {
-    if (autoOpen && data && (artifacts.data || minuteDeployment)) {
+    if (autoOpen && hasSelection && data && (artifacts.data || minuteDeployment)) {
       openSettings();
       clearAutoOpen();
     }
-  }, [autoOpen, data, artifacts.data, minuteDeployment]);
+  }, [autoOpen, hasSelection, data, artifacts.data, minuteDeployment]);
   const write = useMutation({ mutationFn: async ({ path, method, body, create }: { path: string; method: string; body: unknown; create?: boolean }) => create ? api<{ id: string; snapshot: TradingSnapshot }>(path, { method, body: JSON.stringify(body) }) : api<TradingSnapshot>(tradingPath(path, presetId), {
     method, body: JSON.stringify(body),
     headers: path === "/trading/activate" || path === "/trading/deactivate" ? { Prefer: "respond-async" } : undefined,
@@ -236,6 +244,15 @@ function TradingSession({ sourceId, sourceRunId, presetId, requestId, autoOpen, 
     }
     if (variables.path === "/trading/activate" || variables.path === "/trading/deactivate") {
       void client.invalidateQueries({ queryKey: ["jobs"] });
+    }
+    if (variables.path === "/trading/strategy" && variables.method === "DELETE") {
+      const removedId = presetId ?? presets.data?.defaultAccountPresetId;
+      const remaining = presets.data?.presets.find(preset => preset.id !== removedId);
+      await client.invalidateQueries({ queryKey: tradingPresetsKey });
+      setDialog(null);
+      if (mounted.current) selectPreset(remaining?.id ?? null, { replace: true });
+      void client.invalidateQueries({ queryKey: tradingKey(null), exact: true });
+      return;
     }
     await client.cancelQueries({ queryKey: tradingKey(presetId), exact: true });
     client.setQueryData(tradingKey(presetId), result as TradingSnapshot);
@@ -279,8 +296,16 @@ function TradingSession({ sourceId, sourceRunId, presetId, requestId, autoOpen, 
     submit(creating ? "/trading/presets" : "/trading/strategy", creating || !deployment ? "POST" : "PUT", body, creating);
   };
   const setField = <K extends keyof TradingSetup>(key: K, value: TradingSetup[K]) => setDraft((old) => old ? { ...old, [key]: value } : old);
-  const defaultPresetId = presets.data?.defaultAccountPresetId;
-  const accountSelector = <div className="flex flex-wrap items-center gap-2"><Label htmlFor="trading-preset">모의투자 선택</Label><select id="trading-preset" className="max-w-full rounded-md border bg-background px-3 py-2 text-sm" value={presetId ?? defaultPresetId ?? ""} disabled={write.isPending} onChange={(event) => selectPreset(event.target.value || null)}>{!defaultPresetId ? <option value="">기본 계좌</option> : null}{presets.data?.presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.title}</option>)}{presets.data?.archived?.map((preset) => <option key={preset.id} value={preset.id}>{preset.title} (전략 제거됨)</option>)}</select><Button variant="outline" disabled={!data || write.isPending || (!sourceRunId && !artifacts.data) || (!!sourceId && !source.data?.setup) || (!!sourceRunId && !minuteRequest)} onClick={openNew}>새 모의투자</Button></div>;
+  const accountSelector = <div className="flex flex-wrap items-center gap-2">
+    <Label htmlFor="trading-preset">모의투자 선택</Label>
+    <select id="trading-preset" className="max-w-full rounded-md border bg-background px-3 py-2 text-sm"
+      value={selectedId ?? ""} disabled={write.isPending || !presets.data?.presets.length}
+      onChange={event => selectPreset(event.target.value)}>
+      {!presets.data?.presets.length ? <option value="">선택할 모의투자 없음</option> : null}
+      {presets.data?.presets.map(preset => <option key={preset.id} value={preset.id}>{preset.title}</option>)}
+    </select>
+    <Button variant="outline" disabled={!data || write.isPending || (!sourceRunId && !artifacts.data) || (!!sourceId && !source.data?.setup) || (!!sourceRunId && !minuteRequest)} onClick={openNew}>새 모의투자</Button>
+  </div>;
   if (requestId) {
     const sourceFailed = sourceId ? source.isError || (source.isSuccess && !source.data?.setup) : sourceRunId ? minuteSource.isError || (minuteSource.isSuccess && !minuteRequest) : true;
     return <div className="space-y-3"><h2 className="text-lg font-semibold">매매</h2>{handoffError ? <Alert variant="destructive" role="alert"><AlertDescription>{handoffError} <Button variant="outline" size="sm" onClick={() => void handoff()}>다시 시도</Button></AlertDescription></Alert> : sourceFailed ? <Alert variant="destructive" role="alert"><AlertDescription>{source.data?.error ?? "완료된 백테스트 설정을 불러오지 못했습니다."} <Button variant="outline" size="sm" onClick={() => void (sourceId ? source.refetch() : minuteSource.refetch())}>다시 시도</Button></AlertDescription></Alert> : <p role="status">백테스트 설정으로 모의투자를 준비하는 중…</p>}</div>;
@@ -296,9 +321,13 @@ function TradingSession({ sourceId, sourceRunId, presetId, requestId, autoOpen, 
   const savedTitle = (minuteDeployment ? minuteDeployment.title : draft?.title) ?? "";
   return <div className="space-y-4"><h2 className="text-lg font-semibold">매매</h2>
     {accountSelector}
+    {presets.error ? <Alert variant="destructive"><AlertDescription>모의투자 목록을 불러오지 못했습니다.</AlertDescription></Alert> : null}
     {snapshot.error ? <Alert variant="destructive"><AlertDescription>최신 상태를 불러오지 못했습니다.</AlertDescription></Alert> : null}
+    {presets.data && presets.data.presets.length === 0 ? <p>등록된 모의투자가 없습니다. 새 모의투자를 만들어 주세요.</p> : null}
+    {hasSelection ? <>
     <Card><CardHeader><CardTitle>모의 투자 현황</CardTitle>{data.broker.selectedAccountId && <CardDescription>모의계좌 · {data.broker.selectedAccountId}{minuteDeployment?.lastDecisionAtMs ? ` · 평가 기준 ${date(minuteDeployment.lastDecisionAtMs)} 확정 봉 종가` : ""}</CardDescription>}</CardHeader><CardContent className="space-y-2 text-sm"><p>초기 모의 자금 {money(data.paperCapital?.initialCashKrw)} · {minuteDeployment ? "확정된 1분 OHLCV로 모의 체결하며 수수료와 세금이 적용됩니다." : "최신 시세로 모의 체결하며 수수료와 세금이 적용됩니다."}</p><p>주문 가능 {money(data.account?.cashBuyingPower)} · 보유 평가액 {money(data.account?.marketValue)} · 평가손익 {money(data.account?.unrealizedPnl)} · 총 손익 {money(data.performance?.totalPnl)} · 추정 수익률 {data.performance?.returnPercent == null ? "—" : `${data.performance.returnPercent.toFixed(2)}%`}</p></CardContent></Card>
     <Card><CardHeader><CardTitle>전략 상태</CardTitle><CardDescription>{deployment ? `${deployment.name} · ${deployment.version} · ${tradingStatusLabel[deployment.status]}${preparation ? "" : ` · ${deployment.activity}`}` : "등록된 전략이 없습니다."}</CardDescription></CardHeader><CardContent className="space-y-3">{preparation ? <Alert variant={preparation.status === "FAILED" ? "destructive" : "default"} role={preparation.status === "FAILED" ? "alert" : "status"}><AlertDescription className="flex min-w-0 items-start gap-2">{preparing ? <LoaderCircle aria-hidden="true" className="mt-0.5 size-4 shrink-0 animate-spin" /> : null}<span className="min-w-0 break-words"><strong>{preparing ? "데이터 준비 중" : preparation.status === "READY" ? "데이터 준비 완료" : "데이터 준비 실패"}</strong> · {preparation.message}{preparation.status === "READY" ? " 자동 매매를 켜려면 직접 ON을 선택하세요." : null}</span></AlertDescription></Alert> : null}{toggleJob && (toggling || toggleJob.status === "FAILED" || toggleJob.status === "INTERRUPTED") ? <p role={toggling ? "status" : "alert"} className="text-sm">{toggleJob.message} <Button variant="link" asChild><Link to="/jobs">작업 목록</Link></Button></p> : null}{deployment?.lastError && deployment.lastError !== preparation?.message && deployment.lastError !== toggleJob?.message ? <p role="alert" className="break-words text-destructive">{deployment.lastError}</p> : null}{error && !settingsOpen && !dialog && !toggleMode ? <Alert variant="destructive" role="alert"><AlertDescription className="break-words">{error}</AlertDescription></Alert> : null}{data.blockers.map((b) => <p key={b} className="text-sm text-destructive">{b}</p>)}<div className="flex flex-wrap gap-2"><Button variant="outline" disabled={(!artifacts.data && !minuteDeployment && !(sourceRunId && !deployment && minuteRequest)) || (!!sourceId && !deployment && !source.data?.setup) || (!!sourceRunId && !deployment && !minuteRequest)} onClick={openSettings}>{deployment && <LockKeyhole aria-hidden="true" />}매매 설정</Button>{deployment ? <><Button aria-pressed={deployment.status === "ACTIVE"} className={deployment.status === "ACTIVE" ? "bg-emerald-100 text-emerald-900 hover:bg-emerald-200 dark:bg-emerald-950 dark:text-emerald-100 dark:hover:bg-emerald-900" : "bg-amber-100 text-amber-900 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-100 dark:hover:bg-amber-900"} disabled={write.isPending || (toggling && !enabling) || deployment.status === "STOPPING" || (nextToggleMode === "on" && preparing)} onClick={() => { setError(null); setDialogRevision(data.revision); setToggleMode(nextToggleMode); }}>{enabling ? "자동 매매 켜기 취소" : deployment.status === "ACTIVE" ? "자동 매매 ON" : "자동 매매 OFF"}</Button>{inactive && dailyDeployment ? <Button variant="outline" disabled={write.isPending || preparing || toggling} onClick={() => { setError(null); submit("/trading/prepare", "POST", { expectedRevision: data.revision }); }}>{preparing ? "데이터 준비 중" : preparation?.status === "FAILED" ? "데이터 복구 재시도" : "데이터 확인·복구"}</Button> : null}{dailyDeployment ? <Button variant="outline" disabled={!inactive || toggling || write.isPending || !latest || latest.artifactHash === dailyDeployment.artifactHash} onClick={() => { if (latest) setVersionParams({ ...defaults(latest), ...Object.fromEntries(Object.entries(dailyDeployment.parameters).filter(([key]) => key in properties(latest))) }); setError(null); setDialogRevision(data.revision); setDialog("version"); }}>전략 버전 업데이트</Button> : null}<Button variant="outline" disabled={(!creating && (!inactive || toggling)) || write.isPending} onClick={() => { setError(null); setDialogRevision(data.revision); setDialog("remove"); }}>전략 제거</Button></> : null}</div><p className="text-sm text-muted-foreground">{!inactive ? "설정 수정, 전략 버전 업데이트 및 제거는 자동 매매를 끈 후 가능합니다." : "자동 매매가 꺼져 있으면 매수, 매도 및 손절이 실행되지 않습니다."}</p></CardContent></Card>
+    </> : null}
     {sourceId && source.isLoading ? <p>백테스트 설정을 불러오는 중…</p> : null}{sourceId && !source.isLoading && (source.error || !source.data?.setup) ? <Alert variant="destructive"><AlertDescription>{source.data?.error ?? "백테스트 설정을 불러오지 못했습니다."}</AlertDescription></Alert> : null}
     {sourceRunId && minuteSource.isLoading ? <p>백테스트 설정을 불러오는 중…</p> : null}{sourceRunId && !minuteSource.isLoading && !minuteRequest ? <Alert variant="destructive"><AlertDescription>완료된 분봉 백테스트 설정을 불러오지 못했습니다.</AlertDescription></Alert> : null}
     {artifacts.error ? <Alert variant="destructive"><AlertDescription>전략 버전 목록을 불러오지 못했습니다.</AlertDescription></Alert> : null}
@@ -409,11 +438,13 @@ function TradingSession({ sourceId, sourceRunId, presetId, requestId, autoOpen, 
         </DialogFooter>}
       </DialogContent>
     </Dialog>
+    {hasSelection ? <>
     <Card><CardHeader><CardTitle>보유 종목</CardTitle><CardDescription>전략에 속하지 않은 보유 종목은 수동 관리합니다. 전략에 자동 편입되지 않습니다.</CardDescription></CardHeader><CardContent><div className="overflow-x-auto"><Table><TableHeader><TableRow>{["종목", "관리", "수량", "현재가", "평가액", "평가손익"].map((x) => <TableHead key={x}>{x}</TableHead>)}</TableRow></TableHeader><TableBody>{data.positions.map((p) => <TableRow key={p.symbol}><TableCell><Button variant="link" className="h-auto p-0" onClick={() => setHolding({ symbol: p.symbol, name: p.name })}>{p.name} ({p.symbol})</Button></TableCell><TableCell>{p.deploymentId ? "전략" : "수동"}</TableCell><TableCell>{p.quantity}</TableCell><TableCell>{money(p.price)}</TableCell><TableCell>{money(p.marketValue)}</TableCell><TableCell>{money(p.unrealizedPnl)}</TableCell></TableRow>)}</TableBody></Table></div>{data.positions.length === 0 ? <p className="text-sm text-muted-foreground">표시할 보유 종목이 없습니다.</p> : null}</CardContent></Card>
     <Card><CardHeader><CardTitle>주문 내역</CardTitle></CardHeader><CardContent><div className="overflow-x-auto"><Table><TableHeader><TableRow>{["시간", "종목", "방향", "수량 / 체결", minuteDeployment ? "신호가 / 평균 체결가" : "주문가 / 평균 체결가", "상태", "사유"].map((x) => <TableHead key={x}>{x}</TableHead>)}</TableRow></TableHeader><TableBody>{data.orders.map((o) => <TableRow key={o.id}><TableCell>{date(o.createdAtMs)}</TableCell><TableCell>{o.symbol}</TableCell><TableCell>{o.side === "BUY" ? "매수" : "매도"}</TableCell><TableCell>{o.quantity} / {o.filledQuantity}</TableCell><TableCell>{money(o.price)} / {o.averageFillPrice == null ? "—" : money(o.averageFillPrice)}</TableCell><TableCell>{orderStatusLabel[o.status]}</TableCell><TableCell>{o.reason}{o.error ? ` · ${o.error}` : ""}</TableCell></TableRow>)}</TableBody></Table></div>{data.orders.length === 0 ? <p className="text-sm text-muted-foreground">주문 내역이 없습니다.</p> : null}</CardContent></Card>
     <Card><CardHeader><CardTitle>이벤트</CardTitle></CardHeader><CardContent className="space-y-2 text-sm">{data.events.length ? data.events.map((e) => <p key={e.id}>{date(e.createdAtMs)} · {e.severity} · {e.message}</p>) : <p className="text-muted-foreground">이벤트가 없습니다.</p>}</CardContent></Card>
+    </> : null}
     <HoldingPriceDialog holding={holding} onClose={() => setHolding(null)} />
     <AlertDialog open={toggleMode !== null} onOpenChange={(open) => { if (!open) setToggleMode(null); }}><AlertDialogContent className={toggleMode === "on" ? "bg-emerald-50 dark:bg-emerald-950" : "bg-amber-50 dark:bg-amber-950"}><AlertDialogTitle className="text-lg font-semibold">{toggleMode === "on" ? "자동 매매를 켤까요?" : "자동 매매를 끌까요?"}</AlertDialogTitle><AlertDialogDescription className="text-sm text-muted-foreground">{toggleMode === "on" ? "저장된 설정으로 모의 자동 매매를 시작합니다." : deployment?.status === "ERROR" ? "오류 상태를 정리하고 자동 매매를 완전히 끕니다. 보유 종목은 자동으로 매도하지 않습니다." : "자동 매매를 중지합니다. 보유 종목은 자동으로 매도하지 않습니다."}</AlertDialogDescription>{error && <p role="alert" className="text-sm text-destructive">{error}</p>}<div className="flex justify-end gap-2"><AlertDialogCancel asChild><Button variant="outline">취소</Button></AlertDialogCancel><Button disabled={write.isPending || (toggling && !enabling) || toggleMode !== nextToggleMode || (toggleMode === "on" && (data.blockers.length > 0 || preparing))} onClick={() => submit(toggleMode === "on" ? "/trading/activate" : "/trading/deactivate", "POST", { expectedRevision: dialogRevision ?? data.revision, acknowledged: true })}>{toggleMode === "on" ? "켜기" : "끄기"}</Button></div></AlertDialogContent></AlertDialog>
-    <Dialog open={dialog !== null} onOpenChange={(open) => { if (!open) setDialog(null); }}><DialogContent><DialogHeader><DialogTitle>{dialog === "remove" ? "전략 제거" : "전략 버전 업데이트"}</DialogTitle><DialogDescription>{dialog === "remove" ? "전략을 제거해도 보유 종목을 매도하지 않으며, 보유 종목과 주문 및 이벤트 내역은 유지됩니다." : "자동 매매가 꺼진 상태에서만 변경됩니다."}</DialogDescription></DialogHeader>{dialog === "version" && deployment && latest ? <div className="space-y-3"><p className="text-sm">{deployment.version} → {latest.version}</p><ParameterFields disabled={!inactive} artifact={latest} value={versionParams} onChange={setVersionParams} />{parameterError(latest, versionParams) ? <p className="text-sm text-destructive">{parameterError(latest, versionParams)}</p> : null}</div> : null}{error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}<DialogFooter><Button variant="outline" onClick={() => setDialog(null)}>취소</Button>{dialog === "remove" ? <Button variant="destructive" disabled={!inactive || write.isPending} onClick={() => submit("/trading/strategy", "DELETE", { expectedRevision: dialogRevision ?? data.revision })}>제거</Button> : <Button disabled={!inactive || !latest || !!parameterError(latest, versionParams) || write.isPending} onClick={() => latest && submit("/trading/version", "POST", { expectedRevision: dialogRevision ?? data.revision, artifactHash: latest.artifactHash, parameters: versionParams })}>전략 버전 업데이트</Button>}</DialogFooter></DialogContent></Dialog>
+    <Dialog open={dialog !== null} onOpenChange={(open) => { if (!open) setDialog(null); }}><DialogContent><DialogHeader><DialogTitle>{dialog === "remove" ? "전략 제거" : "전략 버전 업데이트"}</DialogTitle><DialogDescription>{dialog === "remove" ? "전략과 모의투자를 목록에서 제거합니다. 보유 종목을 매도하지 않으며, 잔고와 주문 및 이벤트 내역은 유지됩니다." : "자동 매매가 꺼진 상태에서만 변경됩니다."}</DialogDescription></DialogHeader>{dialog === "version" && deployment && latest ? <div className="space-y-3"><p className="text-sm">{deployment.version} → {latest.version}</p><ParameterFields disabled={!inactive} artifact={latest} value={versionParams} onChange={setVersionParams} />{parameterError(latest, versionParams) ? <p className="text-sm text-destructive">{parameterError(latest, versionParams)}</p> : null}</div> : null}{error ? <p role="alert" className="text-sm text-destructive">{error}</p> : null}<DialogFooter><Button variant="outline" onClick={() => setDialog(null)}>취소</Button>{dialog === "remove" ? <Button variant="destructive" disabled={!inactive || write.isPending} onClick={() => submit("/trading/strategy", "DELETE", { expectedRevision: dialogRevision ?? data.revision })}>제거</Button> : <Button disabled={!inactive || !latest || !!parameterError(latest, versionParams) || write.isPending} onClick={() => latest && submit("/trading/version", "POST", { expectedRevision: dialogRevision ?? data.revision, artifactHash: latest.artifactHash, parameters: versionParams })}>전략 버전 업데이트</Button>}</DialogFooter></DialogContent></Dialog>
   </div>;
 }

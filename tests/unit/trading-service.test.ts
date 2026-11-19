@@ -82,6 +82,7 @@ describe("모의투자 실행 경계", () => {
       orders: warmupOnly ? [] : [{ side: "BUY", symbol: "005930", quantity: deployment.id === first.id ? 2 : 7 }],
     }));
     await Promise.all([a.activate(first.snapshot.revision, "user"), b.activate(second.snapshot.revision, "user")]);
+    expect(() => b.remove(b.snapshot().revision, "user")).toThrow();
     const activeRevision = a.snapshot().revision;
     expect(a.rename(first.id, activeRevision, "", "첫 계좌", "user").revision).toBe(activeRevision);
     expect(() => b.rename(first.id, b.snapshot().revision, "", "잘못된 계좌", "user")).toThrow();
@@ -101,10 +102,19 @@ describe("모의투자 실행 경계", () => {
     await presets.tick();
     expect(presets.list().presets.map(row => [row.id, row.status])).toEqual([[first.id, "INACTIVE"], [second.id, "ERROR"]]);
     a.remove(a.snapshot().revision, "user");
-    expect(presets.list().archived.map(row => row.id)).toEqual([first.id]);
-    expect(presets.forPreset(first.id).snapshot()).toMatchObject({deployment: null, account: {cashBuyingPower: 18_000}, positions: [{quantity: 2}]});
+    expect(presets.list()).toMatchObject({ archived: [], defaultAccountPresetId: null });
+    expect(() => presets.forPreset(first.id)).toThrow("모의투자를 찾을 수 없습니다.");
+    expect(a.snapshot()).toMatchObject({account: {cashBuyingPower: 18_000}, positions: [{quantity: 2}], orders: [{deploymentId: first.id, filledQuantity: 2}]});
+    expect(presets.list().presets.map(row => row.id)).toEqual([second.id]);
     const third = await presets.create(config, 0, "user", 30_000);
     expect(third.snapshot).toMatchObject({account: {cashBuyingPower: 30_000}, orders: [], positions: []});
+    presets.forPreset(third.id).remove(third.snapshot.revision, "user");
+    expect(presets.list().presets.map(row => row.id)).toEqual([second.id]);
+    expect(() => presets.forPreset(third.id)).toThrow("모의투자를 찾을 수 없습니다.");
+    b.remove(b.snapshot().revision, "user");
+    expect(presets.list().presets).toEqual([]);
+    const fourth = await presets.create(config, 0, "user", 40_000);
+    expect(fourth.snapshot).toMatchObject({account: {cashBuyingPower: 40_000}, orders: [], positions: []});
   });
   async function paperActive(f: ReturnType<typeof fixture>) {
     await f.service.tick();

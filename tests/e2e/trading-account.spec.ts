@@ -23,6 +23,10 @@ const snapshot: TradingSnapshot = {
   blockers: [],
 };
 
+async function mockPresetList(page: Page, id = "deployment-a") {
+  await page.route("**/api/v1/trading/presets", route => route.fulfill({ json: { presets: [{ id, title: "검증 계좌", status: "INACTIVE", createdAtMs: 1 }], archived: [], defaultAccountPresetId: id } }));
+}
+
 async function expectResponsiveGroups(page: Page, dialog: Locator, first: string, second: string) {
   const a = await dialog.getByRole("heading", { name: first, exact: true }).boundingBox();
   const b = await dialog.getByRole("heading", { name: second, exact: true }).boundingBox();
@@ -42,6 +46,7 @@ async function expectResponsiveGroups(page: Page, dialog: Locator, first: string
 // 모달을 연 뒤 주기적인 상태 조회가 작성 중인 설정을 덮지 않아야 한다.
 test("전략이 외부에서 교체되어도 초안을 유지하고 명시적 새로 불러오기 뒤 저장한다", async ({ page }) => {
   await login(page);
+  await mockPresetList(page);
   await page.clock.install();
   const artifact: TradingArtifact = { strategyId: "range-breakout", name: "전략", description: "검증용",
     version: "1", artifactHash: "a".repeat(64), executionVersion: "b".repeat(64), latest: true,
@@ -118,6 +123,7 @@ test("전략이 외부에서 교체되어도 초안을 유지하고 명시적 �
 
 test("자동 매매는 양방향 확인 후 전환하고 ON에서는 설정을 잠근다", async ({ page }) => {
   await login(page);
+  await mockPresetList(page);
   const artifact: TradingArtifact = { strategyId: "range-breakout", name: "전략", description: "검증용", version: "1", artifactHash: "a".repeat(64), executionVersion: "b".repeat(64), latest: true, parameterSchema: { type: "object", properties: {} } };
   let current: TradingSnapshot = { ...snapshot, deployment: {
     id: "deployment-a", strategyId: artifact.strategyId, name: artifact.name, version: artifact.version, artifactHash: artifact.artifactHash, status: "INACTIVE", parameters: {}, universeRule: { markets: ["KOSPI"], stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 100 }], rebalanceInterval: { unit: "MONTH", value: 1 } }, timeframe: "1d", budgetKrw: 10_000_000, maxPositions: 10, maxPositionPercent: 10, dailyLossLimitPercent: 3, maxOrderKrw: 1_000_000, maxSlippageBps: 50, randomSeed: 42, sourceJobId: null, createdAtMs: 1, updatedAtMs: 1, activatedAtMs: null, lastDecisionAtMs: null, lastError: null, activity: "대기", latestArtifactHash: artifact.artifactHash, latestVersion: artifact.version,
@@ -170,6 +176,7 @@ test("자동 매매는 양방향 확인 후 전환하고 ON에서는 설정을 �
 
 test("보유 종목에서 시세와 제공 시각을 확인한다", async ({ page }) => {
   await login(page);
+  await mockPresetList(page);
   await page.clock.install();
   const current = { ...snapshot, positions: [{ symbol: "005930", name: "삼성전자", quantity: 1, availableQuantity: 1, averagePrice: 70000, price: 71000, marketValue: 71000, unrealizedPnl: 1000, returnPercent: 1.43, deploymentId: null }] };
   await page.route("**/api/v1/trading", (route) => route.fulfill({ json: current }));
@@ -197,6 +204,7 @@ test("보유 종목에서 시세와 제공 시각을 확인한다", async ({ pag
 
 test("데이터 복구 상태를 확인하고 실패 후 재시도해도 자동 매매는 꺼져 있다", async ({ page }) => {
   await login(page);
+  await mockPresetList(page);
   await page.clock.install();
   const artifact: TradingArtifact = { strategyId: "range-breakout", name: "전략", description: "검증용", version: "1", artifactHash: "a".repeat(64), executionVersion: "b".repeat(64), latest: true, parameterSchema: { type: "object", properties: {} } };
   let current: TradingSnapshot = { ...snapshot, deployment: {
@@ -297,6 +305,7 @@ test("모의투자를 만들고 계좌별 자금과 설정을 분리한다", asy
 // 분봉 계좌에서는 원본 설정만 표시하고 일봉 전용 변경 동작을 제공하지 않는다.
 test("분봉 모의투자는 고정 설정을 표시하고 확인 후 켠다", async ({ page }) => {
   await login(page);
+  await mockPresetList(page, "minute-preset");
   let current: TradingSnapshot = { ...snapshot, deployment: {
     id: "minute-preset", kind: "intraday", name: "분봉 전략", strategyId: "intraday-ema", version: "1", status: "INACTIVE",
     timeframe: "5m", sourceRunId: "run-1", executionVersion: "execution-1", createdAtMs: 1, updatedAtMs: 1,
@@ -328,4 +337,34 @@ test("분봉 모의투자는 고정 설정을 표시하고 확인 후 켠다", a
   await page.getByRole("button", { name: "자동 매매 OFF" }).click();
   await page.getByRole("button", { name: "켜기", exact: true }).click();
   await expect(page.getByRole("button", { name: "자동 매매 ON" })).toBeVisible();
+});
+
+test("제거한 모의투자는 목록과 북마크에서 사라지고 빈 화면에서 새로 만들 수 있다", async ({ page }) => {
+  await login(page);
+  const id = "8dcf8959-6b08-4f00-a873-45d7c01ccf39";
+  const artifact: TradingArtifact = { strategyId: "range-breakout", name: "전략", description: "검증용", version: "1", artifactHash: "a".repeat(64), executionVersion: "b".repeat(64), latest: true, parameterSchema: { type: "object", properties: {} } };
+  let removed = false;
+  const current: TradingSnapshot = { ...snapshot, account: { cashBuyingPower: 12345678, marketValue: 0, unrealizedPnl: 0 }, deployment: {
+    id, strategyId: artifact.strategyId, name: artifact.name, version: artifact.version, artifactHash: artifact.artifactHash,
+    status: "INACTIVE", parameters: {}, universeRule: { markets: ["KOSPI"], stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 100 }], rebalanceInterval: { unit: "MONTH", value: 1 } },
+    timeframe: "1d", budgetKrw: 10_000_000, maxPositions: 10, maxPositionPercent: 10, dailyLossLimitPercent: 3,
+    maxOrderKrw: 1_000_000, maxSlippageBps: 50, randomSeed: 42, sourceJobId: null, createdAtMs: 1, updatedAtMs: 1,
+    activatedAtMs: null, lastDecisionAtMs: null, lastError: null, activity: "대기", latestArtifactHash: artifact.artifactHash, latestVersion: artifact.version,
+  } };
+  await page.route("**/api/v1/trading/presets", route => route.fulfill({ json: { presets: removed ? [] : [{ id, title: "삭제 대상", status: "INACTIVE", createdAtMs: 1 }], archived: removed ? [{ id, title: "삭제 대상", status: "INACTIVE", createdAtMs: 1 }] : [], defaultAccountPresetId: removed ? null : id } }));
+  await page.route("**/api/v1/trading/strategies", route => route.fulfill({ json: { strategies: [artifact] } }));
+  await page.route("**/api/v1/trading/strategy**", route => { removed = true; return route.fulfill({ json: { ...current, deployment: null } }); });
+  await page.route("**/api/v1/trading?*", route => removed ? route.fulfill({ status: 404, json: { error: "없음" } }) : route.fulfill({ json: current }));
+  await page.route("**/api/v1/trading", route => route.fulfill({ json: removed ? { ...current, deployment: null } : current }));
+  await page.goto(`/trading?presetId=${id}`);
+  await page.getByRole("button", { name: "전략 제거" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "제거", exact: true }).click();
+  await expect(page.getByText("등록된 모의투자가 없습니다. 새 모의투자를 만들어 주세요.")).toBeVisible();
+  await expect(page.getByText(/12,345,678/)).toHaveCount(0);
+  await expect(page.getByRole("option", { name: /삭제 대상/ })).toHaveCount(0);
+  await page.goto(`/trading?presetId=${id}`);
+  await expect(page).not.toHaveURL(new RegExp(id));
+  await expect(page.getByText("등록된 모의투자가 없습니다. 새 모의투자를 만들어 주세요.")).toBeVisible();
+  await page.getByRole("button", { name: "새 모의투자" }).click();
+  await expect(page.getByRole("dialog", { name: "매매 설정" })).toBeVisible();
 });
