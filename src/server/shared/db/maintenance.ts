@@ -4,6 +4,7 @@ import { auditLogs } from "../../../runtime/shared/db/operations-schema.js";
 import { loginAttempts, sessions } from "./auth-schema.js";
 import { notifications } from "./notification-schema.js";
 import { backgroundJobHistory, jobDismissals } from "./job-center-schema.js";
+import { tradingToggleJobs } from "./trading-schema.js";
 import { openApiTokens } from "./openapi-token-schema.js";
 
 /** 로그인 시도는 잠금 판정 창(15분)에만 쓰인다 — 하루면 충분하고 감사 기록은 audit_logs 가 담당 */
@@ -55,6 +56,7 @@ export function pruneExpiredRows(
       .run();
     const cutoff = nowMs - options.notificationRetentionMs;
     db.delete(backgroundJobHistory).where(lt(backgroundJobHistory.finishedAtMs, cutoff)).run();
+    db.delete(tradingToggleJobs).where(lt(tradingToggleJobs.finishedAtMs, cutoff)).run();
     db.delete(jobDismissals).where(lt(jobDismissals.finishedAtMs, cutoff)).run();
   }
 }

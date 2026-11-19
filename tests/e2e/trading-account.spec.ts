@@ -123,17 +123,36 @@ test("자동 매매는 양방향 확인 후 전환하고 ON에서는 설정을 �
     id: "deployment-a", strategyId: artifact.strategyId, name: artifact.name, version: artifact.version, artifactHash: artifact.artifactHash, status: "INACTIVE", parameters: {}, universeRule: { markets: ["KOSPI"], stages: [{ criterion: "MARKET_CAP", direction: "HIGH", limit: 100 }], rebalanceInterval: { unit: "MONTH", value: 1 } }, timeframe: "1d", budgetKrw: 10_000_000, maxPositions: 10, maxPositionPercent: 10, dailyLossLimitPercent: 3, maxOrderKrw: 1_000_000, maxSlippageBps: 50, randomSeed: 42, sourceJobId: null, createdAtMs: 1, updatedAtMs: 1, activatedAtMs: null, lastDecisionAtMs: null, lastError: null, activity: "대기", latestArtifactHash: artifact.artifactHash, latestVersion: artifact.version,
   } };
   await page.route("**/api/v1/trading", (route) => route.fulfill({ json: current }));
-  await page.route("**/api/v1/trading/strategies", (route) => route.fulfill({ json: { strategies: [artifact] } }));
+  await page.route("**/api/v1/trading/strategies", (route) => route.fulfill({ json: { strategies: [{ ...artifact, latest: false }, { ...artifact, version: "2", artifactHash: "c".repeat(64) }] } }));
   let writes = 0;
-  await page.route("**/api/v1/trading/activate", (route) => { writes++; current = { ...current, revision: 18, paperCapital: { ...current.paperCapital!, canEdit: false }, deployment: { ...current.deployment!, status: "ACTIVE" } }; return route.fulfill({ json: current }); });
+  await page.route("**/api/v1/trading/activate", (route) => {
+    expect(route.request().headers().prefer).toBe("respond-async");
+    writes++;
+    current = { ...current, toggleJob: { id: "trading-toggle:accepted", action: "activate", status: "RUNNING", message: "계좌와 전략 실행 데이터를 확인하고 있습니다." } };
+    return route.fulfill({ status: 202, json: current });
+  });
   await page.route("**/api/v1/trading/deactivate", (route) => { writes++; current = { ...current, revision: 19, paperCapital: { ...current.paperCapital!, canEdit: true }, deployment: { ...current.deployment!, status: "INACTIVE" } }; return route.fulfill({ json: current }); });
   await page.goto("/trading");
   await expect(page.getByText("계좌 연결")).toHaveCount(0);
+  await page.getByRole("button", { name: "전략 버전 업데이트", exact: true }).click();
+  const versionDialog = page.getByRole("dialog", { name: "전략 버전 업데이트" });
+  await expect(versionDialog).toContainText("1 → 2");
+  await expect(versionDialog.getByRole("button", { name: "전략 버전 업데이트" })).toBeEnabled();
+  await versionDialog.getByRole("button", { name: "취소" }).click();
   await page.getByRole("button", { name: "자동 매매 OFF" }).click();
   await expect(page.getByRole("alertdialog")).toContainText("모의 자동 매매");
   const onColor = await page.getByRole("alertdialog").evaluate((element) => getComputedStyle(element).backgroundColor);
   expect(writes).toBe(0);
   await page.getByRole("button", { name: "켜기", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "계좌와 전략 실행 데이터" })).toBeVisible();
+  await page.getByRole("button", { name: "자동 매매 켜기 취소" }).click();
+  await expect(page.getByRole("alertdialog").getByRole("button", { name: "끄기", exact: true })).toBeEnabled();
+  await page.getByRole("alertdialog").getByRole("button", { name: "취소", exact: true }).click();
+  await page.getByRole("status").getByRole("link", { name: "작업 목록" }).click();
+  await expect(page).toHaveURL(/\/jobs$/);
+  current = { ...current, revision: 18, toggleJob: null, paperCapital: { ...current.paperCapital!, canEdit: false }, deployment: { ...current.deployment!, status: "ACTIVE" } };
+  await page.goto("/trading");
   await expect(page.getByRole("button", { name: "자동 매매 ON" })).toBeVisible();
   await page.getByRole("button", { name: "매매 설정" }).click();
   await expect(page.getByLabel("운용 예산 (원)", { exact: true })).toBeDisabled();
@@ -295,7 +314,7 @@ test("분봉 모의투자는 고정 설정을 표시하고 확인 후 켠다", a
   await page.goto("/trading?presetId=minute-preset");
   await expect(page.getByText(/확정된 1분 OHLCV로 모의 체결/)).toBeVisible();
   await expect(page.getByRole("button", { name: "데이터 확인·복구" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "최신 버전으로 변경" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "전략 버전 업데이트" })).toHaveCount(0);
   await page.getByRole("button", { name: "매매 설정" }).click();
   const dialog = page.getByRole("dialog", { name: "매매 설정" });
   await expectResponsiveGroups(page, dialog, "고정 전략 파라미터", "고정 체결 조건");

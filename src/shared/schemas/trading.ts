@@ -120,7 +120,15 @@ export interface TradingEvent {
   message: string;
 }
 
+export interface TradingToggle {
+  id: string;
+  action: "activate" | "deactivate";
+  status: "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "INTERRUPTED";
+  message: string;
+}
+
 export interface TradingSnapshot {
+  toggleJob?: TradingToggle | null;
   revision: number;
   dataPreparation: {
     status: "RUNNING" | "READY" | "FAILED";

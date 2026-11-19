@@ -29,6 +29,7 @@ interface Source {
 }
 
 const sources: Source[] = [
+  { kind: "trading-toggle", table: "trading_toggle_jobs", status: "status", updated: "updated_at_ms", finished: "finished_at_ms", where: "owner_id=@owner" },
   { kind: "configuration-search", table: "configuration_searches", updated: "coalesce(completed_at_ms,created_at_ms)", finished: "completed_at_ms", where: "owner_id=@owner AND status<>'PREVIEW'" },
   { kind: "backtest-wizard", table: "backtest_wizard_jobs", status: "status", updated: "updated_at_ms", finished: "finished_at_ms", where: "owner_id=@owner" },
   { kind: "backtest-refresh", table: "backtest_refresh_jobs", updated: "updated_at_ms", finished: "completed_at_ms", where: "owner_id=@owner" },
@@ -127,6 +128,13 @@ export class JobCenterService {
     const strategyName = (id: string) => this.container.strategyRegistry.describe(id)?.name ?? INTRADAY_STRATEGIES.find((strategy) => strategy.id === id)?.name ?? id;
     const period = (from: string | null, to: string | null) => from && to ? `${from} ~ ${to}` : null;
     switch (row.kind) {
+      case "trading-toggle": {
+        const data = db.prepare("SELECT deployment_id AS deploymentId, action, title, message FROM trading_toggle_jobs WHERE id=? AND owner_id=?").get(row.sourceId, owner) as { deploymentId: string; action: string; title: string; message: string | null };
+        job = { ...job, title: `${data.title} · 자동 매매 ${data.action === "activate" ? "켜기" : "끄기"}`, phase: data.message,
+          error: row.status === "FAILED" || row.status === "INTERRUPTED" ? data.message || "자동 매매 전환이 중단되었습니다." : null,
+          cancellable: false, link: `/trading?presetId=${encodeURIComponent(data.deploymentId)}` };
+        break;
+      }
       case "configuration-search": {
         const data = db.prepare("SELECT json_extract(catalog_json,'$.strategyName') AS name, error FROM configuration_searches WHERE id=? AND owner_id=?").get(row.sourceId, owner) as { name: string; error: string | null };
         const counts = db.prepare("SELECT count(*) AS total, sum(CASE WHEN status IN ('COMPLETED','FAILED','CANCELLED') THEN 1 ELSE 0 END) AS done FROM configuration_search_items WHERE search_id=?").get(row.sourceId) as { total: number; done: number };

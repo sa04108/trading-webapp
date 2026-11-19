@@ -64,14 +64,17 @@ export function registerTradingRoutes(app: FastifyInstance, presets: TradingPres
     const { artifactHash, parameters, expectedRevision } = versionSchema.parse(request.body);
     return account(request).version(artifactHash, parameters, expectedRevision, request.authUser!.id);
   }));
-  app.post("/trading/activate", auth, async (request, reply) => respond(reply, () => {
-    const { expectedRevision } = activationSchema.parse(request.body);
-    return account(request).activate(expectedRevision, request.authUser!.id);
-  }));
-  app.post("/trading/deactivate", auth, async (request, reply) => respond(reply, () => {
-    const { expectedRevision } = activationSchema.parse(request.body);
-    return account(request).deactivate(expectedRevision, request.authUser!.id);
-  }));
+  for (const action of ["activate", "deactivate"] as const) {
+    app.post(`/trading/${action}`, auth, async (request, reply) => respond(reply, () => {
+      const { expectedRevision } = activationSchema.parse(request.body);
+      const service = account(request);
+      const result = service.requestToggle(action, expectedRevision, request.authUser!.id);
+      if (request.headers.prefer === "respond-async") {
+        return reply.header("Preference-Applied", "respond-async").code(202).send(service.snapshot());
+      }
+      return result;
+    }));
+  }
   app.post("/trading/prepare", auth, async (request, reply) => respond(reply, () => {
     const { expectedRevision } = tradingRevisionSchema.parse(request.body);
     const snapshot = account(request).prepareData(expectedRevision, request.authUser!.id);

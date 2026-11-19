@@ -1,4 +1,6 @@
 import { buyCashWithCommission, sizeDailyBuyAtOpen } from "../../../../runtime/modules/backtest/domain/execution.js";
+import { TradingToggleHistory } from "./trading-toggle-history.js";
+import type { TradingToggle } from "../../../../shared/schemas/trading.js";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
@@ -72,6 +74,8 @@ export class TradingService {
   private retryMinuteAt = 0;
   private terminalSyncAt = 0;
   private readonly cancelRetry = new Map<string, { after: number; attempts: number }>();
+  private readonly toggleHistory: TradingToggleHistory;
+  private readonly toggleRequests = new Map<string, Promise<TradingSnapshot>>();
   private readonly db;
   constructor(private readonly deps: {
     database: DatabaseHandle;
@@ -86,6 +90,7 @@ export class TradingService {
     notify?: (message: string, presetId?: string) => void;
   }) {
     this.db = deps.database.db;
+    this.toggleHistory = new TradingToggleHistory(deps.database, this.slot, () => this.now());
     this.db.insert(tradingControl).values({singleton:this.slot}).onConflictDoNothing().run();
     if (this.isPaper) { this.initializePaper(); this.hydratePaperSource(); }
     else if (this.control().mode === "PAPER") throw new TradingError("모의투자 저장소를 실매매 실행기로 열 수 없습니다.");
@@ -288,6 +293,7 @@ export class TradingService {
     } else if(row&&!this.artifacts().some(a=>a.strategyId===JSON.parse(row.setupJson).strategyId&&a.artifactHash===JSON.parse(row.setupJson).artifactHash))blockers.push("고정된 전략 실행 파일을 찾을 수 없습니다. 자동으로 다른 버전을 사용하지 않습니다.");
     if(this.pending().some(o=>o.status==="UNKNOWN"||o.status==="SENDING"))blockers.push("접수 여부가 불명확한 주문이 있습니다. 증권사 주문 내역 확인이 필요합니다.");
     return {
+      toggleJob: row ? this.toggleHistory.latest(row.id) : null,
       revision:control.revision,dataPreparation:this.preparation?.deploymentId===row?.id&&this.preparation?.revision===control.revision?this.preparation.state:null,paperCapital:this.paperCapital(),
       deployment:row && minute ? { ...minute, timeframe: minute.request.timeframe, strategyId: minute.request.strategyId,
         id: row.id, name: row.name, version: row.version, status: row.status, activity: row.activity, createdAtMs: row.createdAtMs,
@@ -391,6 +397,8 @@ export class TradingService {
   remove(expectedRevision:number,actor:string) {
     this.change(expectedRevision,()=>{
       const row=this.requireInactive();
+      const pending = this.toggleHistory.active();
+      if (pending?.deploymentId === row.id) this.toggleHistory.update(pending.id, "CANCELLED", "전략을 제거하여 자동 매매 전환을 중단했습니다.");
       this.db.update(tradingDeployments).set({slot:null,updatedAtMs:this.now(),activity:"제거됨 · 보유 포지션 수동 관리"}).where(eq(tradingDeployments.id,row.id)).run();
       this.event("등록 전략 제거 · 포지션 청산 없이 이력 보관",actor,"WARNING",row.id);
     });return this.snapshot();
@@ -499,7 +507,71 @@ export class TradingService {
       this.applyOrder({...row,brokerOrderId:id},(JSON.parse(saved.payload_json) as {order:BrokerOrder}).order);
     }
   }
-  async activate(expectedRevision:number,actor:string) {
+  requestToggle(action: TradingToggle["action"], expectedRevision: number, actor: string) {
+    const admission = this.deps.database.sqlite.transaction(() => {
+      if (this.stopping) throw new TradingError("서버 종료 중에는 자동 매매를 전환할 수 없습니다.");
+      const row = this.current();
+      if (!row) throw new TradingError("등록된 전략이 없습니다.");
+      const active = this.toggleHistory.active();
+      if (active?.deploymentId === row.id && active.action === action && active.ownerId === actor &&
+          (active.expectedRevision === expectedRevision || (action === "deactivate" && this.control().revision === expectedRevision))) {
+        return { job: active, existing: true };
+      }
+      if (this.control().revision !== expectedRevision) throw new TradingError("매매 설정이 변경되었습니다.", "STALE_REVISION");
+      if (active && (action !== "deactivate" || active.action !== "activate")) throw new TradingError("계좌에서 자동 매매를 전환하고 있습니다.");
+      if (action === "activate") {
+        this.requireInactive();
+        if (this.preparing) throw new TradingError("매매 데이터 준비가 끝난 뒤 자동 매매를 켜 주세요.");
+        if (!this.acquire()) throw new TradingError("다른 실행기가 이 계좌를 처리하고 있습니다.");
+      }
+      if (active) this.toggleHistory.update(active.id, "CANCELLED", "끄기 요청으로 활성화 준비를 중단했습니다.");
+      const job = this.toggleHistory.create({ deploymentId: row.id, ownerId: actor, action, expectedRevision,
+        title: JSON.parse(row.setupJson).title || row.name, executorToken: this.token });
+      // 중지 접수와 신규 주문 차단을 함께 커밋한다. 최종 체결 대조는 서버 실행기가 계속한다.
+      if (action === "deactivate") {
+        this.deactivate(expectedRevision, actor);
+        this.toggleHistory.reconcile(this.current(), this.token);
+      }
+      return { job, existing: false };
+    }).immediate();
+
+    const { job } = admission;
+    if (admission.existing || action === "deactivate") {
+      return this.toggleRequests.get(job.id) ?? Promise.resolve(this.snapshot());
+    }
+    const result = this.activate(expectedRevision, actor, job.id).then(snapshot => {
+      if (snapshot.deployment?.status === "ACTIVE") return snapshot;
+      if (this.preparing) {
+        this.toggleHistory.update(job.id, "RUNNING", snapshot.dataPreparation?.message ?? "매매 데이터를 준비하고 있습니다.");
+        const finishPreparation = () => {
+          const state = this.preparation?.state;
+          this.toggleHistory.update(job.id, "FAILED", state?.status === "READY"
+            ? "데이터 준비를 마쳤습니다. 자동 매매를 켜려면 다시 ON을 선택하세요."
+            : state?.message ?? "자동 매매 준비를 마치지 못했습니다.");
+        };
+        void this.preparing.then(finishPreparation);
+      } else {
+        this.toggleHistory.update(job.id, "FAILED", snapshot.deployment?.lastError ?? "자동 매매를 켜지 못했습니다.");
+      }
+      return this.snapshot();
+    }, (error: unknown) => {
+      this.toggleHistory.update(job.id, this.stopping ? "INTERRUPTED" : "FAILED", error instanceof Error ? error.message : "자동 매매를 켜지 못했습니다.");
+      throw error;
+    }).finally(() => this.toggleRequests.delete(job.id));
+    this.toggleRequests.set(job.id, result);
+    // 비동기 응답을 선택한 호출자도 실패 사유를 작업 이력에서 확인할 수 있다.
+    void result.catch(() => {});
+    return result;
+  }
+  private assertActivationOwner(jobId?: string) {
+    const control = this.control();
+    if (this.stopping || control.executorToken !== this.token || (control.executorExpiresAtMs ?? 0) <= this.now()
+        || (jobId && this.toggleHistory.active()?.id !== jobId)) {
+      throw new TradingError("실행기 또는 활성화 요청이 변경되어 준비를 중단했습니다.");
+    }
+  }
+
+  async activate(expectedRevision:number,actor:string,jobId?:string) {
     if(this.preparing)throw new TradingError("매매 데이터 준비 중입니다. 검증 완료 후 자동매매를 켜 주세요.");
     const before=this.requireInactive();
     if(this.control().revision!==expectedRevision)throw new TradingError("매매 설정이 변경되었습니다.","STALE_REVISION");
@@ -512,6 +584,7 @@ export class TradingService {
         const row = this.requireInactive();
         if (row.id !== before.id) throw new TradingError("등록 전략이 변경되었습니다.");
         const now = this.now();
+        this.assertActivationOwner(jobId);
         let checkpoint;
         try { checkpoint = startMinuteCheckpoint(row, minute, now); }
         catch (error) { throw new TradingError((error as Error).message); }
@@ -519,6 +592,7 @@ export class TradingService {
           activatedAtMs: row.activatedAtMs ?? now, activity: "활성 · 다음 확정 분봉 대기", lastError: null }).where(eq(tradingDeployments.id,row.id)).run();
         this.event("분봉 모의투자 ON · 활성화 이후의 신호부터 주문", actor);
         this.retryMinuteAt = 0;
+        if (jobId) this.toggleHistory.update(jobId, "COMPLETED", "자동 매매를 켰습니다.");
       });
       return this.snapshot();
     }
@@ -529,6 +603,7 @@ export class TradingService {
     let prepared:Awaited<ReturnType<TradingDecisionEngine["evaluate"]>>;
     try { prepared=await this.deps.engine.evaluate({deployment,portfolio:this.portfolio(before),cashKrw:this.strategyCash(before),checkpoint:before.checkpoint,warmupOnly:true}); }
     catch(error){
+      this.assertActivationOwner(jobId);
       if(error instanceof TradingDataRequired&&this.deps.prepareData&&this.control().revision===expectedRevision&&this.current()?.id===before.id&&this.current()?.status==="INACTIVE")return this.prepareData(expectedRevision,actor,error.need);
       const message=error instanceof Error?error.message:"전략 준비에 실패했습니다.";
       const row = this.current();
@@ -539,9 +614,11 @@ export class TradingService {
       throw new TradingError(message,"STRATEGY_NOT_READY");
     }
     this.change(expectedRevision,()=>{
+      this.assertActivationOwner(jobId);
       const row=this.requireInactive();if(row.id!==before.id)throw new TradingError("등록 전략이 변경되었습니다.");
       this.db.update(tradingDeployments).set({status:"ACTIVE",checkpoint:prepared.checkpoint,lastDecisionAtMs:prepared.barTsMs,activatedAtMs:row.activatedAtMs??this.now(),updatedAtMs:this.now(),lastError:null,activity:"활성 · 다음 거래일의 유효한 신호를 기다립니다." + entryHoldSummary(prepared.entryHolds, prepared.actionGapHolds)}).where(eq(tradingDeployments.id,row.id)).run();
       this.event("사용자가 매매 활성화 · 기존 포지션 유지, 새 판단부터 주문 허용",actor);
+      if (jobId) this.toggleHistory.update(jobId, "COMPLETED", "자동 매매를 켰습니다.");
     });return this.snapshot();
   }
   deactivate(expectedRevision:number,actor:string) {
@@ -675,6 +752,7 @@ export class TradingService {
           } else this.saveOrder(order,{status:"UNKNOWN",error:"이전 실행기 중단으로 접수 여부 확인 필요"});
         }
         const row = this.current();
+        this.toggleHistory.reconcile(row, this.token);
         if (row?.status === "ACTIVE" && !minuteSetup(row)) {
           if (this.isPaper) {
             // 저장된 판단은 다시 주문하지 않는다. 전송 전 의도를 닫고 첫 판단 전에 잔고와 체결을 대조한다.
@@ -947,23 +1025,33 @@ export class TradingService {
   }
   private async runTick():Promise<void> {
     if(this.stopping||!this.acquire())return;
+    const row = this.current();
+    const reconcilingStop = row?.status === "STOPPING" || (row?.status === "ERROR" && this.pending(row.id).length > 0);
     try{
-      const row=this.current();
       const minute = minuteSetup(row);
       if (minute && row) {
         if (row.status === "ACTIVE") await this.tradeMinute(row, minute);
         return;
       }
-      if(row?.status==="STOPPING"||(row?.status==="ERROR"&&this.pending(row.id).length))await this.finishStop(row);
+      if(reconcilingStop)await this.finishStop(row);
       else if(row?.status==="ACTIVE")await this.trade(row);
       else if(this.control().accountId&&this.now()-(this.control().syncedAtMs??0)>30_000)await this.refresh();
     } catch (error) {
       if (this.stopping || (error instanceof TradingError && error.code === "ORDER_GATE_CLOSED")) return;
       this.fail(error instanceof Error ? error.message : "매매 처리 실패", this.token);
+    } finally {
+      if (reconcilingStop) {
+        this.deps.database.sqlite.transaction(() => {
+          const lease = this.control();
+          if (lease.executorToken === this.token && (lease.executorExpiresAtMs ?? 0) > this.now()) {
+            this.toggleHistory.reconcile(this.current(), this.token);
+          }
+        }).immediate();
+      }
     }
   }
   async close() {
-    this.stopping=true;if(this.timer)clearInterval(this.timer);await this.running;await this.refreshing?.catch(()=>{});await this.deps.engine.close();await this.preparing;
+    this.stopping=true;if(this.timer)clearInterval(this.timer);await this.running;await this.refreshing?.catch(()=>{});await this.deps.engine.close();await Promise.allSettled(this.toggleRequests.values());await this.preparing;
     this.db.update(tradingControl).set({executorToken:null,executorExpiresAtMs:null}).where(and(eq(tradingControl.singleton,this.slot),eq(tradingControl.executorToken,this.token))).run();
   }
 }
