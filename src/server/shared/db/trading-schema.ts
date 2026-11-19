@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
-/** 단일 슬롯과 개정 번호는 여러 탭·프로세스에서도 동일한 주문 허용 상태를 본다. */
+/** 계좌별 개정 번호와 임대로 여러 탭·프로세스의 주문 허용 상태를 동기화한다. */
 export const tradingControl = sqliteTable("trading_control", {
   singleton: integer("singleton").primaryKey(),
   revision: integer("revision").notNull().default(0),
@@ -13,11 +13,12 @@ export const tradingControl = sqliteTable("trading_control", {
   error: text("error"),
   executorToken: text("executor_token"),
   executorExpiresAtMs: integer("executor_expires_at_ms"),
-}, table => [check("trading_singleton", sql`${table.singleton} = 1`)]);
+}, table => [check("trading_account_slot", sql`${table.singleton} >= 1`)]);
 
 export const tradingDeployments = sqliteTable("trading_deployments", {
   id: text("id").primaryKey(),
   slot: integer("slot"),
+  accountSlot: integer("account_slot").notNull().default(1),
   mode: text("mode", { enum: ["LIVE", "PAPER"] }).notNull().default("LIVE"),
   setupJson: text("setup_json").notNull(),
   name: text("name").notNull(),
@@ -36,7 +37,7 @@ export const tradingDeployments = sqliteTable("trading_deployments", {
   dailyBaseJson: text("daily_base_json"),
 }, table => [
   uniqueIndex("trading_registered_slot").on(table.slot),
-  check("trading_slot_value", sql`${table.slot} IS NULL OR ${table.slot} = 1`),
+  check("trading_slot_value", sql`${table.accountSlot} >= 1 AND (${table.slot} IS NULL OR ${table.slot} = ${table.accountSlot})`),
   check("trading_deployment_status", sql`${table.status} IN ('INACTIVE', 'ACTIVE', 'STOPPING', 'ERROR')`),
 ]);
 
@@ -60,6 +61,7 @@ export const tradingOrders = sqliteTable("trading_orders", {
 ]);
 
 export const tradingEvents = sqliteTable("trading_events", {
+  accountSlot: integer("account_slot").notNull().default(1),
   id: integer("id").primaryKey({autoIncrement:true}),
   deploymentId: text("deployment_id"),
   actor: text("actor").notNull(),
@@ -74,11 +76,12 @@ export const paperTradingAccount = sqliteTable("paper_trading_account", {
   initialCash: real("initial_cash").notNull().default(100_000_000),
   cash: real("cash").notNull(),
   holdingsJson: text("holdings_json").notNull().default("{}"),
-}, table => [check("paper_trading_singleton", sql`${table.singleton} = 1`)]);
+}, table => [check("paper_trading_account_slot", sql`${table.singleton} >= 1`)]);
 
 /** 주문 ID의 유일성과 잔고 갱신을 같은 트랜잭션으로 묶어 중복 체결을 막는다. */
 export const paperTradingOrders = sqliteTable("paper_trading_orders", {
   id: text("id").primaryKey(),
+  accountSlot: integer("account_slot").notNull().default(1),
   payloadJson: text("payload_json").notNull(),
   createdAtMs: integer("created_at_ms").notNull(),
-}, table => [index("paper_trading_orders_time").on(table.createdAtMs)]);
+}, table => [index("paper_trading_orders_account_time").on(table.accountSlot, table.createdAtMs)]);

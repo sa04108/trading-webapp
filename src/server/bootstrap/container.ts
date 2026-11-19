@@ -63,6 +63,7 @@ import { createIntradayService } from "../modules/intraday/infrastructure/create
 import type { IntradayService } from "../modules/intraday/application/intraday-service.js";
 import { createTossTradingBroker } from "../modules/broker/infrastructure/toss/toss-trading-broker.js";
 import { createPaperTradingBroker } from "../modules/trading/infrastructure/paper-trading-broker.js";
+import { TradingPresets } from "../modules/trading/application/trading-presets.js";
 import { TradingService } from "../modules/trading/application/trading-service.js";
 import { StrategyArtifacts } from "../modules/trading/infrastructure/strategy-artifacts.js";
 import { DailyTradingEngine } from "../modules/trading/infrastructure/daily-trading-engine.js";
@@ -128,7 +129,7 @@ export interface Container {
   readonly symbolInfoService: SymbolInfoService;
   readonly symbolLibraryService: SymbolLibraryService;
   readonly strategyRegistry: StrategyRegistry;
-  readonly tradingService: TradingService;
+  readonly tradingService: TradingPresets;
   readonly intradayService: IntradayService;
   readonly backtestWizardDraftService: BacktestWizardDraftService;
   readonly backtestWizardService: BacktestWizardService;
@@ -341,10 +342,11 @@ export function createContainer(
     usage: externalApiUsage,
   });
   const tradingMarketData = createTossTradingBroker(tossConfig, logger, { client: tossClient });
-  const tradingService = new TradingService({
+  const tradingService = new TradingPresets(database, (accountSlot) => new TradingService({
+    accountSlot,
     database,
     broker: createPaperTradingBroker({
-      database,
+      accountSlot, database,
       marketData: { quotes: (symbols) => tradingMarketData.quotes(symbols), dailyCandles: (symbol, from, to) => tradingMarketData.dailyCandles(symbol, from, to) },
       now: () => clock.now(),
       getName: (symbol) => symbolService.getLocalNames([symbol]).get(symbol)?.name,
@@ -358,8 +360,8 @@ export function createContainer(
       artifacts: tradingArtifacts,
       now: () => clock.now(),
     }),
-    notify: (message) => notificationService.create({ type: "trading", severity: "error", title: "자동매매 주문 중지", body: message, link: "/trading" }),
-  });
+    notify: (message, presetId) => notificationService.create({ type: "trading", severity: "error", title: "자동매매 주문 중지", body: message, link: presetId ? `/trading?presetId=${encodeURIComponent(presetId)}` : "/trading" }),
+  }), (err) => logger.error({ err }, "모의투자 실행 오류"));
   // 로컬 폴백(symbolService)을 함께 넘긴다 — 증권사가 모르거나 조회에 실패한 코드도
   // 종목 마스터가 채워 둔 이름이 있으면 그걸로 보여준다 (자격 증명 미설정 환경도 포함).
   const symbolLibraryService = new SymbolLibraryService(database.sqlite, () => clock.now());

@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { tradingRevisionSchema, tradingWriteSchema } from "../../../../shared/schemas/trading.js";
-import { TradingError, type TradingService } from "../application/trading-service.js";
+import { tradingPresetCreateSchema, tradingPresetTitleSchema, tradingRevisionSchema, tradingWriteSchema } from "../../../../shared/schemas/trading.js";
+import type { TradingPresets } from "../application/trading-presets.js";
+import { TradingError } from "../application/trading-service.js";
 
 type PreHandler = (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
 const activationSchema = tradingRevisionSchema.extend({ acknowledged: z.literal(true) });
@@ -22,48 +23,63 @@ async function respond(reply: FastifyReply, operation: () => unknown): Promise<u
   }
 }
 
-export function registerTradingRoutes(app: FastifyInstance, service: TradingService, requireAuth: PreHandler): void {
+export function registerTradingRoutes(app: FastifyInstance, presets: TradingPresets, requireAuth: PreHandler): void {
   const auth = { preHandler: requireAuth };
-  app.get("/trading", auth, async (_request, reply) => respond(reply, () => service.snapshot()));
-  app.get("/trading/quotes/:symbol", auth, async (request, reply) => respond(reply, () => service.quote(quoteParamsSchema.parse(request.params).symbol)));
-  app.get("/trading/strategies", auth, async (_request, reply) => respond(reply, () => ({ strategies: service.artifacts() })));
-  app.get("/trading/source/:jobId", auth, async (request, reply) => respond(reply, () => service.source(sourceParamsSchema.parse(request.params).jobId)));
+  const scope = z.object({ presetId: z.string().uuid().optional() }).strict();
+  const account = (request: FastifyRequest) => {
+    const {presetId} = scope.parse(request.query);
+    return presetId === undefined ? presets.defaultAccount : presets.forPreset(presetId);
+  };
+  app.get("/trading/presets", auth, async (_request, reply) => respond(reply, () => presets.list()));
+  app.post("/trading/presets", auth, async (request, reply) => respond(reply, async () => {
+    const {expectedRevision, initialCashKrw, requestId, ...setup} = tradingPresetCreateSchema.parse(request.body);
+    const result = await presets.create(setup, expectedRevision, request.authUser!.id, initialCashKrw, requestId);
+    return reply.code(201).send(result);
+  }));
+  app.get("/trading", auth, async (request, reply) => respond(reply, () => account(request).snapshot()));
+  app.patch("/trading/title", auth, async (request, reply) => respond(reply, () => {
+    const { deploymentId, expectedRevision, expectedTitle, title } = tradingPresetTitleSchema.parse(request.body);
+    return account(request).rename(deploymentId, expectedRevision, expectedTitle, title, request.authUser!.id);
+  }));
+  app.get("/trading/quotes/:symbol", auth, async (request, reply) => respond(reply, () => account(request).quote(quoteParamsSchema.parse(request.params).symbol)));
+  app.get("/trading/strategies", auth, async (_request, reply) => respond(reply, () => ({ strategies: presets.defaultAccount.artifacts() })));
+  app.get("/trading/source/:jobId", auth, async (request, reply) => respond(reply, () => presets.defaultAccount.source(sourceParamsSchema.parse(request.params).jobId)));
   app.post("/trading/strategy", auth, async (request, reply) => respond(reply, () => {
     const { expectedRevision, initialCashKrw, ...setup } = tradingWriteSchema.parse(request.body);
-    return service.register(setup, expectedRevision, request.authUser!.id, initialCashKrw);
+    return account(request).register(setup, expectedRevision, request.authUser!.id, initialCashKrw);
   }));
   app.put("/trading/strategy", auth, async (request, reply) => respond(reply, () => {
     const { expectedRevision, initialCashKrw, ...setup } = tradingWriteSchema.parse(request.body);
-    return service.update(setup, expectedRevision, request.authUser!.id, initialCashKrw);
+    return account(request).update(setup, expectedRevision, request.authUser!.id, initialCashKrw);
   }));
   app.delete("/trading/strategy", auth, async (request, reply) => respond(reply, () => {
     const { expectedRevision } = tradingRevisionSchema.parse(request.body);
-    return service.remove(expectedRevision, request.authUser!.id);
+    return account(request).remove(expectedRevision, request.authUser!.id);
   }));
   app.post("/trading/version", auth, async (request, reply) => respond(reply, () => {
     const { artifactHash, parameters, expectedRevision } = versionSchema.parse(request.body);
-    return service.version(artifactHash, parameters, expectedRevision, request.authUser!.id);
+    return account(request).version(artifactHash, parameters, expectedRevision, request.authUser!.id);
   }));
   app.post("/trading/activate", auth, async (request, reply) => respond(reply, () => {
     const { expectedRevision } = activationSchema.parse(request.body);
-    return service.activate(expectedRevision, request.authUser!.id);
+    return account(request).activate(expectedRevision, request.authUser!.id);
   }));
   app.post("/trading/deactivate", auth, async (request, reply) => respond(reply, () => {
     const { expectedRevision } = activationSchema.parse(request.body);
-    return service.deactivate(expectedRevision, request.authUser!.id);
+    return account(request).deactivate(expectedRevision, request.authUser!.id);
   }));
   app.post("/trading/prepare", auth, async (request, reply) => respond(reply, () => {
     const { expectedRevision } = tradingRevisionSchema.parse(request.body);
-    const snapshot = service.prepareData(expectedRevision, request.authUser!.id);
+    const snapshot = account(request).prepareData(expectedRevision, request.authUser!.id);
     return reply.code(202).send(snapshot);
   }));
   app.post("/trading/orders/:orderId/resolve", auth, async (request, reply) => respond(reply, () => {
     const { orderId } = orderParamsSchema.parse(request.params);
     const { expectedRevision, brokerOrderId } = resolveSchema.parse(request.body);
-    return service.resolveOrder(orderId, brokerOrderId, expectedRevision, request.authUser!.id);
+    return account(request).resolveOrder(orderId, brokerOrderId, expectedRevision, request.authUser!.id);
   }));
   app.post("/trading/refresh", auth, async (request, reply) => respond(reply, () => {
     emptySchema.parse(request.body);
-    return service.refresh();
+    return account(request).refresh();
   }));
 }

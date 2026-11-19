@@ -194,3 +194,59 @@ test("데이터 복구 상태를 확인하고 실패 후 재시도해도 자동 
   await expect(page.getByRole("button", { name: "자동 매매 OFF" })).toBeEnabled();
   expect(activations).toBe(0);
 });
+
+// 실제 저장소에서 계좌를 두 개 만들고 선택한 계좌만 수정한다.
+test("모의투자를 만들고 계좌별 자금과 설정을 분리한다", async ({ page }, testInfo) => {
+  await login(page);
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const first = `첫 계좌 ${suffix}`;
+  const second = `둘째 계좌 ${suffix}`;
+  await page.goto("/trading");
+  const create = async (title: string, capital: string) => {
+    await page.getByRole("button", { name: "새 모의투자" }).click();
+    await page.getByLabel("모의투자 이름 (선택)").fill(title);
+    await page.getByLabel("초기 모의자금 (원)").fill(capital);
+    const response = page.waitForResponse((res) => res.url().endsWith("/api/v1/trading/presets") && res.request().method() === "POST");
+    await page.getByRole("button", { name: "설정 저장" }).click();
+    const result = await response;
+    expect(result.status()).toBe(201);
+    const body = await result.json() as { id: string };
+    await expect(page).toHaveURL(new RegExp(`presetId=${body.id}`));
+    return body.id;
+  };
+  const firstId = await create(first, "11000000");
+  await expect(page.getByText(/초기 모의 자금 11,000,000원/)).toBeVisible();
+  const secondId = await create(second, "22000000");
+  await expect(page.getByText(/초기 모의 자금 22,000,000원/)).toBeVisible();
+  await page.goto("/");
+  const firstLink = page.getByRole("link", { name: `${first} · 꺼짐` });
+  const secondLink = page.getByRole("link", { name: `${second} · 꺼짐` });
+  await expect(firstLink).toBeVisible();
+  await expect(secondLink).toBeVisible();
+  await firstLink.click();
+  await expect(page).toHaveURL(new RegExp(`presetId=${firstId}`));
+  await expect(page.getByText(/초기 모의 자금 11,000,000원/)).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByLabel("모의투자 선택").selectOption(secondId);
+  await expect(page.getByText(/초기 모의 자금 22,000,000원/)).toBeVisible();
+  await page.getByRole("button", { name: "매매 설정" }).click();
+  await expect(page.getByLabel("모의투자 이름 (선택)")).toHaveValue(second);
+  await page.getByLabel("운용 예산 (원)").fill("9000000");
+  const saved = page.waitForResponse((res) => res.request().method() === "PUT" && new URL(res.url()).pathname === "/api/v1/trading/strategy");
+  await page.getByRole("button", { name: "설정 저장" }).click();
+  const result = await saved;
+  expect(result.status()).toBe(200);
+  expect(new URL(result.url()).searchParams.get("presetId")).toBe(secondId);
+  const firstSnapshot = await (await page.request.get(`/api/v1/trading?presetId=${firstId}`)).json() as TradingSnapshot;
+  const secondSnapshot = await (await page.request.get(`/api/v1/trading?presetId=${secondId}`)).json() as TradingSnapshot;
+  expect(firstSnapshot.deployment).toMatchObject({ title: first, budgetKrw: 10_000_000 });
+  expect(secondSnapshot.deployment).toMatchObject({ title: second, budgetKrw: 9_000_000 });
+  expect(firstSnapshot.paperCapital?.initialCashKrw).toBe(11_000_000);
+  expect(secondSnapshot.paperCapital?.initialCashKrw).toBe(22_000_000);
+  const defaultSnapshot = await (await page.request.get("/api/v1/trading")).json() as TradingSnapshot;
+  if (defaultSnapshot.deployment) {
+    const selector = page.getByLabel("모의투자 선택");
+    await expect(selector.locator(`option[value="${defaultSnapshot.deployment.id}"]`)).toHaveCount(1);
+    await expect(selector.locator('option[value=""]')).toHaveCount(0);
+  }
+});

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { LoaderCircle, LockKeyhole } from "lucide-react";
 import { HoldingPriceDialog } from "./holding-price-dialog";
@@ -19,7 +19,7 @@ import type { RebalanceInterval } from "@shared/schemas/universe-rule";
 import { UniverseStageEditor } from "../backtests/universe-stage-editor";
 import { formatUniverseRuleSummary } from "../backtests/universe-summary";
 import { orderStatusLabel, tradingStatusLabel } from "./status-labels";
-import { tradingKey, useTrading, useTradingArtifacts, useTradingSource } from "./api";
+import { tradingKey, tradingPath, tradingPresetsKey, useTrading, useTradingArtifacts, useTradingPresets, useTradingSource } from "./api";
 
 type Property = { type?: string; default?: unknown; minimum?: number; maximum?: number; exclusiveMinimum?: number; exclusiveMaximum?: number; description?: string };
 function properties(artifact: TradingArtifact | undefined): Record<string, Property> {
@@ -58,16 +58,23 @@ function ParameterFields({ artifact, value, onChange, disabled = false }: { arti
 }
 
 export function TradingPage() {
-  const [search] = useSearchParams();
+  const [search, setSearch] = useSearchParams();
   const sourceId = search.get("sourceJobId");
-  return <TradingSession key={sourceId ?? "new"} sourceId={sourceId} />;
+  const presetId = search.get("presetId");
+  return <TradingSession key={JSON.stringify([sourceId, presetId])} sourceId={sourceId} presetId={presetId} selectPreset={(id) => setSearch(id === null ? {} : { presetId: id })} />;
 }
 
-function TradingSession({ sourceId }: { sourceId: string | null }) {
-  const snapshot = useTrading();
+function TradingSession({ sourceId, presetId, selectPreset }: { sourceId: string | null; presetId: string | null; selectPreset: (id: string | null) => void }) {
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const snapshot = useTrading(presetId);
+  const presets = useTradingPresets();
   const artifacts = useTradingArtifacts();
   const source = useTradingSource(sourceId);
   const client = useQueryClient();
+  const createRequestId = useRef<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [title, setTitle] = useState("");
   const [draft, setDraft] = useState<TradingSetup | null>(null);
   const [initialCashKrw, setInitialCashKrw] = useState(PAPER_TRADING_INITIAL_CASH_KRW);
   const [initialized, setInitialized] = useState<string | null>(null);
@@ -91,6 +98,8 @@ function TradingSession({ sourceId }: { sourceId: string | null }) {
   const contextChanged = initialized !== null && initialized !== contextKey;
   const openSettings = () => {
     if (!data || !artifacts.data) return;
+    setCreating(false);
+    setTitle(deployment?.title ?? "");
     if (deployment) {
       const parsed = tradingSetupSchema.safeParse(Object.fromEntries(Object.keys(tradingSetupSchema.shape).map((k) => [k, deployment[k as keyof typeof deployment]])));
       setDraft(parsed.success ? parsed.data : null);
@@ -102,28 +111,85 @@ function TradingSession({ sourceId }: { sourceId: string | null }) {
     setError(null);
     setSettingsOpen(true);
   };
-  const write = useMutation({ mutationFn: ({ path, method, body }: { path: string; method: string; body: unknown }) => api<TradingSnapshot>(path, { method, body: JSON.stringify(body) }), onSuccess: (next, variables) => { client.setQueryData(tradingKey, next); if (["/trading/strategy", "/trading/version"].includes(variables.path)) setInitialized(null); setError(null); setDialog(null); setToggleMode(null); if (variables.path === "/trading/strategy") setSettingsOpen(false); }, onError: (e) => { setError(e instanceof Error ? e.message : "요청에 실패했습니다."); if (e instanceof ApiError && e.status === 409) { setError(`${e.message} 최신 상태를 다시 불러왔습니다. 내용을 확인한 뒤 다시 시도하세요.`); void client.invalidateQueries({ queryKey: tradingKey }); } } });
-  const submit = (path: string, method: string, body: object) => { if (!data || write.isPending) return; write.mutate({ path, method, body }); };
+  const openNew = () => {
+    if (!data || !artifacts.data || (sourceId && !source.data?.setup)) return;
+    const first = list.find((a) => a.latest);
+    createRequestId.current = crypto.randomUUID();
+    setCreating(true); setTitle(""); setDraft(sourceId && source.data?.setup ? source.data.setup : first ? baseSetup(first) : null);
+    setInitialCashKrw(PAPER_TRADING_INITIAL_CASH_KRW); setDraftRevision(0); setInitialized(contextKey); setError(null); setSettingsOpen(true);
+  };
+  const write = useMutation({ mutationFn: async ({ path, method, body, create }: { path: string; method: string; body: unknown; create?: boolean }) => create ? api<{ id: string; snapshot: TradingSnapshot }>(path, { method, body: JSON.stringify(body) }) : api<TradingSnapshot>(tradingPath(path, presetId), { method, body: JSON.stringify(body) }), onSuccess: async (result, variables) => {
+    if (variables.create) {
+      const created = result as { id: string; snapshot: TradingSnapshot };
+      client.setQueryData(tradingKey(created.id), created.snapshot);
+      void client.invalidateQueries({ queryKey: tradingPresetsKey });
+      void client.invalidateQueries({ queryKey: tradingKey(null), exact: true });
+      if (mounted.current) selectPreset(created.id);
+      return;
+    }
+    await client.cancelQueries({ queryKey: tradingKey(presetId), exact: true });
+    client.setQueryData(tradingKey(presetId), result as TradingSnapshot);
+    void client.invalidateQueries({ queryKey: tradingPresetsKey });
+    void client.invalidateQueries({ queryKey: tradingKey(null), exact: true });
+    const nextId = (result as TradingSnapshot).deployment?.id;
+    if (variables.path === "/trading/strategy" && variables.method === "POST" && presetId !== null && nextId && nextId !== presetId) {
+      client.setQueryData(tradingKey(nextId), result as TradingSnapshot);
+      if (mounted.current) selectPreset(nextId);
+      return;
+    }
+    if (["/trading/strategy", "/trading/version"].includes(variables.path)) setInitialized(null);
+    setError(null); setDialog(null); setToggleMode(null); if (variables.path === "/trading/strategy" || variables.path === "/trading/title") setSettingsOpen(false);
+  }, onError: (e) => { setError(e instanceof Error ? e.message : "요청에 실패했습니다."); if (e instanceof ApiError && e.status === 409) { setError(`${e.message} 최신 상태를 다시 불러왔습니다. 내용을 확인한 뒤 다시 시도하세요.`); void client.invalidateQueries({ queryKey: tradingKey(presetId) }); } } });
+  const submit = (path: string, method: string, body: object, create = false) => { if (!data || write.isPending) return; write.mutate({ path, method, body, create }); };
   const validation = draft ? tradingSetupSchema.safeParse(draft) : null;
   const paramError = draft ? parameterError(artifact, draft.parameters) : null;
-  const save = () => { if (!draft || !data || contextChanged || !inactive) return; const capitalValidation = data.paperCapital?.canEdit ? paperInitialCashSchema.safeParse(initialCashKrw) : null; if (!validation?.success || paramError || (capitalValidation && !capitalValidation.success)) { setError((capitalValidation && !capitalValidation.success ? "초기 모의자금은 10,000원 이상 1조원 이하의 정수로 입력하세요." : null) ?? paramError ?? validation?.error?.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join(", ") ?? "설정을 확인하세요."); return; } submit("/trading/strategy", deployment ? "PUT" : "POST", { ...validation.data, ...(data.paperCapital?.canEdit ? { initialCashKrw } : {}), expectedRevision: draftRevision ?? data.revision }); };
+  const save = () => {
+    if (!draft || !data || contextChanged || (!creating && !inactive)) return;
+    const canEditCapital = creating || data.paperCapital?.canEdit;
+    const capitalValidation = canEditCapital ? paperInitialCashSchema.safeParse(initialCashKrw) : null;
+    if (!validation?.success || paramError || (capitalValidation && !capitalValidation.success)) {
+      setError((capitalValidation && !capitalValidation.success ? "초기 모의자금은 10,000원 이상 1조원 이하의 정수로 입력하세요." : null)
+        ?? paramError ?? validation?.error?.issues.map(i => `${i.path.join(".")}: ${i.message}`).join(", ") ?? "설정을 확인하세요.");
+      return;
+    }
+    const body = {
+      ...validation.data, title: title.trim() || undefined,
+      ...(canEditCapital ? { initialCashKrw } : {}),
+      ...(creating ? { requestId: createRequestId.current } : {}),
+      expectedRevision: creating ? 0 : draftRevision ?? data.revision,
+    };
+    submit(creating ? "/trading/presets" : "/trading/strategy", creating || !deployment ? "POST" : "PUT", body, creating);
+  };
   const setField = <K extends keyof TradingSetup>(key: K, value: TradingSetup[K]) => setDraft((old) => old ? { ...old, [key]: value } : old);
-  if (!data) return <div className="space-y-3"><h2 className="text-lg font-semibold">매매</h2><p role={snapshot.error ? "alert" : "status"}>{snapshot.error ? "매매 정보를 불러오지 못했습니다." : "불러오는 중…"}</p></div>;
+  const defaultPresetId = presets.data?.defaultAccountPresetId;
+  const accountSelector = <div className="flex flex-wrap items-center gap-2"><Label htmlFor="trading-preset">모의투자 선택</Label><select id="trading-preset" className="max-w-full rounded-md border bg-background px-3 py-2 text-sm" value={presetId ?? defaultPresetId ?? ""} disabled={write.isPending} onChange={(event) => selectPreset(event.target.value || null)}>{!defaultPresetId ? <option value="">기본 계좌</option> : null}{presets.data?.presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.title}</option>)}{presets.data?.archived?.map((preset) => <option key={preset.id} value={preset.id}>{preset.title} (전략 제거됨)</option>)}</select><Button variant="outline" disabled={!data || write.isPending || !artifacts.data || (!!sourceId && !source.data?.setup)} onClick={openNew}>새 모의투자</Button></div>;
+  if (!data) return <div className="space-y-3"><h2 className="text-lg font-semibold">매매</h2>{accountSelector}<p role={snapshot.error ? "alert" : "status"}>{snapshot.error ? "매매 정보를 불러오지 못했습니다." : "불러오는 중…"}</p></div>;
   return <div className="space-y-4"><h2 className="text-lg font-semibold">매매</h2>
+    {accountSelector}
     {snapshot.error ? <Alert variant="destructive"><AlertDescription>최신 상태를 불러오지 못했습니다.</AlertDescription></Alert> : null}
-    <Card><CardHeader><CardTitle>모의 투자 현황</CardTitle></CardHeader><CardContent className="space-y-2 text-sm"><p>초기 모의 자금 {money(data.paperCapital?.initialCashKrw)} · 최신 시세로 모의 체결하며 수수료와 세금이 적용됩니다.</p><p>주문 가능 {money(data.account?.cashBuyingPower)} · 보유 평가액 {money(data.account?.marketValue)} · 평가손익 {money(data.account?.unrealizedPnl)} · 총 손익 {money(data.performance?.totalPnl)} · 추정 수익률 {data.performance?.returnPercent == null ? "—" : `${data.performance.returnPercent.toFixed(2)}%`}</p></CardContent></Card>
-    <Card><CardHeader><CardTitle>전략 상태</CardTitle><CardDescription>{deployment ? `${deployment.name} · ${deployment.version} · ${tradingStatusLabel[deployment.status]}${preparation ? "" : ` · ${deployment.activity}`}` : "등록된 전략이 없습니다. 전략은 하나만 등록할 수 있습니다."}</CardDescription></CardHeader><CardContent className="space-y-3">{preparation ? <Alert variant={preparation.status === "FAILED" ? "destructive" : "default"} role={preparation.status === "FAILED" ? "alert" : "status"}><AlertDescription className="flex min-w-0 items-start gap-2">{preparing ? <LoaderCircle aria-hidden="true" className="mt-0.5 size-4 shrink-0 animate-spin" /> : null}<span className="min-w-0 break-words"><strong>{preparing ? "데이터 준비 중" : preparation.status === "READY" ? "데이터 준비 완료" : "데이터 준비 실패"}</strong> · {preparation.message}{preparation.status === "READY" ? " 자동 매매를 켜려면 직접 ON을 선택하세요." : null}</span></AlertDescription></Alert> : null}{deployment?.lastError && deployment.lastError !== preparation?.message ? <p role="alert" className="break-words text-destructive">{deployment.lastError}</p> : null}{error && !settingsOpen && !dialog && !toggleMode ? <Alert variant="destructive" role="alert"><AlertDescription className="break-words">{error}</AlertDescription></Alert> : null}{data.blockers.map((b) => <p key={b} className="text-sm text-destructive">{b}</p>)}<div className="flex flex-wrap gap-2"><Button variant="outline" disabled={!artifacts.data || (!!sourceId && !deployment && !source.data)} onClick={openSettings}>{deployment && <LockKeyhole aria-hidden="true" />}매매 설정</Button>{deployment ? <><Button aria-pressed={deployment.status === "ACTIVE"} className={deployment.status === "ACTIVE" ? "bg-emerald-100 text-emerald-900 hover:bg-emerald-200 dark:bg-emerald-950 dark:text-emerald-100 dark:hover:bg-emerald-900" : "bg-amber-100 text-amber-900 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-100 dark:hover:bg-amber-900"} disabled={write.isPending || deployment.status === "STOPPING" || (inactive && preparing)} onClick={() => { setError(null); setDialogRevision(data.revision); setToggleMode(inactive ? "on" : "off"); }}>{deployment.status === "ACTIVE" ? "자동 매매 ON" : "자동 매매 OFF"}</Button>{inactive ? <Button variant="outline" disabled={write.isPending || preparing} onClick={() => { setError(null); submit("/trading/prepare", "POST", { expectedRevision: data.revision }); }}>{preparing ? "데이터 준비 중" : preparation?.status === "FAILED" ? "데이터 복구 재시도" : "데이터 확인·복구"}</Button> : null}<Button variant="outline" disabled={!inactive || write.isPending || !latest || latest.artifactHash === deployment.artifactHash} onClick={() => { if (latest) setVersionParams({ ...defaults(latest), ...Object.fromEntries(Object.entries(deployment.parameters).filter(([key]) => key in properties(latest))) }); setError(null); setDialogRevision(data.revision); setDialog("version"); }}>최신 버전으로 변경</Button><Button variant="outline" disabled={!inactive || write.isPending} onClick={() => { setError(null); setDialogRevision(data.revision); setDialog("remove"); }}>전략 제거</Button></> : null}</div><p className="text-sm text-muted-foreground">{!inactive ? "설정 수정, 버전 변경 및 제거는 자동 매매를 끈 후 가능합니다." : "자동 매매가 꺼져 있으면 매수, 매도 및 손절이 실행되지 않습니다."}</p></CardContent></Card>
-    {sourceId && !deployment && source.isLoading ? <p>백테스트 설정을 불러오는 중…</p> : null}{sourceId && !deployment && (source.error || source.data?.error) ? <Alert variant="destructive"><AlertDescription>{source.data?.error ?? "백테스트 설정을 불러오지 못했습니다."}</AlertDescription></Alert> : null}
+    <Card><CardHeader><CardTitle>모의 투자 현황</CardTitle>{data.broker.selectedAccountId && <CardDescription>모의계좌 · {data.broker.selectedAccountId}</CardDescription>}</CardHeader><CardContent className="space-y-2 text-sm"><p>초기 모의 자금 {money(data.paperCapital?.initialCashKrw)} · 최신 시세로 모의 체결하며 수수료와 세금이 적용됩니다.</p><p>주문 가능 {money(data.account?.cashBuyingPower)} · 보유 평가액 {money(data.account?.marketValue)} · 평가손익 {money(data.account?.unrealizedPnl)} · 총 손익 {money(data.performance?.totalPnl)} · 추정 수익률 {data.performance?.returnPercent == null ? "—" : `${data.performance.returnPercent.toFixed(2)}%`}</p></CardContent></Card>
+    <Card><CardHeader><CardTitle>전략 상태</CardTitle><CardDescription>{deployment ? `${deployment.name} · ${deployment.version} · ${tradingStatusLabel[deployment.status]}${preparation ? "" : ` · ${deployment.activity}`}` : "등록된 전략이 없습니다."}</CardDescription></CardHeader><CardContent className="space-y-3">{preparation ? <Alert variant={preparation.status === "FAILED" ? "destructive" : "default"} role={preparation.status === "FAILED" ? "alert" : "status"}><AlertDescription className="flex min-w-0 items-start gap-2">{preparing ? <LoaderCircle aria-hidden="true" className="mt-0.5 size-4 shrink-0 animate-spin" /> : null}<span className="min-w-0 break-words"><strong>{preparing ? "데이터 준비 중" : preparation.status === "READY" ? "데이터 준비 완료" : "데이터 준비 실패"}</strong> · {preparation.message}{preparation.status === "READY" ? " 자동 매매를 켜려면 직접 ON을 선택하세요." : null}</span></AlertDescription></Alert> : null}{deployment?.lastError && deployment.lastError !== preparation?.message ? <p role="alert" className="break-words text-destructive">{deployment.lastError}</p> : null}{error && !settingsOpen && !dialog && !toggleMode ? <Alert variant="destructive" role="alert"><AlertDescription className="break-words">{error}</AlertDescription></Alert> : null}{data.blockers.map((b) => <p key={b} className="text-sm text-destructive">{b}</p>)}<div className="flex flex-wrap gap-2"><Button variant="outline" disabled={!artifacts.data || (!!sourceId && !deployment && !source.data?.setup)} onClick={openSettings}>{deployment && <LockKeyhole aria-hidden="true" />}매매 설정</Button>{deployment ? <><Button aria-pressed={deployment.status === "ACTIVE"} className={deployment.status === "ACTIVE" ? "bg-emerald-100 text-emerald-900 hover:bg-emerald-200 dark:bg-emerald-950 dark:text-emerald-100 dark:hover:bg-emerald-900" : "bg-amber-100 text-amber-900 hover:bg-amber-200 dark:bg-amber-950 dark:text-amber-100 dark:hover:bg-amber-900"} disabled={write.isPending || deployment.status === "STOPPING" || (inactive && preparing)} onClick={() => { setError(null); setDialogRevision(data.revision); setToggleMode(inactive ? "on" : "off"); }}>{deployment.status === "ACTIVE" ? "자동 매매 ON" : "자동 매매 OFF"}</Button>{inactive ? <Button variant="outline" disabled={write.isPending || preparing} onClick={() => { setError(null); submit("/trading/prepare", "POST", { expectedRevision: data.revision }); }}>{preparing ? "데이터 준비 중" : preparation?.status === "FAILED" ? "데이터 복구 재시도" : "데이터 확인·복구"}</Button> : null}<Button variant="outline" disabled={!inactive || write.isPending || !latest || latest.artifactHash === deployment.artifactHash} onClick={() => { if (latest) setVersionParams({ ...defaults(latest), ...Object.fromEntries(Object.entries(deployment.parameters).filter(([key]) => key in properties(latest))) }); setError(null); setDialogRevision(data.revision); setDialog("version"); }}>최신 버전으로 변경</Button><Button variant="outline" disabled={(!creating && !inactive) || write.isPending} onClick={() => { setError(null); setDialogRevision(data.revision); setDialog("remove"); }}>전략 제거</Button></> : null}</div><p className="text-sm text-muted-foreground">{!inactive ? "설정 수정, 버전 변경 및 제거는 자동 매매를 끈 후 가능합니다." : "자동 매매가 꺼져 있으면 매수, 매도 및 손절이 실행되지 않습니다."}</p></CardContent></Card>
+    {sourceId && source.isLoading ? <p>백테스트 설정을 불러오는 중…</p> : null}{sourceId && !source.isLoading && (source.error || !source.data?.setup) ? <Alert variant="destructive"><AlertDescription>{source.data?.error ?? "백테스트 설정을 불러오지 못했습니다."}</AlertDescription></Alert> : null}
     {artifacts.error ? <Alert variant="destructive"><AlertDescription>전략 버전 목록을 불러오지 못했습니다.</AlertDescription></Alert> : null}
-    <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+    <Dialog open={settingsOpen} onOpenChange={(open) => { setSettingsOpen(open); if (!open) setCreating(false); }}>
       <DialogContent className="flex max-h-[calc(100dvh-2rem)] min-w-0 flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader className="shrink-0 pr-8">
           <DialogTitle>매매 설정</DialogTitle>
         </DialogHeader>
         <div className="min-h-0 min-w-0 space-y-4 overflow-y-auto overscroll-contain">
           <DialogDescription>일봉 전략은 거래일 09:00~09:10(KST)에 전일 확정 봉으로 판단합니다. 실행창을 놓친 신호를 장중에 소급 주문하지 않습니다. 저장과 활성화는 별도 단계입니다. 손실 한도는 주문 중지 기준이며 보유 종목을 자동 청산하지 않습니다.</DialogDescription>
-          {error || contextChanged ? <Alert variant="destructive" role="alert"><AlertDescription>{error ?? "등록된 전략이 다른 화면에서 변경되었습니다. 작성 중인 입력은 유지했습니다. 최신 설정을 불러온 뒤 저장해 주세요."} <Button variant="outline" size="sm" disabled={snapshot.isFetching || snapshot.isError} onClick={openSettings}>최신 설정 불러오기</Button></AlertDescription></Alert> : null}
-          {draft ? <div className="space-y-4"><fieldset disabled={!inactive || write.isPending} className="min-w-0 space-y-4"><div className="space-y-1"><Label>전략 및 고정 버전</Label>{deployment || sourceId ? <p className="break-all text-sm">{artifact ? `${artifact.name} · ${artifact.version}` : `${draft.strategyId} · ${draft.artifactHash}`} </p> : <Select disabled={!inactive || write.isPending} value={`${draft.strategyId}:${draft.artifactHash}`} onValueChange={(key) => { const selected = list.find((a) => `${a.strategyId}:${a.artifactHash}` === key); if (selected) setDraft(baseSetup(selected)); }}><SelectTrigger><SelectValue placeholder="전략 선택" /></SelectTrigger><SelectContent>{list.filter((a) => a.latest).map((a) => <SelectItem key={`${a.strategyId}:${a.artifactHash}`} value={`${a.strategyId}:${a.artifactHash}`}>{a.name} · {a.version}</SelectItem>)}</SelectContent></Select>}{!artifact ? <p role="alert" className="text-sm text-destructive">원본의 정확한 전략 버전을 찾을 수 없습니다. 다른 버전으로 대체하지 않습니다.</p> : null}</div><ParameterFields disabled={!inactive || write.isPending} artifact={artifact} value={draft.parameters} onChange={(v) => setField("parameters", v)} /><div className="space-y-2"><Label>유니버스 시장</Label><Select disabled={!inactive || write.isPending} value={draft.universeRule.markets[0]} onValueChange={(v) => setField("universeRule", { ...draft.universeRule, markets: [v as "KOSPI" | "KOSDAQ"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="KOSPI">KOSPI</SelectItem><SelectItem value="KOSDAQ">KOSDAQ</SelectItem></SelectContent></Select><div className="max-w-full overflow-x-auto">{inactive && !write.isPending ? <UniverseStageEditor stages={draft.universeRule.stages} onChange={(stages) => setField("universeRule", { ...draft.universeRule, stages })} /> : <p className="break-words text-sm">{formatUniverseRuleSummary(draft.universeRule)}</p>}</div><Label>리밸런스 주기</Label><div className="flex gap-2"><Input className="min-w-0" type="number" min={1} value={draft.universeRule.rebalanceInterval.value} disabled={["NONE", "YEAR"].includes(draft.universeRule.rebalanceInterval.unit)} onChange={(e) => setField("universeRule", { ...draft.universeRule, rebalanceInterval: { ...draft.universeRule.rebalanceInterval, value: Number(e.target.value) } as RebalanceInterval })} /><Select disabled={!inactive || write.isPending} value={draft.universeRule.rebalanceInterval.unit} onValueChange={(unit) => setField("universeRule", { ...draft.universeRule, rebalanceInterval: { unit, value: 1 } as RebalanceInterval })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{[["NONE", "안 함"], ["DAY", "일"], ["WEEK", "주"], ["MONTH", "개월"], ["YEAR", "년"]].map(([v, label]) => <SelectItem key={v} value={v!}>{label}</SelectItem>)}</SelectContent></Select></div></div><div className="space-y-1"><Label htmlFor="initialCashKrw">초기 모의자금 (원)</Label><Input id="initialCashKrw" type="number" min={10000} max={1000000000000} step={1} disabled={!inactive || write.isPending || !data.paperCapital?.canEdit} value={Number.isFinite(initialCashKrw) ? initialCashKrw : ""} onChange={(e) => setInitialCashKrw(e.target.value === "" ? NaN : Number(e.target.value))} /><p className="text-xs text-muted-foreground">초기 모의자금은 모의 투자 전체의 시작 자금이며, 운용 예산은 전략의 별도 사용 한도입니다. {!inactive ? "자동매매 OFF 상태에서 변경할 수 있습니다." : data.paperCapital && !data.paperCapital.canEdit ? "진행 중인 주문이 있거나 첫 체결 이후에는 초기 모의자금을 변경할 수 없습니다." : null}</p></div><div className="grid gap-3 sm:grid-cols-2">{numericFields.map(([key, label]) => <div className="space-y-1" key={key}><Label htmlFor={key}>{label}</Label><Input id={key} type="number" step="any" value={Number.isFinite(draft[key]) ? draft[key] : ""} onChange={(e) => setField(key, e.target.value === "" ? NaN : Number(e.target.value))} /></div>)}</div><Button type="button" disabled={!inactive || !artifact || write.isPending || contextChanged} onClick={save}>설정 저장</Button></fieldset></div> : <p>설정을 불러올 수 없습니다.</p>}
+          {error || contextChanged ? <Alert variant="destructive" role="alert"><AlertDescription>{error ?? "등록된 전략이 다른 화면에서 변경되었습니다. 작성 중인 입력은 유지했습니다. 최신 설정을 불러온 뒤 저장해 주세요."} {!creating ? <Button variant="outline" size="sm" disabled={snapshot.isFetching || snapshot.isError} onClick={openSettings}>최신 설정 불러오기</Button> : null}</AlertDescription></Alert> : null}
+          {draft ? <div className="space-y-4">
+            <div className="space-y-1">
+              <Label htmlFor="preset-title">모의투자 이름 (선택)</Label>
+              <Input id="preset-title" value={title} maxLength={100} disabled={write.isPending}
+                placeholder={artifact?.name ?? "전략 이름"} onChange={(e) => setTitle(e.target.value)} />
+              {!creating && !inactive && deployment && <Button variant="outline" size="sm"
+                disabled={write.isPending || contextChanged || title.trim() === (draft.title ?? "")}
+                onClick={() => submit("/trading/title", "PATCH", { deploymentId: deployment.id, expectedRevision: draftRevision,
+                  expectedTitle: draft.title ?? "", title: title.trim() })}>이름 저장</Button>}
+            </div>
+            <fieldset disabled={(!creating && !inactive) || write.isPending} className="min-w-0 space-y-4"><div className="space-y-1"><Label>전략 및 고정 버전</Label>{(!creating && deployment) || sourceId ? <p className="break-all text-sm">{artifact ? `${artifact.name} · ${artifact.version}` : `${draft.strategyId} · ${draft.artifactHash}`} </p> : <Select disabled={(!creating && !inactive) || write.isPending} value={`${draft.strategyId}:${draft.artifactHash}`} onValueChange={(key) => { const selected = list.find((a) => `${a.strategyId}:${a.artifactHash}` === key); if (selected) setDraft(baseSetup(selected)); }}><SelectTrigger><SelectValue placeholder="전략 선택" /></SelectTrigger><SelectContent>{list.filter((a) => a.latest).map((a) => <SelectItem key={`${a.strategyId}:${a.artifactHash}`} value={`${a.strategyId}:${a.artifactHash}`}>{a.name} · {a.version}</SelectItem>)}</SelectContent></Select>}{!artifact ? <p role="alert" className="text-sm text-destructive">원본의 정확한 전략 버전을 찾을 수 없습니다. 다른 버전으로 대체하지 않습니다.</p> : null}</div><ParameterFields disabled={(!creating && !inactive) || write.isPending} artifact={artifact} value={draft.parameters} onChange={(v) => setField("parameters", v)} /><div className="space-y-2"><Label>유니버스 시장</Label><Select disabled={(!creating && !inactive) || write.isPending} value={draft.universeRule.markets[0]} onValueChange={(v) => setField("universeRule", { ...draft.universeRule, markets: [v as "KOSPI" | "KOSDAQ"] })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="KOSPI">KOSPI</SelectItem><SelectItem value="KOSDAQ">KOSDAQ</SelectItem></SelectContent></Select><div className="max-w-full overflow-x-auto">{(creating || inactive) && !write.isPending ? <UniverseStageEditor stages={draft.universeRule.stages} onChange={(stages) => setField("universeRule", { ...draft.universeRule, stages })} /> : <p className="break-words text-sm">{formatUniverseRuleSummary(draft.universeRule)}</p>}</div><Label>리밸런스 주기</Label><div className="flex gap-2"><Input className="min-w-0" type="number" min={1} value={draft.universeRule.rebalanceInterval.value} disabled={["NONE", "YEAR"].includes(draft.universeRule.rebalanceInterval.unit)} onChange={(e) => setField("universeRule", { ...draft.universeRule, rebalanceInterval: { ...draft.universeRule.rebalanceInterval, value: Number(e.target.value) } as RebalanceInterval })} /><Select disabled={(!creating && !inactive) || write.isPending} value={draft.universeRule.rebalanceInterval.unit} onValueChange={(unit) => setField("universeRule", { ...draft.universeRule, rebalanceInterval: { unit, value: 1 } as RebalanceInterval })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{[["NONE", "안 함"], ["DAY", "일"], ["WEEK", "주"], ["MONTH", "개월"], ["YEAR", "년"]].map(([v, label]) => <SelectItem key={v} value={v!}>{label}</SelectItem>)}</SelectContent></Select></div></div><div className="space-y-1"><Label htmlFor="initialCashKrw">초기 모의자금 (원)</Label><Input id="initialCashKrw" type="number" min={10000} max={1000000000000} step={1} disabled={(!creating && !inactive) || write.isPending || (!creating && !data.paperCapital?.canEdit)} value={Number.isFinite(initialCashKrw) ? initialCashKrw : ""} onChange={(e) => setInitialCashKrw(e.target.value === "" ? NaN : Number(e.target.value))} /><p className="text-xs text-muted-foreground">초기 모의자금은 모의 투자 전체의 시작 자금이며, 운용 예산은 전략의 별도 사용 한도입니다. {!creating && !inactive ? "자동매매 OFF 상태에서 변경할 수 있습니다." : !creating && data.paperCapital && !data.paperCapital.canEdit ? "진행 중인 주문이 있거나 첫 체결 이후에는 초기 모의자금을 변경할 수 없습니다." : null}</p></div><div className="grid gap-3 sm:grid-cols-2">{numericFields.map(([key, label]) => <div className="space-y-1" key={key}><Label htmlFor={key}>{label}</Label><Input id={key} type="number" step="any" value={Number.isFinite(draft[key]) ? draft[key] : ""} onChange={(e) => setField(key, e.target.value === "" ? NaN : Number(e.target.value))} /></div>)}</div><Button type="button" disabled={(!creating && !inactive) || !artifact || write.isPending || contextChanged} onClick={save}>설정 저장</Button></fieldset></div> : <p>설정을 불러올 수 없습니다.</p>}
         </div>
       </DialogContent>
     </Dialog>

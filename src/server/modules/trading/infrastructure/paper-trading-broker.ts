@@ -1,7 +1,7 @@
 import { paperFillPrice, paperTradingCostProfile } from "../application/paper-trading-cost.js";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import { getCostProfile, sellTaxAmount } from "../../../../runtime/modules/backtest/domain/cost-profiles.js";
-import { PAPER_TRADING_ACCOUNT_ID, PAPER_TRADING_INITIAL_CASH_KRW, tradingSetupSchema } from "../../../../shared/schemas/trading.js";
+import { PAPER_TRADING_INITIAL_CASH_KRW, paperTradingAccountId, tradingSetupSchema } from "../../../../shared/schemas/trading.js";
 import { BrokerHoldingsChangedError, BrokerRequestError, type BrokerOrder, type TradingBroker } from "../application/broker-port.js";
 
 type Request = Parameters<TradingBroker["place"]>[1];
@@ -12,16 +12,20 @@ type Account = { cash: number; holdings_json: string };
 export function createPaperTradingBroker(deps: {
   database: DatabaseHandle;
   marketData: Pick<TradingBroker, "quotes" | "dailyCandles">;
+  accountSlot?: number;
   now?: () => number;
   getName?: (symbol: string) => string | undefined;
 }): TradingBroker {
   const { sqlite } = deps.database;
+  const slot = deps.accountSlot ?? 1;
+  if (!Number.isSafeInteger(slot) || slot <= 0) throw new RangeError("모의 계좌 슬롯이 올바르지 않습니다");
+  const accountId = paperTradingAccountId(slot);
   const now = deps.now ?? Date.now;
   const fail = (message: string): never => { throw new BrokerRequestError(message, false); };
-  const account = (id: string) => { if (id !== PAPER_TRADING_ACCOUNT_ID) fail("모의 계좌가 아닙니다"); };
-  const readAccount = (): Account => (sqlite.prepare("SELECT cash, holdings_json FROM paper_trading_account WHERE singleton = 1").get() as Account | undefined) ?? { cash: PAPER_TRADING_INITIAL_CASH_KRW, holdings_json: "{}" };
+  const account = (id: string) => { if (id !== accountId) fail("모의 계좌가 아닙니다"); };
+  const readAccount = (): Account => (sqlite.prepare("SELECT cash, holdings_json FROM paper_trading_account WHERE singleton = ?").get(slot) as Account | undefined) ?? { cash: PAPER_TRADING_INITIAL_CASH_KRW, holdings_json: "{}" };
   const readOrder = (id: string): StoredOrder | undefined => {
-    const row = sqlite.prepare("SELECT payload_json FROM paper_trading_orders WHERE id = ?").get(id) as { payload_json: string } | undefined;
+    const row = sqlite.prepare("SELECT payload_json FROM paper_trading_orders WHERE id = ? AND account_slot = ?").get(id, slot) as { payload_json: string } | undefined;
     return row ? JSON.parse(row.payload_json) as StoredOrder : undefined;
   };
   const same = (a: Request, b: Request) => a.clientOrderId === b.clientOrderId && a.symbol === b.symbol && a.side === b.side && a.quantity === b.quantity && a.price === b.price && a.venue === b.venue;
@@ -40,7 +44,7 @@ export function createPaperTradingBroker(deps: {
   };
   return {
     mode: "PAPER", configured: true,
-    accounts: () => protect(() => [{ id: PAPER_TRADING_ACCOUNT_ID, label: "모의투자" }]),
+    accounts: () => protect(() => [{ id: accountId, label: "모의투자" }]),
     buyingPower: id => protect(() => { account(id); return readAccount().cash; }),
     sellableQuantity: (id, symbol) => protect(() => { account(id); return (JSON.parse(readAccount().holdings_json) as Record<string, Holding>)[symbol]?.quantity ?? 0; }),
     holdings: id => protect(async () => {
@@ -70,7 +74,7 @@ export function createPaperTradingBroker(deps: {
       account(id);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) fail("주문 조회 기간이 올바르지 않습니다");
       const start = Date.parse(`${from}T00:00:00+09:00`), end = Date.parse(`${to}T00:00:00+09:00`) + 86_400_000;
-      return (sqlite.prepare("SELECT payload_json FROM paper_trading_orders WHERE created_at_ms >= ? AND created_at_ms < ? ORDER BY created_at_ms").all(start, end) as { payload_json: string }[]).map(row => (JSON.parse(row.payload_json) as StoredOrder).order);
+      return (sqlite.prepare("SELECT payload_json FROM paper_trading_orders WHERE account_slot = ? AND created_at_ms >= ? AND created_at_ms < ? ORDER BY created_at_ms").all(slot, start, end) as { payload_json: string }[]).map(row => (JSON.parse(row.payload_json) as StoredOrder).order);
     }),
     order: (id, orderId) => protect(() => { account(id); return readOrder(orderId)?.order ?? fail("주문을 찾을 수 없습니다"); }),
     place: (id, request, beforeSend) => protect(async () => {
@@ -85,7 +89,7 @@ export function createPaperTradingBroker(deps: {
         const timestamp = now();
         if (q.timestampMs < timestamp - 30_000 || q.timestampMs > timestamp + 5_000) fail("유효한 최신 시세가 없습니다");
         const current = readAccount();
-        const row = sqlite.prepare("SELECT setup_json FROM trading_deployments WHERE slot = 1 AND mode = 'PAPER'").get() as { setup_json: string } | undefined;
+        const row = sqlite.prepare("SELECT setup_json FROM trading_deployments WHERE slot = ? AND mode = 'PAPER'").get(slot) as { setup_json: string } | undefined;
         const setup = row ? tradingSetupSchema.parse(JSON.parse(row.setup_json)) : null;
         const profile = getCostProfile(setup?.paperCommissionProfileId ?? paperTradingCostProfile.id) ?? paperTradingCostProfile;
         const fillPrice = setup ? paperFillPrice(setup,request.side,request.symbol,q.price,timestamp,request.venue) : q.price;
@@ -102,14 +106,19 @@ export function createPaperTradingBroker(deps: {
         if (within) {
           if (request.side === "BUY") { current.cash -= gross + commission; holdings[request.symbol] = { quantity: holding.quantity + request.quantity, cost: holding.cost + gross }; }
           else { current.cash += gross - commission - tax; const quantity = holding.quantity - request.quantity; if (quantity === 0) delete holdings[request.symbol]; else holdings[request.symbol] = { quantity, cost: holding.cost * quantity / holding.quantity }; }
-          sqlite.prepare("INSERT INTO paper_trading_account (singleton, cash, holdings_json) VALUES (1, ?, ?) ON CONFLICT(singleton) DO UPDATE SET cash = excluded.cash, holdings_json = excluded.holdings_json").run(current.cash, JSON.stringify(holdings));
+          sqlite.prepare("INSERT INTO paper_trading_account (singleton, cash, holdings_json) VALUES (?, ?, ?) ON CONFLICT(singleton) DO UPDATE SET cash = excluded.cash, holdings_json = excluded.holdings_json").run(slot, current.cash, JSON.stringify(holdings));
         }
         const order: BrokerOrder = { id: request.clientOrderId, clientOrderId: request.clientOrderId, symbol: request.symbol, side: request.side, quantity: request.quantity, price: request.price, orderedAtMs: timestamp, filledQuantity: within ? request.quantity : 0, averageFillPrice: within ? fillPrice : null, commission: within ? commission : 0, tax: within ? tax : 0, ...(!within ? { error: "모의 예상 체결가가 지정가를 벗어났습니다. 호가 단위와 슬리피지 한도를 확인하세요." } : {}), status: within ? "FILLED" : "REJECTED" };
-        sqlite.prepare("INSERT INTO paper_trading_orders (id, payload_json, created_at_ms) VALUES (?, ?, ?)").run(order.id, JSON.stringify({ request, order }), timestamp);
+        try {
+          sqlite.prepare("INSERT INTO paper_trading_orders (id, account_slot, payload_json, created_at_ms) VALUES (?, ?, ?, ?)").run(order.id, slot, JSON.stringify({ request, order }), timestamp);
+        } catch (error) {
+          if (error instanceof Error && "code" in error && error.code === "SQLITE_CONSTRAINT_PRIMARYKEY") fail("주문 ID를 사용할 수 없습니다");
+          throw error;
+        }
         return { orderId: order.id };
       }).immediate();
     }),
-    cancel: (id, orderId) => protect(() => { account(id); sqlite.transaction(() => { const stored = readOrder(orderId); if (!stored) fail("주문을 찾을 수 없습니다"); if (stored!.order.status === "OPEN" || stored!.order.status === "PARTIAL") { stored!.order.status = "CANCELLED"; sqlite.prepare("UPDATE paper_trading_orders SET payload_json = ? WHERE id = ?").run(JSON.stringify(stored), orderId); } }).immediate(); }),
+    cancel: (id, orderId) => protect(() => { account(id); sqlite.transaction(() => { const stored = readOrder(orderId); if (!stored) fail("주문을 찾을 수 없습니다"); if (stored!.order.status === "OPEN" || stored!.order.status === "PARTIAL") { stored!.order.status = "CANCELLED"; sqlite.prepare("UPDATE paper_trading_orders SET payload_json = ? WHERE id = ? AND account_slot = ?").run(JSON.stringify(stored), orderId, slot); } }).immediate(); }),
     quotes: symbols => protect(() => deps.marketData.quotes(symbols)),
     dailyCandles: (symbol, from, to) => protect(() => deps.marketData.dailyCandles(symbol, from, to)),
   };

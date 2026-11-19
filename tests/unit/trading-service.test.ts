@@ -8,6 +8,7 @@ import { TradingService, type StrategyArtifactStore, type TradingDecisionEngine 
 import { backtestJobs } from "../../src/runtime/shared/db/operations-schema.js";
 import { backtestRuns } from "../../src/server/shared/db/backtest-result-schema.js";
 import { createPaperTradingBroker } from "../../src/server/modules/trading/infrastructure/paper-trading-broker.js";
+import { TradingPresets } from "../../src/server/modules/trading/application/trading-presets.js";
 import { kstDateOf } from "../../src/runtime/modules/market-data/domain/kst-date.js";
 import { TradingDataRequired, type TradingDataNeed } from "../../src/server/modules/trading/application/trading-data.js";
 
@@ -56,6 +57,52 @@ async function active(f: ReturnType<typeof fixture>, config: TradingSetup = setu
 const holding = (quantity: number): BrokerHolding => ({ symbol: "005930", name: "삼성전자", quantity, availableQuantity: quantity, averagePrice: 1000, price: 1000, marketValue: quantity * 1000, unrealizedPnl: 0 });
 
 describe("모의투자 실행 경계", () => {
+  it("두 프리셋이 같은 봉을 동시에 매매하고 한 계좌의 중지·제거·오류와 이력을 분리한다", async () => {
+    const f = fixture(true);
+    const presets = new TradingPresets(f.database, (slot) => slot === 1 ? f.service : new TradingService({
+      database: f.database, accountSlot: slot, now: f.now, engine: f.engine, artifacts: f.artifacts,
+      broker: createPaperTradingBroker({ database: f.database, accountSlot: slot, marketData: f.broker, now: f.now }),
+    }), error => { throw error; });
+    cleanup.unshift(() => presets.close());
+    const config = { ...setup, paperCommissionProfileId: "zero-cost", paperSlippageProfileId: "zero-slippage" } as const;
+    const requestId = "98bc5660-b8ca-4152-9c81-baf990fba6f0";
+    const [first, second, retry] = await Promise.all([
+      presets.create(config, 0, "user", 20_000, requestId),
+      presets.create({ ...config, title: "두 번째" }, 0, "user", 50_000),
+      presets.create(config, 0, "user", 20_000, requestId),
+    ]);
+    expect(retry.id).toBe(first.id);
+    const a = presets.forPreset(first.id), b = presets.forPreset(second.id);
+    expect(presets.list().presets.map(row => row.title)).toEqual(["알파", "두 번째"]);
+    vi.mocked(f.engine.evaluate).mockImplementation(async ({ deployment, warmupOnly }) => ({
+      checkpoint: "동일 봉", barTsMs: warmupOnly ? 1 : 2,
+      orders: warmupOnly ? [] : [{ side: "BUY", symbol: "005930", quantity: deployment.id === first.id ? 2 : 7 }],
+    }));
+    await Promise.all([a.activate(first.snapshot.revision, "user"), b.activate(second.snapshot.revision, "user")]);
+    const activeRevision = a.snapshot().revision;
+    expect(a.rename(first.id, activeRevision, "", "첫 계좌", "user").revision).toBe(activeRevision);
+    expect(() => b.rename(first.id, b.snapshot().revision, "", "잘못된 계좌", "user")).toThrow();
+    expect(presets.list().presets.map(row => row.status)).toEqual(["ACTIVE", "ACTIVE"]);
+    await presets.tick();
+    const [afterA, afterB] = await Promise.all([a.refresh(), b.refresh()]);
+    for (const [result, id, shares, cash] of [[afterA, first.id, 2, 18_000], [afterB, second.id, 7, 43_000]] as const) {
+      expect(result.account?.cashBuyingPower).toBe(cash);
+      expect(result.orders).toMatchObject([{ deploymentId: id, filledQuantity: shares, status: "FILLED" }]);
+      expect(result.positions).toMatchObject([{ deploymentId: id, symbol: "005930", quantity: shares }]);
+      expect(result.events.filter(e => e.message.includes("주 주문 접수")).map(e => e.message)).toEqual([`005930 매수 ${shares}주 주문 접수`]);
+    }
+    a.deactivate(afterA.revision, "user");
+    expect(presets.list().presets.map(row => row.id)).toEqual([second.id, first.id]);
+    expect(b.snapshot().revision).toBe(afterB.revision);
+    vi.mocked(f.engine.evaluate).mockRejectedValue(new Error("두 번째 계좌 시세 오류"));
+    await presets.tick();
+    expect(presets.list().presets.map(row => [row.id, row.status])).toEqual([[first.id, "INACTIVE"], [second.id, "ERROR"]]);
+    a.remove(a.snapshot().revision, "user");
+    expect(presets.list().archived.map(row => row.id)).toEqual([first.id]);
+    expect(presets.forPreset(first.id).snapshot()).toMatchObject({deployment: null, account: {cashBuyingPower: 18_000}, positions: [{quantity: 2}]});
+    const third = await presets.create(config, 0, "user", 30_000);
+    expect(third.snapshot).toMatchObject({account: {cashBuyingPower: 30_000}, orders: [], positions: []});
+  });
   async function paperActive(f: ReturnType<typeof fixture>) {
     await f.service.tick();
     await f.service.register(setup, f.service.snapshot().revision, "user");
