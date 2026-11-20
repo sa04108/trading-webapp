@@ -11,6 +11,11 @@ type Decision = {
 };
 const none = (): Decision => ({ entry: null, exit: null });
 
+export interface IntradaySignalCheckpoint {
+  orbFired: boolean;
+  recoveryRemaining: number;
+}
+
 /** 확정된 분봉과 신호 봉만 사용하며 모든 지표는 거래일마다 초기화한다. */
 export function createIntradaySignalModel(request: IntradayRequest) {
   let day = "";
@@ -61,7 +66,14 @@ export function createIntradaySignalModel(request: IntradayRequest) {
     recoveryRemaining = 0;
   };
   return {
-    onMinute(bar: IntradayBar, signalBar?: IntradayBar): Decision {
+    checkpoint(): IntradaySignalCheckpoint {
+      return { orbFired: fired, recoveryRemaining };
+    },
+    restore(checkpoint: IntradaySignalCheckpoint) {
+      fired = checkpoint.orbFired;
+      recoveryRemaining = checkpoint.recoveryRemaining;
+    },
+    onMinute(bar: IntradayBar, signalBar?: IntradayBar, allowEntry = true): Decision {
       const nextDay = intradayDate(bar.endMs);
       if (nextDay !== day) {
         reset();
@@ -130,6 +142,7 @@ export function createIntradaySignalModel(request: IntradayRequest) {
         const entry =
           eligible &&
           elapsed <= entryWindowMinutes &&
+          allowEntry &&
           !fired &&
           previousClose !== null &&
           previousClose <= threshold &&
@@ -222,6 +235,7 @@ export function createIntradaySignalModel(request: IntradayRequest) {
                   bandPeriod,
               );
       const entry =
+        allowEntry &&
         signalBar.volume > 0 &&
         previousClose !== null &&
         previousLower !== null &&

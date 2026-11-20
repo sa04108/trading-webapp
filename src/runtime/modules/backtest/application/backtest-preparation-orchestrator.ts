@@ -366,21 +366,9 @@ export class BacktestPreparationOrchestrator {
     // 두 문장을 잇는 것만으로는 single-flight가 아니다.
     const selected = this.deps.database.sqlite
       .transaction(() => {
-        const existing = this.deps.database.db
-          .select(PREPARATION_DTO_SELECTION)
-          .from(backtestPreparationJobs)
-          .where(
-            and(
-              eq(backtestPreparationJobs.requestHash, requestHash),
-              eq(backtestPreparationJobs.runtimeVersionsJson, preparationRuntimeVersionsJson()),
-              inArray(backtestPreparationJobs.status, [...ACTIVE_STATUSES]),
-            ),
-          )
-          .orderBy(desc(backtestPreparationJobs.createdAtMs))
-          .limit(1)
-          .get();
+        const existing = options.reuseActive === false ? null : this.activeRow(requestHash);
         // 버전 복구는 다른 소비자가 소유한 이전 실행과 분리해서 시작한다.
-        if (existing && options.reuseActive !== false) {
+        if (existing) {
           if (owner) this.bindWizard(owner.userId, owner.context, existing.id);
           return { row: existing, inserted: false } as const;
         }
@@ -460,20 +448,25 @@ export class BacktestPreparationOrchestrator {
   getActive(input: PreparationInput): BacktestPreparationJobDto | null {
     const strategy = this.requireStrategy(input);
     const requestHash = backtestPreparationRequestHash(input, strategy);
-    const row = this.deps.database.db
+    const row = this.activeRow(requestHash);
+    return row ? toDto(row) : null;
+  }
+
+  private activeRow(requestHash: string) {
+    return this.deps.database.db
       .select(PREPARATION_DTO_SELECTION)
       .from(backtestPreparationJobs)
       .where(
         and(
           eq(backtestPreparationJobs.requestHash, requestHash),
           eq(backtestPreparationJobs.runtimeVersionsJson, preparationRuntimeVersionsJson()),
+          eq(backtestPreparationJobs.cancelRequested, false),
           inArray(backtestPreparationJobs.status, [...ACTIVE_STATUSES]),
         ),
       )
       .orderBy(desc(backtestPreparationJobs.createdAtMs))
       .limit(1)
       .get();
-    return row ? toDto(row) : null;
   }
 
   getPreview(jobId: string): BacktestUniversePreview | null {

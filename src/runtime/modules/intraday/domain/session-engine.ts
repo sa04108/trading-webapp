@@ -2,7 +2,7 @@ import { resolveIntradayRequest } from "../../../../shared/schemas/intraday-stra
 import { MINUTE_MS, intradayBarSchema, intradayDate, type IntradayBar, type IntradayRequest, type IntradaySignal, type IntradayFill, type IntradayOrderEvent, type IntradayEquity } from "../../../../shared/schemas/intraday.js";
 import { getKrxExecutionRules, tickSizeAt } from "../../backtest/domain/cost-profiles.js";
 import { roundToTick } from "../../backtest/domain/execution.js";
-import { createIntradaySignalModel } from "./signal-model.js";
+import { createIntradaySignalModel, type IntradaySignalCheckpoint } from "./signal-model.js";
 import { aggregateIntradayBars, isIntradaySessionBar, minuteOfDay } from "./session-bars.js";
 
 const EXIT = 15 * 60 + 15;
@@ -14,6 +14,7 @@ export interface IntradaySessionState {
   lastBarMs: number | null; throughMs: number | null; nextSignalId: number; day: string; finalizedDay: string; stopped: boolean;
   totalEntryCost: number; tradeProceeds: number; entryAt: number; peak: number; holdingMinutes: number; completedPnl: number;
   previousVolume: number; dailyEntries: number; lastExitAt: number | null; dayBars: IntradayBar[];
+  signalCheckpoint?: IntradaySignalCheckpoint;
   totalCosts: number; maxDrawdownPct: number; completedTrades: number; processedBars: number;
 }
 export function initialIntradayState(request: IntradayRequest): IntradaySessionState {
@@ -41,6 +42,8 @@ export function advanceIntradaySession(requestInput: IntradayRequest, inputState
   const aggregated = new Map(aggregateIntradayBars([...dayBars, ...bars], request.timeframe).map(b => [b.endMs, b]));
   const signalModel = createIntradaySignalModel(request);
   for (const b of dayBars) signalModel.onMinute(b, aggregated.get(b.endMs));
+  // 봉으로 지표를 복원한 뒤 당시 매매 활성 여부에 따라 달라진 당일 진입 상태를 복원한다.
+  if (state.signalCheckpoint) signalModel.restore(state.signalCheckpoint);
   const orders: IntradaySubmittedOrder[] = [];
   const result = { signals: [] as IntradaySignal[], fills: [] as IntradayFill[], orderEvents: [] as IntradayOrderEvent[], equity: [] as IntradayEquity[], warnings: [] as string[], processedBars: state.processedBars,
     metrics: { totalCosts: state.totalCosts, maxDrawdownPct: state.maxDrawdownPct, completedTrades: state.completedTrades } };
@@ -222,10 +225,10 @@ export function advanceIntradaySession(requestInput: IntradayRequest, inputState
     }
     settlePending(bar.endMs);
     const signalBar = aggregated.get(bar.endMs);
-    const decision = signalModel.onMinute(bar, signalBar);
+    const tradingEnabled = bar.endMs > (options.signalAfterMs ?? -Infinity);
+    const decision = signalModel.onMinute(bar, signalBar, tradingEnabled);
     dayBars.push(bar);
     // 시간 제한은 실제 첫 체결부터 센다. 관측된 1분봉에서 청산 신호를 내고 기존 지연·만료 규칙으로 체결한다.
-    const tradingEnabled = bar.endMs > (options.signalAfterMs ?? -Infinity);
     const holdingExpired = tradingEnabled && quantity > 0 && bar.endMs - entryAt >= maxHoldingMinutes * MINUTE_MS;
     if (holdingExpired) {
       if (pending?.signal.side === "BUY") event("CANCELLED", bar.endMs, "최대 보유 시간으로 미체결 매수를 취소했습니다.");
@@ -283,6 +286,6 @@ export function advanceIntradaySession(requestInput: IntradayRequest, inputState
   } else settlePending(options.throughMs);
   Object.assign(state, { cash, quantity, averagePrice, lastPrice, pending, lastBarMs, throughMs: options.throughMs, nextSignalId, day, finalizedDay, stopped,
     totalEntryCost, tradeProceeds, entryAt, peak, holdingMinutes, completedPnl, previousVolume, dailyEntries, lastExitAt: Number.isFinite(lastExitAt) ? lastExitAt : null,
-    dayBars, totalCosts: result.metrics.totalCosts, maxDrawdownPct: result.metrics.maxDrawdownPct, completedTrades: result.metrics.completedTrades, processedBars: result.processedBars });
+    dayBars, signalCheckpoint: signalModel.checkpoint(), totalCosts: result.metrics.totalCosts, maxDrawdownPct: result.metrics.maxDrawdownPct, completedTrades: result.metrics.completedTrades, processedBars: result.processedBars });
   return { state, signals: result.signals, fills: result.fills, orderEvents: result.orderEvents, orders, equity: result.equity, warnings: result.warnings };
 }

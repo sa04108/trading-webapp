@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { openDatabase } from '../../src/runtime/shared/db/database.js';
 import { DATABASE_SCHEMA_VERSION, datasetIdentity } from '../../src/runtime/shared/db/database-layout.js';
 import { DatasetSnapshots } from '../../src/server/modules/agents/application/dataset-snapshots.js';
@@ -25,7 +25,9 @@ it('데이터 revision이 같아도 이전 스키마 스냅샷은 재게시하�
     expect(current.schemaVersion).toBe(DATABASE_SCHEMA_VERSION);
     await expect(cache.synchronize(oldSchema)).rejects.toThrow('클라이언트를 업데이트');
     fs.copyFileSync(snapshots.file(current), cache.file(current));
-    await cache.synchronize(current);
+    const verifying = cache.synchronize(current);
+    cache.prune(new Set());
+    await verifying;
     expect(cache.current).toEqual(current);
     await expect(snapshots.ensureLatest()).resolves.toEqual(current);
   } finally {
@@ -35,6 +37,27 @@ it('데이터 revision이 같아도 이전 스키마 스냅샷은 재게시하�
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }, 20_000);
+
+it('에이전트 종료는 기존 캐시 검증과 대기 요청을 중단하고 다운로드를 시작하지 않는다', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-cache-stop-'));
+  const cache = new AgentDatasetCache(dir, { serverUrl: 'http://127.0.0.1', token: 'x'.repeat(32) });
+  const manifest = { version: 1, datasetId: 'a87b7ae5-806e-4c7d-8c7b-4a2995ddeeec', sourceRevision: 1,
+    collectionVersion: 'b'.repeat(64), schemaVersion: DATABASE_SCHEMA_VERSION, sha256: 'a'.repeat(64), bytes: 1 };
+  const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('예상하지 않은 다운로드'));
+  try {
+    fs.writeFileSync(cache.file(manifest), 'x');
+    const attempts = Promise.allSettled([cache.synchronize(manifest), cache.synchronize({ ...manifest, version: 2 })]);
+    await cache.stop();
+    for (const result of await attempts) expect(result).toMatchObject({ status: 'rejected', reason: { name: 'AbortError' } });
+    await expect(cache.synchronize(manifest)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(cache.current).toBeNull();
+  } finally {
+    fetch.mockRestore();
+    await cache.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 it('수집 버전만 바뀌어도 새 데이터셋을 게시하고 이전 스냅샷과 revision을 보존한다', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'qp-collection-version-'));

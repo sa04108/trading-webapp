@@ -447,3 +447,77 @@ it("직렬화 후 이어 실행해도 단일 실행과 동일한 주문과 체�
   expect([...first.equity, ...second.equity]).toEqual(one.equity);
   expect(second.state).toEqual(one.state);
 });
+
+it("ORB는 활성화 이전 돌파로 당일 진입 기회를 소비하지 않고 재시작 후에도 경계를 보존한다", async () => {
+  const { initialIntradayState, advanceIntradaySession } = await import("../../src/runtime/modules/intraday/domain/session-engine.js");
+  const req = intradayRequestSchema.parse({ ...request(), strategyId: "intraday-orb", parameters: {
+    openingMinutes: 5, entryWindowMinutes: 15, breakoutBps: 0, volumeMultiplier: 1,
+    allocationPct: 95, stopLossPct: 50, takeProfitPct: 100,
+  } });
+  const data = bars().slice(0, 9).map((bar, i) => {
+    const close = i === 5 || i === 7 ? 1010 : 1000;
+    return { ...bar, open: close, high: close, low: close, close };
+  });
+  const options = { throughMs: at("09:09"), signalAfterMs: at("09:06") };
+  const one = advanceIntradaySession(req, initialIntradayState(req), data, options);
+  expect(one.signals).toMatchObject([{ atMs: at("09:08"), side: "BUY", reason: "ORB" }]);
+  const first = advanceIntradaySession(req, initialIntradayState(req), data.slice(0, 7), { ...options, throughMs: at("09:07") });
+  const second = advanceIntradaySession(req, JSON.parse(JSON.stringify(first.state)), data.slice(7), options);
+  expect([...first.signals, ...second.signals]).toEqual(one.signals);
+  expect([...first.fills, ...second.fills]).toEqual(one.fills);
+});
+
+it("ORB의 실제 미체결 신호는 OFF 후 ON과 기존 체크포인트 재생에도 당일 다시 발생하지 않는다", async () => {
+  const { initialIntradayState, advanceIntradaySession } = await import("../../src/runtime/modules/intraday/domain/session-engine.js");
+  const req = intradayRequestSchema.parse({ ...request(), period: { from: date, to: "2026-11-13" }, initialCash: 10_000, strategyId: "intraday-orb", parameters: {
+    openingMinutes: 5, entryWindowMinutes: 15, breakoutBps: 0, volumeMultiplier: 1,
+    allocationPct: 95, stopLossPct: 50, takeProfitPct: 100,
+  } });
+  const data = bars().slice(0, 8).map((bar, i) => {
+    const close = i === 5 || i === 7 ? 101_000 : 100_000;
+    return { ...bar, open: close, high: close, low: close, close };
+  });
+  const first = advanceIntradaySession(req, initialIntradayState(req), data.slice(0, 6), { throughMs: at("09:06"), signalAfterMs: at("09:05") });
+  expect(first.signals).toMatchObject([{ atMs: at("09:06"), reason: "ORB" }]);
+  expect(first.orderEvents).toMatchObject([{ status: "UNFILLED", remainingQty: 0 }]);
+  const second = advanceIntradaySession(req, JSON.parse(JSON.stringify(first.state)), data.slice(6), { throughMs: at("09:08"), signalAfterMs: at("09:07") });
+  expect(second.signals).toEqual([]);
+  const nextDay = data.map(bar => ({ ...bar, endMs: bar.endMs + 86_400_000 }));
+  const nextSession = advanceIntradaySession(req, JSON.parse(JSON.stringify(second.state)), nextDay, { throughMs: at("09:08", "2026-11-13") });
+  expect(nextSession.signals).toMatchObject([{ atMs: at("09:06", "2026-11-13"), side: "BUY", reason: "ORB" }]);
+  const legacy = JSON.parse(JSON.stringify(first.state));
+  delete legacy.signalCheckpoint;
+  const restored = advanceIntradaySession(req, legacy, data.slice(6), { throughMs: at("09:08"), signalAfterMs: at("09:07") });
+  expect(restored.signals).toEqual([]);
+});
+
+it("볼린저 회복은 ON 이전 신호를 주문에 소비하지 않되 회복 기한과 청산을 유지한다", async () => {
+  const { initialIntradayState, advanceIntradaySession } = await import("../../src/runtime/modules/intraday/domain/session-engine.js");
+  const req = intradayRequestSchema.parse({ ...request(), strategyId: "intraday-bollinger-rsi", parameters: {
+    bandPeriod: 4, bandStdDev: 1, rsiPeriod: 2, oversold: 30, recoveryBars: 2,
+    allocationPct: 95, stopLossPct: 50, takeProfitPct: 100,
+  } });
+  const closes = [1000, 1000, 1000, 800, 810, 820, 1000, 1000];
+  const data = bars().slice(0, closes.length).map((bar, i) => ({ ...bar, open: closes[i]!, high: closes[i]!, low: closes[i]!, close: closes[i]! }));
+  const options = { throughMs: at("09:08"), signalAfterMs: at("09:05") };
+  const one = advanceIntradaySession(req, initialIntradayState(req), data, options);
+  expect(one.signals).toMatchObject([{ atMs: at("09:06"), side: "BUY", reason: "BOLLINGER_RSI" }, { atMs: at("09:08"), side: "SELL", reason: "BOLLINGER_RSI" }]);
+  const first = advanceIntradaySession(req, initialIntradayState(req), data.slice(0, 5), { ...options, throughMs: at("09:05") });
+  const next = advanceIntradaySession(req, JSON.parse(JSON.stringify(first.state)), data.slice(5), options);
+  expect([...first.signals, ...next.signals]).toEqual(one.signals);
+  expect([...first.fills, ...next.fills]).toEqual(one.fills);
+  const expiredReq = intradayRequestSchema.parse({ ...req, parameters: { ...req.parameters, recoveryBars: 1 } });
+  const expired = advanceIntradaySession(expiredReq, initialIntradayState(expiredReq), data, options);
+  expect(expired.signals).toEqual([]);
+  const expiredFirst = advanceIntradaySession(expiredReq, initialIntradayState(expiredReq), data.slice(0, 5), { ...options, throughMs: at("09:05") });
+  const expiredNext = advanceIntradaySession(expiredReq, JSON.parse(JSON.stringify(expiredFirst.state)), data.slice(5), options);
+  expect(expiredNext.signals).toEqual([]);
+  const activeFirst = advanceIntradaySession(req, initialIntradayState(req), data.slice(0, 5), { throughMs: at("09:05"), signalAfterMs: at("09:04") });
+  expect(activeFirst.signals).toMatchObject([{ atMs: at("09:05"), side: "BUY", reason: "BOLLINGER_RSI" }]);
+  const resumed = advanceIntradaySession(req, JSON.parse(JSON.stringify(activeFirst.state)), data.slice(5, 6), { throughMs: at("09:06"), signalAfterMs: at("09:05") });
+  expect(resumed.signals).toEqual([]);
+  const legacy = JSON.parse(JSON.stringify(first.state));
+  delete legacy.signalCheckpoint;
+  const restored = advanceIntradaySession(req, legacy, data.slice(5), options);
+  expect(restored.signals).toEqual([]);
+});

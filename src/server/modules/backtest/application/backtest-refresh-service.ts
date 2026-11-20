@@ -83,7 +83,8 @@ export class BacktestRefreshService {
       const row = this.owned(ownerId, id);
       if (!activeStatuses.includes(row.status)) return;
       this.finish(row, "CANCELLED", null, null);
-      this.cancelUnsharedPreparation(row.preparationJobId);
+      if (row.preparationJobId && !this.references.hasConsumers(row.preparationJobId))
+        this.deps.preparation.cancel(row.preparationJobId);
     }).immediate();
     return this.get(ownerId, id);
   }
@@ -157,18 +158,6 @@ export class BacktestRefreshService {
       this.deps.onFinished(this.dto(current));
       this.deps.database.db.update(backtestRefreshJobs).set({ notifiedAtMs: this.deps.clock.now() }).where(eq(backtestRefreshJobs.id, row.id)).run();
     }).immediate();
-  }
-
-  private cancelUnsharedPreparation(id: string | null): void {
-    if (!id) return;
-    const shared = this.deps.database.sqlite.prepare(`
-      SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id=?
-      UNION ALL SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id=?
-      UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id=?
-      UNION ALL SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id=?
-      UNION ALL SELECT 1 FROM configuration_search_items WHERE preparation_job_id=? LIMIT 1
-    `).get(id, id, id, id, id);
-    if (!shared) this.deps.preparation.cancel(id);
   }
 
   private async tick(): Promise<void> {

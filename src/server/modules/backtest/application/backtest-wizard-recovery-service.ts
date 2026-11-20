@@ -71,7 +71,7 @@ export class BacktestWizardRecoveryService {
           error = `자동 복구할 수 없습니다: ${failure.message} 전략과 입력값을 확인한 뒤 미리보기를 다시 실행하세요.`;
         }
         // 새 참조로 교체한 뒤 소비자가 없는 이전 준비만 정리한다. 공유 작업은 유지한다.
-        if (previous && (!this.references.hasConsumers(previous.id) || error && this.onlyWizardConsumer(previous.id, wizard)))
+        if (previous && !this.references.hasConsumers(previous.id, error ? { wizard } : undefined))
           this.fencePreparation(previous.id, now);
         this.database.db.update(backtestWizardJobs).set({
           currentStep: "universe", status: error ? "WAITING" : "QUEUED", finishedAtMs: null,
@@ -135,13 +135,4 @@ export class BacktestWizardRecoveryService {
     this.database.sqlite.prepare("DELETE FROM agent_data_waits WHERE kind='PREPARATION' AND job_id=?").run(id);
   }
 
-  private onlyWizardConsumer(id: string, wizard: Wizard): boolean {
-    // 실패한 교체는 기존 참조를 보존하되 다른 위저드·실험에서 쓰는 작업은 취소하지 않는다.
-    return !this.database.sqlite.prepare(`SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id=? AND (user_id<>? OR context<>?)
-      UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id=?
-      UNION ALL SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id=?
-      UNION ALL SELECT 1 FROM configuration_search_items WHERE preparation_job_id=?
-      UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id=? LIMIT 1`)
-      .get(id, wizard.ownerId, wizard.id, id, id, id, id);
-  }
 }

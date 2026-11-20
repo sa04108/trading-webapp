@@ -48,7 +48,7 @@ export function durableJson(file: string, value: unknown): void {
 
 export class AgentDatasetCache {
   private pending: Promise<void> | null = null;
-  private abort: AbortController | null = null;
+  private readonly shutdown = new AbortController();
   current: DatasetManifest | null = null;
   constructor(
     readonly directory: string,
@@ -69,6 +69,7 @@ export class AgentDatasetCache {
   }
 
   async synchronize(input: DatasetManifest): Promise<void> {
+    this.shutdown.signal.throwIfAborted();
     if (input.schemaVersion !== DATABASE_SCHEMA_VERSION)
       throw new Error("계산 DB 스키마가 달라 클라이언트를 업데이트해야 합니다");
     const manifest = datasetManifestSchema.parse(input);
@@ -85,19 +86,16 @@ export class AgentDatasetCache {
     }
     this.pending = this.download(manifest).finally(() => {
       this.pending = null;
-      this.abort = null;
     });
     return this.pending;
   }
 
   private async download(manifest: DatasetManifest): Promise<void> {
-    if (manifest.schemaVersion !== DATABASE_SCHEMA_VERSION)
-      throw new Error("계산 DB 스키마가 달라 클라이언트를 업데이트해야 합니다");
     const file = this.file(manifest);
     if (fs.existsSync(file)) {
       this.report(manifest, "VERIFYING_DATASET", null, null, "기존 파일 확인 중");
       const hash = createHash("sha256");
-      for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+      for await (const chunk of fs.createReadStream(file, { signal: this.shutdown.signal })) hash.update(chunk);
       if (
         fs.statSync(file).size === manifest.bytes &&
         hash.digest("hex") === manifest.sha256
@@ -108,21 +106,19 @@ export class AgentDatasetCache {
         return;
       }
     }
+    this.shutdown.signal.throwIfAborted();
     const free = fs.statfsSync(this.directory);
     if (free.bavail * free.bsize < manifest.bytes * 1.1)
       throw new Error("계산 데이터 다운로드 공간이 부족합니다");
     const temporary = `${file}.part`;
-    this.abort = new AbortController();
+    const signal = AbortSignal.any([this.shutdown.signal, AbortSignal.timeout(30 * 60_000)]);
     try {
       const response = await fetch(
         `${this.settings.serverUrl}/api/agents/datasets/${manifest.version}`,
         {
           headers: { authorization: `Bearer ${this.settings.token}` },
           redirect: "error",
-          signal: AbortSignal.any([
-            this.abort.signal,
-            AbortSignal.timeout(30 * 60_000),
-          ]),
+          signal,
         },
       );
       if (!response.ok || !response.body)
@@ -157,6 +153,7 @@ export class AgentDatasetCache {
         Readable.fromWeb(response.body),
         verify,
         fs.createWriteStream(temporary, { mode: 0o600 }),
+        { signal },
       );
       if (bytes !== manifest.bytes || hash.digest("hex") !== manifest.sha256)
         throw new Error("계산 데이터 해시 또는 길이 불일치");
@@ -215,6 +212,7 @@ export class AgentDatasetCache {
   }
 
   prune(pinnedFiles: ReadonlySet<string>): void {
+    if (this.pending) return;
     for (const name of fs.readdirSync(this.directory)) {
       if (!/^\d+-[a-f0-9]{64}\.sqlite$/.test(name)) continue;
       const file = path.join(this.directory, name);
@@ -227,7 +225,7 @@ export class AgentDatasetCache {
     }
   }
   async stop(): Promise<void> {
-    this.abort?.abort();
+    this.shutdown.abort();
     await this.pending?.catch(() => undefined);
   }
 }

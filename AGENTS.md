@@ -5,6 +5,7 @@ These instructions apply repository-wide.
 ## Request Handling
 
 - Understand the user's goal and relevant code flow before acting.
+- Before adding, modifying, or refactoring product code, read and follow the full [coding guide](docs/agent-guidelines/coding.md). When reviewing product code, apply the criteria relevant to the change.
 - Write new or modified code comments and docstrings in Korean.
 - Stay read-only for investigation, review, or design-only requests. Ask and wait if implementation intent is unclear; when changes are clearly requested, proceed within scope using reasonable defaults for minor details.
 

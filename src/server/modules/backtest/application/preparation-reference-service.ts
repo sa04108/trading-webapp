@@ -149,12 +149,22 @@ export class PreparationReferenceService {
     if (owner) this.releaseWizard(userId, context);
   }
 
-  hasConsumers(preparationJobId: string): boolean {
-    return Boolean(this.database.sqlite.prepare(`SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id=@id
+  hasConsumers(
+    preparationJobId: string,
+    excluding: { validationId?: string; wizard?: { ownerId: string; id: string } } = {},
+  ): boolean {
+    return Boolean(this.database.sqlite.prepare(`SELECT 1 FROM preparation_wizard_references
+      WHERE preparation_job_id=@id AND (@wizardId IS NULL OR context<>@wizardId OR user_id<>@ownerId)
       UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id=@id
-      UNION ALL SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id=@id
+      UNION ALL SELECT 1 FROM backtest_validation_trials
+        WHERE preparation_job_id=@id AND (@validationId IS NULL OR validation_id<>@validationId)
       UNION ALL SELECT 1 FROM configuration_search_items WHERE preparation_job_id=@id
-      UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id=@id LIMIT 1`).get({ id: preparationJobId }));
+      UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id=@id LIMIT 1`).get({
+      id: preparationJobId,
+      validationId: excluding.validationId ?? null,
+      wizardId: excluding.wizard?.id ?? null,
+      ownerId: excluding.wizard?.ownerId ?? null,
+    }));
   }
 
   collect(): number {

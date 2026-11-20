@@ -26,6 +26,13 @@ const LIST_LIMIT = 200;
 // 저장된 과거 알림도 현재 실험 명칭으로 표시하되 원본 기록은 보존한다.
 const experimentTitle = (value: string) => value.replace(/난수(?: 시드)? 실험/g, "설정 탐색 실험");
 
+function notificationSelection(severity: NotificationSeverity | undefined, excludeIds: readonly string[]) {
+  return and(
+    severity === undefined ? undefined : eq(notifications.severity, severity),
+    excludeIds.length ? sql`${notifications.id} NOT IN (SELECT value FROM json_each(${JSON.stringify(excludeIds)}))` : undefined,
+  );
+}
+
 /**
  * 사용자 알림. 저장이 전달이다 — 접속 중이면 events 를 SSE 가 실어 나르고,
  * 미접속 중 발생분은 다음 접속 때 목록으로 본다.
@@ -68,10 +75,7 @@ export class NotificationService {
 
   count(severity?: NotificationSeverity, excludeIds: readonly string[] = []): number {
     const [row] = this.db.select({ value: count() }).from(notifications)
-      .where(and(
-        severity === undefined ? undefined : eq(notifications.severity, severity),
-        sql`NOT EXISTS (SELECT 1 FROM json_each(${JSON.stringify(excludeIds)}) excluded WHERE excluded.value = ${notifications.id})`,
-      )).all();
+      .where(notificationSelection(severity, excludeIds)).all();
     return row?.value ?? 0;
   }
 
@@ -101,9 +105,6 @@ export class NotificationService {
   }
 
   removeAll(severity?: NotificationSeverity, excludeIds: readonly string[] = []): void {
-    this.db.delete(notifications).where(and(
-      severity === undefined ? undefined : eq(notifications.severity, severity),
-      sql`NOT EXISTS (SELECT 1 FROM json_each(${JSON.stringify(excludeIds)}) excluded WHERE excluded.value = ${notifications.id})`,
-    )).run();
+    this.db.delete(notifications).where(notificationSelection(severity, excludeIds)).run();
   }
 }

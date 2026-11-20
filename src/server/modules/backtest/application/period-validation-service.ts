@@ -35,6 +35,7 @@ import type {
 } from "../../../../runtime/modules/backtest/application/backtest-preparation-orchestrator.js";
 import type { ResultsService } from "./results-service.js";
 import { BacktestRefreshRequiredError } from "./backtest-refresh-error.js";
+import type { PreparationReferenceService } from "./preparation-reference-service.js";
 import { PreparationPreviewCache } from "../../../../runtime/modules/backtest/application/preparation-preview-cache.js";
 
 type Experiment = typeof backtestValidations.$inferSelect;
@@ -42,7 +43,7 @@ type Trial = typeof backtestValidationTrials.$inferSelect;
 
 export interface PeriodValidationDeps {
   database: DatabaseHandle;
-  collectPreparations(): number;
+  references: Pick<PreparationReferenceService, "hasConsumers" | "collect">;
   clock: Clock;
   queue: JobQueue;
   results: ResultsService;
@@ -341,7 +342,7 @@ export class PeriodValidationService {
           .run();
         for (const trial of trials)
           if (trial.jobId) this.deps.queue.deleteJob(trial.jobId);
-        this.deps.collectPreparations();
+        this.deps.references.collect();
         return true;
       })
       .immediate();
@@ -487,7 +488,8 @@ export class PeriodValidationService {
 
   private finishCancellation(experiment: Experiment): void {
     let pending = false;
-    for (const trial of this.trials(experiment.id)) {
+    const trials = this.trials(experiment.id);
+    for (const trial of trials) {
       if (!trial.jobId) continue;
       const job = this.deps.queue.getJob(trial.jobId);
       if (job && !this.deps.queue.isTerminal(job.status)) {
@@ -495,27 +497,23 @@ export class PeriodValidationService {
         pending = true;
       }
     }
-    // 다른 실험·위저드가 함께 쓰는 준비 작업은 취소하지 않는다.
-    for (const trial of this.trials(experiment.id)) {
-      if (!trial.preparationJobId) continue;
-      const prep = this.deps.preparation.get(trial.preparationJobId);
-      if (!prep || ["COMPLETED", "FAILED", "CANCELLED"].includes(prep.status))
-        continue;
-      const shared = this.deps.database.sqlite
-        .prepare(
-          `
-        SELECT 1 FROM backtest_validation_trials WHERE preparation_job_id = ? AND validation_id <> ?
-        UNION ALL SELECT 1 FROM preparation_wizard_references WHERE preparation_job_id = ?
-        UNION ALL SELECT 1 FROM backtest_jobs WHERE preparation_job_id = ?
-        UNION ALL SELECT 1 FROM backtest_refresh_jobs WHERE preparation_job_id = ? LIMIT 1
-      `,
-        )
-        .get(prep.id, experiment.id, prep.id, prep.id, prep.id);
-      if (!shared) {
-        this.deps.preparation.cancel(prep.id);
-        pending = true;
+    this.deps.database.sqlite.transaction(() => {
+      for (const id of new Set(trials.map(trial => trial.preparationJobId))) {
+        if (!id) continue;
+        const prep = this.deps.database.db.select({
+          status: backtestPreparationJobs.status, cancelRequested: backtestPreparationJobs.cancelRequested,
+        }).from(backtestPreparationJobs).where(eq(backtestPreparationJobs.id, id)).get();
+        if (!prep || ["COMPLETED", "FAILED", "CANCELLED"].includes(prep.status)) continue;
+        if (this.deps.references.hasConsumers(id, { validationId: experiment.id })) {
+          this.deps.database.db.update(backtestValidationTrials).set({ preparationJobId: null }).where(and(
+            eq(backtestValidationTrials.validationId, experiment.id), eq(backtestValidationTrials.preparationJobId, id),
+          )).run();
+        } else {
+          if (!prep.cancelRequested) this.deps.preparation.cancel(id);
+          pending = true;
+        }
       }
-    }
+    }).immediate();
     if (!pending)
       this.finish(experiment.id, experiment.error ? "FAILED" : "CANCELLED");
   }
@@ -531,7 +529,7 @@ export class PeriodValidationService {
       .set({ lifecycleManaged: true })
       .where(eq(backtestPreparationJobs.id, preparationJobId))
       .run();
-    this.deps.collectPreparations();
+    this.deps.references.collect();
   }
 
   private async prepareGroup(
