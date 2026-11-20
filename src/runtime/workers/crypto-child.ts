@@ -1,4 +1,4 @@
-import { runCryptoBacktest } from "../modules/crypto/backtest.js";
+import { latestCryptoStrategy } from "../modules/crypto/strategy-versions.js";
 import type { CryptoBacktestInput } from "../../shared/crypto-backtest.js";
 import type { UniverseComputeReply } from "../../shared/universe-compute.js";
 
@@ -6,7 +6,7 @@ process.on("disconnect", () => process.exit());
 process.once("message", (message: { input: CryptoBacktestInput; barsJson: string }) => {
   let reply: UniverseComputeReply;
   try {
-    const result = runCryptoBacktest(message.input, JSON.parse(message.barsJson));
+    const result = latestCryptoStrategy.runBacktest(message.input, JSON.parse(message.barsJson));
     reply = { status: "COMPLETED", resultJson: JSON.stringify(result) };
   } catch (error) {
     reply = {

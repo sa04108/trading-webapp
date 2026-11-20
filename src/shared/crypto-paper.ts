@@ -6,9 +6,19 @@ export const cryptoPaperSettingsSchema = z
   .strict();
 export const cryptoPaperActiveSchema = z.object({ active: z.boolean() }).strict();
 
+export const cryptoPaperVersionSchema = z
+  .object({
+    expectedRevision: z.number().int().positive(),
+    targetVersion: z.string().min(1).max(128),
+  })
+  .strict();
+
 export interface CryptoPaperAccount {
   sourceRunId: string;
   strategyVersion: string;
+  latestStrategyVersion: string;
+  versionUpdateBlocker: string | null;
+  revision: number;
   input: CryptoBacktestInput;
   active: boolean;
   initialCash: number;

@@ -1,4 +1,4 @@
-import { CRYPTO_STRATEGY_VERSION } from "../../../../shared/crypto-backtest.js";
+import { latestCryptoStrategy } from "../../../../runtime/modules/crypto/strategy-versions.js";
 import { CryptoBacktests } from "../../crypto/crypto-backtests.js";
 import path from "node:path";
 import fs from "node:fs";
@@ -118,7 +118,7 @@ export class AgentCoordinator {
     private readonly logger: Logger,
     private readonly executionVersion: string,
   ) {
-    this.cryptoBacktests = new CryptoBacktests(database.sqlite, CRYPTO_STRATEGY_VERSION);
+    this.cryptoBacktests = new CryptoBacktests(database.sqlite, latestCryptoStrategy.version);
     this.cryptoBacktests.events.on("queued", this.wake);
     this.cryptoBacktests.events.on("cancel", (executor: string, taskId: string) => {
       const connection = executor === LOCAL_AGENT_ID ? this.localConnection : this.connections.get(executor);

@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router";
 import type { CryptoRunDetail } from "@shared/crypto-runs";
 import type { CryptoPaperAccount } from "@shared/crypto-paper";
-import { api, postJson } from "@/lib/api-client";
+import { api, ApiError, postJson } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -25,6 +25,11 @@ export function CryptoPaperPage() {
   const [params, setParams] = useSearchParams();
   const sourceId = params.get("source");
   const [confirmation, setConfirmation] = useState<"on" | "off" | null>(null);
+  const [versionRequest, setVersionRequest] = useState<{
+    expectedRevision: number;
+    currentVersion: string;
+    targetVersion: string;
+  } | null>(null);
   const client = useQueryClient();
   const account = useQuery({
     queryKey: ["crypto", "paper"],
@@ -43,6 +48,18 @@ export function CryptoPaperPage() {
     onSuccess: (data) => {
       client.setQueryData(["crypto", "paper"], data);
       setConfirmation(null);
+    },
+  });
+  const updateVersion = useMutation({
+    mutationFn: (request: { expectedRevision: number; targetVersion: string }) =>
+      postJson<{ account: CryptoPaperAccount }>("/crypto/paper/version", request),
+    onSuccess: (data) => {
+      client.setQueryData(["crypto", "paper"], data);
+      setVersionRequest(null);
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409)
+        void client.invalidateQueries({ queryKey: ["crypto", "paper"] });
     },
   });
   const current = account.data?.account;
@@ -149,7 +166,7 @@ export function CryptoPaperPage() {
             <CardContent>
               <Settings input={current.input} />
               <p className="mt-3 text-sm text-muted-foreground">
-                전략 버전 {current.strategyVersion} ·{" "}
+                현재 전략 버전 {current.strategyVersion} · 사용 가능한 버전 {current.latestStrategyVersion} ·{" "}
                 <Link
                   className="underline"
                   to={`/backtests/crypto/${encodeURIComponent(current.sourceRunId)}`}
@@ -157,6 +174,35 @@ export function CryptoPaperPage() {
                   원본 백테스트
                 </Link>
               </p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                ON 상태와 다음 활성화 시 호환되는 최신 전략 버전이 자동 적용됩니다. OFF 상태에서는 직접
+                업데이트할 수 있습니다.
+              </p>
+              {current.strategyVersion !== current.latestStrategyVersion && current.versionUpdateBlocker && (
+                <p role="alert" className="mt-2 text-sm text-destructive">
+                  버전 업데이트 불가: {current.versionUpdateBlocker}
+                </p>
+              )}
+              <Button
+                className="mt-3"
+                variant="outline"
+                disabled={
+                  current.active ||
+                  current.strategyVersion === current.latestStrategyVersion ||
+                  !!current.versionUpdateBlocker ||
+                  updateVersion.isPending
+                }
+                onClick={() => {
+                  updateVersion.reset();
+                  setVersionRequest({
+                    expectedRevision: current.revision,
+                    currentVersion: current.strategyVersion,
+                    targetVersion: current.latestStrategyVersion,
+                  });
+                }}
+              >
+                전략 버전 업데이트
+              </Button>
             </CardContent>
           </Card>
           <Card>
@@ -214,6 +260,60 @@ export function CryptoPaperPage() {
           </Card>
         </>
       )}
+      <Dialog
+        open={versionRequest !== null}
+        onOpenChange={(open) => {
+          if (!open && !updateVersion.isPending) setVersionRequest(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>전략 버전 업데이트</DialogTitle>
+            <DialogDescription>
+              OFF 상태인 이 계좌에 아래 버전을 적용합니다. 현금과 보유 자산, 거래 내역은 그대로 이어집니다.
+            </DialogDescription>
+          </DialogHeader>
+          {versionRequest && (
+            <p className="text-sm">
+              {versionRequest.currentVersion} → {versionRequest.targetVersion}
+            </p>
+          )}
+          {updateVersion.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              업데이트 실패: {errorText(updateVersion.error)}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={updateVersion.isPending}
+              onClick={() => setVersionRequest(null)}
+            >
+              취소
+            </Button>
+            <Button
+              disabled={
+                !versionRequest ||
+                !current ||
+                current.active ||
+                current.revision !== versionRequest.expectedRevision ||
+                current.latestStrategyVersion !== versionRequest.targetVersion ||
+                !!current.versionUpdateBlocker ||
+                updateVersion.isPending
+              }
+              onClick={() =>
+                versionRequest &&
+                updateVersion.mutate({
+                  expectedRevision: versionRequest.expectedRevision,
+                  targetVersion: versionRequest.targetVersion,
+                })
+              }
+            >
+              전략 버전 업데이트
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={confirmation !== null}
         onOpenChange={(open) => {

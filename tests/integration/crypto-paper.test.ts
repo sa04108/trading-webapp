@@ -3,10 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { openDatabase } from "../../src/runtime/shared/db/database.js";
+import {
+  cryptoStrategyVersions,
+  type CryptoStrategy,
+} from "../../src/runtime/modules/crypto/strategy-versions.js";
 import { runCryptoBacktest } from "../../src/runtime/modules/crypto/backtest.js";
 import { CryptoPaperTrading } from "../../src/server/modules/crypto/paper-trading.js";
 import { waitForCondition } from "../helpers/wait-for-condition.js";
 
+const base = cryptoStrategyVersions[0];
 const input = {
   markets: ["KRW-BTC"],
   startDate: "2026-02-01",
@@ -207,4 +212,210 @@ describe("암호화폐 모의투자", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("기존 ON 계좌를 재시작 뒤 호환 전략으로 전환하고 다음 세션에서 새 결정을 실행한다", async () => {
+    const { dir, dbPath } = temporaryDatabase();
+    let db = openDatabase(dbPath);
+    let now = ms("2026-01-31T23:59:00Z");
+    const next: CryptoStrategy = {
+      ...base,
+      version: "test-compatible-v2",
+      compatibleFrom: [base.version],
+      selectTarget: () => ({ target: null, evaluated: true, incomplete: false }),
+      executeSession: (settings, portfolio, decision, prices, date) =>
+        base.executeSession({ ...settings, feeBps: 100 }, portfolio, decision, prices, date),
+    };
+    const deps = {
+      now: () => now,
+      history,
+      quotes: async () => new Map([["KRW-BTC", { price: 130, atMs: now }]]),
+    };
+    let paper = new CryptoPaperTrading(db.sqlite, { ...deps, strategies: [base] });
+    try {
+      seed(db.sqlite, "owner-a", "run-a");
+      seed(db.sqlite, "owner-b", "run-b");
+      paper.configure("owner-a", "run-a");
+      paper.configure("owner-b", "run-b");
+      paper.setActive("owner-a", true);
+      now = ms("2026-02-01T00:01:00Z");
+      await paper.tick();
+      const before = paper.get("owner-a")!;
+      const other = paper.get("owner-b")!;
+      expect(before).toMatchObject({
+        strategyVersion: base.version,
+        active: true,
+        cash: 0,
+        holding: { market: "KRW-BTC", quantity: 10000 / 130 },
+        lastSession: "2026-02-01",
+      });
+      expect(before.trades).toMatchObject([{ date: "2026-02-01", side: "BUY" }]);
+      expect(
+        db.sqlite
+          .prepare("SELECT strategy_version_override FROM crypto_paper_accounts WHERE owner_id=?")
+          .get("owner-a"),
+      ).toEqual({ strategy_version_override: null });
+      await paper.close();
+      db.close();
+      db = openDatabase(dbPath);
+      paper = new CryptoPaperTrading(db.sqlite, { ...deps, strategies: [base, next] });
+      expect(paper.get("owner-a")).toMatchObject({
+        cash: before.cash,
+        holding: before.holding,
+        trades: before.trades,
+        sourceRunId: "run-a",
+        lastSession: "2026-02-01",
+        active: true,
+      });
+      now = ms("2026-02-02T00:01:00Z");
+      await paper.tick();
+      const after = paper.get("owner-a")!;
+      expect(after).toMatchObject({
+        strategyVersion: next.version,
+        latestStrategyVersion: next.version,
+        sourceRunId: "run-a",
+        active: true,
+        cash: 9900,
+        holding: null,
+        lastSession: "2026-02-02",
+      });
+      expect(after.trades).toMatchObject([
+        { date: "2026-02-02", side: "SELL", market: "KRW-BTC", fee: 100 },
+        { date: "2026-02-01", side: "BUY", market: "KRW-BTC" },
+      ]);
+      await paper.tick();
+      expect(paper.get("owner-a")!.trades).toEqual(after.trades);
+      expect(paper.get("owner-b")).toMatchObject({
+        strategyVersion: base.version,
+        active: false,
+        cash: other.cash,
+        holding: other.holding,
+        trades: other.trades,
+        sourceRunId: "run-b",
+      });
+      expect(
+        db.sqlite
+          .prepare("SELECT strategy_version,input_json,result_json FROM crypto_runs WHERE id=?")
+          .get("run-a"),
+      ).toEqual({ strategy_version: base.version, input_json: JSON.stringify(input), result_json: result });
+    } finally {
+      await paper.close();
+      db.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("OFF 계좌는 명시적 갱신 또는 활성화에서 호환 버전을 적용하며 이전 revision과 ON 갱신을 거부한다", async () => {
+    const { dir, dbPath } = temporaryDatabase();
+    const db = openDatabase(dbPath);
+    let now = ms("2026-01-31T23:59:00Z");
+    const next: CryptoStrategy = {
+      ...base,
+      version: "test-compatible-v2",
+      compatibleFrom: [base.version],
+      selectTarget: () => ({ target: null, evaluated: true, incomplete: false }),
+    };
+    const deps = {
+      now: () => now,
+      history,
+      quotes: async () => new Map([["KRW-BTC", { price: 130, atMs: now }]]),
+    };
+    let paper = new CryptoPaperTrading(db.sqlite, { ...deps, strategies: [base] });
+    try {
+      seed(db.sqlite, "owner-a", "run-a");
+      seed(db.sqlite, "owner-b", "run-b");
+      paper.configure("owner-a", "run-a");
+      paper.configure("owner-b", "run-b");
+      await paper.close();
+      paper = new CryptoPaperTrading(db.sqlite, { ...deps, strategies: [base, next] });
+      const before = paper.get("owner-a")!;
+      expect(before).toMatchObject({
+        strategyVersion: base.version,
+        latestStrategyVersion: next.version,
+        active: false,
+      });
+      expect(() => paper.updateVersion("owner-a", before.revision - 1, next.version)).toThrow();
+      expect(() => paper.updateVersion("owner-a", before.revision, base.version)).toThrow();
+      expect(paper.get("owner-a")).toEqual(before);
+      const updated = paper.updateVersion("owner-a", before.revision, next.version);
+      expect(updated).toMatchObject({
+        strategyVersion: next.version,
+        sourceRunId: "run-a",
+        cash: before.cash,
+        holding: before.holding,
+        trades: before.trades,
+        active: false,
+        lastSession: before.lastSession,
+      });
+      expect(paper.configure("owner-a", "run-a")).toMatchObject({
+        strategyVersion: next.version,
+        sourceRunId: "run-a",
+        cash: before.cash,
+        holding: before.holding,
+        trades: before.trades,
+      });
+      seed(db.sqlite, "owner-a", "other-v1-run");
+      expect(() => paper.configure("owner-a", "other-v1-run")).toThrow();
+      expect(paper.get("owner-a")).toEqual(updated);
+      expect(paper.get("owner-b")!.strategyVersion).toBe(base.version);
+      expect(paper.setActive("owner-b", true)).toMatchObject({ active: true, strategyVersion: next.version });
+      expect(() => paper.updateVersion("owner-b", paper.get("owner-b")!.revision, next.version)).toThrow();
+      now = ms("2026-02-01T00:01:00Z");
+      await paper.tick();
+      expect(paper.get("owner-b")).toMatchObject({
+        strategyVersion: next.version,
+        cash: 10000,
+        holding: null,
+        trades: [],
+        lastSession: "2026-02-01",
+      });
+    } finally {
+      await paper.close();
+      db.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["이전 버전", "계좌 파라미터"])(
+    "%s 호환성이 없으면 ON 계좌는 기존 전략으로 계속 실행한다",
+    async (incompatibleField) => {
+      const { dir, dbPath } = temporaryDatabase();
+      const db = openDatabase(dbPath);
+      let now = ms("2026-01-31T23:59:00Z");
+      const incompatible: CryptoStrategy = {
+        ...base,
+        version: "test-incompatible-v2",
+        compatibleFrom: incompatibleField === "이전 버전" ? [] : [base.version],
+        acceptsInput: (params) => incompatibleField !== "계좌 파라미터" || params.lookbackDays >= 10,
+        selectTarget: () => ({ target: null, evaluated: true, incomplete: false }),
+      };
+      const deps = {
+        now: () => now,
+        history,
+        quotes: async () => new Map([["KRW-BTC", { price: 130, atMs: now }]]),
+      };
+      let paper = new CryptoPaperTrading(db.sqlite, { ...deps, strategies: [base] });
+      try {
+        seed(db.sqlite, "owner-a", "run-a");
+        paper.configure("owner-a", "run-a");
+        paper.setActive("owner-a", true);
+        await paper.close();
+        paper = new CryptoPaperTrading(db.sqlite, { ...deps, strategies: [base, incompatible] });
+        now = ms("2026-02-01T00:01:00Z");
+        await paper.tick();
+        expect(paper.get("owner-a")).toMatchObject({
+          active: true,
+          strategyVersion: base.version,
+          latestStrategyVersion: incompatible.version,
+          holding: { market: "KRW-BTC" },
+          lastSession: "2026-02-01",
+        });
+        expect(paper.get("owner-a")!.versionUpdateBlocker).toEqual(expect.any(String));
+        expect(paper.get("owner-a")!.trades).toMatchObject([{ date: "2026-02-01", side: "BUY" }]);
+      } finally {
+        await paper.close();
+        db.close();
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 });

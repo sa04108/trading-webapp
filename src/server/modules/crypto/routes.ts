@@ -1,4 +1,8 @@
-import { cryptoPaperSettingsSchema, cryptoPaperActiveSchema } from "../../../shared/crypto-paper.js";
+import {
+  cryptoPaperSettingsSchema,
+  cryptoPaperActiveSchema,
+  cryptoPaperVersionSchema,
+} from "../../../shared/crypto-paper.js";
 import type { CryptoPaperTrading } from "./paper-trading.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -65,6 +69,17 @@ export function registerCryptoPaperRoutes(
     const data = cryptoPaperSettingsSchema.safeParse(request.body);
     if (!data.success) return reply.code(400).send({ error: "원본 백테스트와 초기 자금을 확인하세요." });
     return { account: paper.configure(request.authUser!.id, data.data.sourceRunId, data.data.initialCash) };
+  });
+  app.post("/crypto/paper/version", auth, async (request, reply) => {
+    const parsed = cryptoPaperVersionSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "계좌 설정과 적용할 전략 버전을 확인하세요." });
+    return {
+      account: paper.updateVersion(
+        request.authUser!.id,
+        parsed.data.expectedRevision,
+        parsed.data.targetVersion,
+      ),
+    };
   });
   app.post("/crypto/paper/active", auth, async (request, reply) => {
     const data = cryptoPaperActiveSchema.safeParse(request.body);

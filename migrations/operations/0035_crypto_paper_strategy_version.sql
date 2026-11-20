@@ -1,0 +1,1 @@
+ALTER TABLE `crypto_paper_accounts` ADD `strategy_version_override` text;

@@ -9,6 +9,7 @@ import {
 import type { AgentMessage, ServerAgentMessage } from "../../../shared/agent-protocol.js";
 import type { CryptoRunDetail, CryptoRunSummary } from "../../../shared/crypto-runs.js";
 import { UNIVERSE_COMPUTE_TIMEOUT_MS } from "../../../shared/universe-compute.js";
+import { latestCryptoStrategy } from "../../../runtime/modules/crypto/strategy-versions.js";
 import { fetchUpbitDailyBars } from "./upbit.js";
 
 const dayMs = 86_400_000;
@@ -140,7 +141,7 @@ export class CryptoBacktests {
       this.fetching = { id: row.id, abort };
       try {
         const input: CryptoBacktestInput = JSON.parse(row.input_json);
-        const from = new Date(Date.parse(input.startDate) - Math.max(30, input.lookbackDays + 1) * dayMs)
+        const from = new Date(Date.parse(input.startDate) - latestCryptoStrategy.warmupDays(input) * dayMs)
           .toISOString()
           .slice(0, 10);
         const markets = [...input.markets].sort();

@@ -1,8 +1,6 @@
 import { z } from "zod";
 import { isoDateSchema } from "./schemas/backtest-request.js";
 
-export const CRYPTO_STRATEGY_VERSION = "upbit-turnover-momentum-v1";
-
 export const cryptoBacktestInputSchema = z
   .object({
     markets: z

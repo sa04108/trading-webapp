@@ -1,15 +1,12 @@
 import type Database from "better-sqlite3";
-import {
-  CRYPTO_STRATEGY_VERSION,
-  type CryptoBacktestInput,
-  type CryptoDailyBar,
-} from "../../../shared/crypto-backtest.js";
+import type { CryptoBacktestInput, CryptoDailyBar } from "../../../shared/crypto-backtest.js";
 import type { CryptoPaperAccount } from "../../../shared/crypto-paper.js";
+import type { CryptoPortfolio } from "../../../runtime/modules/crypto/backtest.js";
 import {
-  executeCryptoSession,
-  selectCryptoTarget,
-  type CryptoPortfolio,
-} from "../../../runtime/modules/crypto/backtest.js";
+  cryptoStrategyVersions,
+  type CryptoStrategy,
+  type CryptoStrategyVersions,
+} from "../../../runtime/modules/crypto/strategy-versions.js";
 import { fetchUpbitDailyBars, fetchUpbitQuotes } from "./upbit.js";
 
 const dayMs = 86_400_000;
@@ -32,9 +29,14 @@ interface AccountRow {
   strategy_version: string;
   input_json: string;
 }
-const accountsSql =
-  "SELECT a.*,r.input_json,r.strategy_version FROM crypto_paper_accounts a JOIN crypto_runs r ON a.source_run_id=r.id";
-type Options = { now?: () => number; history?: typeof fetchUpbitDailyBars; quotes?: typeof fetchUpbitQuotes };
+const accountsSql = `SELECT a.*,r.input_json,COALESCE(a.strategy_version_override,r.strategy_version) AS strategy_version
+   FROM crypto_paper_accounts a JOIN crypto_runs r ON a.source_run_id=r.id`;
+type Options = {
+  now?: () => number;
+  history?: typeof fetchUpbitDailyBars;
+  quotes?: typeof fetchUpbitQuotes;
+  strategies?: CryptoStrategyVersions;
+};
 
 export class CryptoPaperTrading {
   private readonly now: () => number;
@@ -44,14 +46,30 @@ export class CryptoPaperTrading {
   private pending: Promise<void> | null = null;
   private readonly abort = new AbortController();
   private lastValuation = 0;
+  private readonly versions: CryptoStrategyVersions;
+  private readonly latest: CryptoStrategy;
 
   constructor(
     private readonly db: Database.Database,
     options: Options = {},
   ) {
+    this.versions = options.strategies ?? cryptoStrategyVersions;
+    this.latest = this.versions.at(-1)!;
     this.now = options.now ?? Date.now;
     this.history = options.history ?? fetchUpbitDailyBars;
     this.quotes = options.quotes ?? fetchUpbitQuotes;
+  }
+
+  private versionUpdateBlocker(
+    currentVersion: string,
+    input: CryptoBacktestInput,
+    target = this.latest,
+  ): string | null {
+    if (currentVersion === target.version) return null;
+    if (!target.compatibleFrom.includes(currentVersion))
+      return "대상 버전이 현재 계좌의 전략 상태를 이어받을 수 없습니다.";
+    if (!target.acceptsInput(input)) return "현재 파라미터는 대상 전략 버전과 호환되지 않습니다.";
+    return null;
   }
 
   get(owner: string): CryptoPaperAccount | null {
@@ -63,10 +81,14 @@ export class CryptoPaperTrading {
         "SELECT fill_json FROM crypto_paper_fills WHERE owner_id=? ORDER BY date DESC,sequence DESC LIMIT 100",
       )
       .all(owner) as { fill_json: string }[];
+    const input: CryptoBacktestInput = JSON.parse(row.input_json);
     return {
       sourceRunId: row.source_run_id,
       strategyVersion: row.strategy_version,
-      input: JSON.parse(row.input_json),
+      latestStrategyVersion: this.latest.version,
+      versionUpdateBlocker: this.versionUpdateBlocker(row.strategy_version, input),
+      revision: row.revision,
+      input,
       active: !!row.active,
       initialCash: row.initial_cash,
       cash: row.cash,
@@ -89,22 +111,50 @@ export class CryptoPaperTrading {
           | { status: string; input_json: string; strategy_version: string }
           | undefined;
         if (!run) throw httpError(404, "원본 코인 백테스트를 찾을 수 없습니다.");
-        if (run.status !== "COMPLETED" || run.strategy_version !== CRYPTO_STRATEGY_VERSION)
-          throw httpError(409, "현재 엔진과 동일한 버전으로 완료한 백테스트가 필요합니다.");
+        const strategy = this.versions.find((v) => v.version === run.strategy_version);
+        if (run.status !== "COMPLETED" || !strategy)
+          throw httpError(409, "실행 가능한 버전으로 완료한 백테스트가 필요합니다.");
         const existing = this.get(owner);
         if (existing?.active) throw httpError(409, "자동매매를 끈 뒤 설정을 변경하세요.");
         if (existing && initialCash !== undefined && initialCash !== existing.initialCash)
           throw httpError(409, "기존 모의계좌의 초기 자금은 변경할 수 없습니다.");
-        const funds = initialCash ?? (JSON.parse(run.input_json) as CryptoBacktestInput).initialCash;
+        if (existing?.sourceRunId === sourceRunId) return existing;
+        const input: CryptoBacktestInput = JSON.parse(run.input_json);
+        if (existing) {
+          const blocker = this.versionUpdateBlocker(existing.strategyVersion, input, strategy);
+          if (blocker) throw httpError(409, blocker);
+        }
+        const funds = initialCash ?? input.initialCash;
         if (!Number.isFinite(funds) || funds <= 0 || funds > 1e15)
           throw httpError(400, "초기 모의자금이 올바르지 않습니다.");
         this.db
           .prepare(
             `INSERT INTO crypto_paper_accounts(owner_id,source_run_id,initial_cash,cash,updated_at_ms)
         VALUES(?,?,?,?,?) ON CONFLICT(owner_id) DO UPDATE SET source_run_id=excluded.source_run_id,
-        revision=revision+1,updated_at_ms=excluded.updated_at_ms,error=NULL`,
+        strategy_version_override=NULL,revision=revision+1,updated_at_ms=excluded.updated_at_ms,error=NULL`,
           )
           .run(owner, sourceRunId, funds, funds, this.now());
+        return this.get(owner)!;
+      })
+      .immediate();
+  }
+
+  updateVersion(owner: string, expectedRevision: number, targetVersion: string): CryptoPaperAccount {
+    return this.db
+      .transaction(() => {
+        const account = this.get(owner);
+        if (!account) throw httpError(404, "코인 모의계좌를 찾을 수 없습니다.");
+        if (account.active) throw httpError(409, "자동매매를 끈 뒤 전략 버전을 변경하세요.");
+        if (account.revision !== expectedRevision || targetVersion !== this.latest.version)
+          throw httpError(409, "계좌 설정 또는 최신 버전이 변경되었습니다. 다시 확인하세요.");
+        if (account.versionUpdateBlocker) throw httpError(409, account.versionUpdateBlocker);
+        if (account.strategyVersion === targetVersion) return account;
+        this.db
+          .prepare(
+            `UPDATE crypto_paper_accounts SET strategy_version_override=?, revision=revision+1, updated_at_ms=?
+        WHERE owner_id=?`,
+          )
+          .run(targetVersion, this.now(), owner);
         return this.get(owner)!;
       })
       .immediate();
@@ -116,15 +166,17 @@ export class CryptoPaperTrading {
         const account = this.get(owner);
         if (!account) throw httpError(404, "코인 모의계좌를 먼저 준비하세요.");
         if (account.active !== active) {
-          if (active && account.strategyVersion !== CRYPTO_STRATEGY_VERSION)
+          const upgrade =
+            active && account.strategyVersion !== this.latest.version && !account.versionUpdateBlocker;
+          if (active && !upgrade && !this.versions.some((v) => v.version === account.strategyVersion))
             throw httpError(409, "이 계좌에 고정된 전략 버전을 실행할 수 없습니다.");
           const now = this.now();
           this.db
             .prepare(
               `UPDATE crypto_paper_accounts SET active=?,active_from_ms=?,revision=revision+1,
-          updated_at_ms=?,error=NULL WHERE owner_id=?`,
+          strategy_version_override=COALESCE(?,strategy_version_override),updated_at_ms=?,error=NULL WHERE owner_id=?`,
             )
-            .run(Number(active), active ? now : null, now, owner);
+            .run(Number(active), active ? now : null, upgrade ? this.latest.version : null, now, owner);
         }
         return this.get(owner)!;
       })
@@ -180,15 +232,33 @@ export class CryptoPaperTrading {
             );
           continue;
         }
-        if (row.strategy_version !== CRYPTO_STRATEGY_VERSION)
-          throw new Error("고정된 전략 버전을 실행할 수 없습니다.");
         const input: CryptoBacktestInput = JSON.parse(row.input_json);
-        const from = dateOf(open - Math.max(30, input.lookbackDays + 1) * dayMs);
+        let strategy = this.versions.find((v) => v.version === row.strategy_version);
+        if (
+          row.strategy_version !== this.latest.version &&
+          !this.versionUpdateBlocker(row.strategy_version, input)
+        ) {
+          // 이전 버전으로 이미 시작한 판단은 revision이 달라져 체결을 기록할 수 없다.
+          const updated = this.db
+            .prepare(
+              `UPDATE crypto_paper_accounts SET strategy_version_override=?,
+            revision=revision+1,updated_at_ms=? WHERE owner_id=? AND revision=? AND active=1
+            AND (last_session IS NULL OR last_session<?) RETURNING revision`,
+            )
+            .get(this.latest.version, this.now(), row.owner_id, row.revision, session) as
+            | { revision: number }
+            | undefined;
+          if (!updated) continue;
+          row.revision = updated.revision;
+          strategy = this.latest;
+        }
+        if (!strategy) throw new Error("이 계좌에 고정된 전략 버전을 실행할 수 없습니다.");
+        const from = dateOf(open - strategy.warmupDays(input) * dayMs);
         const markets = [...input.markets].sort(),
           key = JSON.stringify([markets, from]);
         if (!datasets.has(key))
           datasets.set(key, this.history(markets, from, dateOf(open - dayMs), this.abort.signal));
-        const signal = selectCryptoTarget(input, await datasets.get(key)!, session);
+        const signal = strategy.selectTarget(input, await datasets.get(key)!, session);
         const portfolio: CryptoPortfolio = {
           cash: row.cash,
           holding: row.holding_json && JSON.parse(row.holding_json),
@@ -206,7 +276,7 @@ export class CryptoPaperTrading {
           if (quote && quote.atMs >= open && quote.atMs <= observed && observed - quote.atMs <= 60_000)
             prices.set(market, quote.price);
         }
-        const step = executeCryptoSession(input, portfolio, signal, prices, session);
+        const step = strategy.executeSession(input, portfolio, signal, prices, session);
         if (step.skipped === "INSUFFICIENT_HISTORY") throw new Error("판단에 필요한 확정 일봉이 부족합니다.");
         if (step.skipped === "MISSING_PRICE") throw new Error("새 세션 현재가를 기다리고 있습니다.");
         const holding = step.portfolio.holding;

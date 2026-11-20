@@ -1,5 +1,5 @@
 import { cryptoBacktestInputSchema } from '../../../../shared/crypto-backtest.js';
-import { cryptoPaperSettingsSchema, cryptoPaperActiveSchema } from '../../../../shared/crypto-paper.js';
+import { cryptoPaperSettingsSchema, cryptoPaperActiveSchema, cryptoPaperVersionSchema } from '../../../../shared/crypto-paper.js';
 import { z } from 'zod';
 import type { ApiReferenceMetadata } from './api-reference.js';
 import type { ApiEndpoint, ApiParameter } from '../../../../shared/schemas/api-reference.js';
@@ -82,8 +82,9 @@ add('GET', '/crypto/backtests', '코인 백테스트 기록', '사용자의 실�
 add('POST', '/crypto/backtests', '코인 일봉 백테스트 시작', '확정 일봉을 수집하고 계산을 예약한 다음 실행 ID를 반환합니다.', { input: body('후보 마켓, 기간, 유니버스·모멘텀 및 체결 설정', cryptoBacktestInputSchema), status: 202 });
 add('GET', '/crypto/backtests/:id', '코인 백테스트 결과', '수집·실행 상태와 오류, 완료된 자산 곡선·거래 내역 및 재현 정보를 반환합니다.');
 add('DELETE', '/crypto/backtests/:id', '코인 백테스트 취소', '수집 또는 계산 중인 소유자 본인의 실행을 취소합니다.', { status: 204, errors:[404,409] });
-add('GET', '/crypto/paper', '코인 모의투자 현황', '계좌 설정과 자동매매 상태, 보유 자산, 평가 시각 및 최근 100건의 체결을 반환합니다. 준비 전에는 account가 null입니다.');
+add('GET', '/crypto/paper', '코인 모의투자 현황', '계좌 설정, 자동매매 상태와 최근 체결을 반환합니다. strategyVersion은 적용 버전, latestStrategyVersion은 최신 버전이며 versionUpdateBlocker가 있으면 기존 버전으로 계속 실행합니다. 수동 업데이트에는 revision을 사용합니다. 준비 전에는 account가 null입니다.');
 add('POST', '/crypto/paper/settings', '코인 모의투자 준비', '본인의 완료된 백테스트 설정을 OFF 계좌에 적용합니다. 기존 계좌의 현금과 보유 자산은 유지됩니다.', { input: body('백테스트 ID와 첫 계좌의 초기 자금',cryptoPaperSettingsSchema), errors:[400,404,409] });
+add('POST', '/crypto/paper/version', '코인 모의투자 전략 버전 업데이트', 'OFF 계좌의 설정을 확인한 버전으로 갱신합니다. 원본 백테스트와 자산·거래일은 유지됩니다. ON 계좌는 호환되는 최신 버전을 다음 실행 전에 적용합니다.', { input:body('계좌 수정 번호와 적용할 최신 버전',cryptoPaperVersionSchema), errors:[400,404,409] });
 add('POST', '/crypto/paper/active', '코인 자동매매 전환', '모의 자동매매 ON/OFF를 저장합니다. 재시작 후에도 마지막 상태가 유지됩니다.', { input:body('자동매매 상태',cryptoPaperActiveSchema), errors:[400,404,409] });
 
 export const marketApiMetadata = map;

@@ -35,6 +35,7 @@ export const cryptoPaperAccounts = sqliteTable("crypto_paper_accounts", {
   sourceRunId: text("source_run_id")
     .notNull()
     .references(() => cryptoRuns.id),
+  strategyVersionOverride: text("strategy_version_override"),
   initialCash: real("initial_cash").notNull(),
   cash: real("cash").notNull(),
   holdingJson: text("holding_json"),

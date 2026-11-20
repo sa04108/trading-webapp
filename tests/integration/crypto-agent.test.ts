@@ -111,6 +111,31 @@ describe("원격 에이전트 암호화폐 백테스트", () => {
           cookies: { session: cookie },
         });
         expect(dashboard.json().account).toMatchObject({ active: true, cash: 20_000, sourceRunId: id });
+        const account = activation.json().account;
+        const version = {
+          method: "POST" as const,
+          url: "/api/v1/crypto/paper/version",
+          cookies: { session: cookie },
+          payload: { expectedRevision: account.revision, targetVersion: account.latestStrategyVersion },
+        };
+        expect((await ctx.app.inject(version)).statusCode).toBe(409);
+        const off = await ctx.app.inject({
+          method: "POST",
+          url: "/api/v1/crypto/paper/active",
+          cookies: { session: cookie },
+          payload: { active: false },
+        });
+        expect((await ctx.app.inject(version)).statusCode).toBe(409);
+        const confirmed = await ctx.app.inject({
+          ...version,
+          payload: { ...version.payload, expectedRevision: off.json().account.revision },
+        });
+        expect(confirmed.statusCode).toBe(200);
+        expect(confirmed.json().account).toMatchObject({
+          active: false,
+          strategyVersion: account.latestStrategyVersion,
+          sourceRunId: id,
+        });
       } finally {
         dispatch.mockRestore();
       }
