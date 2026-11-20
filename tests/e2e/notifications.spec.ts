@@ -77,3 +77,48 @@ test("알림 전체 선택은 표시 상한 밖의 오류까지 삭제하고 정
   await page.getByRole("button", { name: "전체", exact: true }).click();
   await expect(page.getByText("정보 알림", { exact: true })).toBeVisible();
 });
+
+// 초기 실패와 기존 목록의 재조회 실패를 빈 목록으로 오인하지 않는다.
+test("알림 조회 실패를 표시하고 다시 불러오며 기존 목록을 유지한다", async ({ page }) => {
+  await login(page);
+  const item = { id: "saved", type: "data-sync", severity: "error", title: "저장된 알림", body: null, link: null, read: true, createdAtMs: Date.now() };
+  let fail = true;
+  await page.route(/\/api\/v1\/notifications(?:\?.*)?$/, (route) => fail
+    ? route.fulfill({ status: 500, json: { error: "조회 오류" } })
+    : route.fulfill({ json: { notifications: [item], total: 1, selectionCount: 1 } }));
+  await page.goto("/notifications");
+  await expect(page.getByRole("alert").filter({ hasText: "조회 오류" })).toBeVisible();
+  await expect(page.getByText("알림이 없습니다.", { exact: true })).toHaveCount(0);
+  fail = false;
+  await page.getByRole("button", { name: "다시 불러오기" }).click();
+  await expect(page.getByText("저장된 알림", { exact: true })).toBeVisible();
+  await page.clock.install();
+  await page.clock.runFor(5_100);
+  fail = true;
+  await page.evaluate(() => { window.dispatchEvent(new Event("offline")); window.dispatchEvent(new Event("online")); });
+  await page.clock.runFor(2_000);
+  await expect(page.getByRole("alert").filter({ hasText: "조회 오류" })).toBeVisible();
+  await expect(page.getByText("저장된 알림", { exact: true })).toBeVisible();
+  fail = false;
+  await page.getByRole("button", { name: "다시 불러오기" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "조회 오류" })).toHaveCount(0);
+});
+
+// 일시적인 조회 실패는 삭제로 단정하거나 이동하지 않고, 404만 삭제 표시를 남긴다.
+test("관련 대상의 일시적인 오류와 삭제를 구분한다", async ({ page }) => {
+  await login(page);
+  const item = { id: "linked", type: "data-sync", severity: "error", title: "연결된 알림", body: null, link: "/backtests/missing-test", read: true, createdAtMs: Date.now() };
+  await page.route(/\/api\/v1\/notifications(?:\?.*)?$/, (route) => route.fulfill({ json: { notifications: [item], total: 1, selectionCount: 1 } }));
+  let status = 500;
+  await page.route("**/api/v1/backtests/missing-test", (route) => route.fulfill({ status, json: { error: "조회 실패" } }));
+  await page.goto("/notifications");
+  await page.getByRole("button", { name: "연결된 알림 관련 화면으로 이동" }).click();
+  await expect(page.getByText("관련 화면을 확인하지 못했습니다. 다시 시도해 주세요.")).toBeVisible();
+  await expect(page).toHaveURL(/\/notifications$/);
+  await expect(page.getByText("정보를 찾을 수 없습니다", { exact: false })).toHaveCount(0);
+  status = 404;
+  await page.getByRole("button", { name: "연결된 알림 관련 화면으로 이동" }).click();
+  await expect(page).toHaveURL(/\/backtests\/missing-test$/);
+  await page.goBack();
+  await expect(page.getByText("정보를 찾을 수 없습니다", { exact: false })).toBeVisible();
+});

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useListSelection, type ListSelectionRequest } from "@/components/use-list-selection";
-import { api } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import { formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { notificationsQueryOptions, useNotifications } from "./api";
@@ -88,7 +88,7 @@ export function NotificationsPage() {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<"all" | "error">("all");
   const selection = useListSelection();
-  const { data, isLoading, isPlaceholderData } = useNotifications(filter === "error" ? "error" : undefined, selection.excludeIds);
+  const { data, isLoading, isPlaceholderData, isError, error, refetch } = useNotifications(filter === "error" ? "error" : undefined, selection.excludeIds);
   const notifications = data?.notifications ?? [];
   const missingTargets = useMissingTargets();
 
@@ -155,8 +155,12 @@ export function NotificationsPage() {
         staleTime: 0,
       });
       clearTargetMissing(link);
-    } catch {
-      markTargetMissing(link);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) markTargetMissing(link);
+      else {
+        toast.error("관련 화면을 확인하지 못했습니다. 다시 시도해 주세요.");
+        return;
+      }
     } finally {
       setChecking(null);
     }
@@ -229,15 +233,23 @@ export function NotificationsPage() {
         </div>
       </CardHeader>
       <CardContent className="p-0">
-        {isLoading ? (
+        {isError && (
+          <div role="alert" className="flex flex-wrap items-center gap-2 px-6 py-3 text-sm wrap-anywhere text-destructive">
+            <span>알림을 불러오지 못했습니다: {error.message}</span>
+            <Button size="sm" variant="outline" onClick={() => void refetch()}>다시 불러오기</Button>
+          </div>
+        )}
+        {isLoading && (
           <p className="px-6 py-8 text-sm text-muted-foreground">
             불러오는 중…
           </p>
-        ) : notifications.length === 0 ? (
+        )}
+        {!isLoading && !isError && notifications.length === 0 && (
           <p className="px-6 py-8 text-sm text-muted-foreground">
             {filter === "error" ? "오류 알림이 없습니다." : "알림이 없습니다."}
           </p>
-        ) : (
+        )}
+        {notifications.length > 0 && (
           <ul className="divide-y">
             {notifications.map((item) => {
               const isExpanded = expanded.has(item.id);
