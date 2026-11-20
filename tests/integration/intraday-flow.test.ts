@@ -700,6 +700,38 @@ describe("분봉 준비부터 격리 계산과 저장까지", () => {
       "COMPLETED",
     );
   });
+
+  it("이력 페이지에서 로컬 종목명을 우선순위에 따라 표시하고 미확인 이름은 비워 둔다", async () => {
+    const { app, database } = await fixture();
+    const insertRun = (id: string, symbol: string, createdAtMs: number) => database.db.insert(intradayRuns).values({
+      id, ownerId: "owner", status: "COMPLETED", requestJson: JSON.stringify({ ...request, symbol }), createdAtMs, updatedAtMs: createdAtMs,
+    }).run();
+    insertRun("directory", "005930", 4);
+    insertRun("master", "000660", 3);
+    insertRun("registered", "035420", 2);
+    insertRun("unknown", "123456", 1);
+    insertRun("past", "004125", 0);
+    database.sqlite.prepare("INSERT INTO symbol_directory VALUES (?, ?, ?, ?, ?)").run("005930", "삼성전자", "KOSPI", "toss", 1);
+    database.sqlite.prepare("INSERT INTO symbol_directory VALUES (?, ?, ?, ?, ?)").run("000660", "오래된 이름", "KOSPI", "local", 1);
+    const master = database.sqlite.prepare(`INSERT INTO data.symbol_master_versions
+      (standard_code, valid_from_date, short_code, name, market, shares_outstanding, instrument_type, recorded_at_ms)
+      VALUES (?, '2020-01-01', ?, ?, 'KOSPI', '1', 'STOCK', 2)`);
+    master.run("KR005930", "005930", "마스터 삼성");
+    master.run("KR000660", "000660", "SK하이닉스");
+    master.run("KR004125", "004125", "이전 상장 종목");
+    database.sqlite.prepare("UPDATE data.symbol_master_versions SET valid_to_date = '2021-04-01' WHERE short_code = '004125'").run();
+    database.sqlite.prepare("INSERT INTO data.symbols (code, market, name, created_at_ms) VALUES (?, 'KOSPI', ?, 1)")
+      .run("035420", "NAVER");
+
+    const first = await app.inject({ url: "/intraday/runs?strategyId=intraday-ema&limit=2", headers });
+    expect(first.statusCode).toBe(200);
+    expect(first.json().total).toBe(5);
+    expect(first.json().runs.map((run: { id: string; symbolName: string | null }) => [run.id, run.symbolName]))
+      .toEqual([["directory", "삼성전자"], ["master", "SK하이닉스"]]);
+    const second = await app.inject({ url: "/intraday/runs?strategyId=intraday-ema&limit=3&offset=2", headers });
+    expect(second.json().runs.map((run: { id: string; symbolName: string | null }) => [run.id, run.symbolName]))
+      .toEqual([["registered", "NAVER"], ["unknown", null], ["past", "이전 상장 종목"]]);
+  });
   it("수집 실패를 실행 실패로 종료하고 같은 결과 조회에 원인을 전달한다", async () => {
     const { service, app, terminalEvents } = await fixture(async () => {
       throw new Error("토스 요청 실패 (502)");

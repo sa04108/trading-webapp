@@ -295,6 +295,9 @@ export function IntradayListPage() {
     controls.collapsed(groups.data?.groups[index]?.strategyId ?? "")
       ? [] : (query.data?.runs ?? []),
   );
+  const missingNames = useStockNames(controls.view === "table"
+    ? [...new Set(visibleRuns.filter(run => !run.symbolName).map(run => run.request.symbol))].sort()
+    : []);
   const extras = useBacktestHistoryExtras(visibleRuns.map((run) => run.id), 5_000, "intraday");
   const extrasById = new Map(extras.data?.summaries.map((item) => [item.jobId, item]) ?? []);
   const corrections = (groups.data?.groups ?? []).flatMap((group, index) => {
@@ -428,11 +431,13 @@ export function IntradayListPage() {
                               </Link>
                             )}
                           </div>
+                          <p className="mt-1 w-max whitespace-nowrap text-muted-foreground" title={run.request.symbol}>
+                            {run.symbolName ?? missingNames.get(run.request.symbol)?.name ?? "종목명 미등록"}
+                          </p>
                           <HistoryResultDetails
                             id={run.id}
                             mode="intraday"
                             status={run.status === "COMPLETED" ? null : <IntradayStatusBadge status={run.status} />}
-                            description={run.request.symbol}
                             summary={extrasById.get(run.id)}
                             editing={editing}
                           />
