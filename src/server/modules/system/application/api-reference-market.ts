@@ -1,3 +1,5 @@
+import { cryptoBacktestInputSchema } from '../../../../shared/crypto-backtest.js';
+import { cryptoPaperSettingsSchema, cryptoPaperActiveSchema } from '../../../../shared/crypto-paper.js';
 import { z } from 'zod';
 import type { ApiReferenceMetadata } from './api-reference.js';
 import type { ApiEndpoint, ApiParameter } from '../../../../shared/schemas/api-reference.js';
@@ -75,4 +77,13 @@ add('POST', '/trading/deactivate', '실전 운용 비활성화', '신규 주문�
 add('POST', '/trading/orders/:orderId/resolve', '불확실 주문 대조', '명시적 확인과 증권사 주문 ID 또는 null로 불확실한 주문을 대조합니다.', { params: presetScope, input: body('expectedRevision, acknowledged=true, brokerOrderId (문자열 또는 null).', tradingRevisionSchema.extend({ acknowledged: z.literal(true), brokerOrderId: z.string().trim().min(1).max(500).nullable() })), errors: [400, 404, 409] });
 add('POST', '/trading/refresh', '실전 운용 상태 새로고침', '증권사 계좌와 주문 상태를 새로 조회합니다.', { params: presetScope, input: body('빈 객체.', z.object({}).strict()), errors: [400, 409] });
 add('PUT', '/trading/account', '운용 계좌 선택', '현재 수정 버전으로 accountId를 선택합니다.', { input: body('expectedRevision과 accountId.', tradingRevisionSchema.extend({ accountId: z.string().min(1).max(200) })), errors: [400, 404, 409] });
+add('GET', '/crypto/markets', '업비트 원화 마켓', '현재 상장된 원화 마켓의 코드와 한글 이름을 반환합니다.', { errors: [502] });
+add('GET', '/crypto/backtests', '코인 백테스트 기록', '사용자의 실행 목록과 전체 건수를 반환합니다.', { params: [query('limit','integer','1~100, 기본 30건'),query('offset','integer','건너뛸 건수')] });
+add('POST', '/crypto/backtests', '코인 일봉 백테스트 시작', '확정 일봉을 수집하고 계산을 예약한 다음 실행 ID를 반환합니다.', { input: body('후보 마켓, 기간, 유니버스·모멘텀 및 체결 설정', cryptoBacktestInputSchema), status: 202 });
+add('GET', '/crypto/backtests/:id', '코인 백테스트 결과', '수집·실행 상태와 오류, 완료된 자산 곡선·거래 내역 및 재현 정보를 반환합니다.');
+add('DELETE', '/crypto/backtests/:id', '코인 백테스트 취소', '수집 또는 계산 중인 소유자 본인의 실행을 취소합니다.', { status: 204, errors:[404,409] });
+add('GET', '/crypto/paper', '코인 모의투자 현황', '계좌 설정과 자동매매 상태, 보유 자산, 평가 시각 및 최근 100건의 체결을 반환합니다. 준비 전에는 account가 null입니다.');
+add('POST', '/crypto/paper/settings', '코인 모의투자 준비', '본인의 완료된 백테스트 설정을 OFF 계좌에 적용합니다. 기존 계좌의 현금과 보유 자산은 유지됩니다.', { input: body('백테스트 ID와 첫 계좌의 초기 자금',cryptoPaperSettingsSchema), errors:[400,404,409] });
+add('POST', '/crypto/paper/active', '코인 자동매매 전환', '모의 자동매매 ON/OFF를 저장합니다. 재시작 후에도 마지막 상태가 유지됩니다.', { input:body('자동매매 상태',cryptoPaperActiveSchema), errors:[400,404,409] });
+
 export const marketApiMetadata = map;

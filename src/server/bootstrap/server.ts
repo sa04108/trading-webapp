@@ -1,3 +1,5 @@
+import { CryptoPaperTrading } from "../modules/crypto/paper-trading.js";
+import { registerCryptoRoutes, registerCryptoPaperRoutes } from "../modules/crypto/routes.js";
 import { ProviderRequestBlockedError } from "../shared/provider-request-policy.js";
 import { registerRequestObservability } from "../shared/request-observability.js";
 import { startRuntimeObserver } from "../shared/runtime-observer.js";
@@ -78,9 +80,11 @@ export async function buildServer(
   registerRequestObservability(app);
   const apiReference = installApiReference(app);
 
+  const cryptoPaper = new CryptoPaperTrading(container.database.sqlite);
   let stopIntradayValidations: (() => Promise<void>) | undefined;
   let stopConfigurationSearches: (() => Promise<void>) | undefined;
   app.addHook("preClose", async () => {
+    await cryptoPaper.close();
     await stopConfigurationSearches?.();
     await stopIntradayValidations?.();
     await container.intradayService.close();
@@ -147,6 +151,8 @@ export async function buildServer(
       registerSymbolLibraryRoutes(api, container.symbolLibraryService, requireAuth);
       registerStrategyRoutes(api, container.strategyRegistry, requireAuth);
       registerTradingRoutes(api, container.tradingService, requireAuth);
+      registerCryptoPaperRoutes(api,cryptoPaper,requireAuth);
+      registerCryptoRoutes(api, container.agentCoordinator.cryptoBacktests, requireAuth);
       registerIntradayRoutes(api, container.intradayService, requireAuth);
       const intradayValidations = registerIntradayValidationRoutes(api, container.database, container.intradayService, requireAuth);
       stopIntradayValidations = () => intradayValidations.stop();
@@ -319,7 +325,7 @@ export async function buildServer(
   // 첫 요청 전에 로그인 타이밍 균등화용 더미 해시를 준비한다 (콜드스타트 타이밍 노출 차단).
   // buildServer 를 거치는 모든 진입점(main, E2E, 테스트)이 자동으로 포함된다.
   await container.authService.ready();
-  app.addHook("onReady", async () => { container.tradingService.start(); });
+  app.addHook("onReady", async () => { container.tradingService.start(); cryptoPaper.start(); });
 
   const runtimeObserver = startRuntimeObserver(app.log);
   app.addHook("onClose", async () => { runtimeObserver.stop(); });

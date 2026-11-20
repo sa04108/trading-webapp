@@ -1,3 +1,5 @@
+import { CRYPTO_STRATEGY_VERSION } from "../../../../shared/crypto-backtest.js";
+import { CryptoBacktests } from "../../crypto/crypto-backtests.js";
 import path from "node:path";
 import fs from "node:fs";
 import Database from "better-sqlite3";
@@ -102,6 +104,7 @@ export class AgentCoordinator {
   private lastSamplingNotificationAt = 0;
   private readonly startingPreparations = new Map<string, number>();
   private readonly universeCompute: UniverseComputeBroker;
+  readonly cryptoBacktests: CryptoBacktests;
 
   constructor(
     private readonly database: DatabaseHandle,
@@ -115,6 +118,12 @@ export class AgentCoordinator {
     private readonly logger: Logger,
     private readonly executionVersion: string,
   ) {
+    this.cryptoBacktests = new CryptoBacktests(database.sqlite, CRYPTO_STRATEGY_VERSION);
+    this.cryptoBacktests.events.on("queued", this.wake);
+    this.cryptoBacktests.events.on("cancel", (executor: string, taskId: string) => {
+      const connection = executor === LOCAL_AGENT_ID ? this.localConnection : this.connections.get(executor);
+      if (connection) this.send(connection, {type:"UNIVERSE_CANCEL", taskId});
+    });
     this.universeCompute = new UniverseComputeBroker({
       ownerDataset: (owner, request) => {
         if (this.stopped || !this.preparations.owns(owner, request)) return null;
@@ -143,6 +152,7 @@ export class AgentCoordinator {
 
   start(options: { local?: boolean } = {}): void {
     if (this.timer || this.stopped) return;
+    this.cryptoBacktests.start();
     this.dataQueue.recover();
     this.backtests.start();
     this.timer = setInterval(() => this.tick(), 2000);
@@ -304,6 +314,11 @@ export class AgentCoordinator {
     if (!connection.ready) throw new Error("HELLO가 필요합니다");
     if (message.type === "UNIVERSE_REQUEST") {
       this.universeCompute.request(clientId, message);
+      return;
+    }
+    if (message.type === "CRYPTO_RESULT") {
+      this.cryptoBacktests.finish(clientId,message);
+      this.wake();
       return;
     }
     if (message.type === "UNIVERSE_RESULT") {
@@ -773,6 +788,15 @@ export class AgentCoordinator {
   }
 
   private async dispatch(): Promise<void> {
+    if (this.cryptoBacktests.hasQueued()) {
+      this.refreshLocalCapacity();
+      const peers = [...this.connections, ...(this.localConnection ? [[LOCAL_AGENT_ID,this.localConnection] as const] : [])];
+      for (const [id,connection] of peers) {
+        if (!this.available(id,connection)) continue;
+        const task = this.cryptoBacktests.claim(id);
+        if (task) this.send(connection,task);
+      }
+    }
     if (!this.hasQueuedWork()) return;
     this.refreshLocalCapacity();
     if (
@@ -1198,6 +1222,7 @@ export class AgentCoordinator {
         if (row?.attempt !== Number(key.slice(separator + 1))) this.startingPreparations.delete(key);
       }
       this.preparations.sweep();
+      this.cryptoBacktests.sweep();
       this.universeCompute.sweep();
       this.dataQueue.tick();
       if (Date.now() - this.lastPrunedAt > 60_000) {
@@ -1268,7 +1293,7 @@ export class AgentCoordinator {
         "SELECT COUNT(*) AS n FROM agent_preparation_leases l JOIN backtest_preparation_jobs j ON j.id = l.job_id WHERE client_id = ? AND j.status = 'RUNNING'",
       )
       .get(clientId) as { n: number };
-    return backtests.n + preparations.n + this.universeCompute.active(clientId);
+    return backtests.n + preparations.n + this.universeCompute.active(clientId) + this.cryptoBacktests.active(clientId);
   }
 
   stop(): Promise<void> {
@@ -1288,6 +1313,7 @@ export class AgentCoordinator {
     for (const { socket } of this.connections.values()) socket.terminate();
     this.connections.clear();
     const primary = await Promise.allSettled([
+      this.cryptoBacktests.close(),
       this.localClient?.stop() ?? Promise.resolve(),
       this.drain(this.messageOperations),
       this.drain(this.resultOperations),

@@ -1,6 +1,7 @@
 /** 운영 서버 내부 에이전트도 독립 에이전트와 같은 임대 소유권을 사용한다. */
 export const LOCAL_AGENT_ID = "server-local";
 
+import type { CryptoBacktestInput } from "./crypto-backtest.js";
 import { z } from "zod";
 import { isoDateSchema } from "./schemas/backtest-request.js";
 import type { ExecutionActivity } from "./execution-progress.js";
@@ -132,6 +133,10 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
     requestId: z.string().uuid(), input: universeComputeInputSchema,
   }),
   z.object({
+    type: z.literal("CRYPTO_RESULT"), taskId: z.string().uuid(),
+    token: z.string().min(32).max(256), reply: universeComputeReplySchema,
+  }),
+  z.object({
     type: z.literal("UNIVERSE_RESULT"), taskId: z.string().uuid(),
     token: z.string().min(32).max(256), reply: universeComputeReplySchema,
   }),
@@ -204,6 +209,8 @@ export const agentMessageSchema = z.discriminatedUnion("type", [
 ]);
 export type AgentMessage = z.infer<typeof agentMessageSchema>;
 export type ServerAgentMessage =
+  | { type: "CRYPTO_TASK"; taskId: string; token: string; deadlineMs: number;
+      input: CryptoBacktestInput; barsJson: string }
   | { type: "UNIVERSE_TASK"; taskId: string; token: string; deadlineMs: number;
       dataset: DatasetManifest; input: UniverseComputeInput }
   | { type: "UNIVERSE_CANCEL"; taskId: string }

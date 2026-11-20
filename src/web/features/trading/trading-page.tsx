@@ -1,3 +1,4 @@
+import { PaperNavigation } from "../crypto/paper-navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -113,7 +114,7 @@ export function TradingPage() {
   const state = useLocation().state as { tradingRequestId?: string } | null;
   const requestId = state?.tradingRequestId ?? null;
   const autoOpen = search.get("settings") === "open";
-  return <TradingSession key={JSON.stringify([sourceId, sourceRunId, presetId, requestId])} sourceId={sourceId} sourceRunId={sourceRunId} presetId={presetId} requestId={requestId} autoOpen={autoOpen} selectPreset={(id, options) => setSearch(id === null ? {} : { presetId: id, ...(options?.open ? { settings: "open" } : {}) }, { replace: options?.replace })} clearAutoOpen={() => setSearch(presetId ? { presetId } : {}, { replace: true })} />;
+  return <div className="space-y-4"><PaperNavigation mode="stock" /><TradingSession key={JSON.stringify([sourceId, sourceRunId, presetId, requestId])} sourceId={sourceId} sourceRunId={sourceRunId} presetId={presetId} requestId={requestId} autoOpen={autoOpen} selectPreset={(id, options) => setSearch(id === null ? {} : { presetId: id, ...(options?.open ? { settings: "open" } : {}) }, { replace: options?.replace })} clearAutoOpen={() => setSearch(presetId ? { presetId } : {}, { replace: true })} /></div>;
 }
 
 function TradingSession({ sourceId, sourceRunId, presetId, requestId, autoOpen, selectPreset, clearAutoOpen }: { sourceId: string | null; sourceRunId: string | null; presetId: string | null; requestId: string | null; autoOpen: boolean; selectPreset: (id: string | null, options?: { open?: boolean; replace?: boolean }) => void; clearAutoOpen: () => void }) {

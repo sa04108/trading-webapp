@@ -141,8 +141,7 @@ export class AgentClient {
       });
     this.universeTasks = new AgentUniverseTasks({
       active: () => this.running.size + this.universeTasks.size,
-      resources: () => (this.runtime?.resources ?? availableResources)(
-        this.running.size + this.universeTasks.size, this.observedRss, this.profiled, this.requestedBars),
+      resources: () => this.resources(),
       dataset: () => this.cache.syncing || this.stopping || this.updating || this.runtime
         ? null : this.cache.current,
       file: (dataset) => this.cache.file(dataset),
@@ -289,7 +288,7 @@ export class AgentClient {
   }
 
   private message(message: ServerAgentMessage): void {
-    if (message.type === "UNIVERSE_TASK") {
+    if (message.type === "UNIVERSE_TASK" || message.type === "CRYPTO_TASK") {
       this.universeTasks.start(message);
       this.capacity();
     } else if (message.type === "UNIVERSE_CANCEL") {
@@ -385,9 +384,11 @@ export class AgentClient {
       this.requestedBars,
     );
     if (!this.runtime) return resources;
-    let reservedBytes = 0;
-    let allocatedBytes = 0;
-    let reservedCpus = 0;
+    const auxiliary = this.universeTasks.reservedMemory();
+    const active = this.running.size + this.universeTasks.size;
+    let reservedBytes = auxiliary.unused;
+    let allocatedBytes = auxiliary.allocated;
+    let reservedCpus = this.universeTasks.size;
     for (const running of this.running.values()) {
       const rss = running.child.pid ? processRss(running.child.pid) : 0;
       reservedBytes += Math.max(0, running.budgetBytes - rss);
@@ -399,9 +400,9 @@ export class AgentClient {
       (resources.computeBudgetBytes ?? Number.POSITIVE_INFINITY) - allocatedBytes));
     const cpus = Math.max(0, resources.cpus - reservedCpus);
     const freeSlots = resources.memoryPressure ? 0 : Math.max(0, Math.min(
-      resources.slots - this.running.size, cpus, Math.floor(budgetBytes / (128 * 1024 ** 2)),
+      resources.slots - active, cpus, Math.floor(budgetBytes / (128 * 1024 ** 2)),
     ));
-    return { ...resources, cpus, budgetBytes, slots: this.running.size + freeSlots };
+    return { ...resources, cpus, budgetBytes, slots: active + freeSlots };
   }
 
   private capacity(): void {

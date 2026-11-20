@@ -30,7 +30,7 @@ export function BacktestHeader({
   actions,
 }: {
   title?: string;
-  mode: "daily" | "intraday";
+  mode: "daily" | "intraday" | "crypto";
   actions?: ReactNode;
 }) {
   const navigate = useNavigate();
@@ -43,7 +43,7 @@ export function BacktestHeader({
           value={mode}
           onValueChange={(value) =>
             void navigate(
-              value === "intraday" ? "/backtests/intraday" : "/backtests",
+              value === "intraday" ? "/backtests/intraday" : value === "crypto" ? "/backtests/crypto" : "/backtests",
             )
           }
         >
@@ -53,6 +53,7 @@ export function BacktestHeader({
           <SelectContent>
             <SelectItem value="daily">일봉</SelectItem>
             <SelectItem value="intraday">분봉</SelectItem>
+            <SelectItem value="crypto">코인 일봉</SelectItem>
           </SelectContent>
         </Select>
       </div>

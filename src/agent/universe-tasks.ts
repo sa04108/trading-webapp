@@ -5,7 +5,7 @@ import { universeComputeReplySchema, UNIVERSE_COMPUTE_TIMEOUT_MS,
   type UniverseComputeReply } from "../shared/universe-compute.js";
 import { processRss, type AgentResources } from "./resources.js";
 
-type Task = Extract<ServerAgentMessage, { type: "UNIVERSE_TASK" }>;
+type Task = Extract<ServerAgentMessage, { type: "UNIVERSE_TASK" | "CRYPTO_TASK" }>;
 interface Running {
   task: Task; child: ChildProcess; budgetBytes: number; peakRss: number;
   closed: Promise<void>; deadline: NodeJS.Timeout;
@@ -32,23 +32,34 @@ export class AgentUniverseTasks {
   }) {}
 
   get size(): number { return this.running.size; }
-  files(): string[] { return [...this.running.values()].map(({ task }) => this.deps.file(task.dataset)); }
+  reservedMemory(): {allocated: number; unused: number} {
+    let allocated = 0;
+    let unused = 0;
+    for (const run of this.running.values()) {
+      allocated += run.budgetBytes;
+      unused += Math.max(0, run.budgetBytes - (run.child.pid ? processRss(run.child.pid) : 0));
+    }
+    return {allocated, unused};
+  }
+
+  files(): string[] { return [...this.running.values()].flatMap(({ task }) => task.type === "UNIVERSE_TASK" ? [this.deps.file(task.dataset)] : []); }
 
   start(task: Task): void {
     if (this.running.has(task.taskId)) return;
     const dataset = this.deps.dataset();
     const resources = this.deps.resources();
-    if (!dataset || JSON.stringify(dataset) !== JSON.stringify(task.dataset) ||
+    if ((task.type === "UNIVERSE_TASK" && (!dataset || JSON.stringify(dataset) !== JSON.stringify(task.dataset))) ||
         resources.slots <= this.deps.active() || resources.budgetBytes < 256 * 1024 ** 2 ||
         resources.memoryPressure || task.deadlineMs <= Date.now()) {
       this.reply(task, { status: "UNAVAILABLE" });
       return;
     }
-    const helperBudget = universeHelperBudget(resources.budgetBytes);
+    const helperBudget = universeHelperBudget(task.type === "CRYPTO_TASK" ? Math.min(resources.budgetBytes, 320 * 1024 ** 2) : resources.budgetBytes);
     let child: ChildProcess;
     try {
       const ts = import.meta.url.endsWith(".ts");
-      child = fork(fileURLToPath(new URL(`../runtime/workers/universe-child.${ts ? "ts" : "js"}`, import.meta.url)), [], {
+      const worker = task.type === "CRYPTO_TASK" ? "crypto-child" : "universe-child";
+      child = fork(fileURLToPath(new URL(`../runtime/workers/${worker}.${ts ? "ts" : "js"}`, import.meta.url)), [], {
         execArgv: [`--max-old-space-size=${helperBudget.heapMb}`, "--max-semi-space-size=4", ...(ts ? ["--import", "tsx"] : [])],
         env: { NODE_ENV: "production" }, stdio: ["ignore", "ignore", "ignore", "ipc"],
       });
@@ -72,11 +83,13 @@ export class AgentUniverseTasks {
     child.once("close", () => {
       clearTimeout(running.deadline);
       this.running.delete(task.taskId);
-      this.reply(task, pending ?? { status: "UNAVAILABLE" });
+      this.reply(task, pending ?? (task.type === "CRYPTO_TASK"
+        ? { status: "FAILED", error: "계산 프로세스가 결과를 반환하기 전에 종료되었습니다." }
+        : { status: "UNAVAILABLE" }));
       this.deps.finished(running.peakRss);
       complete();
     });
-    child.send({ dataPath: this.deps.file(task.dataset), collectionVersion: task.dataset.collectionVersion,
+    child.send(task.type === "CRYPTO_TASK" ? { input: task.input, barsJson: task.barsJson } : { dataPath: this.deps.file(task.dataset), collectionVersion: task.dataset.collectionVersion,
       input: task.input }, (error) => { if (error) child.kill("SIGKILL"); });
   }
 
@@ -96,6 +109,6 @@ export class AgentUniverseTasks {
   }
 
   private reply(task: Task, reply: UniverseComputeReply): void {
-    this.deps.send({ type: "UNIVERSE_RESULT", taskId: task.taskId, token: task.token, reply });
+    this.deps.send({ type: task.type === "CRYPTO_TASK" ? "CRYPTO_RESULT" : "UNIVERSE_RESULT", taskId: task.taskId, token: task.token, reply });
   }
 }

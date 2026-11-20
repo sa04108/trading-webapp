@@ -1,3 +1,5 @@
+import { CryptoPaperPage } from "../features/crypto/paper-page";
+import { CryptoBacktestsPage, CryptoBacktestDetailPage } from "../features/crypto/pages";
 import { ConfigurationSearchPage, ConfigurationSearchDetailPage } from "../features/backtests/configuration-search-page";
 import { PeriodValidationPage, PeriodValidationDetailPage } from "../features/backtests/period-validation-pages";
 import { createBrowserRouter } from "react-router";
@@ -39,7 +41,10 @@ export const router = createBrowserRouter([
         children: [
           { index: true, element: <DashboardPage /> },
           { path: "trading", element: <TradingPage /> },
+          { path: "trading/crypto", element: <CryptoPaperPage /> },
           { path: "backtests", element: <BacktestsPage /> },
+          { path: "backtests/crypto", element: <CryptoBacktestsPage /> },
+          { path: "backtests/crypto/:id", element: <CryptoBacktestDetailPage /> },
           { path: "backtests/intraday", element: <IntradayListPage /> },
           { path: "backtests/intraday/new", element: <IntradayNewPage /> },
           { path: "backtests/intraday/:id", element: <IntradayDetailPage /> },

@@ -17,3 +17,4 @@ export * from "./backtest-refresh-schema.js";
 export * from "./intraday-validation-schema.js";
 export * from "./configuration-search-schema.js";
 export * from "./openapi-token-schema.js";
+export * from "./crypto-schema.js";

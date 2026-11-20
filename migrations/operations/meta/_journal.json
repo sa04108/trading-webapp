@@ -232,6 +232,20 @@
       "when": 1795102883040,
       "tag": "0032_intraday_history_index",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1795176709361,
+      "tag": "0033_crypto_backtests",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1795177031238,
+      "tag": "0034_crypto_paper",
+      "breakpoints": true
     }
   ]
 }
