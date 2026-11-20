@@ -654,13 +654,12 @@ export function registerBacktestRoutes(
     app,
     {
       database: deps.database,
+      references: new PreparationReferenceService(deps.database),
       clock,
       queue,
       results,
       strategies,
       preparation,
-      collectPreparations: () =>
-        new PreparationReferenceService(deps.database).collect(),
       onFinished: deps.onValidationFinished,
       validateRequest: (body) => {
         const errors = validateStaticSubmission(body);

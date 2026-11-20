@@ -70,7 +70,7 @@ describe('독립 구간 검증 실행', () => {
       },
     } as unknown as BacktestPreparationOrchestrator;
     deps = {
-      collectPreparations: () => new PreparationReferenceService(database).collect(),
+      references: new PreparationReferenceService(database),
       database, clock, queue, results, preparation, strategies: new StrategyRegistry([strategy]),
       validateRequest: () => [],
       buildEnqueue: vi.fn(async (request, preview) => () => queue.enqueue(request, [], undefined, null, [], { preparationJobId: preview.preparationJobId })),
@@ -368,6 +368,36 @@ describe('독립 구간 검증 실행', () => {
     database.db.update(backtestRuns).set({ executionVersion }).where(eq(backtestRuns.jobId, jobId)).run();
     await service.pump();
     expect(service.get(experiment.id)).toMatchObject({ status: 'FAILED', error: expect.stringContaining('하위 백테스트의 실행 버전') });
+  });
+
+  it('기간검증 취소는 단독 준비의 종료를 기다리고 설정 탐색과 공유한 준비는 넘겨준다', async () => {
+    const experiment = service.create(sourceId, { mode: 'HOLDOUT', splitDate: '2023-01-01' });
+    for (const id of ['shared', 'exclusive']) {
+      database.db.insert(backtestPreparationJobs).values({ id, requestHash: id, requestJson: '{}', status: 'RUNNING',
+        phase: 'MARKET_DATA', createdAtMs: 1, updatedAtMs: 1 }).run();
+    }
+    database.sqlite.prepare(`UPDATE backtest_validation_trials SET preparation_job_id = CASE role WHEN 'TRAIN' THEN 'shared' ELSE 'exclusive' END
+      WHERE validation_id=?`).run(experiment.id);
+    database.sqlite.prepare(`INSERT INTO configuration_searches
+      (id,owner_id,request_id,mode,source_job_id,config_json,catalog_json,runtime_identity,status,created_at_ms)
+      VALUES ('search','owner','request','daily',?,'{}','{}','test','ACTIVE',1)`).run(sourceId);
+    database.sqlite.exec(`INSERT INTO configuration_search_items (id,search_id,ordinal,request_json,values_json,status,preparation_job_id)
+      VALUES ('item','search',0,'{}','{}','PREPARING','shared')`);
+    deps.preparation.cancel = id => database.db.update(backtestPreparationJobs).set({ cancelRequested: true })
+      .where(eq(backtestPreparationJobs.id, id)).run().changes === 1;
+
+    service.cancel(experiment.id);
+    await service.pump();
+    const cancellation = database.sqlite.prepare('SELECT cancel_requested FROM backtest_preparation_jobs WHERE id=?').pluck();
+    expect(cancellation.get('shared')).toBe(0);
+    expect(cancellation.get('exclusive')).toBe(1);
+    expect(service.get(experiment.id)?.status).toBe('CANCELLING');
+    database.db.update(backtestPreparationJobs).set({ status: 'CANCELLED' }).where(eq(backtestPreparationJobs.id, 'exclusive')).run();
+    await service.pump();
+    expect(service.get(experiment.id)?.status).toBe('CANCELLED');
+    expect(database.sqlite.prepare("SELECT preparation_job_id FROM configuration_search_items WHERE id='item'").pluck().get()).toBe('shared');
+    database.sqlite.exec("DELETE FROM configuration_searches WHERE id='search'");
+    expect(new PreparationReferenceService(database).hasConsumers('shared')).toBe(false);
   });
 
   it('제출 검증을 기다리는 동안 취소하면 새 작업을 생성하지 않는다', async () => {

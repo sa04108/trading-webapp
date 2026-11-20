@@ -1590,6 +1590,12 @@ describe('BacktestPreparationOrchestrator recovery와 취소', () => {
 
       expect(orchestrator.cancel(job.id)).toBe(true);
       expect(orchestrator.get(job.id)?.status).toBe('RUNNING');
+      expect(orchestrator.getActive(INPUT)).toBeNull();
+      const replacement = orchestrator.start(INPUT);
+      expect(replacement.id).not.toBe(job.id);
+      expect(orchestrator.getActive(INPUT)?.id).toBe(replacement.id);
+      expect(orchestrator.start(INPUT).id).toBe(replacement.id);
+      orchestrator.cancel(replacement.id);
       continueAfterCancel.resolve();
       await waitFor(() => orchestrator.get(job.id)?.status === 'CANCELLED');
       expect(orchestrator.get(job.id)?.doneSymbols).toBe(1);
