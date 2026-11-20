@@ -2,8 +2,9 @@ import { openDatabase } from "../../src/runtime/shared/db/database.js";
 import { benchmarkDailyValues, symbolMasterTradingDays } from "../../src/runtime/shared/db/data-schema.js";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { deserialize } from "node:v8";
+import { deserialize, serialize } from "node:v8";
 import { createOfficialKrxTradingCalendar } from "../../src/server/modules/market-data/infrastructure/krx/krx-trading-calendar.js";
+import { crossSectionalMomentumStrategy } from "../../src/runtime/modules/strategy/strategies/cross-sectional-momentum.js";
 import { rangeBreakoutStrategy } from "../../src/runtime/modules/strategy/strategies/range-breakout.js";
 import { reconcileState } from "../../src/server/modules/trading/infrastructure/strategy-lifecycle.js";
 import { calculate } from "../../src/workers/trading-decision-child.js";
@@ -49,6 +50,87 @@ describe("daily decision", () => {
     const next = "2026-11-14";
     bars.push({ ...bars.at(-1)!, tsMs: ts + 86_400_000 });
     try { expect((await run(warm.checkpoint, false, next)).orders).toHaveLength(1); } finally { bars.pop(); }
+  });
+  it("전략 갱신은 남은 매도 목표를 이어가고 이전 매수 의도는 버린다", async () => {
+    const old = await run(null, true);
+    const saved = deserialize(Buffer.from(old.checkpoint, "base64")) as Record<string, unknown>;
+    saved.priorityCalls = 7;
+    saved.pendingSells = [{ symbol: "005930", reason: "STOP_LOSS", target: 2 }];
+    saved.pendingExits = ["005930"];
+    saved.deferredBuys = [{ symbol: "000660", side: "BUY", quantity: 5 }];
+    const previousArtifact = { hash: deployment.artifactHash, checkpoint: serialize(saved).toString("base64") };
+    const upgradedDeployment = { ...deployment, artifactHash: "b".repeat(64) };
+    const noOrders = { ...strategy, onBars: () => ({ orders: [] }) };
+    const upgradedBundle = { ...bundle, getStrategy: () => noOrders };
+    const portfolio = { "005930": { quantity: 7, cost: 700, enteredAtMs: ts - 86_400_000 } };
+    const execute = (day: string, checkpoint: string | null, warmupOnly: boolean, previous?: typeof previousArtifact) => calculate({ input: {
+      deployment: upgradedDeployment, cashKrw: 1000, portfolio, checkpoint, warmupOnly,
+      ...(previous ? { throughBarMs: ts, previousArtifact: previous } : {}),
+    }, date: day, bundlePath: "" } as never, {} as never, upgradedBundle as never, runtime as never);
+    const warm = await execute(date, null, true, previousArtifact);
+    expect(warm.orders).toEqual([]);
+    const state = deserialize(Buffer.from(warm.checkpoint, "base64")) as { pendingSells: unknown[]; pendingExits: string[]; deferredBuys: unknown[]; priorityCalls: number };
+    expect(state.pendingSells).toEqual([{ symbol: "005930", reason: "STOP_LOSS", target: 2 }]);
+    expect(state.pendingExits).toEqual(["005930"]);
+    expect(state.deferredBuys).toEqual([]);
+    expect(state.priorityCalls).toBe(7);
+    expect((await execute(date, warm.checkpoint, false)).orders).toEqual([]);
+    bars.push({ ...bars.at(-1)!, tsMs: ts + 86_400_000 });
+    try {
+      expect((await execute("2026-11-14", warm.checkpoint, false)).orders).toEqual([
+        { symbol: "005930", side: "SELL", reason: "STOP_LOSS", quantity: 5 },
+      ]);
+    } finally { bars.pop(); }
+  });
+
+  it("실제 순위 전략은 갱신으로 리밸런스하지 않고 다음 예정 주기에 매수한다", async () => {
+    const calendar = createOfficialKrxTradingCalendar();
+    const history: typeof bars = [];
+    for (let ms = Date.parse("2026-09-01T00:00:00Z"); ms <= Date.parse("2026-11-17T00:00:00Z"); ms += 86_400_000) {
+      const day = new Date(ms).toISOString().slice(0, 10);
+      if (calendar.classify(day, "KOSPI").state === "OPEN") history.push({ ...bars[0]!, tsMs: ms });
+    }
+    const oldDate = "2026-11-12", oldMs = Date.parse(`${oldDate}T00:00:00Z`);
+    const rankDeployment = { ...deployment, strategyId: crossSectionalMomentumStrategy.id, version: crossSectionalMomentumStrategy.version,
+      createdAtMs: oldMs, parameters: { formationDays: 20, skipDays: 0, topN: 1, marketTrendBars: 0,
+        minAverageTradingValueKrw: 0, minRebalanceBars: 1, absoluteMomentumFilter: false } };
+    const entry = { symbol: "005930", marketCapKrw: "100", volume: 100, tradingValueKrw: "100" };
+    const rankRuntime = { ...runtime,
+      candles: { getCandlesArray: async ({ fromTsMs, toTsMs }: { fromTsMs: number; toTsMs: number }) => history.filter(bar => bar.tsMs >= fromTsMs && bar.tsMs <= toTsMs) },
+      resolver: { resolveOrDescribeNeeds: async (_rule: unknown, period: { to: string }) => ({ kind: "READY", unionEntries: new Map(),
+        schedule: [{ rebalanceDate: period.to >= "2026-11-16" ? "2026-11-16" : "2026-11-02", members: [entry] }], dataExclusions: [], corporateActionExclusions: [] }) },
+    };
+    const rankBundle = { ...bundle, getStrategy: () => crossSectionalMomentumStrategy, reconcileState };
+    const execute = (day: string, checkpoint: string | null, previous?: { hash: string; checkpoint: string }) => calculate({ input: {
+      deployment: previous || checkpoint ? { ...rankDeployment, artifactHash: "b".repeat(64) } : rankDeployment,
+      cashKrw: rankDeployment.budgetKrw, portfolio: {}, checkpoint, warmupOnly: checkpoint === null,
+      ...(previous ? { throughBarMs: oldMs, previousArtifact: previous } : {}),
+    }, date: day, bundlePath: "" } as never, {} as never, rankBundle as never, rankRuntime as never);
+    const warm = await execute(oldDate, null);
+    const old = deserialize(Buffer.from(warm.checkpoint, "base64")) as { firstDecision: boolean; rebalanceDate: string };
+    old.firstDecision = false;
+    old.rebalanceDate = "2026-11-02";
+    const upgraded = await execute(oldDate, null, { hash: rankDeployment.artifactHash, checkpoint: serialize(old).toString("base64") });
+    const next = await execute("2026-11-13", upgraded.checkpoint);
+    expect(next.orders).toEqual([]);
+    const nextState = deserialize(Buffer.from(next.checkpoint, "base64")) as { state: { pendingTargets: unknown; lastRebalanceBar: unknown } };
+    expect(nextState.state.pendingTargets).toBeNull();
+    expect(nextState.state.lastRebalanceBar).toBeNull();
+    const scheduled = await execute("2026-11-16", next.checkpoint);
+    const scheduledState = deserialize(Buffer.from(scheduled.checkpoint, "base64")) as { state: { pendingTargets: unknown } };
+    expect(scheduledState.state.pendingTargets).toEqual(["005930"]);
+    expect((await execute("2026-11-17", scheduled.checkpoint)).orders).toMatchObject([{ symbol: "005930", side: "BUY" }]);
+  });
+
+  it("갱신할 이전 체크포인트의 전략과 봉 경계가 다르면 거부한다", async () => {
+    const old = await run(null, true);
+    const saved = deserialize(Buffer.from(old.checkpoint, "base64")) as Record<string, unknown>;
+    for (const patch of [{ hash: "c".repeat(64) }, { strategyId: "other" }, { lastBar: ts - 86_400_000 }, { abi: 2 }, { priorityCalls: -1 }, { firstDecision: "false" }, { rebalanceDate: "2026-02-30" }, { pendingSells: [{ symbol: "005930", target: -1 }] }]) {
+      const previousArtifact = { hash: deployment.artifactHash, checkpoint: serialize({ ...saved, ...patch }).toString("base64") };
+      await expect(calculate({ input: { deployment: { ...deployment, artifactHash: "b".repeat(64) }, cashKrw: 1000,
+        portfolio: {}, checkpoint: null, warmupOnly: true, throughBarMs: ts, previousArtifact }, date, bundlePath: "" } as never,
+        {} as never, bundle as never, runtime as never)).rejects.toThrow(/이전 전략/);
+    }
   });
   it("최근 확정 봉이 빠지면 가격 자료만 수집한다", async () => {
     await expect(run(null, true, "2026-11-14")).rejects.toMatchObject({
@@ -227,7 +309,6 @@ describe("daily decision", () => {
     const warm = await run(null, true);
     const value = deserialize(Buffer.from(warm.checkpoint, "base64")) as { lastBar: number };
     value.lastBar = ts - 6 * 366 * 86_400_000;
-    const { serialize } = await import("node:v8");
     await expect(run(serialize(value).toString("base64"), false, "2026-11-14")).rejects.toThrow(/중단 기간/);
   });
 

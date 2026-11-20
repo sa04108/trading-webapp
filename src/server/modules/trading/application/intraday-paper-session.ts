@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { and, eq } from "drizzle-orm";
+import { z } from "zod";
 import type { DatabaseHandle } from "../../../../runtime/shared/db/database.js";
 import { advanceIntradaySession, initialIntradayState, type IntradaySessionState } from "../../../../runtime/modules/intraday/domain/session-engine.js";
-import { intradayDate, MINUTE_MS, type IntradayBar, type IntradayFill, type IntradayOrderEvent } from "../../../../shared/schemas/intraday.js";
+import { intradayBarSchema, intradayDate, MINUTE_MS, type IntradayBar, type IntradayFill, type IntradayOrderEvent } from "../../../../shared/schemas/intraday.js";
 import { paperTradingAccountId, type IntradayTradingSetup, type TradingOrder } from "../../../../shared/schemas/trading.js";
 import { paperTradingAccount, paperTradingOrders, tradingControl, tradingDeployments, tradingEvents, tradingOrders } from "../../../shared/db/trading-schema.js";
 import type { BrokerOrder } from "./broker-port.js";
@@ -16,7 +17,8 @@ export interface IntradayPaperData {
 type Row = typeof tradingDeployments.$inferSelect;
 type Db = DatabaseHandle["db"];
 type Output = ReturnType<typeof advanceIntradaySession>;
-interface Checkpoint { signalAfterMs: number; state: IntradaySessionState; gapDate?: string; missingBars?: number }
+const CHECKPOINT_FORMAT = 1;
+interface Checkpoint { formatVersion?: number; signalAfterMs: number; state: IntradaySessionState; gapDate?: string; missingBars?: number }
 
 export function minuteSetup(row: Row | null): IntradayTradingSetup | null {
   if (!row) return null;
@@ -29,13 +31,44 @@ export function readMinuteCheckpoint(row: Row): Checkpoint {
   return JSON.parse(row.checkpoint) as Checkpoint;
 }
 
+// 형식 번호가 없던 계좌도 같은 원장·주문·봉 구조인지 확인한 뒤 새 실행기에 넘긴다.
+const count = z.number().int().nonnegative();
+const timestamp = count.nullable();
+const checkpointSchema = z.object({
+  formatVersion: z.literal(CHECKPOINT_FORMAT).optional(),
+  signalAfterMs: count,
+  state: z.object({
+    cash: z.number(), quantity: count, averagePrice: z.number(), lastPrice: z.number(),
+    lastBarMs: timestamp, throughMs: timestamp, nextSignalId: count, day: z.string(), finalizedDay: z.string(), stopped: z.boolean(),
+    totalEntryCost: z.number(), tradeProceeds: z.number(), entryAt: count, peak: z.number(), holdingMinutes: count,
+    completedPnl: z.number(), previousVolume: count, dailyEntries: count, lastExitAt: timestamp,
+    dayBars: z.array(intradayBarSchema), signalCheckpoint: z.object({ orbFired: z.boolean(), recoveryRemaining: count }).optional(),
+    totalCosts: z.number(), maxDrawdownPct: z.number(), completedTrades: count, processedBars: count,
+    pending: z.object({
+      id: z.string().min(1), eligibleAtMs: count, expiresAtMs: count, requestedQty: count.positive(), remainingQty: count.positive(),
+      signal: z.object({ id: z.string(), atMs: count, side: z.enum(["BUY", "SELL"]), reason: z.string() }),
+    }).refine(order => order.signal.id === order.id && order.remainingQty <= order.requestedQty && order.eligibleAtMs <= order.expiresAtMs).nullable(),
+  }),
+});
+
+function compatibleMinuteCheckpoint(row: Row): Checkpoint {
+  const checkpoint = readMinuteCheckpoint(row);
+  if (!checkpointSchema.safeParse(checkpoint).success)
+    throw new Error("기존 분봉 체크포인트를 현재 실행기에서 이어갈 수 없습니다.");
+  return checkpoint;
+}
+
+export function upgradeMinuteCheckpoint(row: Row): string {
+  return JSON.stringify({ ...compatibleMinuteCheckpoint(row), formatVersion: CHECKPOINT_FORMAT });
+}
+
 export function startMinuteCheckpoint(row: Row, setup: IntradayTradingSetup, now: number): Checkpoint {
-  const checkpoint = row.checkpoint ? readMinuteCheckpoint(row) : { state: initialIntradayState(setup.request) };
+  const checkpoint = row.checkpoint ? compatibleMinuteCheckpoint(row) : { state: initialIntradayState(setup.request) };
   const { state } = checkpoint;
   if (state.stopped || (state.quantity > 0 && (state.day !== intradayDate(now) || now >= Date.parse(state.day + "T15:20:00+09:00")))) {
     throw new Error("당일 청산 기한을 지난 잔여 포지션이 있습니다. 이 계좌의 보유·체결 이력을 확인하고 새 모의투자를 생성해 주세요.");
   }
-  return { ...checkpoint, signalAfterMs: now };
+  return { ...checkpoint, formatVersion: CHECKPOINT_FORMAT, signalAfterMs: now };
 }
 
 /** 최근 누락 봉에는 두 분의 재조회 여유를 준 뒤, 실제로 관측한 봉만 확정한다. */
