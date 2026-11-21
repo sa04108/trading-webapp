@@ -140,6 +140,7 @@ test("자동 매매는 양방향 확인 후 전환하고 ON에서는 설정을 �
   await page.route("**/api/v1/trading/deactivate", (route) => { writes++; current = { ...current, revision: 19, paperCapital: { ...current.paperCapital!, canEdit: true }, deployment: { ...current.deployment!, status: "INACTIVE" } }; return route.fulfill({ json: current }); });
   await page.goto("/trading");
   await expect(page.getByText("계좌 연결")).toHaveCount(0);
+  await expect(page.getByText("호환되는 전략 버전은 활성화할 때와 다음 실행 전에 자동 적용됩니다.")).toBeVisible();
   await page.getByRole("button", { name: "전략 버전 업데이트", exact: true }).click();
   const versionDialog = page.getByRole("dialog", { name: "전략 버전 업데이트" });
   await expect(versionDialog).toContainText("1 → 2");
@@ -322,6 +323,7 @@ test("분봉 모의투자는 고정 설정을 표시하고 확인 후 켠다", a
   });
   await page.goto("/trading?presetId=minute-preset");
   await expect(page.getByText(/확정된 1분 OHLCV로 모의 체결/)).toBeVisible();
+  await expect(page.getByText("호환되는 전략 버전은 활성화할 때와 다음 실행 전에 자동 적용됩니다.")).toBeVisible();
   await expect(page.getByRole("button", { name: "데이터 확인·복구" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "전략 버전 업데이트" })).toHaveCount(0);
   await page.getByRole("button", { name: "매매 설정" }).click();

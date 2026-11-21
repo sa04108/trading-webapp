@@ -534,6 +534,52 @@ test("이전 EMA 복제는 기존 봉 주기를 보여주고 새 실행 전에 �
 });
 
 
+test("분봉 표는 긴 종목명을 한 줄로 표시하고 실험 링크를 그 아래에 둔다", async ({ page }) => {
+  await login(page);
+  const symbolName = "한국타이어앤테크놀로지";
+  await page.route("**/api/v1/symbols/info?**", route => {
+    expect(new URL(route.request().url()).searchParams.get("symbols")).toBe("005930,123456");
+    return route.fulfill({ json: { stocks: [{ symbol: "005930", name: "삼성전자" }] } });
+  });
+  await page.route("**/api/v1/intraday/runs/groups", route => route.fulfill({ json: {
+    groups: [{ strategyId: request.strategyId, total: 3 }],
+  } }));
+  await page.route("**/api/v1/intraday/runs?**", route => route.fulfill({ json: {
+    runs: [
+      { ...completed, request: { ...request, symbol: "161390" }, symbolName, metrics: result.metrics },
+      { ...completed, id: "lookup", symbolName: null, metrics: null },
+      { ...completed, id: "unknown", request: { ...request, symbol: "123456" }, symbolName: null, metrics: null },
+    ], total: 3,
+  } }));
+  await page.route("**/api/v1/intraday/experiments/summary?**", route => route.fulfill({ json: {
+    summaries: [{ jobId: completed.id, search: { experimentCount: 1 }, validation: { experimentCount: 1, returns: { sampleStdDev: null } } }],
+  } }));
+  await page.goto("/backtests/intraday?view=table");
+  const history = page.getByRole("region", { name: "백테스트 이력" });
+  await expect(history.getByText("삼성전자", { exact: true })).toBeVisible();
+  const row = history.getByRole("row").filter({ has: page.getByText(symbolName, { exact: true }) });
+  const name = row.getByText(symbolName, { exact: true });
+  await expect(name).toBeVisible();
+  await expect(history.getByText("종목명 미등록", { exact: true })).toBeVisible();
+  const search = row.getByRole("link", { name: "탐색", exact: true });
+  const validation = row.getByRole("link", { name: "검증", exact: true });
+  await expect(search).toHaveAttribute("href", "/backtests/intraday/done/search");
+  await expect(validation).toHaveAttribute("href", "/backtests/intraday/done/validations");
+  const lines = await name.evaluate(node => {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    return Array.from(range.getClientRects(), rect => ({ right: rect.right, bottom: rect.bottom }));
+  });
+  expect(lines).toHaveLength(1);
+  const nextColumn = (await row.getByRole("cell").nth(1).boundingBox())!;
+  const searchBox = (await search.boundingBox())!;
+  const validationBox = (await validation.boundingBox())!;
+  expect(nextColumn.x).toBeGreaterThanOrEqual(lines[0]!.right);
+  expect(searchBox.y).toBeGreaterThanOrEqual(lines[0]!.bottom);
+  expect(validationBox.y).toEqual(searchBox.y);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
 // 분봉 기록 삭제는 취소 API와 구분해야 하며, 접힌 전략·다른 페이지·실행 중 기록을 건드리면 안 된다.
 test("분봉 편집은 현재 페이지의 종료된 이력만 삭제한다", async ({ page }) => {
   await login(page);

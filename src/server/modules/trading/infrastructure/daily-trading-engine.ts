@@ -43,7 +43,12 @@ export class DailyTradingEngine implements TradingDecisionEngine {
   async evaluate(input: EvaluationInput): Promise<EvaluationOutput> {
     if (this.closed) throw new Error("전략 실행기가 종료되었습니다");
     const now = this.options.now();
-    const date = latestClosedTradingDate(now);
+    let date = latestClosedTradingDate(now);
+    if (input.throughBarMs !== undefined) {
+      if (!input.warmupOnly || !Number.isSafeInteger(input.throughBarMs) || input.throughBarMs % 86_400_000 !== 0
+        || input.throughBarMs > Date.parse(date + "T00:00:00Z")) throw new Error("전략 업데이트의 준비 봉 시각이 올바르지 않습니다.");
+      date = kstDateOf(input.throughBarMs);
+    }
     const bundlePath = this.options.artifacts.bundlePath(input.deployment.artifactHash);
     return this.run(input, date, bundlePath, !input.warmupOnly && this.canTrade(now) ? kstDateOf(now) : undefined);
   }

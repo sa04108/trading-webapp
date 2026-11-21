@@ -129,6 +129,69 @@ it("부분 체결 뒤 시세 오류로 정지하면 체결된 잔고만 보존�
   expect(stopped.account?.cashBuyingPower).toBe(cash);
 });
 
+it("활성 분봉 모의계좌는 실행 버전 갱신 후 부분 체결과 미체결을 이어간다", async () => {
+  const f = fixture();
+  const created = await f.presets.createIntraday({ sourceRunId: "run-1", requestId: "a26fe604-8498-4b73-a93f-f9eb07c20006" }, "owner");
+  const service = f.presets.forPreset(created.id);
+  await service.activate(created.snapshot.revision, "owner");
+  f.setNow(at("10:03"));
+  await service.tick();
+  const before = service.snapshot();
+  expect(before.orders).toMatchObject([{ side: "BUY", quantity: 94, filledQuantity: 10, status: "PARTIAL" }]);
+  const stored = f.database.sqlite.prepare("SELECT setup_json, checkpoint FROM trading_deployments WHERE id = ?").get(created.id) as { setup_json: string; checkpoint: string };
+  const oldSetup = JSON.parse(stored.setup_json);
+  f.database.sqlite.prepare("UPDATE trading_deployments SET setup_json = ?, version = ? WHERE id = ?")
+    .run(JSON.stringify({ ...oldSetup, executionVersion: "previous-execution" }), "previous-strategy", created.id);
+  f.setNow(at("10:04"));
+  await service.tick();
+  const after = await service.refresh();
+  expect(after.deployment).toMatchObject({ status: "ACTIVE", executionVersion: readRuntimeVersions().executionVersion });
+  expect(after.orders).toMatchObject([{ id: before.orders[0]!.id, side: "BUY", quantity: 94, filledQuantity: 94, status: "FILLED" }]);
+  expect(after.positions).toMatchObject([{ symbol: "005930", quantity: 94 }]);
+  expect(after.account!.cashBuyingPower).toBeLessThan(before.account!.cashBuyingPower);
+  const current = f.database.sqlite.prepare("SELECT checkpoint FROM trading_deployments WHERE id = ?").get(created.id) as { checkpoint: string };
+  expect(JSON.parse(current.checkpoint).signalAfterMs).toBe(JSON.parse(stored.checkpoint).signalAfterMs);
+  expect(JSON.parse(current.checkpoint).state.lastBarMs).toBeGreaterThan(JSON.parse(stored.checkpoint).state.lastBarMs);
+});
+
+it("꺼진 분봉 모의계좌는 실행 버전이 바뀌어도 자동으로 켜지지 않는다", async () => {
+  const f = fixture();
+  const created = await f.presets.createIntraday({ sourceRunId: "run-1", requestId: "a26fe604-8498-4b73-a93f-f9eb07c20007" }, "owner");
+  const service = f.presets.forPreset(created.id);
+  f.database.sqlite.prepare("UPDATE trading_deployments SET version = ? WHERE id = ?").run("previous-strategy", created.id);
+  await service.tick();
+  expect(service.snapshot().deployment?.status).toBe("INACTIVE");
+  expect(f.intraday.paperBars).not.toHaveBeenCalled();
+});
+
+it("알 수 없는 분봉 체크포인트 형식은 업데이트를 대기하며 원장과 미체결을 보존한다", async () => {
+  const f = fixture();
+  const created = await f.presets.createIntraday({ sourceRunId: "run-1", requestId: "a26fe604-8498-4b73-a93f-f9eb07c20008" }, "owner");
+  const service = f.presets.forPreset(created.id);
+  await service.activate(created.snapshot.revision, "owner");
+  f.setNow(at("10:03"));
+  await service.tick();
+  const before = await service.refresh();
+  expect(before.orders).toMatchObject([{ status: "PARTIAL", quantity: 94, filledQuantity: 10 }]);
+  const read = () => f.database.sqlite.prepare("SELECT setup_json, checkpoint, version FROM trading_deployments WHERE id = ?").get(created.id) as { setup_json: string; checkpoint: string; version: string };
+  const previous = read();
+  const unsupported = JSON.stringify({ ...JSON.parse(previous.checkpoint), formatVersion: 999 });
+  f.database.sqlite.prepare("UPDATE trading_deployments SET setup_json = ?, checkpoint = ?, version = ? WHERE id = ?")
+    .run(JSON.stringify({ ...JSON.parse(previous.setup_json), executionVersion: "previous-execution" }), unsupported, "previous-strategy", created.id);
+  const priorUpdate = read();
+  f.intraday.paperBars.mockClear();
+  f.setNow(at("10:04"));
+  await service.tick();
+  const after = await service.refresh();
+  expect(after.deployment).toMatchObject({ status: "ACTIVE", executionVersion: "previous-execution", lastError: expect.stringContaining("체크포인트") });
+  expect(after.events).toEqual(expect.arrayContaining([expect.objectContaining({ severity: "WARNING", message: expect.stringContaining("체크포인트") })]));
+  expect(after.orders).toEqual(before.orders);
+  expect(after.positions).toEqual(before.positions);
+  expect(after.account?.cashBuyingPower).toBe(before.account?.cashBuyingPower);
+  expect(read()).toEqual(priorUpdate);
+  expect(f.intraday.paperBars).not.toHaveBeenCalled();
+});
+
 it("장중 ON 전의 매수 신호는 지표 준비에만 사용한다", async () => {
   const f = fixture();
   expect(f.result.signals[0]).toMatchObject({ side: "BUY", atMs: at("10:00") });

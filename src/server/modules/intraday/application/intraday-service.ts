@@ -694,7 +694,7 @@ export class IntradayService {
       ORDER BY ${ordering}, ${desc(intradayRuns.id)}
       LIMIT ${query.limit} OFFSET ${query.offset}
     `);
-    return rows.map((row) => {
+    const runs = rows.map((row) => {
       const [returns, drawdown, sharpe] = row.metricsJson ? JSON.parse(row.metricsJson) as (number | null)[] : [];
       return {
         ...this.run(row),
@@ -703,6 +703,25 @@ export class IntradayService {
         },
       };
     });
+    if (runs.length === 0) return [];
+    const symbols = [...new Set(runs.map((run) => run.request.symbol))];
+    const names = this.options.db.all<{ symbol: string; name: string | null }>(sql`
+      SELECT requested.value AS symbol,
+        COALESCE(
+          CASE WHEN d.source = 'toss' OR (d.source = 'local' AND
+            (m.recorded_at_ms IS NULL OR d.updated_at_ms >= m.recorded_at_ms)) THEN NULLIF(trim(d.name), '') END,
+          CASE WHEN m.valid_to_date IS NULL THEN trim(m.name) END, NULLIF(trim(d.name), ''), NULLIF(trim(s.name), ''), trim(m.name)
+        ) AS name
+      FROM json_each(${JSON.stringify(symbols)}) AS requested
+      LEFT JOIN symbol_directory d ON d.symbol = requested.value AND trim(d.name) != d.symbol
+      LEFT JOIN data.symbol_master_versions m ON m.id = (
+        SELECT id FROM data.symbol_master_versions WHERE short_code = requested.value AND trim(name) NOT IN ('', short_code)
+        ORDER BY (valid_to_date IS NULL) DESC, valid_from_date DESC, recorded_at_ms DESC, id DESC LIMIT 1
+      )
+      LEFT JOIN data.symbols s ON s.code = requested.value AND trim(s.name) != s.code
+    `);
+    const nameBySymbol = new Map(names.map((row) => [row.symbol, row.name]));
+    return runs.map((run) => ({ ...run, symbolName: nameBySymbol.get(run.request.symbol) ?? null }));
   }
   getRun(ownerId: string, id: string): IntradayRun {
     const row = this.options.db

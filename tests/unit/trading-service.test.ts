@@ -595,6 +595,124 @@ describe("모의투자 실행 경계", () => {
     service.deactivate(service.snapshot().revision, "user");
     expect(service.snapshot().deployment?.status).toBe("INACTIVE");
   });
+
+  it("활성 일봉 모의계좌는 새 아티팩트를 워밍업하고 원장을 유지하며 다음 봉부터 실행한다", async () => {
+    const f = fixture(true);
+    await paperActive(f);
+    await f.service.tick();
+    const before = await f.service.refresh();
+    expect(before).toMatchObject({ deployment: { status: "ACTIVE", artifactHash: oldHash, lastDecisionAtMs: 2 }, positions: [{ quantity: 10 }] });
+    const oldOrders = before.orders;
+    const cash = before.account?.cashBuyingPower;
+    vi.mocked(f.engine.evaluate).mockClear();
+    let nextBar = 2;
+    vi.mocked(f.engine.evaluate).mockImplementation(async ({ warmupOnly }) => ({
+      checkpoint: warmupOnly ? "new-warmup" : "new-next", barTsMs: warmupOnly ? 2 : nextBar,
+      orders: warmupOnly ? [] : [{ symbol: "005930", side: "BUY", quantity: 1 }],
+    }));
+    f.setArtifacts([artifact(oldHash, "1", false), artifact(newHash, "2", true)]);
+    await f.service.tick();
+    const warmup = vi.mocked(f.engine.evaluate).mock.calls.find(([input]) => input.warmupOnly)?.[0];
+    expect(warmup).toMatchObject({ deployment: { artifactHash: newHash }, checkpoint: null, warmupOnly: true, throughBarMs: 2,
+      previousArtifact: { hash: oldHash, checkpoint: "checkpoint" } });
+    const upgraded = await f.service.refresh();
+    expect(upgraded).toMatchObject({ deployment: { status: "ACTIVE", artifactHash: newHash, lastDecisionAtMs: 2 }, positions: [{ quantity: 10 }] });
+    expect(upgraded.account?.cashBuyingPower).toBe(cash);
+    expect(upgraded.orders).toEqual(oldOrders);
+    nextBar = 3;
+    await f.service.tick();
+    expect(f.engine.evaluate).toHaveBeenLastCalledWith(expect.objectContaining({ deployment: expect.objectContaining({ artifactHash: newHash }), checkpoint: "new-warmup", warmupOnly: false }));
+    expect(await f.service.refresh()).toMatchObject({ deployment: { status: "ACTIVE", artifactHash: newHash, lastDecisionAtMs: 3 }, positions: [{ quantity: 11 }] });
+    expect(f.database.sqlite.prepare("SELECT count(*) AS n FROM paper_trading_orders").get()).toEqual({ n: 2 });
+  });
+
+  it("꺼진 일봉 모의계좌는 새 아티팩트가 나와도 자동으로 켜지지 않는다", async () => {
+    const f = fixture(true);
+    await paperActive(f);
+    f.service.deactivate(f.service.snapshot().revision, "user");
+    f.setArtifacts([artifact(oldHash, "1", false), artifact(newHash, "2", true)]);
+    vi.mocked(f.engine.evaluate).mockClear();
+    await f.service.tick();
+    expect(f.service.snapshot().deployment?.status).toBe("INACTIVE");
+    expect(f.engine.evaluate).not.toHaveBeenCalled();
+  });
+
+  it("일봉 버전 갱신 중 데이터 준비가 2분을 넘어도 소유 임대를 연장해 완료한다", async () => {
+    const f = fixture(true);
+    await paperActive(f);
+    await f.service.tick();
+    const before = await f.service.refresh();
+    f.setArtifacts([artifact(oldHash, "1", false), artifact(newHash, "2", true)]);
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const preparing = new Promise<void>(resolve => { started = resolve; });
+    let shouldStop!: () => boolean;
+    f.prepareData.mockImplementationOnce(async (_need, _progress, stopped) => {
+      shouldStop = stopped;
+      started();
+      await gate;
+    });
+    vi.mocked(f.engine.evaluate).mockRejectedValueOnce(new TradingDataRequired("데이터 결손", repairNeed));
+    vi.mocked(f.engine.evaluate).mockImplementation(async ({ warmupOnly }) => ({
+      checkpoint: "new-checkpoint", barTsMs: 2,
+      orders: warmupOnly ? [] : [{ symbol: "005930", side: "BUY", quantity: 1 }],
+    }));
+    const ticking = f.service.tick();
+    try {
+      await preparing;
+      expect(f.prepareData.mock.calls[0]?.[0]).toEqual(repairNeed);
+      f.advance(70_000);
+      void f.service.tick();
+      expect(shouldStop()).toBe(false);
+      f.advance(70_000);
+      void f.service.tick();
+      expect(shouldStop()).toBe(false);
+    } finally { release(); await ticking; }
+    const after = await f.service.refresh();
+    expect(after.deployment).toMatchObject({ status: "ACTIVE", artifactHash: newHash, lastDecisionAtMs: 2 });
+    expect(after.orders).toEqual(before.orders);
+    expect(after.positions).toEqual(before.positions);
+    expect(after.account?.cashBuyingPower).toBe(before.account?.cashBuyingPower);
+    expect(f.database.sqlite.prepare("SELECT count(*) AS n FROM paper_trading_orders").get()).toEqual({ n: 1 });
+  });
+
+  it("일봉 버전 갱신 워밍업 중 OFF하면 늦은 결과로 다시 활성화하거나 주문하지 않는다", async () => {
+    const f = fixture(true);
+    await paperActive(f);
+    await f.service.tick();
+    const before = await f.service.refresh();
+    f.setArtifacts([artifact(oldHash, "1", false), artifact(newHash, "2", true)]);
+    let started!: () => void, release!: () => void;
+    const warming = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    vi.mocked(f.engine.evaluate).mockImplementationOnce(async () => {
+      started();
+      await gate;
+      return { checkpoint: "late-new-checkpoint", barTsMs: 2, orders: [] };
+    });
+    const ticking = f.service.tick();
+    try {
+      await warming;
+      f.service.deactivate(f.service.snapshot().revision, "user");
+      expect(f.service.snapshot().deployment).toMatchObject({ status: "INACTIVE", artifactHash: oldHash, lastDecisionAtMs: 2 });
+    } finally { release(); await ticking; }
+    const after = await f.service.refresh();
+    expect(after.deployment).toMatchObject({ status: "INACTIVE", artifactHash: oldHash, lastDecisionAtMs: 2 });
+    expect(after.orders).toEqual(before.orders);
+    expect(after.positions).toEqual(before.positions);
+    expect(after.account?.cashBuyingPower).toBe(before.account?.cashBuyingPower);
+    expect(f.database.sqlite.prepare("SELECT checkpoint FROM trading_deployments WHERE slot = 1").get()).toEqual({ checkpoint: "checkpoint" });
+  });
+
+  it("일봉 모의계좌를 켤 때 같은 전략의 최신 아티팩트로 준비한다", async () => {
+    const f = fixture(true);
+    await f.service.tick();
+    await f.service.register(setup, f.service.snapshot().revision, "user");
+    f.setArtifacts([artifact(oldHash, "1", false), artifact(newHash, "2", true)]);
+    await f.service.activate(f.service.snapshot().revision, "user");
+    expect(f.engine.evaluate).toHaveBeenLastCalledWith(expect.objectContaining({ deployment: expect.objectContaining({ artifactHash: newHash }), checkpoint: null, warmupOnly: true }));
+    expect(f.service.snapshot()).toMatchObject({ deployment: { status: "ACTIVE", artifactHash: newHash }, orders: [] });
+  });
 });
 
 describe("실매매 전략 생명주기", () => {
@@ -660,7 +778,8 @@ describe("실매매 전략 생명주기", () => {
     if (!deployment || deployment.timeframe !== "1d") throw new Error("일봉 배포가 아닙니다.");
     expect(deployment.artifactHash).toBe(oldHash);
     await f.service.tick();
-    expect(f.engine.evaluate).toHaveBeenLastCalledWith(expect.objectContaining({ deployment: expect.objectContaining({ artifactHash: oldHash }), warmupOnly: false }));
+    expect(f.engine.evaluate).toHaveBeenCalledWith(expect.objectContaining({ deployment: expect.objectContaining({ artifactHash: newHash }), checkpoint: null, warmupOnly: true, throughBarMs: 1 }));
+    expect(f.engine.evaluate).toHaveBeenLastCalledWith(expect.objectContaining({ deployment: expect.objectContaining({ artifactHash: newHash }), warmupOnly: false }));
   });
   it.each([[200_000, 1_188], [-200_000, 792]])("실현 손익 %i원을 전략 현금과 주문 수량에 반영한다", async (pnl, quantity) => {
     const f = fixture();

@@ -7,18 +7,17 @@ import type { BacktestHistoryExtras } from "@shared/schemas/backtest-experiments
 import { ExperimentLinks, hasExperimentRecords } from "./experiment-links";
 import type { ExperimentMode } from "./experiment-paths";
 
-export function HistoryResultDetails({ id, status, description, summary, mode, editing }: {
+export function HistoryResultDetails({ id, status, summary, mode, editing }: {
   id: string;
   status?: ReactNode;
-  description?: ReactNode;
   summary?: BacktestHistoryExtras;
   mode?: ExperimentMode;
   editing: boolean;
 }) {
-  if (!status && !description && (editing || !hasExperimentRecords(summary))) return null;
+  if (!status && (editing || !hasExperimentRecords(summary))) return null;
   return (
     <div className="mt-1 flex items-center gap-1 text-muted-foreground">
-      {status}{description}
+      {status}
       {!editing ? <ExperimentLinks jobId={id} summary={summary} mode={mode} /> : null}
     </div>
   );

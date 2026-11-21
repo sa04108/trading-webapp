@@ -65,6 +65,24 @@ export async function calculate(message: { input: Input; date: string; execution
   const checkpoint = message.input.checkpoint ? deserialize(Buffer.from(message.input.checkpoint, "base64")) as Checkpoint : null;
   if (checkpoint && (checkpoint.abi !== 1 || checkpoint.hash !== deployment.artifactHash || checkpoint.strategyId !== strategy.id || !Number.isSafeInteger(checkpoint.rngCalls) || checkpoint.rngCalls < 0 || checkpoint.rngCalls > 10_000_000 || !Number.isFinite(checkpoint.lastBar))) throw new Error("저장된 전략 상태가 호환되지 않습니다");
   const latest = Date.parse(`${message.date}T00:00:00Z`);
+  const previousArtifact = message.input.previousArtifact;
+  let previous: Checkpoint | null = null;
+  if (previousArtifact) {
+    if (!warmupOnly || checkpoint || message.input.throughBarMs !== latest) throw new Error("이전 전략 상태는 같은 봉의 버전 갱신에만 사용할 수 있습니다");
+    previous = deserialize(Buffer.from(previousArtifact.checkpoint, "base64")) as Checkpoint;
+    if (!previous || previous.abi !== 1 || previous.hash !== previousArtifact.hash || previous.strategyId !== strategy.id || previous.lastBar !== latest)
+      throw new Error("이전 전략의 실행 상태가 호환되지 않습니다");
+    if (previous.priorityCalls !== undefined && (!Number.isSafeInteger(previous.priorityCalls) || previous.priorityCalls < 0 || previous.priorityCalls > 10_000_000))
+      throw new Error("이전 전략의 매수 우선순위 상태가 올바르지 않습니다");
+    if (typeof previous.firstDecision !== "boolean" || typeof previous.rebalanceDate !== "string"
+      || !/^\d{4}-\d{2}-\d{2}$/.test(previous.rebalanceDate)
+      || Number.isNaN(Date.parse(`${previous.rebalanceDate}T00:00:00Z`))
+      || new Date(`${previous.rebalanceDate}T00:00:00Z`).toISOString().slice(0, 10) !== previous.rebalanceDate
+      || previous.rebalanceDate > message.date) throw new Error("이전 전략의 리밸런스 상태가 올바르지 않습니다");
+    if ((previous.pendingExits !== undefined && (!Array.isArray(previous.pendingExits) || previous.pendingExits.some(symbol => !/^\d{6}$/.test(symbol)) || new Set(previous.pendingExits).size !== previous.pendingExits.length))
+      || (previous.pendingSells !== undefined && (!Array.isArray(previous.pendingSells) || previous.pendingSells.some(order => !order || !/^\d{6}$/.test(order.symbol) || !Number.isSafeInteger(order.target) || order.target < 0 || (order.reason !== undefined && typeof order.reason !== "string")) || new Set(previous.pendingSells.map(order => order.symbol)).size !== previous.pendingSells.length)))
+      throw new Error("이전 전략의 청산 상태가 올바르지 않습니다");
+  }
   if (checkpoint && checkpoint.lastBar > latest) throw new Error("전략 상태가 최근 확정 봉보다 앞서 있습니다");
   if (checkpoint && checkpoint.lastBar === latest) {
     if (!Array.isArray(checkpoint.members)) throw new Error("저장된 유니버스 상태가 올바르지 않습니다");
@@ -340,7 +358,7 @@ export async function calculate(message: { input: Input; date: string; execution
         [symbol, factsView.corporateActions(symbol, checkpoint.lastBar).filter(action => action.effectiveTsMs >= originBar && action.effectiveTsMs > gate.priceCutoff(symbol))])) });
   }
   const timelineToRun = timeline.filter((ts) => ts > first && ts <= latest);
-  const priorityCalls = checkpoint?.priorityCalls ?? 0;
+  const priorityCalls = checkpoint?.priorityCalls ?? previous?.priorityCalls ?? 0;
   if (!Number.isSafeInteger(priorityCalls) || priorityCalls < 0 || priorityCalls > 10_000_000) throw new Error("저장된 매수 우선순위 상태가 올바르지 않습니다");
   const priorityRng = createRng(deployment.randomSeed ^ BUY_PRIORITY_SEED_SALT);
   let priorityCount = 0;
@@ -483,6 +501,13 @@ export async function calculate(message: { input: Input; date: string; execution
   }
   const actionCutoffs = Object.fromEntries(symbols.filter(symbol => Number.isFinite(gate.priceCutoff(symbol))).map(symbol => [symbol, gate.priceCutoff(symbol)]));
   const actionGapHolds = members.map(member => member.symbol).filter(symbol => gate.atClose.has(symbol) || blockedAtOpen.has(symbol)).sort();
+  // 새 전략 상태는 재생하되 기존 주문의 남은 청산 목표만 같은 봉에서 이어간다.
+  if (previous) {
+    firstDecision = previous.firstDecision || previous.rebalanceDate !== latestSchedule.rebalanceDate;
+    activeRebalanceDate = latestSchedule.rebalanceDate;
+    pendingExits = new Set((previous.pendingExits ?? []).filter(symbol => (portfolio[symbol]?.quantity ?? 0) > 0));
+    pendingSells = (previous.pendingSells ?? []).filter(order => (portfolio[order.symbol]?.quantity ?? 0) > order.target);
+  }
   const next: Checkpoint = { abi: 1, hash: deployment.artifactHash, strategyId: strategy.id, state, actionCutoffs, lastBar: latest, rngCalls: calls, priorityCalls: priorityCount, pendingExits: [...pendingExits], deferredBuys, originBar, lastSeen, tracked: symbols, pendingSells, firstDecision: firstDecision || activeRebalanceDate !== latestSchedule.rebalanceDate, rebalanceDate: latestSchedule.rebalanceDate, members: [...members] };
   const entryHolds = members.flatMap(({ symbol }) => {
     const bars = counts.get(symbol) ?? 0;
